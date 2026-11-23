@@ -8,6 +8,7 @@
 
 import { z } from 'zod';
 import type { IMakaioBus } from '@makaio/bus-core';
+import type { CallContext } from '@makaio/contracts';
 import { PreferencesSchemas, PreferencesSubjects, type PreferenceKey } from '@makaio/services-core/preferences';
 /**
  * Canonical serializable window-manager snapshot shared by desktop hosts.
@@ -112,11 +113,13 @@ export type PersistedWindowSession = z.infer<typeof PersistedWindowSessionSchema
 
 /**
  * Capture the current open windows and write them to the PreferencesService.
+ * @param call - Call context for the session persistence operation.
  * @param busClient - Connected bus client used to reach the PreferencesService.
  * @param windowManager - Live window manager whose registry is snapshotted.
  * @param hostScope - Host-specific preference scope such as `electron`.
  */
 export async function saveWindowSession(
+  call: CallContext,
   busClient: WindowSessionBusClient,
   windowManager: WindowSessionWindowSource,
   hostScope: WindowSessionScope,
@@ -143,11 +146,11 @@ export async function saveWindowSession(
   }
 
   if (entries.length === 0) {
-    await deleteWindowSession(busClient, hostScope);
+    await deleteWindowSession(call, busClient, hostScope);
     return;
   }
 
-  const response = await busClient.request(PreferencesSubjects.set, {
+  const response = await busClient.request(call, PreferencesSubjects.set, {
     key: createWindowSessionKey(hostScope),
     category: WINDOW_SESSION_CATEGORY,
     value: { version: 1, windows: entries } satisfies PersistedWindowSession,
@@ -161,17 +164,19 @@ export async function saveWindowSession(
 
 /**
  * Load and validate the previously saved window session from the PreferencesService.
+ * @param call - Call context for the session restore operation.
  * @param busClient - Connected bus client used to reach the PreferencesService.
  * @param hostScope - Host-specific preference scope such as `electron`.
  * @returns Validated session, or `null` when missing/invalid.
  */
 export async function loadWindowSession(
+  call: CallContext,
   busClient: WindowSessionBusClient,
   hostScope: WindowSessionScope,
 ): Promise<PersistedWindowSession | null> {
   let response: unknown;
   try {
-    response = await busClient.request(PreferencesSubjects.get, {
+    response = await busClient.request(call, PreferencesSubjects.get, {
       key: createWindowSessionKey(hostScope),
       category: WINDOW_SESSION_CATEGORY,
     });
@@ -201,11 +206,16 @@ export async function loadWindowSession(
 
 /**
  * Remove the stored window session from the PreferencesService.
+ * @param call - Call context for the session persistence operation.
  * @param busClient - Connected bus client used to reach the PreferencesService.
  * @param hostScope - Host-specific preference scope such as `electron`.
  */
-async function deleteWindowSession(busClient: WindowSessionBusClient, hostScope: WindowSessionScope): Promise<void> {
-  const response = await busClient.request(PreferencesSubjects.delete, {
+async function deleteWindowSession(
+  call: CallContext,
+  busClient: WindowSessionBusClient,
+  hostScope: WindowSessionScope,
+): Promise<void> {
+  const response = await busClient.request(call, PreferencesSubjects.delete, {
     key: createWindowSessionKey(hostScope),
     category: WINDOW_SESSION_CATEGORY,
   });

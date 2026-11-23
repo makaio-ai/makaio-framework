@@ -10,7 +10,7 @@
  */
 
 import type { IMakaioBus } from '@makaio/bus-core';
-import type { SubjectTelemetryAttributeValue } from '@makaio/contracts';
+import type { CallContext, SubjectTelemetryAttributeValue } from '@makaio/contracts';
 import { resolveTemplatesInObject } from '@makaio/expression';
 import type { SpanDraft } from '../contracts/index.js';
 import { TelemetryOtelSubjects } from '../contracts/index.js';
@@ -151,9 +151,10 @@ export class SpanEnricherPipeline {
    *
    * The returned draft is a new object — the original is never mutated.
    * @param draft - Fully-resolved span draft to enrich
+   * @param call - Call context the optional enrichment request is sent with
    * @returns Enriched span draft with merged attributes
    */
-  public async enrich(draft: SpanDraft): Promise<SpanDraft> {
+  public async enrich(draft: SpanDraft, call: CallContext): Promise<SpanDraft> {
     // Phase 1: collect attributes from all matching declarative rules.
     const matchingRules = this.registry.evaluate(draft);
     const declarativeAttributes: Record<string, SubjectTelemetryAttributeValue> = {};
@@ -165,7 +166,7 @@ export class SpanEnricherPipeline {
     // Spread into a plain object and explicitly copy the nested readonly arrays
     // into mutable arrays so the value is compatible with the Zod-inferred
     // request payload type (which uses mutable arrays).
-    const busResult = await this.bus.requestOptional(TelemetryOtelSubjects.enrichSpan, {
+    const busResult = await this.bus.requestOptional(call, TelemetryOtelSubjects.enrichSpan, {
       ...draft,
       links: [...draft.links],
       events: [...draft.events],

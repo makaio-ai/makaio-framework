@@ -9,6 +9,7 @@
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
+import { createTestCall } from '@makaio/test-utils';
 import { AccountManagerSubjects } from '../bus/namespace.js';
 import type { IMakaioBus } from '@makaio/bus-core';
 import type { Account } from '../bus/schemas.js';
@@ -80,6 +81,7 @@ function makeCtx<TArgs>(bus: IMakaioBus, args: TArgs) {
   };
 
   return {
+    call: createTestCall(),
     bus,
     args,
     output,

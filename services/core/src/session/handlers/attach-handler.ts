@@ -5,6 +5,7 @@
  */
 
 import type { IMakaioBus } from '@makaio/bus-core';
+import { isInProcessCaller, type CallContext } from '@makaio/core';
 import { AdapterSubjects, AgentResolutionSubjects, ProviderContextSchema, SessionSubjects } from '@makaio/contracts';
 import type {
   AgentRole,
@@ -58,14 +59,14 @@ export function registerAttachHandler(
   const closeGate = new SessionAttachCloseGate();
   const attachCleanup = bus.on(SessionSubjects.agent.attach, async (ctx) => {
     ctx.setResult(
-      await attachAgent(bus, turnManager, machineId, {
+      await attachAgent(ctx.call, bus, turnManager, machineId, {
         ...ctx.payload,
         assertAttachCommitAllowed: () => closeGate.assertAttachCommitAllowed(ctx.payload.sessionId),
       }),
     );
   });
   const attachResolvedCleanup = bus.on(SessionSubjects.agent.attachResolved, async (ctx) => {
-    if (!ctx.origin.local) {
+    if (!isInProcessCaller(ctx.call)) {
       throw new Error('[attach-handler] session.agent.attachResolved requires a local-origin request');
     }
     const admissionAssertion = ctx.payload.assertInitialMessageAdmission;
@@ -73,7 +74,7 @@ export function registerAttachHandler(
       throw new Error('[attach-handler] assertInitialMessageAdmission must be a function');
     }
     ctx.setResult(
-      await attachAgent(bus, turnManager, machineId, {
+      await attachAgent(ctx.call, bus, turnManager, machineId, {
         ...ctx.payload,
         assertAttachCommitAllowed: () => closeGate.assertAttachCommitAllowed(ctx.payload.sessionId),
         assertInitialMessageAdmission: admissionAssertion as (() => void) | undefined,
@@ -124,13 +125,14 @@ async function probeOptionalCapability<T>(
  * Uses `requestOptional` so adapters that have not registered a
  * `getCapabilities` handler are treated as non-resume-capable rather than
  * causing a bus timeout.
+ * @param call - Call context of the attach request this query serves
  * @param bus - Bus instance for the capability query
  * @param adapterId - Resolved adapter instance ID
  * @returns `true` when the adapter declares `session:resume`
  */
-async function adapterSupportsResume(bus: IMakaioBus, adapterId: string): Promise<boolean> {
+async function adapterSupportsResume(call: CallContext, bus: IMakaioBus, adapterId: string): Promise<boolean> {
   return probeOptionalCapability(
-    () => bus.requestOptional(AdapterSubjects.getCapabilities, { adapterId }),
+    () => bus.requestOptional(call, AdapterSubjects.getCapabilities, { adapterId }),
     (data) => new Set(data.capabilities).has('session:resume'),
   );
 }
@@ -169,18 +171,22 @@ async function adapterSupportsResume(bus: IMakaioBus, adapterId: string): Promis
  * longer advertises. Only currency is refreshed: the structural fields the
  * evaluator reads (machine, cwd, adapter identity) must stay consistent with the
  * `effectiveCwd` the caller derived from that same snapshot.
+ * @param call - Call context of the attach request this lookup serves
  * @param input - Bus for the capability lookup and currency re-read, resolved
  *   adapter instance ID, stable adapter type name, validated session record,
  *   local machine identity, and effective working directory for the locality evaluator
  * @returns Resolved resume adapter session ID and optional non-native session context
  */
-async function resolveAttachLocality(input: {
-  bus: IMakaioBus;
-  instance: MachineScopedAdapterInstance;
-  adapterName: string;
-  session: IMakaioSession;
-  effectiveCwd: string | undefined;
-}): Promise<AttachLocalityResult> {
+async function resolveAttachLocality(
+  call: CallContext,
+  input: {
+    bus: IMakaioBus;
+    instance: MachineScopedAdapterInstance;
+    adapterName: string;
+    session: IMakaioSession;
+    effectiveCwd: string | undefined;
+  },
+): Promise<AttachLocalityResult> {
   const { bus, adapterName, session, effectiveCwd } = input;
   const { adapterId, machineId } = input.instance;
   // **The instance arrives with the machine it belongs to, or the attach never got
@@ -198,8 +204,8 @@ async function resolveAttachLocality(input: {
 
   // Independent reads: the session's own row and what the adapter can do.
   const [current, adapterCanResume] = await Promise.all([
-    bus.request(SessionSubjects.get, { sessionId: session.sessionId }),
-    adapterSupportsResume(bus, adapterId),
+    bus.request(call, SessionSubjects.get, { sessionId: session.sessionId }),
+    adapterSupportsResume(call, bus, adapterId),
   ]);
   const resumeIdentity = resolveSessionResumeIdentity(current.session ?? session);
   const verdict = evaluateNativeLocality({
@@ -213,7 +219,7 @@ async function resolveAttachLocality(input: {
     resumeIdentity,
   });
   if (verdict.kind !== 'native') {
-    return degradedAttachLocality(bus, session, adapterId, verdict);
+    return degradedAttachLocality(call, bus, session, adapterId, verdict);
   }
   return { resumeAdapterSessionId: resumeIdentity.adapterSessionId, attachSessionContext: undefined };
 }
@@ -222,6 +228,7 @@ async function resolveAttachLocality(input: {
  * Announce a non-native verdict and shape the context the attach seeds from.
  *
  * One place, so every non-native verdict is announced and carried the same way.
+ * @param call - Call context of the handled attach message.
  * @param bus - Bus the event is emitted on.
  * @param session - Session the attach is for.
  * @param adapterId - Adapter instance the attach targets.
@@ -229,12 +236,13 @@ async function resolveAttachLocality(input: {
  * @returns The locality result: no resume target, and the verdict to seed with.
  */
 function degradedAttachLocality(
+  call: CallContext,
   bus: IMakaioBus,
   session: IMakaioSession,
   adapterId: string,
   verdict: NativeLocalityVerdict,
 ): AttachLocalityResult {
-  void emitLocalityDegradeEvent(bus, {
+  void emitLocalityDegradeEvent(call, bus, {
     sessionId: session.sessionId,
     intent: 'resume',
     verdict,
@@ -245,6 +253,7 @@ function degradedAttachLocality(
 
 /**
  * Attach an agent to a session.
+ * @param call - Call context of the attach request
  * @param bus - Bus instance for storage, resolution, and adapter startup
  * @param turnManager - Shared owner of the initial-message turn lifecycle
  * @param machineId - Optional machine ID for deterministic adapter resolution
@@ -252,6 +261,7 @@ function degradedAttachLocality(
  * @returns Attach response payload
  */
 async function attachAgent(
+  call: CallContext,
   bus: IMakaioBus,
   turnManager: SessionTurnManager,
   machineId: string | undefined,
@@ -270,9 +280,9 @@ async function attachAgent(
     resolvedProviderContext,
   } = params;
   const explicitRuntime = extractRuntimeOptions(agentSelection);
-  const session = await validateSession(bus, sessionId);
-  const resolved = await resolveAttachSelection(bus, sessionId, initialMessage, agentSelection);
-  const { adapterName, instance } = await resolveAttachAdapterTarget(bus, {
+  const session = await validateSession(call, bus, sessionId);
+  const resolved = await resolveAttachSelection(call, bus, sessionId, initialMessage, agentSelection);
+  const { adapterName, instance } = await resolveAttachAdapterTarget(call, bus, {
     selection: agentSelection,
     resolved,
     sessionId,
@@ -280,6 +290,7 @@ async function attachAgent(
   });
 
   const { providerConfigId: mergedProviderConfigId, providerContext } = await resolveAttachProviderSelection(
+    call,
     bus,
     adapterName,
     agentSelection.providerConfigId,
@@ -293,14 +304,8 @@ async function attachAgent(
     runtimeOptions,
   );
   const { role, leadTransition } = determineRole(session, requestedRole);
-  const locality = await resolveAttachLocality({
-    bus,
-    session,
-    effectiveCwd,
-    instance,
-    adapterName,
-  });
-  return executeResolvedAttach(bus, turnManager, {
+  const locality = await resolveAttachLocality(call, { bus, session, effectiveCwd, instance, adapterName });
+  return executeResolvedAttach(call, bus, turnManager, {
     launch: {
       adapterId: instance.adapterId,
       sessionId,
@@ -342,16 +347,22 @@ async function attachAgent(
  * settlement, commit and initial turn — so there is no instant at which the
  * `starting` row it wrote is visible without an entry a concurrent consumer can
  * join instead of opening a second lifecycle beside it.
+ * @param call - Call context of the handled attach message, captured by the exclusive-start closure.
  * @param bus - Bus used for adapter lifecycle, persistence, and routing.
  * @param turnManager - Owner of session turn slots and completion state.
  * @param input - Fully resolved attach launch, identity, and message inputs.
  * @returns Attach response containing canonical turn identity when a message was dispatched.
  */
-async function executeResolvedAttach(bus: IMakaioBus, turnManager: SessionTurnManager, input: ResolvedAttachExecution) {
+async function executeResolvedAttach(
+  call: CallContext,
+  bus: IMakaioBus,
+  turnManager: SessionTurnManager,
+  input: ResolvedAttachExecution,
+) {
   const agentId = crypto.randomUUID();
   let result: Awaited<ReturnType<typeof runAttachAttempt>> | undefined;
   await runExclusiveStart(agentId, async () => {
-    result = await runAttachAttempt(bus, turnManager, agentId, input);
+    result = await runAttachAttempt(call, bus, turnManager, agentId, input);
     // Every modeled attach refusal throws, so reaching here is a live connector.
     return 'connected';
   }).settled;
@@ -375,6 +386,7 @@ async function executeResolvedAttach(bus: IMakaioBus, turnManager: SessionTurnMa
  * failure there unwinds a start that already succeeded: the claims are retired,
  * the connector is stopped, and the row goes to `dead` from wherever the
  * connector left it.
+ * @param call - Call context of the handled attach message.
  * @param bus - Bus used for adapter lifecycle, persistence, and routing.
  * @param turnManager - Owner of session turn slots and completion state.
  * @param agentId - Caller-minted agent identity, already registered with the seam.
@@ -382,6 +394,7 @@ async function executeResolvedAttach(bus: IMakaioBus, turnManager: SessionTurnMa
  * @returns Attach response containing canonical turn identity when a message was dispatched.
  */
 async function runAttachAttempt(
+  call: CallContext,
   bus: IMakaioBus,
   turnManager: SessionTurnManager,
   agentId: string,
@@ -392,14 +405,14 @@ async function runAttachAttempt(
   let reservation: TurnReservation | undefined;
   try {
     reservation =
-      input.initialMessage === undefined ? undefined : await turnManager.reserveTurn(input.session.sessionId);
+      input.initialMessage === undefined ? undefined : await turnManager.reserveTurn(call, input.session.sessionId);
   } catch (error) {
     throw new SessionAgentAttachError('initial_message', error);
   }
   try {
     let started;
     try {
-      started = await startReservedAttachAgent(bus, {
+      started = await startReservedAttachAgent(call, bus, {
         agentId,
         launch: input.launch,
         identity: input.identity,
@@ -423,9 +436,9 @@ async function runAttachAttempt(
     // session that is *gone* rather than closed is reported by the settlement
     // itself, which releases the key cleanly.
     try {
-      await assertSessionActiveAfterStart(bus, input.session.sessionId);
+      await assertSessionActiveAfterStart(call, bus, input.session.sessionId);
     } catch (error) {
-      await retireStartedAttach(bus, started);
+      await retireStartedAttach(call, bus, started);
       throw new SessionAgentAttachError('agent_attach', error);
     }
     let turnInfo;
@@ -433,7 +446,7 @@ async function runAttachAttempt(
       try {
         input.assertAttachCommitAllowed();
       } catch (error) {
-        await retireStartedAttach(bus, started);
+        await retireStartedAttach(call, bus, started);
         throw new SessionAgentAttachError('agent_attach', error);
       }
     } else {
@@ -442,6 +455,7 @@ async function runAttachAttempt(
         input.assertInitialMessageAdmission?.();
       };
       turnInfo = await dispatchInitialAttachMessage(
+        call,
         bus,
         turnManager,
         reservation,
@@ -453,7 +467,7 @@ async function runAttachAttempt(
         started.sessionContext,
         assertAdmission,
       ).catch(async (error: unknown) => {
-        await retireStartedAttach(bus, started);
+        await retireStartedAttach(call, bus, started);
         throw new SessionAgentAttachError('initial_message', error);
       });
     }
@@ -483,6 +497,7 @@ function getPersonaId(selection: AgentSelectionBase): string | undefined {
  * For `kind: 'adapter'`, no resolution is needed — adapter fields are passed
  * directly on the selection. For other kinds (persona, profile, virtual-model),
  * delegates to the host-tier `AgentResolutionSubjects.resolve` handler.
+ * @param call - Call context of the attach request
  * @param bus - Bus instance for resolution RPCs
  * @param sessionId - Session receiving the attached agent
  * @param initialMessage - Optional initial message used for prompt-aware resolution
@@ -490,6 +505,7 @@ function getPersonaId(selection: AgentSelectionBase): string | undefined {
  * @returns Resolved agent config fields, or `null` when kind is 'adapter'
  */
 async function resolveAttachSelection(
+  call: CallContext,
   bus: IMakaioBus,
   sessionId: string,
   initialMessage: MessageInput | undefined,
@@ -499,7 +515,7 @@ async function resolveAttachSelection(
     return null;
   }
   const promptText = initialMessage ? extractTextContent(initialMessage) : undefined;
-  return bus.request(AgentResolutionSubjects.resolve, {
+  return bus.request(call, AgentResolutionSubjects.resolve, {
     selection,
     context: { sessionId, promptText },
   });
@@ -507,12 +523,13 @@ async function resolveAttachSelection(
 
 /**
  * Validates session exists and is active.
+ * @param call - Call context of the attach request
  * @param bus - Bus instance for session lookup
  * @param sessionId - Target session ID
  * @returns The full session record
  */
-async function validateSession(bus: IMakaioBus, sessionId: string): Promise<IMakaioSession> {
-  const { session } = await bus.request(SessionSubjects.get, { sessionId });
+async function validateSession(call: CallContext, bus: IMakaioBus, sessionId: string): Promise<IMakaioSession> {
+  const { session } = await bus.request(call, SessionSubjects.get, { sessionId });
   if (!session) throw new Error(`[attach-handler] Session not found: ${sessionId}`);
   if (session.status !== 'active') {
     throw new AttachStartError(

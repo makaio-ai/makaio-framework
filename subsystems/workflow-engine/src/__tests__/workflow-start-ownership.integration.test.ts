@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
+import { createTestCall } from '@makaio/test-utils';
 import { WorkerNamespace, WorkerSubjects, type IWorkflowRunner, type WorkflowRunContext } from '@makaio/contracts';
 import { ExecutionAttemptAuthority } from '../execution-attempt-authority.js';
 import { workflowAttemptOutcomeCodec } from '../workflow-attempt-outcome.js';
@@ -33,8 +34,8 @@ describe('workflow start terminal ownership', () => {
     const observed = Promise.withResolvers<WorkflowRunContext>();
     const runner: IWorkflowRunner = {
       ...(terminalAuthority !== undefined ? { terminalAuthority } : {}),
-      async run(config) {
-        const { runContext } = await MakaioBus.request(WorkflowStorageSubjects.getRunContext, {
+      async run(call, config) {
+        const { runContext } = await MakaioBus.request(call, WorkflowStorageSubjects.getRunContext, {
           executionId: config.executionId,
         });
         if (!runContext) throw new Error('Owner context was not persisted before runner invocation');
@@ -52,14 +53,14 @@ describe('workflow start terminal ownership', () => {
       }),
     });
     if (source === 'file') {
-      await MakaioBus.request(WorkflowSubjects.runFile, { filePath: '/repo/workflow.ts' });
+      await MakaioBus.request(createTestCall(), WorkflowSubjects.runFile, { filePath: '/repo/workflow.ts' });
     } else {
       const workflow = createWorkflowDefinition({
         id: 'configured-runner',
         root: { type: 'sequence', id: 'root', nodes: [] },
       });
-      await MakaioBus.request(WorkflowStorageSubjects.set, { workflow });
-      await MakaioBus.request(WorkflowSubjects.start, { workflowId: workflow.id });
+      await MakaioBus.request(createTestCall(), WorkflowStorageSubjects.set, { workflow });
+      await MakaioBus.request(createTestCall(), WorkflowSubjects.start, { workflowId: workflow.id });
     }
     expect((await observed.promise).terminalAuthority).toBe(terminalAuthority);
   });
@@ -78,9 +79,9 @@ describe('workflow start terminal ownership', () => {
       MakaioBus,
       undefined,
       {
-        run: async (config) => {
+        run: async (call, config) => {
           if (requiresWorker) throw new Error('Fallback runner must not be selected');
-          const { runContext } = await MakaioBus.request(WorkflowStorageSubjects.getRunContext, {
+          const { runContext } = await MakaioBus.request(call, WorkflowStorageSubjects.getRunContext, {
             executionId: config.executionId,
           });
           if (!runContext) throw new Error('Owner context missing at fallback invocation');
@@ -94,7 +95,7 @@ describe('workflow start terminal ownership', () => {
     await setup.workflowExecutor.init();
     setup.cleanupFns.push(
       MakaioBus.on(WorkerSubjects.dispatch, async (ctx) => {
-        const { runContext } = await MakaioBus.request(WorkflowStorageSubjects.getRunContext, {
+        const { runContext } = await MakaioBus.request(ctx.call, WorkflowStorageSubjects.getRunContext, {
           executionId: ctx.payload.config.executionId,
         });
         if (!runContext) throw new Error('Owner context missing at dispatch');
@@ -109,21 +110,24 @@ describe('workflow start terminal ownership', () => {
       }),
       ...(requiresWorker ? { requirements: { customCapabilities: ['test-worker'] } } : {}),
     };
-    await MakaioBus.request(WorkflowStorageSubjects.set, { workflow });
-    const started = await MakaioBus.request(WorkflowSubjects.start, { workflowId: workflow.id });
+    await MakaioBus.request(createTestCall(), WorkflowStorageSubjects.set, { workflow });
+    const started = await MakaioBus.request(createTestCall(), WorkflowSubjects.start, { workflowId: workflow.id });
     if ('error' in started) throw new Error(String(started.error));
-    const stored = await MakaioBus.request(WorkflowStorageSubjects.getRunContext, {
+    const stored = await MakaioBus.request(createTestCall(), WorkflowStorageSubjects.getRunContext, {
       executionId: started.executionId,
     });
     expect(stored.runContext?.terminalAuthority).toBe(requiresWorker ? 'authority' : undefined);
     await expect
       .poll(
         async () =>
-          (await MakaioBus.request(WorkflowStorageSubjects.getExecution, { executionId: started.executionId }))
-            .execution?.status,
+          (
+            await MakaioBus.request(createTestCall(), WorkflowStorageSubjects.getExecution, {
+              executionId: started.executionId,
+            })
+          ).execution?.status,
       )
       .toBe('failed');
-    const stopped = await MakaioBus.request(WorkflowStorageSubjects.getExecution, {
+    const stopped = await MakaioBus.request(createTestCall(), WorkflowStorageSubjects.getExecution, {
       executionId: started.executionId,
     });
     expect(observed.context, stopped.execution?.error?.replaceAll('\n', ' ')).toBeDefined();

@@ -1,4 +1,5 @@
 import type { IMakaioBus } from '@makaio/bus-core';
+import type { CallContext } from '@makaio/core';
 import type {
   IWorkerProvider,
   IWorkflowRunner,
@@ -24,6 +25,7 @@ import {
 } from '@makaio/contracts';
 import { mintOrRotateWorkflowExecutionBusSecret } from '../workflow-execution-bus-access.js';
 import { OutcomeDeliveryError, submitOutcomeWithAck, type OutcomeSubmitRetryConfig } from './outcome-submission.js';
+import { createReplayOnceSignal } from './replay-once-signal.js';
 import type {
   ThinWorkflowPiscinaAttemptBinding,
   ThinWorkflowPiscinaRunWithReadiness,
@@ -184,53 +186,6 @@ interface TerminalObservationSignals {
   readonly completion: ProviderCompletionSignal;
   /** Loss of local observation when positive completion is impossible. */
   readonly localObservationLoss: LocalObservationLossSignal;
-}
-
-/** Private retained value signal shared by the provider's two terminal fact families. */
-interface ReplayOnceSignal<T extends object> {
-  /** Publish the retained value at most once. */
-  readonly publish: (createValue: () => T) => void;
-  /** Observe the retained value, replaying it after publication. */
-  readonly observe: (observer: (value: T) => void) => () => void;
-}
-
-/**
- * Create an at-most-once signal that replays its retained value to late observers.
- *
- * The value producer runs before the signal becomes observable. Callers can
- * therefore perform required local cleanup in the producer without exposing
- * a completion or conclusion before that cleanup succeeds.
- * @param observerFailureLabel - Stable log prefix identifying the signal's observer family.
- * @returns Publisher and observer registration for one retained value.
- */
-function createReplayOnceSignal<T extends object>(observerFailureLabel: string): ReplayOnceSignal<T> {
-  const observers = new Set<(value: T) => void>();
-  let value: T | undefined;
-
-  return {
-    publish: (createValue): void => {
-      if (value !== undefined) return;
-      const nextValue = createValue();
-      value = nextValue;
-      const pending = [...observers];
-      observers.clear();
-      for (const observer of pending) {
-        try {
-          observer(nextValue);
-        } catch (error) {
-          console.error(`${observerFailureLabel} observer failed:`, error);
-        }
-      }
-    },
-    observe: (observer): (() => void) => {
-      if (value !== undefined) {
-        observer(value);
-        return () => undefined;
-      }
-      observers.add(observer);
-      return () => observers.delete(observer);
-    },
-  };
 }
 
 /**
@@ -504,12 +459,17 @@ export class PiscinaThinWorkflowProvider implements IWorkerProvider {
    * Cancellation still rejects with the caller's exact reason. Every later
    * failure remains rejected because this provider cannot prove that a local
    * startup side effect did not occur.
+   * @param call - Triggering call; the settled run's outcome is submitted under it.
    * @param request - Generic provision request with selected Runtime inputs.
    * @param signal - AbortSignal for cooperative cancellation of the provision operation.
    * @returns Allocated outcome, or confirmed absence when no local allocation could exist.
    * @throws When cancellation occurs or a failure follows the pre-allocation boundary.
    */
-  public async provision(request: WorkerProvisionRequest, signal: AbortSignal): Promise<WorkerProvisionOutcome> {
+  public async provision(
+    call: CallContext,
+    request: WorkerProvisionRequest,
+    signal: AbortSignal,
+  ): Promise<WorkerProvisionOutcome> {
     signal.throwIfAborted();
 
     const preflight = await this.resolveLaunchBeforeAllocation(request, signal);
@@ -589,6 +549,7 @@ export class PiscinaThinWorkflowProvider implements IWorkerProvider {
       void dispatch.ready.then(
         () =>
           this.submitOutcomeOnSettlement(
+            call,
             dispatch.result,
             executionId,
             executionAttemptId,
@@ -681,6 +642,7 @@ export class PiscinaThinWorkflowProvider implements IWorkerProvider {
    * runs in-process, a persistently failing local submit means the outcome
    * handler is unregistered — an infrastructure failure that the host recovery
    * coordinator reconciles via recovery operations.
+   * @param call - Call that triggered the provisioning of this run.
    * @param resultPromise - Promise resolving to the workflow run result.
    * @param executionId - Workflow execution identifier.
    * @param executionAttemptId - Authority-created attempt identifier.
@@ -689,6 +651,7 @@ export class PiscinaThinWorkflowProvider implements IWorkerProvider {
    * @param onProviderCompletion - Reports positive completion after outcome acknowledgement or final local delivery exhaustion.
    */
   private async submitOutcomeOnSettlement(
+    call: CallContext,
     resultPromise: Promise<WorkflowRunResult>,
     executionId: string,
     executionAttemptId: string,
@@ -721,6 +684,7 @@ export class PiscinaThinWorkflowProvider implements IWorkerProvider {
         ...this.options.outcomeRetry,
       };
       await submitOutcomeWithAck(
+        call,
         this.options.bus,
         {
           executionAttemptId,

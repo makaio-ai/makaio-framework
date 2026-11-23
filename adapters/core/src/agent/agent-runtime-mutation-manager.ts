@@ -1,5 +1,6 @@
 import type { IMakaioBus } from '@makaio/bus-core';
 import type { MakaioSessionAgent } from '@makaio/contracts';
+import type { CallContext } from '@makaio/core';
 import { AgentStorageSubjects } from '@makaio/services-core/session';
 import type { AIAgentConnector } from '../connector/index.js';
 import { AgentCredentialChangeManager } from './agent-credential-change-manager.js';
@@ -59,7 +60,7 @@ export class AgentRuntimeMutationManager {
       setProviderContext: config.setProviderContext,
       setReasoningEffort: config.setReasoningEffort,
       resolveSupportedReasoningLevels: config.resolveSupportedReasoningLevels,
-      persistRuntimeMutation: (changes) => this.persistRuntimeMutation(changes),
+      persistRuntimeMutation: (call, changes) => this.persistRuntimeMutation(call, changes),
     });
     this.credentialChangeManager = new AgentCredentialChangeManager({
       globalBus: config.globalBus,
@@ -69,25 +70,33 @@ export class AgentRuntimeMutationManager {
       getProviderContext: config.getProviderContext,
       setProviderContext: config.setProviderContext,
       swapConnectorUnlocked: config.swapConnectorUnlocked,
-      persistProviderConfigId: (providerConfigId) => this.persistRuntimeMutation({ providerConfigId }),
+      persistProviderConfigId: (call, providerConfigId) => this.persistRuntimeMutation(call, { providerConfigId }),
     });
   }
 
   /**
    * Handle `agent.cwd.change` through the shared runtime barrier.
+   * @param call - Call context of the `agent.cwd.change` request
    * @param payload - CWD change request payload
    * @returns CWD mutation response payload
    */
-  public async handleCwdChange(payload: AgentCwdChangeRequestPayload): Promise<AgentCwdChangeResponsePayload> {
-    return this.runExclusive(() => this.handleCwdChangeUnlocked(payload));
+  public async handleCwdChange(
+    call: CallContext,
+    payload: AgentCwdChangeRequestPayload,
+  ): Promise<AgentCwdChangeResponsePayload> {
+    return this.runExclusive(() => this.handleCwdChangeUnlocked(call, payload));
   }
 
   /**
    * Apply one CWD change while the agent-wide runtime barrier is held.
+   * @param call - Call context of the `agent.cwd.change` request
    * @param payload - CWD change request payload
    * @returns CWD mutation response payload
    */
-  private async handleCwdChangeUnlocked(payload: AgentCwdChangeRequestPayload): Promise<AgentCwdChangeResponsePayload> {
+  private async handleCwdChangeUnlocked(
+    call: CallContext,
+    payload: AgentCwdChangeRequestPayload,
+  ): Promise<AgentCwdChangeResponsePayload> {
     const connector = this.getConnector();
     const { newCwd } = payload;
     if (connector.cwd === newCwd) return { success: true };
@@ -99,14 +108,14 @@ export class AgentRuntimeMutationManager {
       if (changedInPlace) {
         connector.cwd = newCwd;
       } else {
-        await this.swapConnectorUnlocked({ cwd: newCwd });
+        await this.swapConnectorUnlocked(call, { cwd: newCwd });
       }
     } catch {
       return { success: false, reason: 'cwd_change_failed: connector_replacement_failed' };
     }
 
     try {
-      await this.persistRuntimeMutation({ cwd: newCwd });
+      await this.persistRuntimeMutation(call, { cwd: newCwd });
     } catch (error) {
       if (error instanceof AgentRuntimePersistenceError) {
         return { success: false, reason: 'cwd_change_committed_persistence_failed' };
@@ -115,74 +124,88 @@ export class AgentRuntimeMutationManager {
     }
 
     try {
-      await this.emitCwdChanged({ previousCwd, newCwd });
+      await this.emitCwdChanged(call, { previousCwd, newCwd });
     } catch {
       return { success: false, reason: 'cwd_change_committed_event_failed' };
     }
     return { success: true, previousCwd };
   }
 
-  /** Apply all staged replacements while the enclosing turn barrier is held. */
-  private async applyStagedMutationsUnlocked(): Promise<void> {
+  /**
+   * Apply all staged replacements while the enclosing turn barrier is held.
+   * @param call - Call context of the turn dispatch that applies the staged replacements
+   */
+  private async applyStagedMutationsUnlocked(call: CallContext): Promise<void> {
     if (this.getConnector().getProcessingState() !== 'idle') return;
-    await this.modelMutationManager.applyStagedMutation();
-    await this.mcpServersMutationManager.applyStagedMutation();
+    await this.modelMutationManager.applyStagedMutation(call);
+    await this.mcpServersMutationManager.applyStagedMutation(call);
   }
 
   /**
    * Serialize staged mutations and the complete turn pre-hook-to-send boundary.
+   * @param call - Call context of the turn being dispatched
    * @param dispatch - Turn dispatch work that must observe one connector generation
    * @returns Dispatch result
    */
-  public runTurnDispatch<T>(dispatch: () => Promise<T>): Promise<T> {
+  public runTurnDispatch<T>(call: CallContext, dispatch: () => Promise<T>): Promise<T> {
     return this.runExclusive(async () => {
       // Staged collaborators expose unlocked methods specifically for this
       // already-held turn boundary; reacquisition would deadlock the dispatch.
-      await this.applyStagedMutationsUnlocked();
+      await this.applyStagedMutationsUnlocked(call);
       return dispatch();
     });
   }
 
   /**
    * Handle `agent.mcp.servers.set` through the shared runtime barrier.
+   * @param call - Call context of the `agent.mcp.servers.set` request
    * @param payload - MCP server replacement request payload
    * @returns MCP mutation response payload
    */
   public async handleMcpServersSet(
+    call: CallContext,
     payload: AgentMcpServersSetRequestPayload,
   ): Promise<AgentMcpServersSetResponsePayload> {
-    return this.runExclusive(() => this.mcpServersMutationManager.handleMcpServersSet(payload));
+    return this.runExclusive(() => this.mcpServersMutationManager.handleMcpServersSet(call, payload));
   }
 
   /**
    * Handle `agent.model.change` through the shared runtime barrier.
+   * @param call - Call context of the `agent.model.change` request
    * @param payload - Model/provider/reasoning mutation request
    * @returns Model mutation response payload
    */
-  public async handleModelChange(payload: AgentModelChangeRequestPayload): Promise<AgentModelChangeResponsePayload> {
-    return this.runExclusive(() => this.modelMutationManager.handle(payload));
+  public async handleModelChange(
+    call: CallContext,
+    payload: AgentModelChangeRequestPayload,
+  ): Promise<AgentModelChangeResponsePayload> {
+    return this.runExclusive(() => this.modelMutationManager.handle(call, payload));
   }
 
   /**
    * Handle credential rotation through the same turn/mutation barrier.
+   * @param call - Call context of the `agent.credential.change` request
    * @param payload - Credential change request payload
    * @returns Credential mutation response payload
    */
   public async handleCredentialChanged(
+    call: CallContext,
     payload: AgentCredentialChangeRequestPayload,
   ): Promise<AgentCredentialChangeResponsePayload> {
-    return this.credentialChangeManager.handle(payload);
+    return this.credentialChangeManager.handle(call, payload);
   }
 
   /**
    * Persist committed runtime fields and require an affirmative storage result.
+   * @param call - Call context of the mutation being persisted
    * @param changes - CWD/model/provider mutations to persist
    */
   private async persistRuntimeMutation(
+    call: CallContext,
     changes: Partial<Pick<MakaioSessionAgent, 'cwd' | 'model'>> & { providerConfigId?: string | null },
   ): Promise<void> {
     try {
-      const result = await this.globalBus.requestOptional(AgentStorageSubjects.updateRuntime, {
+      const result = await this.globalBus.requestOptional(call, AgentStorageSubjects.updateRuntime, {
         agentId: this.agentId,
         cwd: changes.cwd,
         model: changes.model,

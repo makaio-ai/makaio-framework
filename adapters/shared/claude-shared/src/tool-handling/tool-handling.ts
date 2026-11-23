@@ -15,6 +15,7 @@
  */
 
 import type { IMakaioBus } from '@makaio/bus-core';
+import type { CallContext } from '@makaio/core';
 import type { ClaudeConnectorNamespace } from '../namespace/index.js';
 import {
   createToolApprovalHandler,
@@ -88,14 +89,14 @@ export function fromGlobalToolApproval(response: AgentToolApproveResponse): Clau
  * matches the core schema. The connector handles final SDK mapping.
  * @param connector - Connector for Claude Code SDK adapter
  * @param subjects - Namespace subjects providing the can_use_tool subject definition
- * @param context - Optional context override for request enrichment
+ * @param context - Context override or lazy provider receiving the handled message's call
  * @param globalBus - Bus that owns AgentSubjects.toolApprove handlers.
  * @returns Unsubscribe function
  */
 export function registerToolApprovalHandler(
   connector: ToolApprovalConnector,
   subjects: ClaudeConnectorNamespace<string>['subjects'],
-  context: ToolApprovalContext | (() => Promise<ToolApprovalContext>),
+  context: ToolApprovalContext | ((call: CallContext) => Promise<ToolApprovalContext>),
   globalBus: IMakaioBus,
 ): () => void {
   return createToolApprovalHandler(
@@ -112,6 +113,7 @@ export function registerToolApprovalHandler(
  *
  * Accepts the scoped payload shape so callers may omit identity fields and rely on
  * explicit trusted fallback when context is unavailable.
+ * @param call - Call context of the handled message requesting approval
  * @param bus - Bus that owns AgentSubjects.toolApprove handlers.
  * @param payload - Tool approval request in scoped connector format
  * @param context - Optional context override
@@ -119,6 +121,7 @@ export function registerToolApprovalHandler(
  * @returns Core tool approval response
  */
 export async function requestToolApproval(
+  call: CallContext,
   bus: IMakaioBus,
   payload: ScopedToolApprovalRequest,
   context?: Partial<ToolApprovalContext>,
@@ -128,5 +131,5 @@ export async function requestToolApproval(
     allowPayloadSessionFallback: options.allowPayloadSessionFallback ?? false,
     allowPayloadIdentityFallback: options.allowPayloadIdentityFallback ?? false,
   });
-  return bus.request(AgentSubjects.toolApprove, request);
+  return bus.request(call, AgentSubjects.toolApprove, request);
 }

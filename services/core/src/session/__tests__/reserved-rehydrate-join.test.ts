@@ -10,6 +10,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { MakaioSessionAgent } from '@makaio/contracts';
+import { createTestCall } from '@makaio/test-utils';
 import { runExclusiveStart } from '../ownership/in-flight-starts.js';
 import { FRESH_WITH_HISTORY_RECOVERY_PLAN } from '../recovery-plan.js';
 import { AgentStorageSubjects } from '../storage/agent-namespace.js';
@@ -53,17 +54,18 @@ describe('a joined reserved rehydrate', () => {
     const gate = new Promise<void>((resolve) => {
       release = resolve;
     });
+    const call = createTestCall();
     const attempt = runExclusiveStart(stored.agentId, async () => {
       await gate;
       // Exactly what a rehydrate persists before it commits its row: the
       // instance its connector lives on, and the cwd and model it ran with.
-      await bus.request(AgentStorageSubjects.updateRuntime, {
+      await bus.request(call, AgentStorageSubjects.updateRuntime, {
         agentId: stored.agentId,
         adapterId: REBOUND_ADAPTER_ID,
         cwd: '/after',
         model: 'model-after',
       });
-      await bus.request(AgentStorageSubjects.updateStatus, { agentId: stored.agentId, status: 'idle' });
+      await bus.request(call, AgentStorageSubjects.updateStatus, { agentId: stored.agentId, status: 'idle' });
       return 'connected';
     });
 

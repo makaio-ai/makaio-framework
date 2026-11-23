@@ -2,24 +2,25 @@
  * Tests consumption of centrally finalized Qwen runtime inputs.
  *
  * Verifies that `initializeConnection()` threads the resolved binary path and env
- * into `createAcpConnection`, and that the adapter degrades gracefully when no
- * handler is registered for `client.resolveBinary`.
+ * into `createAcpConnection`, including when no binary selection is supplied.
  *
  * Design invariants under test:
- * - When `client.resolveBinary` returns a managed context, the subprocess is
+ * - When `clientExecution` contains a managed context, the subprocess is
  *   spawned with the selected binary path and the already-finalized connector env;
  *   the binary environment is not merged a second time.
- * - When `client.resolveBinary` returns a global context (empty binaryPath and
+ * - When `clientExecution` contains a global context (null binaryPath and empty
  *   env), the default `'qwen'` command and base env are used.
  * - When the central runtime supplies no binary selection, PATH lookup uses
  *   the default command with an explicit empty environment.
- * - Adapter provider config cannot override the centrally resolved executable.
  */
 
 import { tmpdir } from 'node:os';
 import { beforeEach, afterEach, describe, it, expect, vi } from 'vitest';
 import type { ClientExecutionContext } from '@makaio/contracts/client';
 import type { AcpConnectionHandle } from '@makaio/ai-adapters-acp-client';
+import { ClientSideConnection } from '@agentclientprotocol/sdk';
+import { MakaioBus } from '@makaio/bus-core';
+import { createTestCall } from '@makaio/test-utils';
 
 // ---------------------------------------------------------------------------
 // ACP connection mock — captures the spawn arguments passed to createAcpConnection
@@ -33,19 +34,19 @@ const acpHarness = vi.hoisted(() => {
     env: Record<string, string>;
   }> = [];
 
-  /** Minimal mock ACP connection handle. */
-  const makeMockHandle = (): AcpConnectionHandle => ({
-    // @ts-expect-error -- partial platform shim; tests only need initialize/newSession/kill
-    connection: {
-      initialize: vi.fn().mockResolvedValue(undefined),
-      newSession: vi.fn().mockResolvedValue({ sessionId: 'mock-acp-session' }),
-    },
-    kill: vi.fn(),
-    exited: Promise.resolve(0),
-  });
-
-  return { capturedCalls, makeMockHandle };
+  return { capturedCalls };
 });
+
+/** Minimal typed ACP connection handle for initialization. */
+function makeMockHandle(): AcpConnectionHandle {
+  const connection = new ClientSideConnection(
+    () => ({ sessionUpdate: async () => {}, requestPermission: async () => ({ outcome: { outcome: 'cancelled' } }) }),
+    { readable: new ReadableStream({ start: (controller) => controller.close() }), writable: new WritableStream() },
+  );
+  vi.spyOn(connection, 'initialize').mockResolvedValue({ protocolVersion: 1 });
+  vi.spyOn(connection, 'newSession').mockResolvedValue({ sessionId: 'mock-acp-session' });
+  return { connection, kill: vi.fn(), exited: Promise.resolve(0) };
+}
 
 vi.mock('@makaio/ai-adapters-acp-client', async () => {
   const actual = await vi.importActual<typeof import('@makaio/ai-adapters-acp-client')>(
@@ -55,7 +56,7 @@ vi.mock('@makaio/ai-adapters-acp-client', async () => {
     ...actual,
     createAcpConnection: vi.fn((_clientFn: unknown, opts: { command: string; env: Record<string, string> }) => {
       acpHarness.capturedCalls.push({ command: opts.command, env: opts.env });
-      return Promise.resolve(acpHarness.makeMockHandle());
+      return Promise.resolve(makeMockHandle());
     }),
   };
 });
@@ -90,9 +91,10 @@ function makeExecutionContext(
 async function makeConnector(
   overrides: { env?: Record<string, string>; clientExecution?: ClientExecutionContext } = {},
 ): Promise<QwenAcpConnector> {
-  const bus = await QwenAcpNamespace.scopedBus();
+  const bus = await QwenAcpNamespace.scopedBus(MakaioBus);
   return new QwenAcpConnector({
     bus,
+    globalBus: MakaioBus,
     adapterId: 'adapter-test',
     adapterName: 'qwen-acp',
     agentId: 'agent-test',
@@ -137,7 +139,7 @@ describe('QwenAcpConnector — central runtime inputs', () => {
       }),
     });
     connectors.push(connector);
-    await connector.initialize();
+    await connector.initialize({ call: createTestCall() });
 
     expect(acpHarness.capturedCalls).toHaveLength(1);
     expect(acpHarness.capturedCalls[0]?.command).toBe('/usr/local/lib/makaio/qwen/1.0.0/qwen');
@@ -151,20 +153,20 @@ describe('QwenAcpConnector — central runtime inputs', () => {
   it('uses default qwen command for a centrally selected global binary', async () => {
     const connector = await makeConnector({ clientExecution: makeExecutionContext(null, {}, 'global') });
     connectors.push(connector);
-    await connector.initialize();
+    await connector.initialize({ call: createTestCall() });
 
     expect(acpHarness.capturedCalls).toHaveLength(1);
     expect(acpHarness.capturedCalls[0]?.command).toBe('qwen');
   });
 
   // -------------------------------------------------------------------------
-  // No handler — framework-only boot, falls back to current behaviour
+  // No binary selection — framework-only boot uses the default command
   // -------------------------------------------------------------------------
 
   it('initializes without a managed binary selection', async () => {
     const connector = await makeConnector();
     connectors.push(connector);
-    await expect(connector.initialize()).resolves.toBeUndefined();
+    await expect(connector.initialize({ call: createTestCall() })).resolves.toBeUndefined();
 
     expect(acpHarness.capturedCalls).toHaveLength(1);
     expect(acpHarness.capturedCalls[0]?.command).toBe('qwen');
@@ -179,7 +181,7 @@ describe('QwenAcpConnector — central runtime inputs', () => {
     vi.stubEnv('OPENAI_API_KEY', 'ambient-openai-key');
     const connector = await makeConnector();
     connectors.push(connector);
-    await connector.initialize();
+    await connector.initialize({ call: createTestCall() });
 
     expect(acpHarness.capturedCalls[0]?.env).toEqual({});
   });

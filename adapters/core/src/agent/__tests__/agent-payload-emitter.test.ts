@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { AdapterSubjects, AgentSubjects } from '@makaio/contracts';
+import { AdapterSubjects, AgentSubjects, type CallContext } from '@makaio/contracts';
+import { createTestCall } from '@makaio/test-utils';
 import { AgentPayloadEmitter } from '../agent-payload-emitter.js';
 import { createAgentEventBridge } from '../agent-internal-factories.js';
 
@@ -14,7 +15,7 @@ describe('AgentPayloadEmitter', () => {
     const emittedPayloads: Array<Record<string, unknown>> = [];
     const emitter = new AgentPayloadEmitter({
       globalBus: {
-        emit: async (_subject: unknown, payload: unknown) => {
+        emit: async (_call: CallContext, _subject: unknown, payload: unknown) => {
           emittedPayloads.push(payload as Record<string, unknown>);
         },
       } as never,
@@ -35,7 +36,7 @@ describe('AgentPayloadEmitter', () => {
 
     // A payload that already carries a provider session, as a bridged connector
     // event does, on a subject this gate was never written for.
-    await emitter.emitGlobal(AgentSubjects.message, {
+    await emitter.emitGlobal(createTestCall(), AgentSubjects.message, {
       content: 'hello',
       adapterSessionId: 'carried-by-the-payload',
     } as never);
@@ -48,7 +49,7 @@ describe('AgentPayloadEmitter', () => {
     const emittedPayloads: unknown[] = [];
     const emitter = new AgentPayloadEmitter({
       globalBus: {
-        emit: async (_subject: unknown, payload: unknown) => {
+        emit: async (_call: CallContext, _subject: unknown, payload: unknown) => {
           emittedPayloads.push(payload);
         },
       } as never,
@@ -70,7 +71,7 @@ describe('AgentPayloadEmitter', () => {
       }),
     });
 
-    await emitter.emitGlobal(AgentSubjects.message, {
+    await emitter.emitGlobal(createTestCall(), AgentSubjects.message, {
       content: 'hello',
       messageId: 'payload-message-id',
     });
@@ -111,13 +112,13 @@ describe('AgentPayloadEmitter', () => {
       getCurrentTurnId: () => undefined,
       getConnectorAdapterSessionId: () => undefined,
       getLastKnownAdapterSessionId: () => undefined,
-      setLastKnownAdapterSessionId: (adapterSessionId) => {
+      setLastKnownAdapterSessionId: (_call, adapterSessionId) => {
         recorded.push(adapterSessionId);
       },
       getEventMetadataDefaults: () => ({}),
     });
 
-    await emitter.emitGlobal(AgentSubjects.message, { content: 'hello', messageId: 'message-a' });
+    await emitter.emitGlobal(createTestCall(), AgentSubjects.message, { content: 'hello', messageId: 'message-a' });
 
     expect(recorded).toEqual([undefined]);
   });
@@ -126,7 +127,7 @@ describe('AgentPayloadEmitter', () => {
     const emittedPayloads: unknown[] = [];
     const emitter = new AgentPayloadEmitter({
       globalBus: {
-        emit: async (_subject: unknown, payload: unknown) => {
+        emit: async (_call: CallContext, _subject: unknown, payload: unknown) => {
           emittedPayloads.push(payload);
         },
       } as never,
@@ -144,7 +145,7 @@ describe('AgentPayloadEmitter', () => {
       getEventMetadataDefaults: () => ({}),
     });
 
-    await emitter.emitGlobal(AgentSubjects.turn.completed, {
+    await emitter.emitGlobal(createTestCall(), AgentSubjects.turn.completed, {
       messageId: 'message-a',
       outcome: 'completed',
       turnId: 'captured-turn-id',
@@ -166,7 +167,7 @@ describe('AgentPayloadEmitter', () => {
     const emittedPayloads: unknown[] = [];
     const emitter = new AgentPayloadEmitter({
       globalBus: {
-        emit: async (_subject: unknown, payload: unknown) => {
+        emit: async (_call: CallContext, _subject: unknown, payload: unknown) => {
           emittedPayloads.push(payload);
         },
       } as never,
@@ -184,7 +185,7 @@ describe('AgentPayloadEmitter', () => {
       getEventMetadataDefaults: () => ({}),
     });
 
-    await emitter.emitGlobal(AgentSubjects.user_message.sent, {
+    await emitter.emitGlobal(createTestCall(), AgentSubjects.user_message.sent, {
       messageId: 'message-a',
       content: { role: 'user', message: 'hello', blocks: [{ type: 'text', content: 'hello' }] },
       deliveryMode: 'enqueue',
@@ -199,7 +200,7 @@ describe('AgentPayloadEmitter', () => {
     const emittedPayloads: unknown[] = [];
     const emitter = new AgentPayloadEmitter({
       globalBus: {
-        emit: async (_subject: unknown, payload: unknown) => {
+        emit: async (_call: CallContext, _subject: unknown, payload: unknown) => {
           emittedPayloads.push(payload);
         },
       } as never,
@@ -221,7 +222,7 @@ describe('AgentPayloadEmitter', () => {
       }),
     });
 
-    await emitter.emitGlobal(AgentSubjects.usage, {
+    await emitter.emitGlobal(createTestCall(), AgentSubjects.usage, {
       provider: 'anthropic',
       granularity: 'provider-call',
       model: 'claude-3-7-sonnet',
@@ -267,7 +268,7 @@ describe('AgentPayloadEmitter', () => {
     const emittedPayloads: unknown[] = [];
     const emitter = new AgentPayloadEmitter({
       globalBus: {
-        emit: async (_subject: unknown, payload: unknown) => {
+        emit: async (_call: CallContext, _subject: unknown, payload: unknown) => {
           emittedPayloads.push(payload);
         },
       } as never,
@@ -290,6 +291,7 @@ describe('AgentPayloadEmitter', () => {
     });
 
     await emitter.emitGlobal(
+      createTestCall(),
       AdapterSubjects.log,
       {
         level: 'info',
@@ -319,7 +321,7 @@ describe('AgentPayloadEmitter', () => {
     const emittedPayloads: unknown[] = [];
     const emitter = new AgentPayloadEmitter({
       globalBus: {
-        emit: async (_subject: unknown, payload: unknown) => {
+        emit: async (_call: CallContext, _subject: unknown, payload: unknown) => {
           emittedPayloads.push(payload);
         },
       } as never,
@@ -340,7 +342,7 @@ describe('AgentPayloadEmitter', () => {
       }),
     });
 
-    await emitter.emitGlobal(AgentSubjects.message, {
+    await emitter.emitGlobal(createTestCall(), AgentSubjects.message, {
       content: 'hello',
     });
 
@@ -366,7 +368,7 @@ describe('AgentPayloadEmitter', () => {
     const emittedPayloads: unknown[] = [];
     const emitter = new AgentPayloadEmitter({
       globalBus: {
-        emit: async (_subject: unknown, payload: unknown) => {
+        emit: async (_call: CallContext, _subject: unknown, payload: unknown) => {
           emittedPayloads.push(payload);
         },
       } as never,
@@ -383,7 +385,7 @@ describe('AgentPayloadEmitter', () => {
       getEventMetadataDefaults: () => ({}),
     });
 
-    await emitter.emitGlobal(AgentSubjects.message, { content: 'hello' });
+    await emitter.emitGlobal(createTestCall(), AgentSubjects.message, { content: 'hello' });
     expect(emittedPayloads[0]).not.toHaveProperty('adapterSessionId');
   });
 
@@ -396,7 +398,7 @@ describe('AgentPayloadEmitter', () => {
     const storedIds: Array<string | undefined> = [];
     const emitter = new AgentPayloadEmitter({
       globalBus: {
-        emit: async (_subject: unknown, payload: unknown) => {
+        emit: async (_call: CallContext, _subject: unknown, payload: unknown) => {
           emittedPayloads.push(payload);
         },
       } as never,
@@ -410,13 +412,13 @@ describe('AgentPayloadEmitter', () => {
       getCurrentTurnId: () => undefined,
       getConnectorAdapterSessionId: () => undefined, // new connector not yet confirmed
       getLastKnownAdapterSessionId: () => 'previous-confirmed-session', // cached from old connector
-      setLastKnownAdapterSessionId: (id) => {
+      setLastKnownAdapterSessionId: (_call, id) => {
         storedIds.push(id);
       },
       getEventMetadataDefaults: () => ({}),
     });
 
-    await emitter.emitGlobal(AgentSubjects.message, { content: 'during-swap' });
+    await emitter.emitGlobal(createTestCall(), AgentSubjects.message, { content: 'during-swap' });
     expect(emittedPayloads[0]).toHaveProperty('adapterSessionId', 'previous-confirmed-session');
     // The sink is told what the *connector* confirms, not what the cache still
     // reports: the cached ID may be one a movement already abandoned, and
@@ -431,7 +433,7 @@ describe('AgentPayloadEmitter', () => {
     const storedIds: Array<string | undefined> = [];
     const emitter = new AgentPayloadEmitter({
       globalBus: {
-        emit: async (_subject: unknown, payload: unknown) => {
+        emit: async (_call: CallContext, _subject: unknown, payload: unknown) => {
           emittedPayloads.push(payload);
         },
       } as never,
@@ -445,19 +447,19 @@ describe('AgentPayloadEmitter', () => {
       getCurrentTurnId: () => undefined,
       getConnectorAdapterSessionId: () => confirmedId,
       getLastKnownAdapterSessionId: () => undefined,
-      setLastKnownAdapterSessionId: (id) => {
+      setLastKnownAdapterSessionId: (_call, id) => {
         storedIds.push(id);
       },
       getEventMetadataDefaults: () => ({}),
     });
 
     // Pre-confirmation: no adapterSessionId
-    await emitter.emitGlobal(AgentSubjects.message, { content: 'pre' });
+    await emitter.emitGlobal(createTestCall(), AgentSubjects.message, { content: 'pre' });
     expect(emittedPayloads[0]).not.toHaveProperty('adapterSessionId');
 
     // Simulate system.init confirmation
     confirmedId = 'confirmed-child-session';
-    await emitter.emitGlobal(AgentSubjects.message, { content: 'post' });
+    await emitter.emitGlobal(createTestCall(), AgentSubjects.message, { content: 'post' });
     expect(emittedPayloads[1]).toHaveProperty('adapterSessionId', 'confirmed-child-session');
     expect(storedIds).toContain('confirmed-child-session');
   });
@@ -466,7 +468,7 @@ describe('AgentPayloadEmitter', () => {
     const emittedPayloads: unknown[] = [];
     const emitter = new AgentPayloadEmitter({
       globalBus: {
-        emit: async (_subject: unknown, payload: unknown) => {
+        emit: async (_call: CallContext, _subject: unknown, payload: unknown) => {
           emittedPayloads.push(payload);
         },
       } as never,
@@ -485,19 +487,21 @@ describe('AgentPayloadEmitter', () => {
       getEventMetadataDefaults: () => ({}),
     });
 
-    await emitter.emitGlobal(AgentSubjects.message, { content: 'hello' });
+    await emitter.emitGlobal(createTestCall(), AgentSubjects.message, { content: 'hello' });
     expect(emittedPayloads[0]).toHaveProperty('adapterSessionId', 'local-authoritative-id');
   });
 
   it('routes adapter logs through the emitter without requesting analytics metadata', async () => {
+    const call = createTestCall();
     const emitCalls: Array<{
+      call: CallContext;
       subject: unknown;
       payload: unknown;
       options?: { includeEventMetadata?: boolean };
     }> = [];
     const bridge = createAgentEventBridge({
-      emitGlobal: async (subject, payload, options) => {
-        emitCalls.push({ subject, payload, options });
+      emitGlobal: async (call, subject, payload, options) => {
+        emitCalls.push({ call, subject, payload, options });
       },
       toolCallTracker: {
         register: () => 'tool-call-id',
@@ -511,10 +515,11 @@ describe('AgentPayloadEmitter', () => {
       getUsageModel: () => 'test-model',
     });
 
-    await bridge.emitToolOutput('message-1', 'output', { toolName: 'test-tool' });
+    await bridge.emitToolOutput(call, 'message-1', 'output', { toolName: 'test-tool' });
 
     expect(emitCalls).toEqual([
       {
+        call,
         subject: AdapterSubjects.log,
         payload: {
           level: 'warn',
@@ -524,6 +529,7 @@ describe('AgentPayloadEmitter', () => {
         options: { includeEventMetadata: false },
       },
       {
+        call,
         subject: AgentSubjects.tool.output,
         payload: {
           messageId: 'message-1',

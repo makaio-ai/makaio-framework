@@ -1,4 +1,5 @@
 import type { IMakaioBus } from '@makaio/bus-core';
+import type { CallContext } from '@makaio/core';
 import { type ReasoningLevelMap } from '@makaio/contracts';
 import { AdapterRuntimeSubjects } from '../../adapter-runtime/namespace.js';
 import { AdapterSubsystemSubjects } from '../../adapter-subsystem/namespace.js';
@@ -9,14 +10,20 @@ import type { ExecutionTarget } from '../../execution-target/schemas.js';
 /**
  * Resolve adapterName → adapterId for bus routing.
  * Queries the adapters table for a local enabled instance.
+ * @param call - Call context of the handled message this resolution serves
  * @param bus - Bus instance
  * @param adapterName - Adapter type name
  * @param machineId - Optional machine ID for deterministic local resolution
  * @returns Canonical adapter ID for bus routing
  * @throws if no enabled instance found for this adapterName
  */
-export async function resolveAdapterId(bus: IMakaioBus, adapterName: string, machineId?: string): Promise<string> {
-  const { adapterId } = await bus.request(AdapterRuntimeSubjects.resolveId, {
+export async function resolveAdapterId(
+  call: CallContext,
+  bus: IMakaioBus,
+  adapterName: string,
+  machineId?: string,
+): Promise<string> {
+  const { adapterId } = await bus.request(call, AdapterRuntimeSubjects.resolveId, {
     adapterName,
     ...(machineId !== undefined && { machineId }),
   });
@@ -129,16 +136,18 @@ export interface OwnedAdapterInstanceTarget {
  * The proof is announcement-backed rather than hash-backed: hosts may provide
  * opaque adapter IDs, and a deterministic-looking value is not evidence that a
  * runtime has initialized it.
+ * @param call - Call context of the handled message this proof serves.
  * @param bus - Bus the live-identity request is issued on.
  * @param target - Complete identity the caller intends to dispatch to.
  * @returns The dispatchable instance, or `undefined` when it has no matching live announcement.
  */
 export async function resolveAnnouncedAdapterInstance(
+  call: CallContext,
   bus: IMakaioBus,
   target: Required<Pick<OwnedAdapterInstanceTarget, 'adapterId' | 'adapterName' | 'machineId'>>,
 ): Promise<MachineScopedAdapterInstance | undefined> {
   try {
-    const identity = await bus.request(AdapterRuntimeSubjects.resolveLiveIdentity, target);
+    const identity = await bus.request(call, AdapterRuntimeSubjects.resolveLiveIdentity, target);
     return {
       adapterId: identity.adapterId,
       machineId: identity.machineId,
@@ -186,11 +195,13 @@ export async function resolveAnnouncedAdapterInstance(
  * failed*. Translating it is the caller's job, because only the caller knows
  * what its own refusal looks like: a send defers the agent, a restart reports a
  * non-native recovery, a start refuses to dispatch.
+ * @param call - Call context of the handled message this resolution serves.
  * @param bus - Bus the lookup is issued on.
  * @param target - What the caller knows about the instance and the machine it acts for.
  * @returns Both halves of the key, or `undefined` when this runtime may not act for that machine.
  */
 export async function resolveOwnedAdapterInstance(
+  call: CallContext,
   bus: IMakaioBus,
   target: OwnedAdapterInstanceTarget,
 ): Promise<OwnedAdapterInstance | undefined> {
@@ -198,9 +209,9 @@ export async function resolveOwnedAdapterInstance(
   if (adapterId !== undefined) {
     return machineId === undefined
       ? undefined
-      : await resolveAnnouncedAdapterInstance(bus, { adapterId, adapterName, machineId });
+      : await resolveAnnouncedAdapterInstance(call, bus, { adapterId, adapterName, machineId });
   }
-  const resolved = await resolveAdapterId(bus, adapterName, machineId).catch((error: unknown) => {
+  const resolved = await resolveAdapterId(call, bus, adapterName, machineId).catch((error: unknown) => {
     // The refusal is modeled by the caller (deferral / non-native degrade), so
     // the only trace of WHY no instance was resolvable would otherwise vanish
     // with this catch.
@@ -216,7 +227,7 @@ export async function resolveOwnedAdapterInstance(
   const effective = resolved ?? (machineId === undefined ? storedAdapterId : undefined);
   if (effective === undefined) return undefined;
   if (machineId === undefined) return { adapterId: effective };
-  return await resolveAnnouncedAdapterInstance(bus, { adapterId: effective, adapterName, machineId });
+  return await resolveAnnouncedAdapterInstance(call, bus, { adapterId: effective, adapterName, machineId });
 }
 
 /**
@@ -225,12 +236,14 @@ export async function resolveOwnedAdapterInstance(
  * Looks up the provider config by ID, finds the provider definition it belongs to,
  * then finds the model's `supportedReasoningLevels` in the provider's `availableModels`
  * catalog.
+ * @param call - Call context of the handled message this resolution serves
  * @param bus - Bus instance for RPC calls
  * @param providerConfigId - Canonical provider config ID (ProviderConfigRecord.id)
  * @param model - Model identifier to look up in the provider's catalog
  * @returns Object with `supportedReasoningLevels` when found, or `undefined` when not resolvable
  */
 export async function resolveModelCapabilities(
+  call: CallContext,
   bus: IMakaioBus,
   providerConfigId: string | undefined,
   model: string | undefined,
@@ -238,10 +251,10 @@ export async function resolveModelCapabilities(
   if (!providerConfigId || !model) return undefined;
 
   try {
-    const { config } = await bus.request(AdapterSubsystemSubjects.getProviderConfig, { id: providerConfigId });
+    const { config } = await bus.request(call, AdapterSubsystemSubjects.getProviderConfig, { id: providerConfigId });
     if (!config) return undefined;
 
-    const { provider } = await bus.request(ProviderStorageSubjects.get, { id: config.definitionId });
+    const { provider } = await bus.request(call, ProviderStorageSubjects.get, { id: config.definitionId });
     const modelDef = provider?.availableModels?.find((m) => m.name === model);
     return modelDef ? { supportedReasoningLevels: modelDef.supportedReasoningLevels } : undefined;
   } catch {
@@ -254,16 +267,18 @@ export async function resolveModelCapabilities(
 /**
  * Resolves the effective execution target for a session.
  * Priority: explicit executionTargetId → system default (local).
+ * @param call - Call context of the handled message this resolution serves
  * @param bus - Makaio bus instance
  * @param params - Resolution parameters from session context
  * @returns Resolved execution target
  */
 export async function resolveExecutionTarget(
+  call: CallContext,
   bus: IMakaioBus,
   params: {
     executionTargetId?: string;
   },
 ): Promise<ExecutionTarget> {
-  const { executionTarget } = await bus.request(ExecutionTargetSubjects.resolve, params);
+  const { executionTarget } = await bus.request(call, ExecutionTargetSubjects.resolve, params);
   return executionTarget;
 }

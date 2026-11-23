@@ -1,6 +1,7 @@
 /** Generic import handlers for LogImportRegistry. @packageDocumentation */
 import * as fs from 'node:fs/promises';
 import type { IMakaioBus } from '@makaio/bus-core';
+import type { CallContext } from '@makaio/core';
 import type {
   LogImporter,
   ImportCursorPosition,
@@ -65,6 +66,7 @@ export { matchesPattern } from './pattern-matching.js';
  * Failures are swallowed — a missing cursor is recoverable (the orchestrator
  * will fall back to a full re-read), but we don't want cursor I/O errors to
  * surface to callers of {@link importFromFileContent}.
+ * @param call - Call context of the import this write belongs to
  * @param bus - Bus instance for cursor storage requests
  * @param importer - Importer used to extract session context and serialize state
  * @param records - Parsed records from the full-import snapshot
@@ -74,6 +76,7 @@ export { matchesPattern } from './pattern-matching.js';
  * @param adapterSessionId - Adapter session identifier for warning logs
  */
 async function writeCursorAfterFullImport(
+  call: CallContext,
   bus: IMakaioBus,
   importer: LogImporter<unknown>,
   records: unknown[],
@@ -98,7 +101,7 @@ async function writeCursorAfterFullImport(
       startedEvent: context.startedEvent,
       state: importer.serializeState(context.state),
     };
-    await bus.request(ImportCursorStorageSubjects.set, {
+    await bus.request(call, ImportCursorStorageSubjects.set, {
       filePath,
       bytesRead: contentByteLength,
       lastModified: snapshotIsCurrent ? stat.mtime.toISOString() : new Date(0).toISOString(),
@@ -126,6 +129,7 @@ async function writeCursorAfterFullImport(
  *
  * This uses the plugin event path (`PluginSessionEventSchema`) — no core event
  * schema change is needed.
+ * @param call - Call context of the import this event belongs to
  * @param bus - Bus instance for storage requests
  * @param parentSessionId - Makaio session ID of the pre-compaction parent session
  * @param compressChildSessionId - Makaio session ID of the compress child session
@@ -133,6 +137,7 @@ async function writeCursorAfterFullImport(
  * @param childMessagePayloads - Message payloads from the compress child (for summary extraction)
  */
 async function emitCompactionEvent(
+  call: CallContext,
   bus: IMakaioBus,
   parentSessionId: string,
   compressChildSessionId: string,
@@ -143,7 +148,7 @@ async function emitCompactionEvent(
   const summary = summaryPayload?.contentText ?? null;
   const timestamp = compactionMetadata.timestamp ?? summaryPayload?.timestamp ?? Date.now();
   const eventId = `session-compacted:${parentSessionId}:${compressChildSessionId}`;
-  await appendSessionCompactedEvent(bus, {
+  await appendSessionCompactedEvent(call, bus, {
     sessionId: parentSessionId,
     eventId,
     timestamp,
@@ -162,17 +167,19 @@ async function emitCompactionEvent(
  * messages not referenced by any reconstructed turn (system records, orphans).
  * Turn-member messages are persisted with their real `turnId` by the turn
  * ingestion seam instead — see {@link ingestSegmentTurns}.
+ * @param call - Call context of the import this write belongs to
  * @param bus - Bus instance
  * @param sessionId - Target Makaio session ID
  * @param messagePayloads - Payloads to persist
  */
 async function storeMessages(
+  call: CallContext,
   bus: IMakaioBus,
   sessionId: string,
   messagePayloads: StorageMessagePayload[],
 ): Promise<void> {
   for (const msg of messagePayloads) {
-    await bus.request(MessageStorageSubjects.upsertByAdapterMessageId, {
+    await bus.request(call, MessageStorageSubjects.upsertByAdapterMessageId, {
       sessionId,
       turnId: null,
       adapterMessageId: msg.adapterMessageId,
@@ -214,6 +221,7 @@ function toIngestTurnMessage(payload: StorageMessagePayload): IngestTurnMessage 
  * only on first ingestion of the anchor — emits `session.turn.started` /
  * `session.turn.completed`. Member IDs missing from the segment are logged
  * and skipped so one malformed turn cannot abort the whole import.
+ * @param call - Call context of the import this ingestion belongs to
  * @param bus - Bus instance
  * @param sessionId - Makaio session ID of the segment's session
  * @param segment - Segment whose turns are ingested (`turns` must be present)
@@ -223,6 +231,7 @@ function toIngestTurnMessage(payload: StorageMessagePayload): IngestTurnMessage 
  *   NEWLY created turns (re-ingested anchors do not count)
  */
 async function ingestSegmentTurns(
+  call: CallContext,
   bus: IMakaioBus,
   sessionId: string,
   segment: ImportSegment,
@@ -256,7 +265,7 @@ async function ingestSegmentTurns(
       continue;
     }
 
-    const result = await ingestCompletedTurn(bus, {
+    const result = await ingestCompletedTurn(call, bus, {
       sessionId,
       turnAnchorId: turn.turnAnchorId,
       startedAt: turn.startedAt,
@@ -277,6 +286,24 @@ async function ingestSegmentTurns(
   }
 
   return { turnMemberIds, createdTurnCount };
+}
+
+/**
+ * Derive the context for child segments from the parent's context.
+ * @param ctx - Context of the parent segment
+ * @param ingestionMarker - Resolved marker applied to the whole tree
+ * @returns Child context; children never own the log file (explicit `null` stores NULL, not omitted)
+ */
+function toChildContext(ctx: ImportSegmentTreeContext, ingestionMarker: TurnIngestionMarker): ImportSegmentTreeContext {
+  return {
+    adapterId: ctx.adapterId,
+    adapterName: ctx.adapterName,
+    model: ctx.model,
+    cwd: ctx.cwd,
+    logFilePath: null,
+    machineId: ctx.machineId,
+    ingestionMarker,
+  };
 }
 
 /**
@@ -312,6 +339,7 @@ async function ingestSegmentTurns(
  * position directly after the segment's messages are persisted.
  * @remarks Canonical persistence path for explicit import segment trees. Watcher-driven
  * compaction imports also route through this helper so compaction ownership does not split.
+ * @param call - Call context of the import; every storage request and event of the tree is sent with it
  * @param bus - Bus instance
  * @param segment - Canonical import segment to persist
  * @param ctx - Adapter context for the import
@@ -319,6 +347,7 @@ async function ingestSegmentTurns(
  * @returns Makaio session ID, total message count, and newly created turn count
  */
 export async function importSegmentTree(
+  call: CallContext,
   bus: IMakaioBus,
   segment: ImportSegment,
   ctx: ImportSegmentTreeContext,
@@ -341,7 +370,7 @@ export async function importSegmentTree(
   // sessionId is stable and messages are not yet in storage.
   // ctx.logFilePath: undefined = omit (no-op for log path), null = explicitly NULL (children),
   // string = parent's absolute file path.
-  const existingSession = await bus.requestOptional(SessionStorageSubjects.getByAdapterSessionId, {
+  const existingSession = await bus.requestOptional(call, SessionStorageSubjects.getByAdapterSessionId, {
     adapterSessionId: metadata.adapterSessionId,
     source: ctx.adapterName,
   });
@@ -353,6 +382,7 @@ export async function importSegmentTree(
   }
 
   const { sessionId } = await bus.request(
+    call,
     SessionStorageSubjects.importUpsert,
     toImportUpsertPayload({
       metadata,
@@ -374,6 +404,7 @@ export async function importSegmentTree(
   let turnCount = 0;
   if (segment.turns !== undefined && segment.turns.length > 0) {
     const { turnMemberIds, createdTurnCount } = await ingestSegmentTurns(
+      call,
       bus,
       sessionId,
       segment,
@@ -382,41 +413,33 @@ export async function importSegmentTree(
     );
     turnCount += createdTurnCount;
     await storeMessages(
+      call,
       bus,
       sessionId,
       segment.messages.filter((message) => !turnMemberIds.has(message.adapterMessageId)),
     );
   } else {
-    await storeMessages(bus, sessionId, segment.messages);
+    await storeMessages(call, bus, sessionId, segment.messages);
   }
 
   if (parentSessionId !== undefined && segment.compaction !== undefined) {
-    await emitCompactionEvent(bus, parentSessionId, sessionId, segment.compaction, segment.messages);
+    await emitCompactionEvent(call, bus, parentSessionId, sessionId, segment.compaction, segment.messages);
   }
 
   // Recurse depth-first: each child reaches finalized before the parent does.
   let totalMessageCount = segment.messages.length;
 
-  const childCtx: ImportSegmentTreeContext = {
-    adapterId: ctx.adapterId,
-    adapterName: ctx.adapterName,
-    model: ctx.model,
-    cwd: ctx.cwd,
-    // Children never own the log file — explicit null stores NULL, not omitted
-    logFilePath: null,
-    machineId: ctx.machineId,
-    ingestionMarker: resolvedMarker,
-  };
+  const childCtx = toChildContext(ctx, resolvedMarker);
 
   for (const child of segment.children ?? []) {
-    const childResult = await importSegmentTree(bus, child, childCtx, sessionId);
+    const childResult = await importSegmentTree(call, bus, child, childCtx, sessionId);
     totalMessageCount += childResult.messageCount;
     turnCount += childResult.turnCount;
   }
 
   // Phase: ImportPhase.finalized — all descendants persisted; promote import status bottom-up (idempotent).
   // updateImportStatus with 'imported' also transitions session status to 'active' in the handler.
-  await bus.request(SessionStorageSubjects.updateImportStatus, {
+  await bus.request(call, SessionStorageSubjects.updateImportStatus, {
     sessionId,
     importStatus: 'imported',
   });
@@ -429,12 +452,14 @@ export async function importSegmentTree(
  *
  * Uses the importer's explicit lineage tree as the single source of truth for
  * session creation, message persistence, compaction events, and status finalization.
+ * @param call - Call context of the import
  * @param bus - Bus instance
  * @param result - Fully processed importer result for one log file
  * @param ctx - Adapter identity, optional root log file path, and optional ingestion marker
  * @returns Makaio session ID, total persisted message count, and newly created turn count
  */
 export async function persistImportResultTree(
+  call: CallContext,
   bus: IMakaioBus,
   result: ProcessLogFileResult,
   ctx: PersistImportResultContext,
@@ -442,7 +467,7 @@ export async function persistImportResultTree(
   const metadata = extractSessionMetadata(result.sessionEvent);
   const segmentTree = toImportSegment(result);
 
-  return importSegmentTree(bus, segmentTree, {
+  return importSegmentTree(call, bus, segmentTree, {
     adapterId: ctx.adapterId,
     adapterName: ctx.adapterName,
     model: metadata.model,
@@ -467,6 +492,8 @@ export async function persistImportResultTree(
  * @throws Error if no valid records are found in the content
  */
 export async function importFromFileContent(params: {
+  /** Call context of the import; used for every request the import sends. Never stored. */
+  call: CallContext;
   bus: IMakaioBus;
   importer: LogImporter<unknown>;
   content: string;
@@ -487,7 +514,8 @@ export async function importFromFileContent(params: {
    */
   ingestionMarker?: TurnIngestionMarker;
 }): Promise<ImportFromFileContentResult> {
-  const { bus, importer, content, isJsonl, adapterName, adapterId, sourceFilePath, persistedLogFilePath } = params;
+  const { call, bus, importer, content, isJsonl, adapterName, adapterId, sourceFilePath, persistedLogFilePath } =
+    params;
   const records = parseFileContent(content, importer, isJsonl, sourceFilePath);
 
   if (records.length === 0) {
@@ -509,7 +537,7 @@ export async function importFromFileContent(params: {
     sessionId: effectiveSessionId,
     messageCount: totalMessageCount,
     turnCount,
-  } = await persistImportResultTree(bus, result, {
+  } = await persistImportResultTree(call, bus, result, {
     adapterId,
     adapterName,
     logFilePath: normalizedPersistedLogFilePath,
@@ -520,6 +548,7 @@ export async function importFromFileContent(params: {
   // Only disk-backed imports should persist resumable cursor state and a durable log path.
   if (normalizedPersistedLogFilePath !== undefined) {
     await writeCursorAfterFullImport(
+      call,
       bus,
       importer,
       records,

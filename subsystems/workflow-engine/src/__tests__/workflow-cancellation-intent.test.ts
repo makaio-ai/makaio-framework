@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
+import { createTestCall } from '@makaio/test-utils';
 import { createWorkflowCancelSubject, type IWorkflowRunner, type WorkflowRunnerCompletion } from '@makaio/contracts';
 import { ExecutionAttemptAuthority } from '../execution-attempt-authority.js';
 import { WorkflowSubjects } from '../namespace.js';
@@ -26,7 +27,7 @@ describe('workflow durable cancellation intent', () => {
     const authority = new ExecutionAttemptAuthority(repository, { bootstrapTimeoutMs: 60_000 });
     setup = await setupWorkflowExecutorTest({ executionAttemptAuthority: authority });
     const execution = createWorkflowExecution({ status });
-    await MakaioBus.request(WorkflowStorageSubjects.setExecution, { execution });
+    await MakaioBus.request(createTestCall(), WorkflowStorageSubjects.setExecution, { execution });
     const attempt = await authority.createAttempt(execution.id, makeTestInstruction());
     const delivered: unknown[] = [];
     setup.cleanupFns.push(
@@ -35,7 +36,7 @@ describe('workflow durable cancellation intent', () => {
       }),
     );
     await expect(
-      MakaioBus.request(WorkflowSubjects.cancel, { executionId: execution.id, reason: 'operator' }),
+      MakaioBus.request(createTestCall(), WorkflowSubjects.cancel, { executionId: execution.id, reason: 'operator' }),
     ).resolves.toEqual({ cancelled: true });
     expect(delivered).toEqual([
       {
@@ -60,7 +61,7 @@ describe('workflow durable cancellation intent', () => {
     const authority = new ExecutionAttemptAuthority(repository, { bootstrapTimeoutMs: 60_000 });
     setup = await setupWorkflowExecutorTest({ executionAttemptAuthority: authority });
     const execution = createWorkflowExecution({ status });
-    await MakaioBus.request(WorkflowStorageSubjects.setExecution, { execution });
+    await MakaioBus.request(createTestCall(), WorkflowStorageSubjects.setExecution, { execution });
     const attempt = await authority.createAttempt(execution.id, makeTestInstruction());
     let notifications = 0;
     setup.cleanupFns.push(
@@ -68,7 +69,9 @@ describe('workflow durable cancellation intent', () => {
         notifications += 1;
       }),
     );
-    await expect(MakaioBus.request(WorkflowSubjects.cancel, { executionId: execution.id })).resolves.toEqual({
+    await expect(
+      MakaioBus.request(createTestCall(), WorkflowSubjects.cancel, { executionId: execution.id }),
+    ).resolves.toEqual({
       cancelled: false,
     });
     expect(await authority.readCancellation(attempt.executionAttemptId)).toBeNull();
@@ -88,19 +91,20 @@ describe('workflow durable cancellation intent', () => {
     );
     setup = await setupWorkflowExecutorTest({ executionAttemptAuthority: authority });
     const execution = createWorkflowExecution();
-    await MakaioBus.request(WorkflowStorageSubjects.setExecution, { execution });
+    await MakaioBus.request(createTestCall(), WorkflowStorageSubjects.setExecution, { execution });
     let notifications = 0;
     setup.cleanupFns.push(
       MakaioBus.on(createWorkflowCancelSubject(`workflow.${execution.id}.cancel`), () => {
         notifications += 1;
       }),
     );
-    await expect(MakaioBus.request(WorkflowSubjects.cancel, { executionId: execution.id })).rejects.toThrow(
-      'cancellation store unavailable',
-    );
+    await expect(
+      MakaioBus.request(createTestCall(), WorkflowSubjects.cancel, { executionId: execution.id }),
+    ).rejects.toThrow('cancellation store unavailable');
     expect(notifications).toBe(0);
     expect(
-      (await MakaioBus.request(WorkflowStorageSubjects.getExecution, { executionId: execution.id })).execution,
+      (await MakaioBus.request(createTestCall(), WorkflowStorageSubjects.getExecution, { executionId: execution.id }))
+        .execution,
     ).toMatchObject({ status: 'running' });
   });
 
@@ -109,11 +113,12 @@ describe('workflow durable cancellation intent', () => {
     const authority = new ExecutionAttemptAuthority(repository, { bootstrapTimeoutMs: 60_000 });
     setup = await setupWorkflowExecutorTest({ executionAttemptAuthority: authority });
     const execution = createWorkflowExecution();
-    await MakaioBus.request(WorkflowStorageSubjects.setExecution, { execution });
+    await MakaioBus.request(createTestCall(), WorkflowStorageSubjects.setExecution, { execution });
     const attempt = await authority.createAttempt(execution.id, makeTestInstruction());
     let notifications = 0;
     expect(
       await cancelExecution(
+        createTestCall(),
         {
           bus: MakaioBus,
           activeExecutions: new Map(),
@@ -134,7 +139,8 @@ describe('workflow durable cancellation intent', () => {
     expect(await repository.readCancellation(attempt.executionAttemptId)).toBeNull();
     expect(notifications).toBe(0);
     expect(
-      (await MakaioBus.request(WorkflowStorageSubjects.getExecution, { executionId: execution.id })).execution,
+      (await MakaioBus.request(createTestCall(), WorkflowStorageSubjects.getExecution, { executionId: execution.id }))
+        .execution,
     ).toMatchObject({ status: 'cancelled' });
   });
 
@@ -143,7 +149,7 @@ describe('workflow durable cancellation intent', () => {
     const authority = new ExecutionAttemptAuthority(repository, { bootstrapTimeoutMs: 60_000 });
     setup = await setupWorkflowExecutorTest({ executionAttemptAuthority: authority });
     const execution = createWorkflowExecution();
-    await MakaioBus.request(WorkflowStorageSubjects.setExecution, { execution });
+    await MakaioBus.request(createTestCall(), WorkflowStorageSubjects.setExecution, { execution });
     await authority.createAttempt(execution.id, makeTestInstruction());
     const entered = Promise.withResolvers<void>();
     const release = Promise.withResolvers<void>();
@@ -159,7 +165,7 @@ describe('workflow durable cancellation intent', () => {
         await release.promise;
       }),
     );
-    const cancelling = MakaioBus.request(WorkflowSubjects.cancel, { executionId: execution.id });
+    const cancelling = MakaioBus.request(createTestCall(), WorkflowSubjects.cancel, { executionId: execution.id });
     try {
       await entered.promise;
       expect(notified).toBe(true);
@@ -175,14 +181,14 @@ describe('workflow durable cancellation intent', () => {
     const runnerResult = Promise.withResolvers<WorkflowRunnerCompletion>();
     let runnerSignal: AbortSignal | undefined;
     const runner: IWorkflowRunner = {
-      run(_config, signal) {
+      run(_call, _config, signal) {
         runnerSignal = signal;
         return runnerResult.promise;
       },
     };
     setup = await setupWorkflowExecutorTest({ executionAttemptAuthority: authority, workflowRunner: runner });
     const definition = createWorkflowDefinition();
-    await MakaioBus.request(WorkflowStorageSubjects.set, { workflow: definition });
+    await MakaioBus.request(createTestCall(), WorkflowStorageSubjects.set, { workflow: definition });
     const entered = Promise.withResolvers<void>();
     const release = Promise.withResolvers<void>();
     const cancelledEvent = Promise.withResolvers<void>();
@@ -200,7 +206,9 @@ describe('workflow durable cancellation intent', () => {
         cancelledEvent.resolve();
       }),
     );
-    const { executionId } = await MakaioBus.request(WorkflowSubjects.start, { workflowId: definition.id });
+    const { executionId } = await MakaioBus.request(createTestCall(), WorkflowSubjects.start, {
+      workflowId: definition.id,
+    });
     const attempt = await authority.createAttempt(executionId, makeTestInstruction());
     let notified = false;
     setup.cleanupFns.push(
@@ -220,7 +228,9 @@ describe('workflow durable cancellation intent', () => {
     });
     try {
       await entered.promise;
-      await expect(MakaioBus.request(WorkflowSubjects.cancel, { executionId, reason: 'operator' })).resolves.toEqual({
+      await expect(
+        MakaioBus.request(createTestCall(), WorkflowSubjects.cancel, { executionId, reason: 'operator' }),
+      ).resolves.toEqual({
         cancelled: true,
       });
       expect(await authority.readCancellation(attempt.executionAttemptId)).toMatchObject({ reason: 'operator' });

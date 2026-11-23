@@ -88,7 +88,9 @@ export async function initializeAdapterRuntime(options: InitializeAdapterRuntime
   if (existing?.state === 'retiring' && (await settleRetiringAdapterAdmission(options, adapterId, existing, deferred)))
     return;
   const initializedInstances = new Map<string, AdapterInstance>();
+  // Admission belongs to extension activation or its deferred continuation, without an inbound message.
   await initializeEnabledAdapters(
+    bus.own('start'),
     bus,
     machineId,
     [adapter],

@@ -1,6 +1,7 @@
 import type { ExecutionAttemptAuthority } from './execution-attempt-authority.js';
 import type { ExecutionOwnerId, RuntimeOutcomeFence } from './execution-attempt-repository.js';
 import type { AttemptOutcomeControlObservation, OutcomeAcceptance } from '@makaio/contracts';
+import type { CallContext } from '@makaio/core';
 
 export type { AcceptedAttemptOutcome, OutcomeAcceptance } from '@makaio/contracts';
 
@@ -14,6 +15,8 @@ export type { ExecutionOwnerId };
  * @typeParam TOutcome - Owner-specific outcome type committed per attempt.
  */
 export interface OutcomeConvergenceInput<TOutcome> {
+  /** Call of the inbound message that submitted or retried the outcome; forward it to every send convergence makes. */
+  readonly call: CallContext;
   /** Owner identifier the attempt belongs to. */
   readonly executionId: ExecutionOwnerId;
   /** Authority-created attempt identifier. */
@@ -123,6 +126,8 @@ export interface AttemptOutcomeSubmissionDeps<TOutcome> {
  * @typeParam TOutcome - Owner-specific outcome type committed per attempt.
  */
 export interface AttemptOutcomeSubmission<TOutcome> {
+  /** Call of the inbound message that submitted or retried the outcome; handed on to convergence. */
+  readonly call: CallContext;
   /** Owner identifier the attempt belongs to. */
   readonly executionId: ExecutionOwnerId;
   /** Authority-created attempt identifier. */
@@ -195,6 +200,7 @@ export async function submitAttemptOutcome<TOutcome>(
 
   if (decision.kind === 'accepted' || decision.kind === 'duplicate') {
     const acceptance = await deps.convergence.converge({
+      call: input.call,
       executionId: input.executionId,
       executionAttemptId: input.executionAttemptId,
       outcome: decision.outcome,

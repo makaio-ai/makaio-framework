@@ -15,7 +15,7 @@ import {
   DispatchingAuth,
   HmacAuth,
   registerMakaioLocalCliHmacIdentity,
-  resolveHmacIdentityPeer,
+  resolveHmacIdentityParty,
   resolveHmacIdentitySecret,
 } from '@makaio/bus-transport-websocket';
 import {
@@ -199,7 +199,7 @@ function resolveConfiguredBusSecret(): string | undefined {
  */
 function createAuth(lanBind: boolean, secret: string | undefined): DispatchingAuth | HmacAuth | undefined {
   const hmacAuth = secret
-    ? new HmacAuth({ secret, resolveSecret: resolveHmacIdentitySecret, resolvePeer: resolveHmacIdentityPeer })
+    ? new HmacAuth({ secret, resolveSecret: resolveHmacIdentitySecret, resolveParty: resolveHmacIdentityParty })
     : undefined;
 
   if (lanBind) {

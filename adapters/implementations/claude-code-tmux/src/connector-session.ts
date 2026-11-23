@@ -5,6 +5,7 @@ import {
   type MessageHandle,
   type MessageResult,
 } from '@makaio/ai-adapters-core';
+import type { CallContext } from '@makaio/contracts';
 import { TmuxConnectorTurn } from './turn.js';
 import { buildMessageText } from './utils/prompt.js';
 import type { TmuxConnectorSessionConfig } from './types.js';
@@ -101,7 +102,7 @@ export class TmuxConnectorSession {
     this.activeTurn = turn;
     try {
       this.config.onTurnStart(handle);
-      await turn.start();
+      await turn.start(handle.call);
       await this.config.tmuxSession.sendMessage(buildMessageText(handle, mergedContent));
     } catch (error) {
       await this.handleTurnError(error);
@@ -114,14 +115,20 @@ export class TmuxConnectorSession {
    * @param lastAssistantMessage - Final assistant response text.
    */
   public async handleTurnFinished(lastAssistantMessage: string): Promise<void> {
+    // Ingress: the Stop hook carries no turn id, so the slot rule applies. The slot counts only while the
+    // guards below hold (no completed, interrupted or late-Stop-suppressed turn); the selected turn and its
+    // handle are fixed here, before any await, and the emission uses that handle's call.
     const turn = this.activeTurn;
-    if (!turn || turn.isCompleted() || turn.acknowledgeInterrupt() || turn.shouldIgnoreStop()) return;
+    if (!turn || turn.isCompleted() || turn.acknowledgeInterrupt() || turn.shouldIgnoreStop()) {
+      console.debug('[TmuxConnectorSession] Stop hook has no eligible turn; completion not emitted');
+      return;
+    }
     if (this.suppressStopUntilPromptSubmit) return;
+    const handle = turn.getMessageHandle();
 
     await this.finalizeTurnOnce(turn, async () => {
-      await turn.markStepFinished();
+      await turn.markStepFinished(handle.call);
 
-      const handle = turn.getMessageHandle();
       const result: MessageResult = {
         outcome: 'completed',
         result: { message: lastAssistantMessage },
@@ -129,9 +136,9 @@ export class TmuxConnectorSession {
 
       try {
         await markCompletedWithFinalResult(handle, result, this.config.onTurnComplete);
-        await this.config.emitTurnCompleted({ message: lastAssistantMessage });
+        await this.config.emitTurnCompleted(handle.call, { message: lastAssistantMessage });
       } finally {
-        await this.finishActiveTurn(turn);
+        await this.finishActiveTurn(handle.call, turn);
       }
     });
   }
@@ -141,8 +148,9 @@ export class TmuxConnectorSession {
    */
   public async handleUserPromptSubmit(): Promise<void> {
     this.suppressStopUntilPromptSubmit = false;
-    this.activeTurn?.getMessageHandle().markAcknowledged(true);
-    await this.activeTurn?.markStepStarted();
+    const turn = this.activeTurn;
+    turn?.getMessageHandle().markAcknowledged(true);
+    await turn?.markStepStarted(turn.getMessageHandle().call);
   }
 
   /**
@@ -163,7 +171,7 @@ export class TmuxConnectorSession {
         await markCompletedWithFinalResult(handle, result, this.config.onTurnComplete);
       } finally {
         this.clearAbandonedToolCalls(turn);
-        await this.finishActiveTurn(turn);
+        await this.finishActiveTurn(handle.call, turn);
       }
     });
   }
@@ -201,10 +209,11 @@ export class TmuxConnectorSession {
 
   /**
    * Detach the active turn and reset Stop-suppression state exactly once.
+   * @param call - Call of the message whose turn is being finalized.
    * @param turn - Turn being finalized.
    */
-  private async finishActiveTurn(turn: TmuxConnectorTurn): Promise<void> {
-    await turn.markTurnFinished();
+  private async finishActiveTurn(call: CallContext, turn: TmuxConnectorTurn): Promise<void> {
+    await turn.markTurnFinished(call);
     if (this.activeTurn === turn) {
       this.activeTurn = undefined;
     }
@@ -228,12 +237,17 @@ export class TmuxConnectorSession {
    * @param toolInput - Raw tool input from Claude Code.
    */
   public async handlePreToolUse(toolName: string, toolUseId: string, toolInput: unknown): Promise<void> {
+    // Ingress: the hook carries no turn id, so the slot rule applies; select the turn and its handle
+    // before any await.
     const activeTurn = this.activeTurn;
-    const messageId = activeTurn?.getMessageHandle()?.messageId;
-    if (activeTurn === undefined || messageId === undefined) return;
+    const handle = activeTurn?.getMessageHandle();
+    if (activeTurn === undefined || handle === undefined) {
+      console.debug('[TmuxConnectorSession] PreToolUse has no active turn; tool use not emitted', { toolUseId });
+      return;
+    }
     this.toolCallTurns.set(toolUseId, activeTurn);
-    await activeTurn.markStepStarted();
-    await this.config.emitToolUseStarted({ messageId, toolName, toolUseId, toolInput });
+    await activeTurn.markStepStarted(handle.call);
+    await this.config.emitToolUseStarted(handle.call, { messageId: handle.messageId, toolName, toolUseId, toolInput });
   }
 
   /**
@@ -249,11 +263,21 @@ export class TmuxConnectorSession {
     toolResult: unknown,
     isError?: boolean,
   ): Promise<void> {
+    // The retained origin of the matching PreToolUse decides, also after the turn was superseded.
     const originatingTurn = this.toolCallTurns.get(toolUseId);
-    const messageId = originatingTurn?.getMessageHandle()?.messageId;
-    if (originatingTurn === undefined || messageId === undefined) return;
+    const handle = originatingTurn?.getMessageHandle();
+    if (originatingTurn === undefined || handle === undefined) {
+      console.debug('[TmuxConnectorSession] PostToolUse has no retained origin; tool use not emitted', { toolUseId });
+      return;
+    }
     this.toolCallTurns.delete(toolUseId);
-    await originatingTurn.markStepFinished();
-    await this.config.emitToolUseFinished({ messageId, toolName, toolUseId, toolResult, isError });
+    await originatingTurn.markStepFinished(handle.call);
+    await this.config.emitToolUseFinished(handle.call, {
+      messageId: handle.messageId,
+      toolName,
+      toolUseId,
+      toolResult,
+      isError,
+    });
   }
 }

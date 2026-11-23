@@ -18,6 +18,7 @@
 import * as path from 'node:path';
 import * as fs from 'node:fs';
 import { MakaioBus } from '@makaio/bus-core';
+import type { CallContext } from '@makaio/contracts';
 import { Updater, type UpdateStatusType } from 'electrobun/bun';
 import { VariantSubjects } from '@makaio/contracts/variant';
 import type { VariantConfig, MakaioVariant } from '../variant-config.js';
@@ -120,12 +121,18 @@ function writeVersionJsonAtomic(versionPath: string, content: string): void {
 /**
  * Emit a `host:variant.upgradeProgress` bus event, swallowing errors so a
  * failed publish never aborts the upgrade pipeline itself.
+ * @param call - Call that requested the upgrade.
  * @param status - Coarse upgrade phase.
  * @param percent - Optional completion percentage (0-100).
  * @param message - Optional human-readable status message.
  */
-function emitUpgradeProgress(status: VariantUpgradeStatus, percent?: number, message?: string): void {
-  MakaioBus.emit(VariantSubjects.upgradeProgress, { status, percent, message }).catch((err: unknown) => {
+function emitUpgradeProgress(
+  call: CallContext,
+  status: VariantUpgradeStatus,
+  percent?: number,
+  message?: string,
+): void {
+  MakaioBus.emit(call, VariantSubjects.upgradeProgress, { status, percent, message }).catch((err: unknown) => {
     console.warn('[electrobun] Failed to emit host:variant.upgradeProgress:', err);
   });
 }
@@ -136,11 +143,13 @@ function emitUpgradeProgress(status: VariantUpgradeStatus, percent?: number, mes
  * Bridges Electrobun's {@link Updater} status stream to coarse bus events and
  * restores the original `version.json` if the pipeline fails before the app
  * relaunches.
+ * @param call - Call that requested the upgrade.
  * @param targetVariant - The variant identifier to upgrade to.
  * @param versionPath - Absolute path to `version.json`.
  * @param originalVersionContent - Raw JSON string of the pre-rewrite file.
  */
 async function runUpgradePipeline(
+  call: CallContext,
   targetVariant: MakaioVariant,
   versionPath: string,
   originalVersionContent: string,
@@ -153,11 +162,11 @@ async function runUpgradePipeline(
     if (busStatus === null) return;
 
     const percent = entry.details?.progress;
-    emitUpgradeProgress(busStatus, percent, entry.message);
+    emitUpgradeProgress(call, busStatus, percent, entry.message);
   });
 
   try {
-    emitUpgradeProgress('downloading', 0, `Switching to variant: ${targetVariant}`);
+    emitUpgradeProgress(call, 'downloading', 0, `Switching to variant: ${targetVariant}`);
 
     const checkResult = await Updater.checkForUpdate();
     if (checkResult.error) {
@@ -181,17 +190,17 @@ async function runUpgradePipeline(
       throw new Error('Download did not complete successfully.');
     }
 
-    emitUpgradeProgress('applying', undefined, 'Applying update and relaunching...');
+    emitUpgradeProgress(call, 'applying', undefined, 'Applying update and relaunching...');
     await Updater.applyUpdate();
 
     // applyUpdate() calls quit() internally on success - execution should not
     // reach here. Emit complete defensively in case the platform path skips quit.
-    emitUpgradeProgress('complete', 100, `Upgraded to variant: ${targetVariant}`);
+    emitUpgradeProgress(call, 'complete', 100, `Upgraded to variant: ${targetVariant}`);
   } catch (err: unknown) {
     pipelineFailed = true;
     const message = err instanceof Error ? err.message : String(err);
     console.error('[electrobun] Variant upgrade pipeline failed:', err);
-    emitUpgradeProgress('error', undefined, message);
+    emitUpgradeProgress(call, 'error', undefined, message);
   } finally {
     // Clear the status callback regardless of outcome.
     Updater.onStatusChange(null);
@@ -271,7 +280,7 @@ export function registerVariantUpgradeHandler(cleanups: Array<() => void>, varia
       ctx.setResult({ accepted: true, message: `Upgrading to variant: ${targetVariant}` });
 
       // Run the pipeline in the background - do not await here.
-      void runUpgradePipeline(targetVariant, versionPath, originalVersionContent).finally(() => {
+      void runUpgradePipeline(ctx.call, targetVariant, versionPath, originalVersionContent).finally(() => {
         upgradeInProgress = false;
       });
     }),

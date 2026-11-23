@@ -8,7 +8,7 @@ import {
   UsageEvent,
 } from './namespaces/index.js';
 import { registerToolApprovalHandler } from './tool-handling.js';
-import type { SessionMessageBlock } from '@makaio/contracts';
+import type { CallContext, SessionMessageBlock } from '@makaio/contracts';
 
 const DEFAULT_CONTEXT_WINDOW_SIZE = 200_000;
 
@@ -135,6 +135,7 @@ export class AnthropicSdkAgent extends BaseStreamAgent<
    *
    * Granularity is `provider-call`: each usage event is merged from the
    * `message_start`/`message_delta` frames of exactly one Anthropic request.
+   * @param call - Call context of the usage event being translated
    * @param payload - Anthropic usage event payload
    * @returns Normalized usage metrics
    */
@@ -162,11 +163,12 @@ export class AnthropicSdkAgent extends BaseStreamAgent<
    *
    * Uses `cache_read_input_tokens` for the cached token count and
    * defaults to `DEFAULT_CONTEXT_WINDOW_SIZE` (200,000) for Claude models.
+   * @param call - Call context of the usage event being translated
    * @param payload - Anthropic usage event payload
    */
-  protected async emitUsageContextWindowUpdate(payload: Record<string, unknown>): Promise<void> {
+  protected async emitUsageContextWindowUpdate(call: CallContext, payload: Record<string, unknown>): Promise<void> {
     const usage = payload as UsageEvent;
-    await this.emitContextWindowUpdate({
+    await this.emitContextWindowUpdate(call, {
       currentTokens:
         usage.total_tokens ??
         usage.prompt_tokens +
@@ -254,11 +256,11 @@ export class AnthropicSdkAgent extends BaseStreamAgent<
     this.addConnectorWiringCleanup(
       registerToolApprovalHandler(
         connector,
-        async () => ({
+        async (call: CallContext) => ({
           adapterId: this.adapterId,
           adapterName: this.adapterName,
           agentId: this.agentId,
-          adapterSessionId: await this.getAdapterSessionId(),
+          adapterSessionId: await this.getAdapterSessionId(call),
           // sessionId is always set for agents running within a session; asserted here
           // as the Zod schema on AgentSubjects.toolApprove enforces it at runtime.
           sessionId: this.sessionId!,

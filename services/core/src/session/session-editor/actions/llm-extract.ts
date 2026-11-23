@@ -1,4 +1,5 @@
 import type { IMakaioBus } from '@makaio/bus-core';
+import type { CallContext } from '@makaio/core';
 import type { SessionMessage } from '@makaio/contracts';
 import { AdapterSubjects, AgentResolutionSubjects } from '@makaio/contracts';
 import { AdapterRuntimeSubjects } from '@makaio/services-core/adapter-runtime';
@@ -96,11 +97,16 @@ export function createLlmExtractAction(bus: IMakaioBus): SessionEditorAction {
      *
      * All failure modes degrade gracefully — any error returns the input
      * messages unchanged so the pipeline can fall through to messages-to-context.
+     * @param call - Call context of the operation the pipeline runs for; forwarded to every request
      * @param messages - Session messages to extract context from
      * @param options - Pipeline step options; must include `virtualModelId: string`
      * @returns Structured context on success, or pass-through messages on any failure
      */
-    async execute(messages: SessionMessage[], options?: Record<string, unknown>): Promise<ActionResult> {
+    async execute(
+      call: CallContext,
+      messages: SessionMessage[],
+      options?: Record<string, unknown>,
+    ): Promise<ActionResult> {
       const passThrough: ActionResult = { kind: 'messages', messages };
 
       const virtualModelId = options?.virtualModelId;
@@ -117,13 +123,13 @@ export function createLlmExtractAction(bus: IMakaioBus): SessionEditorAction {
 
       try {
         // Step 1: Resolve virtualModelId → adapterName + model via AgentResolution seam
-        const resolvedTarget = await bus.request(AgentResolutionSubjects.resolve, {
+        const resolvedTarget = await bus.request(call, AgentResolutionSubjects.resolve, {
           selection: { kind: 'virtual-model', virtualModelId },
           context: { sessionId },
         });
 
         // Step 2: Resolve adapterName → adapterId
-        const { adapterId } = await bus.request(AdapterRuntimeSubjects.resolveId, {
+        const { adapterId } = await bus.request(call, AdapterRuntimeSubjects.resolveId, {
           adapterName: resolvedTarget.adapterName,
         });
 
@@ -132,13 +138,13 @@ export function createLlmExtractAction(bus: IMakaioBus): SessionEditorAction {
 
         // Step 4: Resolve the adapter-qualified runtime context, then run ephemeral inference.
         const providerContext = resolvedTarget.providerConfigId
-          ? await resolveRuntimeProviderContext(bus, {
+          ? await resolveRuntimeProviderContext(call, bus, {
               adapterName: resolvedTarget.adapterName,
               providerConfigId: resolvedTarget.providerConfigId,
             })
           : undefined;
 
-        const { text } = await bus.request(AdapterSubjects.infer, {
+        const { text } = await bus.request(call, AdapterSubjects.infer, {
           adapterId,
           prompt,
           model: resolvedTarget.model,

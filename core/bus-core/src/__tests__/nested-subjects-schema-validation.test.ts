@@ -124,7 +124,7 @@ describe('Nested Subjects - Schema Validation', () => {
         received.push(payload);
       });
 
-      await MakaioBus.emit(TestSubjects.tool.use, {
+      await MakaioBus.emit(MakaioBus.own('root'), TestSubjects.tool.use, {
         toolName: 'bash',
         args: ['ls', '-la'],
       });
@@ -150,13 +150,13 @@ describe('Nested Subjects - Schema Validation', () => {
       });
 
       // Without optional field
-      const result1 = await MakaioBus.request(TestSubjects.user.profile.get, {
+      const result1 = await MakaioBus.request(MakaioBus.own('root'), TestSubjects.user.profile.get, {
         userId: 'user-123',
       });
       expect(result1).toEqual({ username: 'test-user', email: 'test@example.com' });
 
       // With optional field
-      const result2 = await MakaioBus.request(TestSubjects.user.profile.get, {
+      const result2 = await MakaioBus.request(MakaioBus.own('root'), TestSubjects.user.profile.get, {
         userId: 'user-456',
         includeMetadata: true,
       });
@@ -164,6 +164,16 @@ describe('Nested Subjects - Schema Validation', () => {
     });
 
     it('prevents emitting to request subjects', async () => {
+      await expect(
+        // @ts-expect-error - emitting a request should error at compile-time
+        MakaioBus.emit(MakaioBus.own('root'), TestSubjects.test.create, {
+          taskName: 'test',
+          priority: 1,
+        }),
+      ).rejects.toThrow('Cannot emit to request subjects. Use event subjects only.');
+    });
+
+    it('prevents emitting to request subjects in own form', async () => {
       await expect(
         // @ts-expect-error - emitting a request should error at compile-time
         MakaioBus.emit(TestSubjects.test.create, {
@@ -192,7 +202,7 @@ describe('Nested Subjects - Schema Validation', () => {
         received.push(payload);
       });
 
-      await scopedBus.emit(TestSubjects.stream.chunk, {
+      await scopedBus.emit(MakaioBus.own('root'), TestSubjects.stream.chunk, {
         content: 'hello',
         sequenceId: 1,
       });
@@ -200,10 +210,25 @@ describe('Nested Subjects - Schema Validation', () => {
       // Cannot emit with string subject
       await expect(
         // @ts-expect-error - string subjects not allowed
-        scopedBus.emit('stream.chunk', { content: 'world', sequenceId: 2 }),
+        scopedBus.emit(MakaioBus.own('root'), 'stream.chunk', { content: 'world', sequenceId: 2 }),
       ).rejects.toThrow('Invalid subject definition provided to emit()');
 
+      // Own form: a string in first position is neither a minted call context nor a subject definition
+      await expect(
+        // @ts-expect-error - string subjects not allowed
+        scopedBus.emit('stream.chunk', { content: 'world', sequenceId: 2 }),
+      ).rejects.toThrow('neither a minted call context nor a subject definition');
+
       // Cannot emit to different namespace subject
+      await expect(
+        // @ts-expect-error - cross-namespace not allowed
+        scopedBus.emit(MakaioBus.own('root'), AdapterSubjects.tool.execute, {
+          tool: 'bash',
+          params: { command: 'ls' },
+        }),
+      ).rejects.toThrow('Subject namespace adapter:validation does not match scoped bus namespace test');
+
+      // Own form: cross-namespace subject
       await expect(
         // @ts-expect-error - cross-namespace not allowed
         scopedBus.emit(AdapterSubjects.tool.execute, {
@@ -238,7 +263,7 @@ describe('Nested Subjects - Schema Validation', () => {
         received.push(payload);
       });
 
-      await MakaioBus.emit(TestSubjects.agent.tool.execution.started, {
+      await MakaioBus.emit(MakaioBus.own('root'), TestSubjects.agent.tool.execution.started, {
         agentId: 'agent-1',
         toolName: 'bash',
         timestamp: Date.now(),

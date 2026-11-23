@@ -16,6 +16,7 @@ import {
   type ArtifactRevision,
 } from '@makaio/contracts';
 import { createMakaioContext } from '@makaio/core';
+import { createTestCall } from '@makaio/test-utils';
 import type { ToolExecutionContext } from '@makaio/tools-core';
 import { patchArtifact, type ArtifactPatchHost, type ArtifactPatchStoreRequest } from '../patch-artifact.js';
 
@@ -167,7 +168,7 @@ export function host(
 
 // ─── shared context and helpers ───────────────────────────────────────────────
 
-export const context: ToolExecutionContext = createMakaioContext();
+export const context: ToolExecutionContext = { ...createMakaioContext(), call: createTestCall() };
 
 /**
  * Validate a request against the wire contract before executing it.

@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
 import { DEFAULT_HARNESSES } from '@makaio/contracts';
+import { createTestCall } from '@makaio/test-utils';
 import { seedDefaultHarnesses } from '../default-harnesses.js';
 import { HarnessStorageSubjects } from '../storage/namespace.js';
 import { createHarness, createTestDb } from './shared.js';
@@ -20,9 +21,10 @@ describe('seedDefaultHarnesses', () => {
   });
 
   it('seeds all default harnesses when missing', async () => {
-    await seedDefaultHarnesses(MakaioBus);
+    const call = createTestCall();
+    await seedDefaultHarnesses(call, MakaioBus);
 
-    const { harnesses } = await MakaioBus.request(HarnessStorageSubjects.list, {});
+    const { harnesses } = await MakaioBus.request(call, HarnessStorageSubjects.list, {});
     expect(harnesses).toHaveLength(DEFAULT_HARNESSES.length);
 
     const ids = new Set(harnesses.map((harness) => harness.id));
@@ -32,14 +34,16 @@ describe('seedDefaultHarnesses', () => {
   });
 
   it('is idempotent across repeated runs', async () => {
-    await seedDefaultHarnesses(MakaioBus);
-    await seedDefaultHarnesses(MakaioBus);
+    const call = createTestCall();
+    await seedDefaultHarnesses(call, MakaioBus);
+    await seedDefaultHarnesses(call, MakaioBus);
 
-    const { harnesses } = await MakaioBus.request(HarnessStorageSubjects.list, {});
+    const { harnesses } = await MakaioBus.request(call, HarnessStorageSubjects.list, {});
     expect(harnesses).toHaveLength(DEFAULT_HARNESSES.length);
   });
 
   it('does not overwrite a user-customized default harness (same id)', async () => {
+    const call = createTestCall();
     const existingDefault = DEFAULT_HARNESSES[0];
     if (!existingDefault) {
       throw new Error('Expected at least one default harness');
@@ -48,7 +52,7 @@ describe('seedDefaultHarnesses', () => {
     // Simulate user customizing the default harness — keeps the same id,
     // changes the description.  Matching by id (not composite key) ensures
     // robustness across clientId/adapterName migrations.
-    await MakaioBus.request(HarnessStorageSubjects.set, {
+    await MakaioBus.request(call, HarnessStorageSubjects.set, {
       harness: createHarness({
         id: existingDefault.id,
         name: existingDefault.name,
@@ -58,9 +62,9 @@ describe('seedDefaultHarnesses', () => {
       }),
     });
 
-    await seedDefaultHarnesses(MakaioBus);
+    await seedDefaultHarnesses(call, MakaioBus);
 
-    const { harnesses } = await MakaioBus.request(HarnessStorageSubjects.list, {
+    const { harnesses } = await MakaioBus.request(call, HarnessStorageSubjects.list, {
       clientId: existingDefault.clientId,
       adapterName: existingDefault.adapterName,
       name: existingDefault.name,

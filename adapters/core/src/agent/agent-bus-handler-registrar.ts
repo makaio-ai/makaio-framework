@@ -1,6 +1,6 @@
 import type { IMakaioBus } from '@makaio/bus-core';
 import { AgentSubjects, McpSubjects, SessionSubjects } from '@makaio/contracts';
-import type { RequestContext } from '@makaio/core';
+import type { CallContext, RequestContext } from '@makaio/core';
 import type {
   AgentCredentialChangeRequestPayload,
   AgentCredentialChangeResponsePayload,
@@ -34,13 +34,22 @@ export interface AgentBusHandlerRegistrarConfig {
   /** Provider for `agent.getCapabilities` response payload. */
   getCapabilities: () => GetCapabilitiesResponsePayload;
   /** Apply an `agent.cwd.change` payload. */
-  onCwdChange: (payload: AgentCwdChangeRequestPayload) => Promise<AgentCwdChangeResponsePayload>;
+  onCwdChange: (call: CallContext, payload: AgentCwdChangeRequestPayload) => Promise<AgentCwdChangeResponsePayload>;
   /** Apply an `agent.model.change` payload. */
-  onModelChange: (payload: AgentModelChangeRequestPayload) => Promise<AgentModelChangeResponsePayload>;
+  onModelChange: (
+    call: CallContext,
+    payload: AgentModelChangeRequestPayload,
+  ) => Promise<AgentModelChangeResponsePayload>;
   /** Apply an `agent.mcp.servers.set` payload. */
-  onMcpServersSet: (payload: AgentMcpServersSetRequestPayload) => Promise<AgentMcpServersSetResponsePayload>;
+  onMcpServersSet: (
+    call: CallContext,
+    payload: AgentMcpServersSetRequestPayload,
+  ) => Promise<AgentMcpServersSetResponsePayload>;
   /** Apply an `agent.credential.change` payload. */
-  onCredentialChange: (payload: AgentCredentialChangeRequestPayload) => Promise<AgentCredentialChangeResponsePayload>;
+  onCredentialChange: (
+    call: CallContext,
+    payload: AgentCredentialChangeRequestPayload,
+  ) => Promise<AgentCredentialChangeResponsePayload>;
   /** Observe the canonical session turn number. */
   onTurnStarted: (turnNumber: number) => void;
   /** Mark connector tools stale after an MCP catalog mutation. */
@@ -61,16 +70,16 @@ export function registerAgentBusHandlers(config: AgentBusHandlerRegistrarConfig)
       ctx.setResult(config.getCapabilities());
     }),
     filteredBus.on(AgentSubjects.cwd.change, async (ctx) => {
-      ctx.setResult(await config.onCwdChange(ctx.payload));
+      ctx.setResult(await config.onCwdChange(ctx.call, ctx.payload));
     }),
     filteredBus.on(AgentSubjects.model.change, async (ctx) => {
-      ctx.setResult(await config.onModelChange(ctx.payload));
+      ctx.setResult(await config.onModelChange(ctx.call, ctx.payload));
     }),
     filteredBus.on(AgentSubjects.mcp.servers.set, async (ctx) => {
-      ctx.setResult(await config.onMcpServersSet(ctx.payload));
+      ctx.setResult(await config.onMcpServersSet(ctx.call, ctx.payload));
     }),
     filteredBus.on(AgentSubjects.credential.change, async (ctx) => {
-      ctx.setResult(await config.onCredentialChange(ctx.payload));
+      ctx.setResult(await config.onCredentialChange(ctx.call, ctx.payload));
     }),
     config.globalBus.on(McpSubjects.tools.updated, config.onMcpToolsChanged),
     config.globalBus.on(McpSubjects.tools.enabled, config.onMcpToolsChanged),

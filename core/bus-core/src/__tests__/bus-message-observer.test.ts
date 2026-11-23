@@ -21,9 +21,9 @@ describe('bus message observers', () => {
     const cleanupRequest = bus.on(namespace.subjects.load, (ctx) => ctx.setResult({ ok: true }));
     const cleanupBroadcast = bus.on(namespace.subjects.announce, (ctx) => ctx.setResult({ ack: true }));
 
-    await bus.emit(namespace.subjects.changed, { id: 'one' });
-    await bus.request(namespace.subjects.load, { id: 'two' });
-    await bus.broadcast(namespace.subjects.announce, { id: 'three' });
+    await bus.emit(bus.own('root'), namespace.subjects.changed, { id: 'one' });
+    await bus.request(bus.own('root'), namespace.subjects.load, { id: 'two' });
+    await bus.broadcast(bus.own('root'), namespace.subjects.announce, { id: 'three' });
 
     dispose();
     cleanupRequest();
@@ -52,9 +52,9 @@ describe('bus message observers', () => {
     const cleanupRequest = bus.on(namespace.subjects.load, (ctx) => ctx.setResult({ ok: true }));
     const cleanupBroadcast = bus.on(namespace.subjects.announce, (ctx) => ctx.setResult({ ack: true }));
 
-    await bus.emit(namespace.subjects.changed, { id: 'one' }, { transports: [] });
-    await bus.request(namespace.subjects.load, { id: 'two' }, { transports: [] });
-    await bus.broadcast(namespace.subjects.announce, { id: 'three' }, { transports: [] });
+    await bus.emit(bus.own('root'), namespace.subjects.changed, { id: 'one' }, { transports: [] });
+    await bus.request(bus.own('root'), namespace.subjects.load, { id: 'two' }, { transports: [] });
+    await bus.broadcast(bus.own('root'), namespace.subjects.announce, { id: 'three' }, { transports: [] });
 
     dispose();
     cleanupRequest();
@@ -73,9 +73,9 @@ describe('bus message observers', () => {
     const observer = vi.fn();
     const dispose = bus.observeMessages(observer);
 
-    await bus.emit(namespace.subjects.changed, { id: 'one' });
+    await bus.emit(bus.own('root'), namespace.subjects.changed, { id: 'one' });
     dispose();
-    await bus.emit(namespace.subjects.changed, { id: 'two' });
+    await bus.emit(bus.own('root'), namespace.subjects.changed, { id: 'two' });
 
     expect(observer).toHaveBeenCalledTimes(1);
   });
@@ -95,7 +95,7 @@ describe('bus message observers', () => {
     const disposeSuccessful = bus.observeMessages(successfulObserver);
 
     try {
-      await expect(bus.emit(namespace.subjects.changed, { id: 'one' })).resolves.toBeUndefined();
+      await expect(bus.emit(bus.own('root'), namespace.subjects.changed, { id: 'one' })).resolves.toBeUndefined();
       await new Promise((resolve) => setTimeout(resolve, 0));
 
       expect(successfulObserver).toHaveBeenCalledTimes(1);

@@ -1,4 +1,5 @@
 import type { IMakaioBus } from '@makaio/bus-core';
+import type { CallContext } from '@makaio/core';
 import { AdapterSubjects, SessionSubjects, type SessionOwnershipSettleMovementServiceResult } from '@makaio/contracts';
 import { AgentStorageSubjects } from '../storage/agent-namespace.js';
 import {
@@ -59,13 +60,14 @@ export interface CallerOwnedStart {
  * refused commit above, and the shared teardown of a step that threw. A removal
  * is the one post-dispatch failure with a precise name, and every path that
  * cannot see it reports it as an unresolved settlement.
+ * @param call - Call context of the start, attach or rehydrate request the read belongs to.
  * @param bus - Bus the read is issued on.
  * @param agentId - Agent to re-read.
  * @returns `true` when the row is gone or `disposed`.
  */
-async function agentWasRemoved(bus: IMakaioBus, agentId: string): Promise<boolean> {
+async function agentWasRemoved(call: CallContext, bus: IMakaioBus, agentId: string): Promise<boolean> {
   try {
-    const stored = await bus.requestOptional(AgentStorageSubjects.get, { agentId });
+    const stored = await bus.requestOptional(call, AgentStorageSubjects.get, { agentId });
     if (!stored.handled) return false;
     const row = stored.data.agent;
     return row === null || row.status === 'disposed';
@@ -90,6 +92,7 @@ async function agentWasRemoved(bus: IMakaioBus, agentId: string): Promise<boolea
  * one step that cleans and throws for itself, and a `try` spanning it would
  * clean a second time and relabel a precisely classified ownership refusal as an
  * unresolved settlement (§8.2).
+ * @param call - Call context of the start, attach or rehydrate request; forwarded to every step.
  * @param bus - Bus every step is issued on.
  * @param start - The dispatched start being completed.
  * @param providerSessionId - Provider session the adapter reported, when it did.
@@ -99,6 +102,7 @@ async function agentWasRemoved(bus: IMakaioBus, agentId: string): Promise<boolea
  * @throws A {@link SessionStartError} when the completion failed or the row was removed under it.
  */
 export async function completeCallerOwnedStart(
+  call: CallContext,
   bus: IMakaioBus,
   start: CallerOwnedStart,
   providerSessionId: string | undefined,
@@ -108,12 +112,13 @@ export async function completeCallerOwnedStart(
 ): Promise<void> {
   let settled: SessionOwnershipSettleMovementServiceResult | undefined;
   try {
-    settled = await settleCallerOwnedStart(bus, start, providerSessionId);
+    settled = await settleCallerOwnedStart(call, bus, start, providerSessionId);
   } catch (error) {
-    throw await failCompletedStart(bus, start, ownerInstanceId, error);
+    throw await failCompletedStart(call, bus, start, ownerInstanceId, error);
   }
   if (settled !== undefined) {
     await applySettlementOutcome(
+      call,
       bus,
       start.adapterId,
       start.agentId,
@@ -135,21 +140,22 @@ export async function completeCallerOwnedStart(
   // what every other post-dispatch failure does and what protects a provider
   // session nobody has proven closed.
   try {
-    await persistStartOrigin(bus, start, providerSessionId, ownerInstanceId);
+    await persistStartOrigin(call, bus, start, providerSessionId, ownerInstanceId);
     if (start.admitSessionBeforeFinalAdoption) {
       // The reservation admitted the session before provider dispatch.
       // Re-observe it immediately before the adapter's acknowledgement adopts
       // this live connector into the durable idle state.
-      await assertSessionActiveAfterStart(bus, start.sessionId);
+      await assertSessionActiveAfterStart(call, bus, start.sessionId);
     }
-    await acknowledgeCallerSettlement(bus, start, settlementAckToken, ownerInstanceId, recovery);
+    await acknowledgeCallerSettlement(call, bus, start, settlementAckToken, ownerInstanceId, recovery);
   } catch (error) {
-    throw await failCompletedStart(bus, start, ownerInstanceId, error);
+    throw await failCompletedStart(call, bus, start, ownerInstanceId, error);
   }
 }
 
 /**
  * Return the adapter-minted generation token after durable settlement.
+ * @param call - Call context of the request the acknowledgement belongs to.
  * @param bus - Bus carrying the targeted adapter RPC
  * @param start - Hosted caller-owned attempt
  * @param settlementAckToken - Token returned by the successful dispatch
@@ -157,6 +163,7 @@ export async function completeCallerOwnedStart(
  * @param recovery - Whether this acknowledgement belongs to recovery.
  */
 export async function acknowledgeCallerSettlement(
+  call: CallContext,
   bus: IMakaioBus,
   start: Pick<CallerOwnedStart, 'adapterId' | 'agentId'>,
   settlementAckToken: string | undefined,
@@ -166,7 +173,7 @@ export async function acknowledgeCallerSettlement(
   if (settlementAckToken === undefined) {
     throw new Error(`[session.start] adapter omitted the settlement acknowledgement token for agent ${start.agentId}`);
   }
-  const acknowledged = await bus.request(AdapterSubjects.acknowledgeCallerSettlement, {
+  const acknowledged = await bus.request(call, AdapterSubjects.acknowledgeCallerSettlement, {
     adapterId: start.adapterId,
     ownerInstanceId,
     agentId: start.agentId,
@@ -192,6 +199,7 @@ export async function acknowledgeCallerSettlement(
  * A start that returned no provider session (an idle fork start) has nothing to
  * settle — the movement observer settles it when the provider confirms — and
  * answers `undefined` so the status transition still runs.
+ * @param call - Call context of the request the settlement belongs to.
  * @param bus - Bus the settlement is issued on.
  * @param start - The dispatched start being completed.
  * @param providerSessionId - Provider session the adapter reported, when it did.
@@ -199,6 +207,7 @@ export async function acknowledgeCallerSettlement(
  * @returns What the authority answered, or `undefined` when there was nothing to settle.
  */
 async function settleCallerOwnedStart(
+  call: CallContext,
   bus: IMakaioBus,
   start: CallerOwnedStart,
   providerSessionId: string | undefined,
@@ -210,7 +219,7 @@ async function settleCallerOwnedStart(
   // same registration installs both subjects, so a start that reserved and then
   // found no settlement authority is impossible rather than degraded. Reaching
   // here without one would mean a live connector whose currency nobody writes.
-  return bus.request(SessionSubjects.ownership.settleMovement, {
+  return bus.request(call, SessionSubjects.ownership.settleMovement, {
     sessionId: start.sessionId,
     agentId,
     adapterId,
@@ -240,6 +249,7 @@ async function settleCallerOwnedStart(
  * handlers as one block. A reservation that succeeded is therefore proof that
  * agent storage answers, and a host where it then does not is inconsistent
  * rather than lightweight.
+ * @param call - Call context of the request the write belongs to.
  * @param bus - Bus the write is issued on.
  * @param start - The dispatched start being completed.
  * @param providerSessionId - Provider session the adapter reported, when it did.
@@ -247,13 +257,14 @@ async function settleCallerOwnedStart(
  * @throws When the row cannot be updated, in either failure form.
  */
 async function persistStartOrigin(
+  call: CallContext,
   bus: IMakaioBus,
   start: CallerOwnedStart,
   providerSessionId: string | undefined,
   ownerInstanceId: string,
 ): Promise<void> {
   const { agentId, providerConfigId, machineId } = start;
-  const written = await bus.request(AgentStorageSubjects.updateRuntime, {
+  const written = await bus.request(call, AgentStorageSubjects.updateRuntime, {
     agentId,
     runtimeOwner: { machineId, instanceId: ownerInstanceId },
     ...(providerSessionId !== undefined && { adapterSessionId: providerSessionId }),
@@ -266,6 +277,7 @@ async function persistStartOrigin(
 
 /**
  * Unwind a completion step that threw.
+ * @param call - Call context of the request the cleanup belongs to.
  * @param bus - Bus the cleanup is issued on.
  * @param start - The dispatched start being unwound.
  * @param ownerInstanceId - Exact runtime incarnation that hosted the generation.
@@ -273,12 +285,14 @@ async function persistStartOrigin(
  * @returns The error the caller reports, so the call site stays a single `throw`.
  */
 async function failCompletedStart(
+  call: CallContext,
   bus: IMakaioBus,
   start: CallerOwnedStart,
   ownerInstanceId: string,
   cause: unknown,
 ): Promise<SessionStartError> {
   return failDispatchedStart(
+    call,
     bus,
     {
       adapterId: start.adapterId,
@@ -326,20 +340,22 @@ export interface DispatchedStartTeardown {
  * the fresh start, the attach and the rehydrate for the same reason their I21′
  * commit table is shared: a second copy of a classification is a second chance
  * to state one of its rows differently, and the three had already drifted.
+ * @param call - Call context of the request the teardown belongs to; forwarded to every step.
  * @param bus - Bus the cleanup and the re-read are issued on.
  * @param teardown - The dispatched attempt being unwound.
  * @param cause - Whatever the failing step threw.
  * @returns The error the caller reports, so the call site stays a single `throw`.
  */
 export async function failDispatchedStart(
+  call: CallContext,
   bus: IMakaioBus,
   teardown: DispatchedStartTeardown,
   cause: unknown,
 ): Promise<SessionStartError> {
   const { adapterId, ownerInstanceId, agentId, attemptKind, policy, claimTokens } = teardown;
-  await abandonDispatchedStart(bus, agentId, policy, claimTokens);
-  await stopStartedConnector(bus, adapterId, agentId, ownerInstanceId, policy.connectorOnlyTeardown);
-  if (await agentWasRemoved(bus, agentId)) {
+  await abandonDispatchedStart(call, bus, agentId, policy, claimTokens);
+  await stopStartedConnector(call, bus, adapterId, agentId, ownerInstanceId, policy.connectorOnlyTeardown);
+  if (await agentWasRemoved(call, bus, agentId)) {
     return new SessionStartError(
       'agent-unavailable',
       `[session.start] agent ${agentId} was removed while its ${attemptKind} was completing`,

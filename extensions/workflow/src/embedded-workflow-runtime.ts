@@ -42,7 +42,13 @@ function createCliWorkspaceResolvers(cwd: string): {
   const workspaceRoot = resolve(cwd);
   return {
     materializationSpecResolver: {
-      async resolve(input) {
+      /**
+       * Resolve a local spec without sending messages.
+       * @param _call - Execution-start call required by the resolver contract.
+       * @param input - Start identity and process-local source information.
+       * @returns Portable spec for a source inside the invocation workspace.
+       */
+      async resolve(_call, input) {
         const sourcePath = relative(workspaceRoot, input.sourcePath);
         if (
           sourcePath.length === 0 ||

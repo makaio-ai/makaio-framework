@@ -6,7 +6,7 @@ import {
   resolveHmacIdentityAllowedMessageSubjects,
   resolveHmacIdentityAllowedSubscriptionSubjects,
   resolveHmacIdentityRequiredSubscriptionFilters,
-  resolveHmacIdentityPeer,
+  resolveHmacIdentityParty,
   resolveHmacIdentitySecret,
   rotateHmacIdentitySecret,
 } from '../identity-secret-registry.js';
@@ -16,48 +16,48 @@ afterEach(() => {
 });
 
 describe('registerHmacIdentitySecret with claims', () => {
-  it('resolves peer context with claims when registered', () => {
+  it('resolves caller party with claims when registered', () => {
     const attemptId = 'attempt-abc-123';
     const executionId = 'exec-abc-123';
     const secret = 'attempt-secret';
     registerHmacIdentitySecret(attemptId, secret, {
-      peerKind: 'workflow-execution-attempt',
+      partyKind: 'test.workflow-execution-attempt',
       claims: { executionId },
     });
 
     expect(resolveHmacIdentitySecret(attemptId)).toBe(secret);
-    expect(resolveHmacIdentityPeer(attemptId)).toEqual({
-      kind: 'workflow-execution-attempt',
+    expect(resolveHmacIdentityParty(attemptId)).toEqual({
+      kind: 'test.workflow-execution-attempt',
       id: attemptId,
-      authenticated: true,
       claims: { executionId },
     });
   });
 
-  it('omits claims from peer context when not registered', () => {
+  it('omits claims from caller party when not registered', () => {
     const identityId = 'exec-no-claims';
     const secret = 'no-claims-secret';
-    registerHmacIdentitySecret(identityId, secret, { peerKind: 'test-identity' });
+    registerHmacIdentitySecret(identityId, secret, { partyKind: 'test.identity' });
 
-    expect(resolveHmacIdentityPeer(identityId)).toEqual({
-      kind: 'test-identity',
+    expect(resolveHmacIdentityParty(identityId)).toEqual({
+      kind: 'test.identity',
       id: identityId,
-      authenticated: true,
     });
   });
 
-  it('rejects an empty peer kind', () => {
-    expect(() => registerHmacIdentitySecret('empty-kind', 'secret', { peerKind: '  ' })).toThrow(/non-empty peerKind/i);
+  it('rejects an empty party kind', () => {
+    expect(() => registerHmacIdentitySecret('empty-kind', 'secret', { partyKind: '  ' })).toThrow(
+      /non-empty partyKind/i,
+    );
   });
 
   it('preserves claims across registration replacement', () => {
     const attemptId = 'attempt-replace';
     const firstCleanup = registerHmacIdentitySecret(attemptId, 'secret-1', {
-      peerKind: 'workflow-execution-attempt',
+      partyKind: 'test.workflow-execution-attempt',
       claims: { executionId: 'exec-1' },
     });
     registerHmacIdentitySecret(attemptId, 'secret-2', {
-      peerKind: 'workflow-execution-attempt',
+      partyKind: 'test.workflow-execution-attempt',
       claims: { executionId: 'exec-2' },
     });
 
@@ -65,10 +65,9 @@ describe('registerHmacIdentitySecret with claims', () => {
     firstCleanup();
 
     expect(resolveHmacIdentitySecret(attemptId)).toBe('secret-2');
-    expect(resolveHmacIdentityPeer(attemptId)).toEqual({
-      kind: 'workflow-execution-attempt',
+    expect(resolveHmacIdentityParty(attemptId)).toEqual({
+      kind: 'test.workflow-execution-attempt',
       id: attemptId,
-      authenticated: true,
       claims: { executionId: 'exec-2' },
     });
   });
@@ -76,14 +75,14 @@ describe('registerHmacIdentitySecret with claims', () => {
   it('cleanup removes claims-bearing registration', () => {
     const attemptId = 'attempt-cleanup';
     const cleanup = registerHmacIdentitySecret(attemptId, 'secret', {
-      peerKind: 'workflow-execution-attempt',
+      partyKind: 'test.workflow-execution-attempt',
       claims: { executionId: 'exec-cleanup' },
     });
 
     cleanup();
 
     expect(resolveHmacIdentitySecret(attemptId)).toBeNull();
-    expect(resolveHmacIdentityPeer(attemptId)).toBeNull();
+    expect(resolveHmacIdentityParty(attemptId)).toBeNull();
   });
 });
 
@@ -99,7 +98,7 @@ describe('captureHmacIdentitySecretCleanup', () => {
   it('captures the current cleanup when the original caller closure is unavailable', () => {
     const attemptId = 'attempt-captured-cleanup';
     registerHmacIdentitySecret(attemptId, 'test-secret', {
-      peerKind: 'workflow-execution-attempt',
+      partyKind: 'test.workflow-execution-attempt',
       claims: { executionId: 'exec-captured-cleanup' },
     });
 
@@ -108,13 +107,13 @@ describe('captureHmacIdentitySecretCleanup', () => {
 
     capturedCleanup?.();
 
-    expect(resolveHmacIdentityPeer(attemptId)).toBeNull();
+    expect(resolveHmacIdentityParty(attemptId)).toBeNull();
   });
 
   it('cannot revoke a later rotation of the captured registration', () => {
     const attemptId = 'attempt-captured-stale';
     registerHmacIdentitySecret(attemptId, 'test-secret', {
-      peerKind: 'workflow-execution-attempt',
+      partyKind: 'test.workflow-execution-attempt',
       claims: { executionId: 'exec-captured-stale' },
     });
     const capturedCleanup = captureHmacIdentitySecretCleanup(attemptId);
@@ -122,10 +121,9 @@ describe('captureHmacIdentitySecretCleanup', () => {
     rotateHmacIdentitySecret(attemptId, 'rotated-test-secret');
     capturedCleanup?.();
 
-    expect(resolveHmacIdentityPeer(attemptId)).toEqual({
-      kind: 'workflow-execution-attempt',
+    expect(resolveHmacIdentityParty(attemptId)).toEqual({
+      kind: 'test.workflow-execution-attempt',
       id: attemptId,
-      authenticated: true,
       claims: { executionId: 'exec-captured-stale' },
     });
   });
@@ -133,21 +131,20 @@ describe('captureHmacIdentitySecretCleanup', () => {
   it('cannot revoke a later replacement of the captured registration', () => {
     const attemptId = 'attempt-captured-replacement';
     registerHmacIdentitySecret(attemptId, 'test-secret', {
-      peerKind: 'workflow-execution-attempt',
+      partyKind: 'test.workflow-execution-attempt',
       claims: { executionId: 'exec-before-replacement' },
     });
     const capturedCleanup = captureHmacIdentitySecretCleanup(attemptId);
 
     registerHmacIdentitySecret(attemptId, 'replacement-test-secret', {
-      peerKind: 'workflow-execution-attempt',
+      partyKind: 'test.workflow-execution-attempt',
       claims: { executionId: 'exec-after-replacement' },
     });
     capturedCleanup?.();
 
-    expect(resolveHmacIdentityPeer(attemptId)).toEqual({
-      kind: 'workflow-execution-attempt',
+    expect(resolveHmacIdentityParty(attemptId)).toEqual({
+      kind: 'test.workflow-execution-attempt',
       id: attemptId,
-      authenticated: true,
       claims: { executionId: 'exec-after-replacement' },
     });
   });
@@ -162,7 +159,7 @@ describe('rotateHmacIdentitySecret', () => {
     const attemptId = 'attempt-rotate';
     const executionId = 'exec-rotate';
     registerHmacIdentitySecret(attemptId, 'old-secret', {
-      peerKind: 'workflow-execution-attempt',
+      partyKind: 'test.workflow-execution-attempt',
       claims: { executionId },
     });
 
@@ -171,20 +168,19 @@ describe('rotateHmacIdentitySecret', () => {
     expect(resolveHmacIdentitySecret(attemptId)).toBe('new-secret');
   });
 
-  it('preserves peer kind and claims after rotation', () => {
+  it('preserves party kind and claims after rotation', () => {
     const attemptId = 'attempt-rotate-claims';
     const executionId = 'exec-rotate-claims';
     registerHmacIdentitySecret(attemptId, 'old-secret', {
-      peerKind: 'workflow-execution-attempt',
+      partyKind: 'test.workflow-execution-attempt',
       claims: { executionId },
     });
 
     rotateHmacIdentitySecret(attemptId, 'new-secret');
 
-    expect(resolveHmacIdentityPeer(attemptId)).toEqual({
-      kind: 'workflow-execution-attempt',
+    expect(resolveHmacIdentityParty(attemptId)).toEqual({
+      kind: 'test.workflow-execution-attempt',
       id: attemptId,
-      authenticated: true,
       claims: { executionId },
     });
   });
@@ -192,7 +188,7 @@ describe('rotateHmacIdentitySecret', () => {
   it('allows overriding options during rotation', () => {
     const attemptId = 'attempt-rotate-override';
     registerHmacIdentitySecret(attemptId, 'old-secret', {
-      peerKind: 'workflow-execution-attempt',
+      partyKind: 'test.workflow-execution-attempt',
       claims: { executionId: 'exec-1' },
     });
 
@@ -200,10 +196,9 @@ describe('rotateHmacIdentitySecret', () => {
       claims: { executionId: 'exec-updated' },
     });
 
-    expect(resolveHmacIdentityPeer(attemptId)).toEqual({
-      kind: 'workflow-execution-attempt',
+    expect(resolveHmacIdentityParty(attemptId)).toEqual({
+      kind: 'test.workflow-execution-attempt',
       id: attemptId,
-      authenticated: true,
       claims: { executionId: 'exec-updated' },
     });
   });
@@ -214,7 +209,7 @@ describe('rotateHmacIdentitySecret', () => {
 
   it('throws when rotating with an empty secret', () => {
     const attemptId = 'attempt-empty-rotate';
-    registerHmacIdentitySecret(attemptId, 'old-secret', { peerKind: 'test-identity' });
+    registerHmacIdentitySecret(attemptId, 'old-secret', { partyKind: 'test.identity' });
 
     expect(() => rotateHmacIdentitySecret(attemptId, '')).toThrow(/non-empty/i);
   });
@@ -222,7 +217,7 @@ describe('rotateHmacIdentitySecret', () => {
   it('returns a cleanup that removes only the rotated registration', () => {
     const attemptId = 'attempt-rotate-cleanup';
     registerHmacIdentitySecret(attemptId, 'old-secret', {
-      peerKind: 'workflow-execution-attempt',
+      partyKind: 'test.workflow-execution-attempt',
       claims: { executionId: 'exec-cleanup' },
     });
 
@@ -236,7 +231,7 @@ describe('rotateHmacIdentitySecret', () => {
     const attemptId = 'attempt-stale-cleanup';
     const executionId = 'exec-stale';
     const originalCleanup = registerHmacIdentitySecret(attemptId, 'old-secret', {
-      peerKind: 'workflow-execution-attempt',
+      partyKind: 'test.workflow-execution-attempt',
       claims: { executionId },
     });
 
@@ -247,10 +242,9 @@ describe('rotateHmacIdentitySecret', () => {
     originalCleanup();
 
     expect(resolveHmacIdentitySecret(attemptId)).toBe('new-secret');
-    expect(resolveHmacIdentityPeer(attemptId)).toEqual({
-      kind: 'workflow-execution-attempt',
+    expect(resolveHmacIdentityParty(attemptId)).toEqual({
+      kind: 'test.workflow-execution-attempt',
       id: attemptId,
-      authenticated: true,
       claims: { executionId },
     });
   });
@@ -261,11 +255,11 @@ describe('rotateHmacIdentitySecret', () => {
     const attemptB = 'attempt-B';
 
     const cleanupA = registerHmacIdentitySecret(attemptA, 'secret-A', {
-      peerKind: 'workflow-execution-attempt',
+      partyKind: 'test.workflow-execution-attempt',
       claims: { executionId },
     });
     registerHmacIdentitySecret(attemptB, 'secret-B', {
-      peerKind: 'workflow-execution-attempt',
+      partyKind: 'test.workflow-execution-attempt',
       claims: { executionId },
     });
 
@@ -275,10 +269,9 @@ describe('rotateHmacIdentitySecret', () => {
     // Attempt B is unaffected.
     expect(resolveHmacIdentitySecret(attemptA)).toBeNull();
     expect(resolveHmacIdentitySecret(attemptB)).toBe('secret-B');
-    expect(resolveHmacIdentityPeer(attemptB)).toEqual({
-      kind: 'workflow-execution-attempt',
+    expect(resolveHmacIdentityParty(attemptB)).toEqual({
+      kind: 'test.workflow-execution-attempt',
       id: attemptB,
-      authenticated: true,
       claims: { executionId },
     });
   });
@@ -291,7 +284,7 @@ describe('rotateHmacIdentitySecret', () => {
 describe('directional subject restrictions', () => {
   it('leaves both directions unrestricted when neither directional field is supplied', () => {
     const identityId = 'unrestricted-identity';
-    registerHmacIdentitySecret(identityId, 'secret', { peerKind: 'test-identity' });
+    registerHmacIdentitySecret(identityId, 'secret', { partyKind: 'test.identity' });
 
     expect(resolveHmacIdentityAllowedMessageSubjects(identityId)).toBeNull();
     expect(resolveHmacIdentityAllowedSubscriptionSubjects(identityId)).toBeNull();
@@ -320,7 +313,7 @@ describe('directional subject restrictions', () => {
   }) => {
     const identityId = 'directional-identity';
     registerHmacIdentitySecret(identityId, 'secret', {
-      peerKind: 'test-identity',
+      partyKind: 'test.identity',
       ...options,
     });
 
@@ -331,7 +324,7 @@ describe('directional subject restrictions', () => {
   it('preserves both directional grants across rotation', () => {
     const identityId = 'rotate-restricted';
     registerHmacIdentitySecret(identityId, 'old-secret', {
-      peerKind: 'worker-bootstrap',
+      partyKind: 'test.worker-bootstrap',
       allowedMessageSubjects: ['worker.control.bootstrap.claim'],
       allowedSubscriptionSubjects: ['workflow.control.cancel'],
     });
@@ -348,7 +341,7 @@ describe('directional subject restrictions', () => {
       'execution-attempt.operation.deliver': { executionAttemptId: 'attempt-a' },
     };
     const cleanup = registerHmacIdentitySecret(identityId, 'old-secret', {
-      peerKind: 'workflow-execution-attempt',
+      partyKind: 'test.workflow-execution-attempt',
       allowedMessageSubjects: [],
       allowedSubscriptionSubjects: ['execution-attempt.operation.deliver'],
       requiredSubscriptionFilters,
@@ -374,7 +367,7 @@ describe('directional subject restrictions', () => {
   it('rejects wildcard required subscription filter keys', () => {
     expect(() =>
       registerHmacIdentitySecret('wildcard-policy', 'secret', {
-        peerKind: 'test-identity',
+        partyKind: 'test.identity',
         requiredSubscriptionFilters: { 'execution-attempt.*': { executionAttemptId: 'attempt-a' } },
       }),
     ).toThrow('registerHmacIdentitySecret requires exact full subjects for requiredSubscriptionFilters');
@@ -385,7 +378,7 @@ describe('directional subject restrictions', () => {
       Reflect.apply(registerHmacIdentitySecret, undefined, [
         'obsolete-subject-grant',
         'secret',
-        { peerKind: 'test-identity', allowedSubjects: ['worker.control.bootstrap.claim'] },
+        { partyKind: 'test.identity', allowedSubjects: ['worker.control.bootstrap.claim'] },
       ]),
     ).toThrow(
       'registerHmacIdentitySecret no longer accepts allowedSubjects; use allowedMessageSubjects and/or allowedSubscriptionSubjects',

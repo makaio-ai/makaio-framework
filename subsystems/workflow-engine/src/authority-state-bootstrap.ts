@@ -1,6 +1,6 @@
 import { isDeepStrictEqual } from 'node:util';
 import type { IMakaioBus } from '@makaio/bus-core';
-import type { TransportReceiveContext } from '@makaio/core';
+import type { CallContext, TransportReceiveContext } from '@makaio/core';
 import type { WorkflowDefinition, WorkflowRunContext } from '@makaio/contracts';
 import { WorkflowStorageSubjects } from './storage/namespace.js';
 import { WorkflowSubjects } from './namespace.js';
@@ -29,23 +29,25 @@ export function registerAuthorityStatePersistedHook(hook: AuthorityStatePersiste
 
 /**
  * Persist state metadata learned only after an authority-owned runner loads its definition.
+ * @param call - Call context of the workflow run being started.
  * @param bus - Authority-connected workflow bus.
  * @param runContext - Loaded run-context snapshot.
  * @param definition - Loaded workflow definition.
  */
 export async function persistAuthorityLoadedState(
+  call: CallContext,
   bus: IMakaioBus,
   runContext: WorkflowRunContext,
   definition: WorkflowDefinition,
 ): Promise<void> {
-  const local = await bus.requestOptional(WorkflowStorageSubjects.getRunContext, {
+  const local = await bus.requestOptional(call, WorkflowStorageSubjects.getRunContext, {
     executionId: runContext.executionId,
   });
   if (local.handled) {
-    await bootstrapAuthorityLoadedState(bus, runContext.executionId, definition);
+    await bootstrapAuthorityLoadedState(call, bus, runContext.executionId, definition);
     return;
   }
-  await bus.request(WorkflowSubjects.bootstrapAuthorityState, {
+  await bus.request(call, WorkflowSubjects.bootstrapAuthorityState, {
     executionId: runContext.executionId,
     terminalAuthority: 'authority',
     definition,
@@ -54,39 +56,43 @@ export async function persistAuthorityLoadedState(
 
 /**
  * Persist a worker-loaded definition through authority-local storage.
+ * @param call - Call context of the message on whose behalf the state is persisted.
  * @param bus - Authority-local workflow bus.
  * @param executionId - Execution whose durable context is updated.
  * @param definition - Definition loaded by the isolated worker.
  * @returns Whether an existing authority-owned context was updated.
  */
 export async function bootstrapAuthorityLoadedState(
+  call: CallContext,
   bus: IMakaioBus,
   executionId: string,
   definition: WorkflowDefinition,
 ): Promise<boolean> {
-  return (await bootstrapAuthorityLoadedStateSnapshot(bus, executionId, definition)) !== undefined;
+  return (await bootstrapAuthorityLoadedStateSnapshot(call, bus, executionId, definition)) !== undefined;
 }
 
 /**
  * Persist authority metadata while preserving an already-pinned definition snapshot.
+ * @param call - Call context of the message on whose behalf the state is persisted.
  * @param bus - Authority-local workflow bus.
  * @param executionId - Execution whose durable context is updated.
  * @param definition - Definition loaded by the isolated worker.
  * @returns The authoritative snapshot, or `undefined` when no context exists.
  */
 async function bootstrapAuthorityLoadedStateSnapshot(
+  call: CallContext,
   bus: IMakaioBus,
   executionId: string,
   definition: WorkflowDefinition,
 ): Promise<WorkflowDefinition | undefined> {
-  const stored = await bus.request(WorkflowStorageSubjects.getRunContext, { executionId });
+  const stored = await bus.request(call, WorkflowStorageSubjects.getRunContext, { executionId });
   if (stored.runContext === null) return undefined;
   if (stored.runContext.executionId !== executionId) {
     throw new Error(`Authority bootstrap identity mismatch for '${executionId}'`);
   }
   const storedSnapshot = stored.runContext.definitionSnapshot;
   if (storedSnapshot === undefined) {
-    await bus.request(WorkflowStorageSubjects.setRunContext, {
+    await bus.request(call, WorkflowStorageSubjects.setRunContext, {
       runContext: { ...stored.runContext, terminalAuthority: 'authority' },
     });
     return undefined;
@@ -95,7 +101,7 @@ async function bootstrapAuthorityLoadedStateSnapshot(
     throw new Error(`Authority bootstrap definition mismatch for '${executionId}'`);
   }
   const authoritativeDefinition = storedSnapshot;
-  await bus.request(WorkflowStorageSubjects.setRunContext, {
+  await bus.request(call, WorkflowStorageSubjects.setRunContext, {
     runContext: {
       ...stored.runContext,
       terminalAuthority: 'authority',
@@ -131,6 +137,7 @@ export function registerAuthorityStateBootstrapHandler(
       throw new Error('authority state bootstrap is execution-bound');
     }
     const persistedDefinition = await bootstrapAuthorityLoadedStateSnapshot(
+      ctx.call,
       bus,
       ctx.payload.executionId,
       ctx.payload.definition as WorkflowDefinition,

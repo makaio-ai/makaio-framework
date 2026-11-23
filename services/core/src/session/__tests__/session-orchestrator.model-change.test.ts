@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
+import { createTestCall } from '@makaio/test-utils';
 import {
   AgentSubjects,
   defineAdapterProviderAuth,
@@ -87,7 +88,7 @@ describe('ensureAgentModel', () => {
     const agent: MakaioSessionAgent = createMockAgent('agent-1', { model: 'gpt-4o' });
     const requestSpy = vi.spyOn(MakaioBus, 'request');
 
-    const result = await ensureAgentModel(MakaioBus, agent, 'gpt-4o');
+    const result = await ensureAgentModel(createTestCall(), MakaioBus, agent, 'gpt-4o');
 
     expect(result).toEqual({ changed: false });
     expect(requestSpy).not.toHaveBeenCalled();
@@ -102,7 +103,7 @@ describe('ensureAgentModel', () => {
       }),
     );
 
-    const result = await ensureAgentModel(MakaioBus, agent, 'gpt-4o-mini');
+    const result = await ensureAgentModel(createTestCall(), MakaioBus, agent, 'gpt-4o-mini');
 
     expect(result).toEqual({ changed: true, swapped: false });
     expect(agent.model).toBe('gpt-4o-mini');
@@ -116,7 +117,7 @@ describe('ensureAgentModel', () => {
       }),
     );
 
-    const result = await ensureAgentModel(MakaioBus, agent, 'claude-sonnet-4-20250514');
+    const result = await ensureAgentModel(createTestCall(), MakaioBus, agent, 'claude-sonnet-4-20250514');
 
     expect(result).toEqual({ changed: true, swapped: true });
     expect(agent.model).toBe('claude-sonnet-4-20250514');
@@ -130,7 +131,7 @@ describe('ensureAgentModel', () => {
       }),
     );
 
-    const result = await ensureAgentModel(MakaioBus, agent, 'gpt-4o-mini');
+    const result = await ensureAgentModel(createTestCall(), MakaioBus, agent, 'gpt-4o-mini');
 
     expect(result).toEqual({ changed: true, swapped: false });
   });
@@ -143,7 +144,7 @@ describe('ensureAgentModel', () => {
       }),
     );
 
-    await expect(ensureAgentModel(MakaioBus, agent, 'gpt-4o-mini')).rejects.toThrow(
+    await expect(ensureAgentModel(createTestCall(), MakaioBus, agent, 'gpt-4o-mini')).rejects.toThrow(
       'Failed to change model for agent agent-1: turn_active',
     );
   });
@@ -159,7 +160,7 @@ describe('ensureAgentModel', () => {
       }),
     );
 
-    await ensureAgentModel(MakaioBus, agent, 'gpt-4o-mini', {
+    await ensureAgentModel(createTestCall(), MakaioBus, agent, 'gpt-4o-mini', {
       providerConfigId: 'provider-xyz',
       skipWarning: true,
     });
@@ -182,7 +183,7 @@ describe('ensureAgentModel', () => {
       }),
     );
 
-    await ensureAgentModel(MakaioBus, agent, 'gpt-4o-mini');
+    await ensureAgentModel(createTestCall(), MakaioBus, agent, 'gpt-4o-mini');
 
     expect(capturedPayload).not.toHaveProperty('providerContext');
     expect(capturedPayload).not.toHaveProperty('skipWarning');
@@ -199,7 +200,7 @@ describe('ensureAgentModel', () => {
       }),
     );
 
-    const result = await ensureAgentModel(MakaioBus, agent, undefined, {
+    const result = await ensureAgentModel(createTestCall(), MakaioBus, agent, undefined, {
       reasoningEffort: 'high',
     });
 
@@ -222,7 +223,7 @@ describe('ensureAgentModel', () => {
       }),
     );
 
-    const result = await ensureAgentModel(MakaioBus, agent, 'gpt-4o-mini', {
+    const result = await ensureAgentModel(createTestCall(), MakaioBus, agent, 'gpt-4o-mini', {
       reasoningEffort: 'medium',
     });
 
@@ -242,7 +243,7 @@ describe('ensureAgentModel', () => {
       }),
     );
 
-    const result = await ensureAgentModel(MakaioBus, agent, 'gpt-4o', {
+    const result = await ensureAgentModel(createTestCall(), MakaioBus, agent, 'gpt-4o', {
       providerConfigId: 'new-provider',
     });
 

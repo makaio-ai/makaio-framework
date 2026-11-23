@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { createBusInstance } from '@makaio/bus-core';
 import { SessionNamespace, SessionSubjects, WorkflowNamespace, type WorkflowRunContext } from '@makaio/contracts';
+import { createTestCall } from '@makaio/test-utils';
 import { WorkflowSubjects } from '../namespace.js';
 import { WorkflowStorageNamespace, WorkflowStorageSubjects } from '../storage/namespace.js';
 import {
@@ -75,7 +76,7 @@ describe('startFileExecution', () => {
     };
 
     try {
-      await expect(startFileExecution(deps, '/repo/workflows/file.ts')).rejects.toThrow(
+      await expect(startFileExecution(createTestCall(), deps, '/repo/workflows/file.ts')).rejects.toThrow(
         '[WorkflowExecutor] startFileExecution called without a workflow runner',
       );
       expect(setExecutionStart).not.toHaveBeenCalled();
@@ -118,7 +119,7 @@ describe('startFileExecution', () => {
     };
 
     try {
-      await expect(startFileExecution(deps, '/repo/workflows/file.ts')).rejects.toThrow(
+      await expect(startFileExecution(createTestCall(), deps, '/repo/workflows/file.ts')).rejects.toThrow(
         'path-backed execution requires a resolved materializationSpec',
       );
       expect(setExecutionStart).not.toHaveBeenCalled();
@@ -161,7 +162,7 @@ describe('persistLoadedExecutionStart', () => {
     });
 
     try {
-      await expect(persistLoadedExecutionStart(bus, execution, runContext, workflow)).rejects.toThrow(
+      await expect(persistLoadedExecutionStart(createTestCall(), bus, execution, runContext, workflow)).rejects.toThrow(
         'storage:workflow.setExecutionStart',
       );
       expect(setExecution).not.toHaveBeenCalled();

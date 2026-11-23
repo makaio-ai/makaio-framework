@@ -1,4 +1,4 @@
-import type { MakaioBusLike } from '@makaio/core';
+import type { CallContext, MakaioBusLike } from '@makaio/core';
 import type { MakaioSessionEvent } from '../../session/types.js';
 import type { SessionMessage } from '../../session/schemas/message.js';
 import { SESSION_EVENT_TYPES } from '../../session/schemas/event.js';
@@ -112,6 +112,8 @@ export interface WhenContext<TRoles extends MessageRole[] = MessageRole[], TBus 
   sessionId: string;
   /** Bus instance for runtime queries. */
   bus: TBus;
+  /** Call context of the triggering input; send with it through `bus`. */
+  call: CallContext;
 }
 
 /**
@@ -136,6 +138,8 @@ export interface PickerOpenContext<
   projectId?: string;
   /** Bus instance for runtime queries. */
   bus: TBus;
+  /** Call context of the triggering input; send with it through `bus`. */
+  call: CallContext;
 }
 
 /** Configuration returned by `onPickerOpen` to control the event picker UI. */
@@ -166,6 +170,8 @@ export interface SelectionChangeContext<TBus extends MakaioBusLike = MakaioBusLi
   sessionId: string;
   /** Bus instance for runtime queries. */
   bus: TBus;
+  /** Call context of the triggering input; send with it through `bus`. */
+  call: CallContext;
 }
 
 /** Feedback returned by `onSelectionChange` to inform the picker UI. */
@@ -199,6 +205,8 @@ export interface ExecuteContext<
   projectId?: string;
   /** Bus instance for runtime queries. */
   bus: TBus;
+  /** Call context of the triggering input; send with it through `bus`. */
+  call: CallContext;
 }
 
 /** Result returned by a session event action's `onExecute` callback. */

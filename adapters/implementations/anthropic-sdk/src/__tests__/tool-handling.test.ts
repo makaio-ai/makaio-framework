@@ -1,7 +1,8 @@
 import { beforeEach, describe, expect, it } from 'vitest';
+import { createTestCall } from '@makaio/test-utils';
 import { createBusInstance, MakaioBus } from '@makaio/bus-core';
-import { ToolSubjects, type AgentToolApproveResponse } from '@makaio/contracts';
-import type { ExtractSubjectPayload } from '@makaio/core';
+import { ToolSubjects, type AgentToolApproveResponse, type Party } from '@makaio/contracts';
+import type { CallContext, ExtractSubjectPayload } from '@makaio/core';
 import type { ToolCall } from '../namespaces/index.js';
 import { executeTool, extractToolCallPayload, handleToolCalls, loadToolsFromRegistry } from '../tool-handling.js';
 
@@ -20,8 +21,11 @@ function createToolCall(): ToolCall {
 }
 
 describe('anthropic tool-handling', () => {
+  let call: CallContext;
+
   beforeEach(() => {
     MakaioBus.__resetHandlers?.();
+    call = createTestCall();
   });
 
   it('loads tools through the injected bus instance', async () => {
@@ -44,7 +48,7 @@ describe('anthropic tool-handling', () => {
       });
     });
 
-    const tools = await loadToolsFromRegistry(hostBus, 'adapter-anthropic-1', 'anthropic-sdk');
+    const tools = await loadToolsFromRegistry(call, hostBus, 'adapter-anthropic-1', 'anthropic-sdk');
 
     expect(tools).toHaveLength(1);
     expect(tools[0]?.name).toBe('terminal_scrollback');
@@ -79,7 +83,7 @@ describe('anthropic tool-handling', () => {
       });
     });
 
-    const tools = await loadToolsFromRegistry(hostBus, 'adapter-anthropic-1', 'anthropic-sdk', {
+    const tools = await loadToolsFromRegistry(call, hostBus, 'adapter-anthropic-1', 'anthropic-sdk', {
       allowedTools: ['allowed_tool', 'blocked_tool'],
       disallowedTools: ['blocked_tool'],
     });
@@ -102,6 +106,7 @@ describe('anthropic tool-handling', () => {
     const approval: AgentToolApproveResponse = { action: 'allow', updatedInput: { limit: 5 } };
 
     await handleToolCalls(
+      call,
       [toolCall],
       {
         bus: MakaioBus,
@@ -130,9 +135,10 @@ describe('anthropic tool-handling', () => {
     const events: Array<{ eventType: string; success?: boolean }> = [];
     await expect(
       executeTool(
+        call,
         MakaioBus,
         createToolCall(),
-        async (event) => {
+        async (_call, event) => {
           events.push({ eventType: event.eventType, success: 'success' in event ? event.success : undefined });
         },
         {
@@ -197,9 +203,10 @@ describe('anthropic tool-handling', () => {
 
     await expect(
       executeTool(
+        call,
         MakaioBus,
         malformedToolCall,
-        async (event) => {
+        async (_call, event) => {
           events.push({ eventType: event.eventType, success: 'success' in event ? event.success : undefined });
         },
         { env: {} },
@@ -210,5 +217,42 @@ describe('anthropic tool-handling', () => {
       { eventType: 'tool_started', success: undefined },
       { eventType: 'tool_completed', success: false },
     ]);
+  });
+
+  it('R1: forwards the turn call to approval, lifecycle events and tool execution after an awaited approval', async () => {
+    const personA: Party = { kind: 'acme.person', id: 'person-a' };
+    const turnCall = createTestCall({ principal: personA });
+    const approvalCalls: CallContext[] = [];
+    const eventCalls: CallContext[] = [];
+    const executePrincipals: Party[] = [];
+
+    MakaioBus.on(ToolSubjects.execute, (ctx) => {
+      executePrincipals.push(ctx.call.principal);
+      ctx.setResult({ success: true, data: { ok: true } });
+    });
+
+    const approval: AgentToolApproveResponse = { action: 'allow' };
+    await handleToolCalls(
+      turnCall,
+      [createToolCall()],
+      {
+        bus: MakaioBus,
+        emitSdkEvent: async (eventCall) => {
+          eventCalls.push(eventCall);
+        },
+        requestToolApproval: async (approvalCall) => {
+          approvalCalls.push(approvalCall);
+          await new Promise((resolve) => setTimeout(resolve, 5));
+          return approval;
+        },
+      },
+      { cwd: '/repo', env: {} },
+    );
+
+    expect(approvalCalls).toEqual([turnCall]);
+    expect(approvalCalls[0]).toBe(turnCall);
+    expect(eventCalls).toHaveLength(2);
+    expect(eventCalls.every((eventCall) => eventCall === turnCall)).toBe(true);
+    expect(executePrincipals).toEqual([personA]);
   });
 });

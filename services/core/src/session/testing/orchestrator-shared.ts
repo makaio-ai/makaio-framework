@@ -5,7 +5,13 @@
  */
 import { MakaioBus } from '@makaio/bus-core';
 import { AdapterSubjects, AgentSubjects, SessionSubjects } from '@makaio/contracts';
-import type { IMakaioSession, MakaioSessionAgent, MessageInput, ResponseSchemaDescriptor } from '@makaio/contracts';
+import type {
+  CallContext,
+  IMakaioSession,
+  MakaioSessionAgent,
+  MessageInput,
+  ResponseSchemaDescriptor,
+} from '@makaio/contracts';
 import {
   resetBusHandlers,
   waitForAsync,
@@ -219,7 +225,7 @@ export function registerStartAgentHandler(
     });
 
     // Emit agent.added event (mimics AIAdapter behavior)
-    emitAgentAdded({ sessionId, agentId, adapterId, adapterSessionId });
+    emitAgentAdded(ctx.call, { sessionId, agentId, adapterId, adapterSessionId });
   });
   return start;
 }
@@ -282,7 +288,8 @@ export function registerFailingSendMessageHandler(
  * @returns Promise that resolves when the event has been emitted
  */
 export async function emitAgentComplete(input: { agentId: string; messageId: string; turnId: string }): Promise<void> {
-  await MakaioBus.emit(AgentSubjects.complete, {
+  // ORIGIN: The test injects a successful completion as a separate bus action.
+  await MakaioBus.emit(MakaioBus.own('root'), AgentSubjects.complete, {
     agentId: input.agentId,
     adapterId: `adapter-${input.agentId}`,
     adapterName: 'test-adapter',
@@ -303,7 +310,8 @@ export async function emitAgentError(input: {
   turnId: string;
   error: string;
 }): Promise<void> {
-  await MakaioBus.emit(AgentSubjects.complete, {
+  // ORIGIN: The test injects a failed completion as a separate bus action.
+  await MakaioBus.emit(MakaioBus.own('root'), AgentSubjects.complete, {
     agentId: input.agentId,
     adapterId: `adapter-${input.agentId}`,
     adapterName: 'test-adapter',
@@ -317,17 +325,21 @@ export async function emitAgentError(input: {
 
 /**
  * Helper to emit agent.added event (mimics AIAdapter behavior)
+ * @param call - The handled start request's call context
  * @param payload - The payload for the agent.added event
  */
-export function emitAgentAdded(payload: {
-  sessionId: string;
-  agentId: string;
-  adapterId: string;
-  adapterSessionId: string;
-  role?: 'lead' | 'member';
-}): void {
+export function emitAgentAdded(
+  call: CallContext,
+  payload: {
+    sessionId: string;
+    agentId: string;
+    adapterId: string;
+    adapterSessionId: string;
+    role?: 'lead' | 'member';
+  },
+): void {
   setImmediate(() => {
-    void MakaioBus.emit(SessionSubjects.agent.added, {
+    void MakaioBus.emit(call, SessionSubjects.agent.added, {
       sessionId: payload.sessionId,
       agentId: payload.agentId,
       adapterId: payload.adapterId,
@@ -376,7 +388,7 @@ export function registerCapturingStartAgentHandler(
       ...callerOwnedSuccessFields(ctx.payload),
       ...(messageId && { messageId }),
     });
-    emitAgentAdded({ sessionId, agentId, adapterId: ctx.payload.adapterId, adapterSessionId });
+    emitAgentAdded(ctx.call, { sessionId, agentId, adapterId: ctx.payload.adapterId, adapterSessionId });
   });
 
   const getAgentUnsub = MakaioBus.on(AdapterSubjects.getAgent, (ctx) => {

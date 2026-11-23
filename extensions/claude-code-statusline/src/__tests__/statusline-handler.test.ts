@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createBusInstance } from '@makaio/bus-core';
 import { ClaudeCodeClientSubjects } from '@makaio/client-claude-code/runtime';
 import type { OutputWriter } from '@makaio/kernel/cli';
+import { createTestCall } from '@makaio/test-utils';
 import { runClaudeStatuslineCommand, type ClaudeStatuslineCommandContext } from '../cli/handler.js';
 
 const stdoutChunks: string[] = [];
@@ -62,6 +63,7 @@ function createContext(
 
   return {
     args: {},
+    call: createTestCall(),
     bus: {
       emit: vi.fn(async () => undefined),
     },
@@ -164,7 +166,7 @@ describe('runClaudeStatuslineCommand', () => {
       }),
     ).resolves.toBeUndefined();
 
-    expect(emit).toHaveBeenCalledWith(ClaudeCodeClientSubjects.statusline.received, {
+    expect(emit).toHaveBeenCalledWith(ctx.call, ClaudeCodeClientSubjects.statusline.received, {
       ...validStatuslinePayload,
       session_id: 'session-2',
     });
@@ -201,7 +203,7 @@ describe('runClaudeStatuslineCommand', () => {
       }),
     ).resolves.toBeUndefined();
 
-    expect(emit).toHaveBeenCalledWith(ClaudeCodeClientSubjects.statusline.received, {
+    expect(emit).toHaveBeenCalledWith(ctx.call, ClaudeCodeClientSubjects.statusline.received, {
       ...validStatuslinePayload,
       session_id: 'session-3',
     });

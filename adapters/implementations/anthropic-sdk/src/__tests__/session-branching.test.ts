@@ -17,251 +17,35 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type Anthropic from '@anthropic-ai/sdk';
-import type { ContentBlockParam, MessageParam } from '@anthropic-ai/sdk/resources/messages/messages.js';
+import type { MessageParam } from '@anthropic-ai/sdk/resources/messages/messages.js';
 import { MakaioBus } from '@makaio/bus-core';
-import { MessageHandle, type MessageResult } from '@makaio/ai-adapters-core';
-import { AnthropicSdkSession } from '../session.js';
+import type { MessageResult } from '@makaio/ai-adapters-core';
 import { AnthropicSdkConnectorNamespace, AnthropicSdkConnectorSubjects } from '../namespaces/index.js';
 import type { AnthropicSdkConnectorTurn } from '../turn.js';
 import type { AnthropicSdkBus, AnthropicSdkSessionConfig } from '../types/index.js';
-import type { MessageCompleteEvent } from '../namespaces/schemas/message.js';
 import type { SdkEvent } from '../namespaces/index.js';
-
-/**
- * Minimal typed stub for the Anthropic client.
- *
- * `executeApiCall` is overridden on `TestAnthropicSdkSession` and never calls
- * `super.executeApiCall`, so the real Anthropic client is never invoked.
- * Casting the stub directly to `Anthropic` avoids unsafe double-casts
- * while keeping the test free of network dependencies.
- */
-const stubAnthropicClient = {} as Anthropic;
-
-// ---------------------------------------------------------------------------
-// Fixture factories
-// ---------------------------------------------------------------------------
-
-/**
- * Build a minimal {@link MessageCompleteEvent} for text-only responses.
- * @param content - Assembled text content from the model.
- * @returns A typed `message_complete` event with `end_turn` finish reason.
- */
-function makeTextCompleteEvent(content: string): MessageCompleteEvent {
-  return {
-    eventType: 'message_complete',
-    content,
-    finish_reason: 'end_turn',
-    tool_calls: undefined,
-  };
-}
-
-/**
- * Build a {@link MessageCompleteEvent} that triggers a single tool call recursion.
- * @param toolCallId - Unique ID for the tool call.
- * @param toolName - Name of the tool to invoke.
- * @returns A typed `message_complete` event with `tool_use` finish reason.
- */
-function makeToolUseCompleteEvent(toolCallId: string, toolName: string): MessageCompleteEvent {
-  return {
-    eventType: 'message_complete',
-    content: null,
-    finish_reason: 'tool_use',
-    tool_calls: [
-      {
-        id: toolCallId,
-        blockIndex: 0,
-        type: 'function',
-        function: { name: toolName, arguments: '{}' },
-      },
-    ],
-  };
-}
-
-/**
- * Build a {@link MessageHandle} for a plain enqueue message.
- * @param messageId - Unique message identifier.
- * @param text - User message text.
- * @returns A new `MessageHandle` in `queued` state.
- */
-function makeHandle(messageId: string, text: string): MessageHandle {
-  return new MessageHandle(
-    messageId,
-    { role: 'user', message: text, blocks: [{ type: 'text', content: text }] },
-    'enqueue',
-  );
-}
-
-/**
- * Copy message history deeply enough for assertions after the live session mutates.
- * @param history - Current Anthropic message history
- * @returns Assertion-safe snapshot
- */
-function snapshotHistory(history: MessageParam[]): MessageParam[] {
-  return history.map((message) => ({
-    role: message.role,
-    content:
-      typeof message.content === 'string'
-        ? message.content
-        : message.content.map((block) => ({ ...block }) as ContentBlockParam),
-  }));
-}
-
-// ---------------------------------------------------------------------------
-// Harness: TestAnthropicSdkSession
-//
-// Subclasses `AnthropicSdkSession` to:
-// 1. Replace the real Anthropic API call with a controlled in-process emission
-//    of `message_complete` events.
-// 2. Expose `startNewTurn` as public so tests can invoke it directly.
-//
-// The `apiCallFn` callback is set per-test to control what the mock API "returns".
-// ---------------------------------------------------------------------------
-
-type ApiCallFn = (adapterSessionId: string) => Promise<void>;
-
-class TestAnthropicSdkSession extends AnthropicSdkSession {
-  /** Injected by tests to control what the mock API call emits. */
-  public apiCallFn: ApiCallFn = async () => {};
-
-  /**
-   * Emit a mock `message_complete` event on the bus, bypassing real Anthropic.
-   * @param _turn - Unused (real call would use this for step lifecycle)
-   * @param _abortSignal - Unused (no real stream to abort)
-   * @param adapterSessionId - Forwarded to apiCallFn for envelope construction
-   */
-  public override async executeApiCall(
-    _turn: AnthropicSdkConnectorTurn,
-    _abortSignal: AbortSignal,
-    adapterSessionId: string,
-  ): Promise<void> {
-    await this.apiCallFn(adapterSessionId);
-  }
-
-  /**
-   * Expose `applyMessageComplete` as public for spy-based test assertions.
-   * @param result - The parsed Anthropic `message_complete` event
-   * @param currentHandle - The active message handle
-   * @param toolCallIteration - Current tool recursion depth
-   * @param turn - Captured turn instance for this run loop
-   */
-  public override async applyMessageComplete(
-    result: MessageCompleteEvent,
-    currentHandle: MessageHandle,
-    toolCallIteration: number,
-    turn: AnthropicSdkConnectorTurn,
-  ): Promise<void> {
-    return super.applyMessageComplete(result, currentHandle, toolCallIteration, turn);
-  }
-
-  /**
-   * Expose `startNewTurn` as public for direct test invocation.
-   * @param handle - The message handle to process
-   * @param mergedContent - Optional merged content from superseded messages
-   */
-  public override async startNewTurn(handle: MessageHandle, mergedContent?: string[]): Promise<void | false> {
-    return super.startNewTurn(handle, mergedContent);
-  }
-
-  /**
-   * Expose adapter history for focused session assertions.
-   * @returns Current Anthropic message history
-   */
-  public getHistory(): MessageParam[] {
-    return this.messages;
-  }
-}
-
-// ---------------------------------------------------------------------------
-// Helper: emit a sdk.event message_complete envelope on the bus.
-//
-// Mirrors what `stream-bridge.ts` does at the end of a real stream.
-// The filter in `createMessageCompletePromise` matches on:
-//   - event.eventType === 'message_complete'
-//   - agentId
-//   - adapterId
-//   - adapterSessionId
-// ---------------------------------------------------------------------------
-
-/**
- * Emit a `message_complete` SDK event envelope to the shared bus.
- *
- * The base session's `createMessageCompletePromise` uses `bus.once` with a
- * filter that matches `agentId`, `adapterId`, and `adapterSessionId`, so all
- * three must be present in the envelope.
- * @param scopedBus - Scoped Anthropic bus instance
- * @param event - The inner `message_complete` event payload
- * @param agentId - Agent ID for filter matching
- * @param adapterId - Adapter ID for filter matching
- * @param adapterSessionId - Turn-scoped adapter session ID for filter matching
- */
-async function emitMessageComplete(
-  scopedBus: AnthropicSdkBus,
-  event: MessageCompleteEvent,
-  agentId: string,
-  adapterId: string,
-  adapterSessionId: string,
-): Promise<void> {
-  const envelope: SdkEvent = {
-    event,
-    agentId,
-    adapterId,
-    adapterSessionId,
-  };
-  await scopedBus.emit(AnthropicSdkConnectorSubjects.sdk.event, envelope);
-}
-
-// ---------------------------------------------------------------------------
-// Session factory
-// ---------------------------------------------------------------------------
-
-/** Minimal tool approval that approves everything with no argument modification. */
-const approveAll = async () => ({ action: 'allow' as const });
-
-/**
- * Construct a {@link TestAnthropicSdkSession} wired to a fresh in-memory bus.
- *
- * The session is configured with no real Anthropic client — `executeApiCall`
- * is overridden on `TestAnthropicSdkSession` to use the injected `apiCallFn`.
- * @param scopedBus - Scoped bus for the Anthropic adapter namespace
- * @param adapterId - Stable adapter instance ID
- * @param agentId - Agent ID for bus filter matching and tool attribution
- * @returns A configured `TestAnthropicSdkSession` instance
- */
-function makeSession(scopedBus: AnthropicSdkBus, adapterId: string, agentId: string): TestAnthropicSdkSession {
-  const config: AnthropicSdkSessionConfig = {
-    bus: scopedBus,
-    adapterId,
-    adapterName: 'anthropic-sdk-test',
-    agentId,
-    cwd: '/tmp',
-    model: 'claude-test',
-    env: {},
-    // Anthropic client is unused — executeApiCall is overridden
-    client: stubAnthropicClient,
-    anthropicTools: [],
-    emitSdkEvent: async (event) => {
-      const envelope: SdkEvent = { event, agentId, adapterId };
-      await scopedBus.emit(AnthropicSdkConnectorSubjects.sdk.event, envelope);
-    },
-    handleError: () => {},
-    requestToolApproval: approveAll,
-  };
-
-  return new TestAnthropicSdkSession(config);
-}
+import {
+  AGENT_ID,
+  ADAPTER_ID,
+  TestAnthropicSdkSession,
+  emitMessageComplete,
+  makeHandle,
+  makeSession,
+  makeTextCompleteEvent,
+  makeToolUseCompleteEvent,
+  snapshotHistory,
+  stubAnthropicClient,
+} from './session-branching-harness.js';
 
 // ---------------------------------------------------------------------------
 // Shared test state
 // ---------------------------------------------------------------------------
 
 let scopedBus: AnthropicSdkBus;
-const AGENT_ID = 'test-agent';
-const ADAPTER_ID = 'test-adapter';
 
 beforeEach(async () => {
   MakaioBus.__resetHandlers?.();
-  scopedBus = await AnthropicSdkConnectorNamespace.scopedBus();
+  scopedBus = await AnthropicSdkConnectorNamespace.scopedBus(MakaioBus);
 });
 
 afterEach(() => {
@@ -283,14 +67,8 @@ describe('shouldAbortTurnProcessing — handle.isProcessed', () => {
     handle.markCompleted({ outcome: 'cancelled' });
 
     // Wire apiCallFn to emit a valid message_complete event
-    session.apiCallFn = async (adapterSessionId) => {
-      await emitMessageComplete(
-        scopedBus,
-        makeTextCompleteEvent('should not be applied'),
-        AGENT_ID,
-        ADAPTER_ID,
-        adapterSessionId,
-      );
+    session.apiCallFn = async (call, adapterSessionId) => {
+      await emitMessageComplete(call, scopedBus, makeTextCompleteEvent('should not be applied'), adapterSessionId);
     };
 
     await session.startNewTurn(handle);
@@ -316,18 +94,17 @@ describe('shouldAbortTurnProcessing — turn.isPaused()', () => {
 
     let capturedTurn: AnthropicSdkConnectorTurn | undefined;
 
-    session.apiCallFn = async (adapterSessionId) => {
+    session.apiCallFn = async (call, adapterSessionId) => {
       // Pause the current turn BEFORE emitting the message_complete event.
       // shouldAbortTurnProcessing is checked after executeStreamingStep returns.
       capturedTurn = session.getCurrentTurn();
       if (capturedTurn) {
-        await capturedTurn.pause();
+        await capturedTurn.pause(call);
       }
       await emitMessageComplete(
+        call,
         scopedBus,
         makeTextCompleteEvent('should not be applied after pause'),
-        AGENT_ID,
-        ADAPTER_ID,
         adapterSessionId,
       );
     };
@@ -355,7 +132,7 @@ describe('shouldAbortTurnProcessing — isTurnSuperseded', () => {
 
     let firstCallCount = 0;
 
-    session.apiCallFn = async (adapterSessionId) => {
+    session.apiCallFn = async (call, adapterSessionId) => {
       firstCallCount++;
       if (firstCallCount === 1) {
         // For the first turn: start a second turn that overwrites currentTurn,
@@ -366,22 +143,10 @@ describe('shouldAbortTurnProcessing — isTurnSuperseded', () => {
         // Give the second turn time to overwrite currentTurn
         await new Promise<void>((resolve) => queueMicrotask(resolve));
         // Now emit completion for the first adapter session (will be ignored)
-        await emitMessageComplete(
-          scopedBus,
-          makeTextCompleteEvent('response for first turn'),
-          AGENT_ID,
-          ADAPTER_ID,
-          adapterSessionId,
-        );
+        await emitMessageComplete(call, scopedBus, makeTextCompleteEvent('response for first turn'), adapterSessionId);
       } else {
         // Second turn: emit a normal message_complete
-        await emitMessageComplete(
-          scopedBus,
-          makeTextCompleteEvent('response for second turn'),
-          AGENT_ID,
-          ADAPTER_ID,
-          adapterSessionId,
-        );
+        await emitMessageComplete(call, scopedBus, makeTextCompleteEvent('response for second turn'), adapterSessionId);
       }
     };
 
@@ -412,8 +177,8 @@ describe('applyMessageComplete — text response', () => {
       turnCompleted = true;
     });
 
-    session.apiCallFn = async (adapterSessionId) => {
-      await emitMessageComplete(scopedBus, makeTextCompleteEvent('4'), AGENT_ID, ADAPTER_ID, adapterSessionId);
+    session.apiCallFn = async (call, adapterSessionId) => {
+      await emitMessageComplete(call, scopedBus, makeTextCompleteEvent('4'), adapterSessionId);
     };
 
     await session.startNewTurn(handle);
@@ -438,8 +203,8 @@ describe('applyMessageComplete — text response', () => {
       }),
     );
 
-    session.apiCallFn = async (adapterSessionId) => {
-      await emitMessageComplete(scopedBus, makeTextCompleteEvent('not json'), AGENT_ID, ADAPTER_ID, adapterSessionId);
+    session.apiCallFn = async (call, adapterSessionId) => {
+      await emitMessageComplete(call, scopedBus, makeTextCompleteEvent('not json'), adapterSessionId);
     };
 
     await session.startNewTurn(handle);
@@ -470,7 +235,7 @@ describe('fullPrefix cacheStrategy', () => {
     let secondTurnHistory: MessageParam[] = [];
     let thirdTurnHistory: MessageParam[] = [];
 
-    session.apiCallFn = async (adapterSessionId) => {
+    session.apiCallFn = async (call, adapterSessionId) => {
       callCount++;
       if (callCount === 2) {
         secondTurnHistory = snapshotHistory(session.getHistory());
@@ -478,13 +243,7 @@ describe('fullPrefix cacheStrategy', () => {
       if (callCount === 3) {
         thirdTurnHistory = snapshotHistory(session.getHistory());
       }
-      await emitMessageComplete(
-        scopedBus,
-        makeTextCompleteEvent(`answer ${callCount}`),
-        AGENT_ID,
-        ADAPTER_ID,
-        adapterSessionId,
-      );
+      await emitMessageComplete(call, scopedBus, makeTextCompleteEvent(`answer ${callCount}`), adapterSessionId);
     };
 
     await session.startNewTurn(firstHandle);
@@ -523,9 +282,9 @@ describe('fullPrefix cacheStrategy', () => {
     ];
 
     let requestHistory: MessageParam[] = [];
-    session.apiCallFn = async (adapterSessionId) => {
+    session.apiCallFn = async (call, adapterSessionId) => {
       requestHistory = snapshotHistory(session.getHistory());
-      await emitMessageComplete(scopedBus, makeTextCompleteEvent('done'), AGENT_ID, ADAPTER_ID, adapterSessionId);
+      await emitMessageComplete(call, scopedBus, makeTextCompleteEvent('done'), adapterSessionId);
     };
 
     await session.startNewTurn(handle);
@@ -558,26 +317,19 @@ describe('applyMessageComplete — tool recursion', () => {
     const handle = makeHandle('msg-tool-1', 'call a tool');
     const apiCallCount = { value: 0 };
 
-    session.apiCallFn = async (adapterSessionId) => {
+    session.apiCallFn = async (call, adapterSessionId) => {
       apiCallCount.value++;
       if (apiCallCount.value === 1) {
         // First call: respond with a tool_use finish reason
         await emitMessageComplete(
+          call,
           scopedBus,
           makeToolUseCompleteEvent('tool-call-1', 'get_weather'),
-          AGENT_ID,
-          ADAPTER_ID,
           adapterSessionId,
         );
       } else {
         // Second call (after tool execution): respond with end_turn
-        await emitMessageComplete(
-          scopedBus,
-          makeTextCompleteEvent('The weather is sunny.'),
-          AGENT_ID,
-          ADAPTER_ID,
-          adapterSessionId,
-        );
+        await emitMessageComplete(call, scopedBus, makeTextCompleteEvent('The weather is sunny.'), adapterSessionId);
       }
     };
 
@@ -607,18 +359,12 @@ describe('applyMessageComplete — tool recursion', () => {
     const handle = makeHandle('msg-tool-accum-1', 'use a tool');
     let callCount = 0;
 
-    session.apiCallFn = async (adapterSessionId) => {
+    session.apiCallFn = async (call, adapterSessionId) => {
       callCount++;
       if (callCount === 1) {
-        await emitMessageComplete(
-          scopedBus,
-          makeToolUseCompleteEvent('tc-accum-1', 'compute'),
-          AGENT_ID,
-          ADAPTER_ID,
-          adapterSessionId,
-        );
+        await emitMessageComplete(call, scopedBus, makeToolUseCompleteEvent('tc-accum-1', 'compute'), adapterSessionId);
       } else {
-        await emitMessageComplete(scopedBus, makeTextCompleteEvent('Done.'), AGENT_ID, ADAPTER_ID, adapterSessionId);
+        await emitMessageComplete(call, scopedBus, makeTextCompleteEvent('Done.'), adapterSessionId);
       }
     };
 
@@ -650,13 +396,12 @@ describe('applyMessageComplete — MAX_TOOL_CALL_ITERATIONS enforcement', () => 
     let callCount = 0;
 
     // Always respond with tool_use to drive the iteration counter up
-    session.apiCallFn = async (adapterSessionId) => {
+    session.apiCallFn = async (call, adapterSessionId) => {
       callCount++;
       await emitMessageComplete(
+        call,
         scopedBus,
         makeToolUseCompleteEvent(`tool-call-${callCount}`, 'looping_tool'),
-        AGENT_ID,
-        ADAPTER_ID,
         adapterSessionId,
       );
     };
@@ -691,13 +436,12 @@ describe('applyMessageComplete — MAX_TOOL_CALL_ITERATIONS enforcement', () => 
     const executeApiCallSpy = vi.spyOn(session, 'executeApiCall');
     let callCount = 0;
 
-    session.apiCallFn = async (adapterSessionId) => {
+    session.apiCallFn = async (call, adapterSessionId) => {
       callCount++;
       await emitMessageComplete(
+        call,
         scopedBus,
         makeToolUseCompleteEvent(`tc-limit-${callCount}`, 'repeating_tool'),
-        AGENT_ID,
-        ADAPTER_ID,
         adapterSessionId,
       );
     };
@@ -723,8 +467,9 @@ describe('applyMessageComplete — MAX_TOOL_CALL_ITERATIONS enforcement', () => 
 describe('applyMessageComplete — tool denial with shouldAbort:true', () => {
   it('completes the turn with error outcome when tool approval is hard-denied', async () => {
     // Use a session configured to deny all tool approvals with shouldAbort
-    const denyConfig: AnthropicSdkSessionConfig = {
+    const denyConfig: AnthropicSdkSessionConfig & { globalBus: typeof MakaioBus } = {
       bus: scopedBus,
+      globalBus: MakaioBus,
       adapterId: ADAPTER_ID,
       adapterName: 'anthropic-sdk-test',
       agentId: AGENT_ID,
@@ -733,9 +478,9 @@ describe('applyMessageComplete — tool denial with shouldAbort:true', () => {
       env: {},
       client: stubAnthropicClient,
       anthropicTools: [],
-      emitSdkEvent: async (event) => {
+      emitSdkEvent: async (call, event) => {
         const envelope: SdkEvent = { event, agentId: AGENT_ID, adapterId: ADAPTER_ID };
-        await scopedBus.emit(AnthropicSdkConnectorSubjects.sdk.event, envelope);
+        await scopedBus.emit(call, AnthropicSdkConnectorSubjects.sdk.event, envelope);
       },
       handleError: () => {},
       requestToolApproval: async () => ({ action: 'deny', message: 'Denied by test policy', shouldAbort: true }),
@@ -745,12 +490,11 @@ describe('applyMessageComplete — tool denial with shouldAbort:true', () => {
 
     const handle = makeHandle('msg-deny-1', 'run a tool');
 
-    denySession.apiCallFn = async (adapterSessionId) => {
+    denySession.apiCallFn = async (call, adapterSessionId) => {
       await emitMessageComplete(
+        call,
         scopedBus,
         makeToolUseCompleteEvent('tc-deny-1', 'restricted_tool'),
-        AGENT_ID,
-        ADAPTER_ID,
         adapterSessionId,
       );
     };

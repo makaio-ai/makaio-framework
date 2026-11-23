@@ -1,35 +1,35 @@
 // @vitest-environment jsdom
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import { renderHook, waitFor } from '@testing-library/react';
-import type { PreferenceKey } from '@makaio/services-core/preferences';
+import { createBusInstance } from '@makaio/bus-core';
+import { PreferencesSubjects, type PreferenceKey } from '@makaio/services-core/preferences';
+import type { ReactNode } from 'react';
+import { BusProvider } from '../bus/bus-provider.js';
 import { useWidgetLayout } from './use-widget-layout.js';
-
-const mockBus = vi.hoisted(() => ({
-  request: vi.fn(),
-}));
-
-vi.mock('../bus/bus-provider.js', () => ({
-  useBus: () => mockBus,
-}));
 
 const TEST_PREFERENCE_KEY: PreferenceKey = {
   scope: 'global',
 };
 
-describe('useWidgetLayout', () => {
-  beforeEach(() => {
-    mockBus.request.mockReset();
+/**
+ * Render the hook with a local bus serving the stored preference.
+ * @param value - Stored preference value returned to the hook.
+ * @returns The rendered hook and its controls.
+ */
+function renderLayout(value: unknown) {
+  const bus = createBusInstance();
+  bus.on(PreferencesSubjects.get, (ctx) => ctx.setResult({ value }));
+  return renderHook(() => useWidgetLayout(TEST_PREFERENCE_KEY), {
+    wrapper: ({ children }: { children: ReactNode }) => <BusProvider bus={bus}>{children}</BusProvider>,
   });
+}
 
+describe('useWidgetLayout', () => {
   it('returns null for malformed placement entries instead of accepting any placements array', async () => {
-    mockBus.request.mockResolvedValue({
-      value: {
-        version: 1,
-        placements: [{ instanceId: 'widget-1' }],
-      },
+    const { result } = renderLayout({
+      version: 1,
+      placements: [{ instanceId: 'widget-1' }],
     });
-
-    const { result } = renderHook(() => useWidgetLayout(TEST_PREFERENCE_KEY));
 
     await waitFor(() => {
       expect(result.current.isLoading).toBe(false);
@@ -40,25 +40,21 @@ describe('useWidgetLayout', () => {
   });
 
   it('accepts a fully valid widget layout payload', async () => {
-    mockBus.request.mockResolvedValue({
-      value: {
-        version: 1,
-        placements: [
-          {
-            instanceId: 'widget-1',
-            widgetId: 'git-status',
-            col: 0,
-            row: 0,
-            size: 'medium',
-            w: 2,
-            h: 1,
-            config: { compact: true },
-          },
-        ],
-      },
+    const { result } = renderLayout({
+      version: 1,
+      placements: [
+        {
+          instanceId: 'widget-1',
+          widgetId: 'git-status',
+          col: 0,
+          row: 0,
+          size: 'medium',
+          w: 2,
+          h: 1,
+          config: { compact: true },
+        },
+      ],
     });
-
-    const { result } = renderHook(() => useWidgetLayout(TEST_PREFERENCE_KEY));
 
     await waitFor(() => {
       expect(result.current.isLoading).toBe(false);

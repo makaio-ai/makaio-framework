@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
+import { createTestCall } from '@makaio/test-utils';
 import { RateLimitError, type ExtractSubjectPayload } from '@makaio/core';
 import { AgentSubjects, type StructuredOutputValidation } from '@makaio/contracts';
 import { createTestableAgent, MockConnector } from './helpers/mock-agent.js';
@@ -101,7 +102,7 @@ describe('AIAgent responseSchema scoping', () => {
     const completeEvents = waitForCompleteEvents(2);
 
     try {
-      const startResult = await agent.start('return json', {
+      const startResult = await agent.start(createTestCall(), 'return json', {
         responseSchema: {
           schema: {
             type: 'object',
@@ -148,7 +149,7 @@ describe('AIAgent responseSchema scoping', () => {
     const completeEvents = waitForCompleteEvents(1);
 
     try {
-      await agent.initialize();
+      await agent.initialize(createTestCall());
 
       const schema = {
         type: 'object',
@@ -195,7 +196,7 @@ describe('AIAgent responseSchema scoping', () => {
     const completeEvents = waitForCompleteEvents(1);
 
     try {
-      const startResult = await agent.start('return json', {
+      const startResult = await agent.start(createTestCall(), 'return json', {
         sessionContext: {
           requestCorrelation: {
             turnId: 'turn-structured-retry',
@@ -313,7 +314,7 @@ describe('AIAgent responseSchema scoping', () => {
     });
 
     try {
-      const startResult = await agent.start('return json', {
+      const startResult = await agent.start(createTestCall(), 'return json', {
         responseSchema: {
           schema: {
             type: 'object',
@@ -393,7 +394,7 @@ describe('AIAgent responseSchema scoping', () => {
     });
 
     try {
-      const startResult = await agent.start('return json', {
+      const startResult = await agent.start(createTestCall(), 'return json', {
         responseSchema: {
           schema: { type: 'object', properties: { ok: { type: 'boolean' } }, required: ['ok'] },
           name: 'ok_schema',
@@ -448,7 +449,7 @@ describe('AIAgent responseSchema scoping', () => {
     });
 
     try {
-      const startResult = await agent.start('return json', {
+      const startResult = await agent.start(createTestCall(), 'return json', {
         responseSchema: {
           schema: {
             type: 'object',

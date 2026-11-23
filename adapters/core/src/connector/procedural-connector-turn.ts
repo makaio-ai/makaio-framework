@@ -1,4 +1,5 @@
 import type { ScopedBus } from '@makaio/bus-core';
+import type { CallContext } from '@makaio/contracts';
 import type { ScopedSubjectDefinition } from '@makaio/core';
 import { BaseConnectorTurn, type PauseResult } from './base-connector-turn.js';
 import type { MessageHandle } from '../message-handle/message-handle.js';
@@ -76,10 +77,11 @@ export class ProceduralConnectorTurn<
 
   /**
    * Emit state change using adapter-provided turn subjects.
+   * @param call - Call of the message causing the transition
    * @param oldState - Previous state before transition
    * @param newState - New state after transition
    */
-  protected async emitStateChange(oldState: TState, newState: TState): Promise<void> {
+  protected async emitStateChange(call: CallContext, oldState: TState, newState: TState): Promise<void> {
     const payload = {
       adapterId: this.adapterId,
       agentId: this.agentId,
@@ -88,65 +90,64 @@ export class ProceduralConnectorTurn<
       timestamp: Date.now(),
     };
 
-    await this.connectorBus.emit(this.turnSubjects.state_changed, payload);
+    await this.connectorBus.emit(call, this.turnSubjects.state_changed, payload);
 
-    switch (newState) {
-      case 'turn_started':
-        await this.connectorBus.emit(this.turnSubjects.turn_started, payload);
-        break;
-      case 'step_started':
-        await this.connectorBus.emit(this.turnSubjects.step_started, payload);
-        break;
-      case 'step_finished':
-        await this.connectorBus.emit(this.turnSubjects.step_finished, payload);
-        break;
-      case 'turn_finished':
-        await this.connectorBus.emit(this.turnSubjects.turn_finished, payload);
-        break;
-    }
+    const stateSubjects = new Map<string, TSubject>([
+      ['turn_started', this.turnSubjects.turn_started],
+      ['step_started', this.turnSubjects.step_started],
+      ['step_finished', this.turnSubjects.step_finished],
+      ['turn_finished', this.turnSubjects.turn_finished],
+    ]);
+    const subject = stateSubjects.get(newState);
+    if (subject) await this.connectorBus.emit(call, subject, payload);
   }
 
   /**
    * Start the turn.
+   * @param call - Call of the message driving the turn
    */
-  public async start(): Promise<void> {
-    await this.transitionTo('turn_started' as TState);
+  public async start(call: CallContext): Promise<void> {
+    await this.transitionTo(call, 'turn_started' as TState);
   }
 
   /**
    * Transition to step_started (called when first content arrives).
    * Allows turn_started to step_started AND step_finished to step_started
    * (for tool recursion).
+   * @param call - Call of the message driving the turn
    */
-  public async markStepStarted(): Promise<void> {
+  public async markStepStarted(call: CallContext): Promise<void> {
     if (this.state === 'turn_started' || this.state === 'step_finished') {
-      await this.transitionTo('step_started' as TState);
+      await this.transitionTo(call, 'step_started' as TState);
     }
   }
 
   /**
    * Transition to step_finished (called after content block completes).
+   * @param call - Call of the message driving the turn
    */
-  public async markStepFinished(): Promise<void> {
+  public async markStepFinished(call: CallContext): Promise<void> {
     if (this.state === 'step_started') {
-      await this.transitionTo('step_finished' as TState);
+      await this.transitionTo(call, 'step_finished' as TState);
     }
   }
 
   /**
    * Mark turn as finished.
+   * @param call - Call of the message driving the turn
    */
-  public async markTurnFinished(): Promise<void> {
-    await this.transitionTo('turn_finished' as TState);
+  public async markTurnFinished(call: CallContext): Promise<void> {
+    await this.transitionTo(call, 'turn_finished' as TState);
   }
 
   /**
    * Pause (abort) at next opportunity.
    * Procedural adapters don't support true pause - caller creates a new turn
    * with merged content instead.
+   * @param _call - Call of the message requesting the pause
    * @returns Pause result indicating turn state
    */
-  public async pause(): Promise<PauseResult<TState>> {
+  public async pause(_call: CallContext): Promise<PauseResult<TState>> {
     if (this.state === ('turn_finished' as TState)) {
       return { stateBeforePause: this.state, turnEnded: true };
     }
@@ -159,10 +160,11 @@ export class ProceduralConnectorTurn<
 
   /**
    * Resume is not supported for procedural adapters - caller creates new turn.
+   * @param _call - Call of the message requesting the resume
    * @param _message - Unused
    * @throws Error always
    */
-  public async resume(_message?: unknown): Promise<void> {
+  public async resume(_call: CallContext, _message?: unknown): Promise<void> {
     throw new Error(`${this.adapterName} does not support resume - create new turn with merged content`);
   }
 

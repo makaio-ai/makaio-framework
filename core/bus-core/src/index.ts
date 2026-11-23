@@ -70,6 +70,10 @@ export {
   transportErrorData,
   findInErrorChain,
 } from './utils/index.js';
+// Authors read call contexts and catch these errors; minting and carrier binding stay
+// in `kernel-api.ts`.
+export { isMintedCallContext, InvalidCallContextError } from './call-context/mint.js';
+export { ForeignOwnContextError } from './call-context/carrier.js';
 export { isRequestSchema } from './utils/is-request-schema.js';
 
 export { matchesSubscription, matchesAnySubscription } from './utils/subscription-matching.js';
@@ -121,10 +125,11 @@ export type {
   BusTransportError,
 } from './types/transports.js';
 
-export { MakaioBus, createBusInstance, createBusContext } from './bus.js';
+export { MakaioBus, createBusInstance } from './bus.js';
 export { waitForSubscriptionPropagation } from './methods/on.js';
 export type { ScopedBus } from './bus.js';
 export type { ConnectOptions, IMakaioBus, MakaioBusContext, TransportRegistration } from './types/bus.js';
+export type { EmitSubject } from './types/bus-send.js';
 
 /**
  * Extend a registered subject's schema when operating on an explicit bus context.
@@ -143,7 +148,6 @@ export type {
   EventSubjectExtension,
 } from './extend-subject.js';
 
-export { createFilteredBus } from './filtered-bus.js';
 export type { IFilteredBus } from './filtered-bus.js';
 
 export { matchesFilter, mergeFilters } from './utils/payload-filter.js';
@@ -157,6 +161,7 @@ export type {
   BusValidationMode,
   NamespaceRegistrationOptions,
   PendingReadyEntry,
+  RegisteredSubjectSchema,
   SchemaViolationCallback,
   SchemaViolationReport,
 } from './registries/index.js';
@@ -178,8 +183,6 @@ export { CorrelationTracker } from './utils/correlation-tracker.js';
 export type { ConnectedPayload, DisconnectedPayload } from './lifecycle.js';
 export type { ExtensionNamespaceConfig } from './extension-namespace-types.js';
 export {
-  LOCAL_ORIGIN,
-  REMOTE_ORIGIN,
   shouldReceiveMessage,
   handleCorrelationResponse,
   trackMessageCorrelation,

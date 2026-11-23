@@ -1,4 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import type { CallContext } from '@makaio/core';
+import { createTestCall } from '@makaio/test-utils';
 import { createBusInstance } from '@makaio/bus-core';
 import type { IMakaioBus } from '@makaio/bus-core';
 import { AccountManagerSubjects } from '../bus/namespace.js';
@@ -77,7 +79,7 @@ function buildTracker(
   bus: IMakaioBus,
   store: InMemoryAccountStore,
   provider: IUsageProvider,
-  readCredential?: (clientId: string, accountId: string) => Promise<UsagePreparedCredential | null>,
+  readCredential?: (call: CallContext, clientId: string, accountId: string) => Promise<UsagePreparedCredential | null>,
 ): UsageTracker {
   const sources = new Map<string, IUsageProvider>([[CLIENT_ID, provider]]);
   const tracker = new UsageTracker({
@@ -120,10 +122,11 @@ async function seedAccount(store: InMemoryAccountStore, credentialOverride?: Raw
  * Emits a `credentials.switched` event for the test account, which triggers a
  * `forceRefresh: true` fetch in the tracker — bypassing the throttle so tests
  * are not affected by `USAGE_THROTTLE_MS`.
+ * @param call - Call forwarded by the switched event
  * @param bus - Bus instance to emit on
  */
-async function emitSwitched(bus: IMakaioBus): Promise<void> {
-  await bus.emit(AccountManagerSubjects.credentials.switched, {
+async function emitSwitched(call: CallContext, bus: IMakaioBus): Promise<void> {
+  await bus.emit(call, AccountManagerSubjects.credentials.switched, {
     clientId: CLIENT_ID,
     from: null,
     to: {
@@ -168,13 +171,13 @@ describe('UsageTracker error cooldown and readCredential', () => {
 
     // First forceRefresh (credentials.switched) — resolveUsage is called,
     // returns null, error cooldown is set.
-    await emitSwitched(bus);
+    await emitSwitched(createTestCall(), bus);
     expect(resolveCount).toBe(1);
 
     // Second forceRefresh immediately — still inside the 30-second window.
     // The cooldown check fires before the store lookup so resolveUsage is
     // never called a second time.
-    await emitSwitched(bus);
+    await emitSwitched(createTestCall(), bus);
     expect(resolveCount).toBe(1);
   });
 
@@ -190,19 +193,19 @@ describe('UsageTracker error cooldown and readCredential', () => {
     tracker = buildTracker(bus, store, provider);
 
     // First forceRefresh — fails, cooldown is set.
-    await emitSwitched(bus);
+    await emitSwitched(createTestCall(), bus);
     expect(callCount).toBe(1);
 
     // Advance past the 30-second cooldown.
     await vi.advanceTimersByTimeAsync(PAST_COOLDOWN_MS);
 
     // Second forceRefresh — succeeds, cooldown is cleared.
-    await emitSwitched(bus);
+    await emitSwitched(createTestCall(), bus);
     expect(callCount).toBe(2);
 
     // Third forceRefresh immediately — cooldown was cleared on success, so
     // this must go through even though no time has passed.
-    await emitSwitched(bus);
+    await emitSwitched(createTestCall(), bus);
     expect(callCount).toBe(3);
   });
 
@@ -221,16 +224,21 @@ describe('UsageTracker error cooldown and readCredential', () => {
     await seedAccount(store, storedCredential);
 
     const { provider, receivedCredentials } = makeSpyProvider(async () => ({ usage: makeUsage() }));
-    const readCredential = vi.fn(async (_clientId: string, _accountId: string) => ({
+    const readCredential = vi.fn(async (_call: CallContext, _clientId: string, _accountId: string) => ({
       status: 'ready' as const,
       credential: freshCredential,
       changed: true,
     }));
 
     tracker = buildTracker(bus, store, provider, readCredential);
-    await emitSwitched(bus);
+    const call = createTestCall();
+    await emitSwitched(call, bus);
 
-    expect(readCredential).toHaveBeenCalledWith(CLIENT_ID, ACCOUNT_ID);
+    expect(readCredential).toHaveBeenCalledWith(
+      expect.objectContaining({ principal: call.principal }),
+      CLIENT_ID,
+      ACCOUNT_ID,
+    );
     expect(receivedCredentials).toHaveLength(1);
     expect(receivedCredentials[0]).toBe(freshCredential);
   });
@@ -246,13 +254,19 @@ describe('UsageTracker error cooldown and readCredential', () => {
 
     const { provider, receivedCredentials } = makeSpyProvider(async () => ({ usage: makeUsage() }));
     const readCredential = vi.fn(
-      async (_clientId: string, _accountId: string): Promise<UsagePreparedCredential | null> => null,
+      async (_call: CallContext, _clientId: string, _accountId: string): Promise<UsagePreparedCredential | null> =>
+        null,
     );
 
     tracker = buildTracker(bus, store, provider, readCredential);
-    await emitSwitched(bus);
+    const call = createTestCall();
+    await emitSwitched(call, bus);
 
-    expect(readCredential).toHaveBeenCalledWith(CLIENT_ID, ACCOUNT_ID);
+    expect(readCredential).toHaveBeenCalledWith(
+      expect.objectContaining({ principal: call.principal }),
+      CLIENT_ID,
+      ACCOUNT_ID,
+    );
     expect(receivedCredentials).toHaveLength(1);
     expect(receivedCredentials[0].token).toBe('stored-token');
   });
@@ -272,9 +286,14 @@ describe('UsageTracker error cooldown and readCredential', () => {
     });
 
     tracker = buildTracker(bus, store, provider, readCredential);
-    await emitSwitched(bus);
+    const call = createTestCall();
+    await emitSwitched(call, bus);
 
-    expect(readCredential).toHaveBeenCalledWith(CLIENT_ID, ACCOUNT_ID);
+    expect(readCredential).toHaveBeenCalledWith(
+      expect.objectContaining({ principal: call.principal }),
+      CLIENT_ID,
+      ACCOUNT_ID,
+    );
     expect(receivedCredentials).toHaveLength(1);
     expect(receivedCredentials[0]).toEqual(storedCredential);
   });
@@ -301,7 +320,7 @@ describe('UsageTracker error cooldown and readCredential', () => {
     await seedAccount(store, storedCredential);
     tracker = buildTracker(bus, store, provider, readCredential);
 
-    await emitSwitched(bus);
+    await emitSwitched(createTestCall(), bus);
     expect(callCount).toBe(1);
 
     const afterFailure = await store.get(CLIENT_ID, ACCOUNT_ID);
@@ -310,7 +329,7 @@ describe('UsageTracker error cooldown and readCredential', () => {
       usageAuthFingerprint: 'fp-stored',
     });
 
-    await emitSwitched(bus);
+    await emitSwitched(createTestCall(), bus);
     expect(callCount).toBe(1);
 
     currentCredential = {
@@ -319,7 +338,7 @@ describe('UsageTracker error cooldown and readCredential', () => {
       metadata: {},
     };
 
-    await emitSwitched(bus);
+    await emitSwitched(createTestCall(), bus);
     expect(callCount).toBe(2);
     expect(receivedCredentials[1]).toBe(currentCredential);
 
@@ -347,9 +366,14 @@ describe('UsageTracker error cooldown and readCredential', () => {
     }));
 
     tracker = buildTracker(bus, store, provider, readCredential);
-    await emitSwitched(bus);
+    const call = createTestCall();
+    await emitSwitched(call, bus);
 
-    expect(readCredential).toHaveBeenCalledWith(CLIENT_ID, ACCOUNT_ID);
+    expect(readCredential).toHaveBeenCalledWith(
+      expect.objectContaining({ principal: call.principal }),
+      CLIENT_ID,
+      ACCOUNT_ID,
+    );
     expect(receivedCredentials).toHaveLength(0);
 
     const afterFailure = await store.get(CLIENT_ID, ACCOUNT_ID);
@@ -372,7 +396,7 @@ describe('UsageTracker error cooldown and readCredential', () => {
     };
 
     await seedAccount(store, storedCredential);
-    await store.metadataStore.patchMetadata(CLIENT_ID, ACCOUNT_ID, 0, {
+    await store.metadataStore.patchMetadata(createTestCall(), CLIENT_ID, ACCOUNT_ID, 0, {
       usageAuthState: 'reauth-required',
       usageAuthFingerprint: 'fp-stable',
       usageAuthMessage: 'expired access token',
@@ -387,7 +411,7 @@ describe('UsageTracker error cooldown and readCredential', () => {
     }));
 
     tracker = buildTracker(bus, store, provider, readCredential);
-    await emitSwitched(bus);
+    await emitSwitched(createTestCall(), bus);
 
     expect(receivedCredentials).toHaveLength(1);
     expect(receivedCredentials[0]).toBe(refreshedCredential);
@@ -405,7 +429,7 @@ describe('UsageTracker error cooldown and readCredential', () => {
     };
 
     await seedAccount(store, storedCredential);
-    await store.metadataStore.patchMetadata(CLIENT_ID, ACCOUNT_ID, 0, {
+    await store.metadataStore.patchMetadata(createTestCall(), CLIENT_ID, ACCOUNT_ID, 0, {
       usageAuthState: 'reauth-required',
       usageAuthFingerprint: 'fp-stored',
       usageAuthMessage: '3 consecutive transient usage-fetch failures',
@@ -421,7 +445,7 @@ describe('UsageTracker error cooldown and readCredential', () => {
     }));
 
     tracker = buildTracker(bus, store, provider, readCredential);
-    await emitSwitched(bus);
+    await emitSwitched(createTestCall(), bus);
 
     expect(receivedCredentials).toHaveLength(1);
 
@@ -444,21 +468,21 @@ describe('UsageTracker error cooldown and readCredential', () => {
     tracker = buildTracker(bus, store, provider);
 
     // First fetch — fails, cooldown is set.
-    await emitSwitched(bus);
+    await emitSwitched(createTestCall(), bus);
     expect(resolveCount).toBe(1);
 
     // Verify cooldown is active by confirming a second immediate call is blocked.
-    await emitSwitched(bus);
+    await emitSwitched(createTestCall(), bus);
     expect(resolveCount).toBe(1);
 
     // Clear account state — removes the cooldown for this account.
-    tracker.clearAccountState(CLIENT_ID, ACCOUNT_ID);
+    tracker.clearAccountState(createTestCall(), CLIENT_ID, ACCOUNT_ID);
 
     // Re-seed so the store lookup succeeds again after the generation bump.
     await seedAccount(store);
 
     // Now forceRefresh: true must go through — cooldown was cleared.
-    await emitSwitched(bus);
+    await emitSwitched(createTestCall(), bus);
     expect(resolveCount).toBe(2);
   });
 
@@ -479,7 +503,7 @@ describe('UsageTracker error cooldown and readCredential', () => {
 
     tracker = buildTracker(bus, store, provider);
 
-    const fetchPromise = emitSwitched(bus);
+    const fetchPromise = emitSwitched(createTestCall(), bus);
     await started;
 
     let stopped = false;
@@ -514,7 +538,7 @@ describe('UsageTracker error cooldown and readCredential', () => {
 
     tracker = buildTracker(bus, store, provider);
 
-    const fetchPromise = emitSwitched(bus);
+    const fetchPromise = emitSwitched(createTestCall(), bus);
     await started;
 
     const stopPromise = tracker.stop();
@@ -558,7 +582,7 @@ describe('UsageTracker error cooldown and readCredential', () => {
 
     tracker = buildTracker(bus, store, provider);
 
-    void emitSwitched(bus);
+    void emitSwitched(createTestCall(), bus);
     await started;
 
     let stopped = false;
@@ -595,11 +619,11 @@ describe('UsageTracker error cooldown and readCredential', () => {
 
     tracker = buildTracker(bus, store, provider);
 
-    void emitSwitched(bus);
+    void emitSwitched(createTestCall(), bus);
     await started;
 
     let cleared = false;
-    const clearPromise = tracker.clearAccountStateAndWait(CLIENT_ID, ACCOUNT_ID).then(() => {
+    const clearPromise = tracker.clearAccountStateAndWait(createTestCall(), CLIENT_ID, ACCOUNT_ID).then(() => {
       cleared = true;
     });
 
@@ -632,7 +656,7 @@ describe('UsageTracker error cooldown and readCredential', () => {
     tracker = buildTracker(bus, store, provider);
 
     try {
-      await emitSwitched(bus);
+      await emitSwitched(createTestCall(), bus);
 
       expect(consoleErrorSpy).toHaveBeenCalledWith(
         `[UsageTracker] resolveUsage failed for source ${CLIENT_ID}:`,
@@ -676,7 +700,7 @@ describe('UsageTracker transient failure escalation', () => {
     tracker = buildTracker(bus, store, provider);
 
     for (let i = 0; i < MAX_TRANSIENT_FAILURES; i++) {
-      await emitSwitched(bus);
+      await emitSwitched(createTestCall(), bus);
       if (i < MAX_TRANSIENT_FAILURES - 1) {
         await vi.advanceTimersByTimeAsync(PAST_COOLDOWN_MS);
       }
@@ -684,7 +708,7 @@ describe('UsageTracker transient failure escalation', () => {
 
     expect(resolveCount).toBe(MAX_TRANSIENT_FAILURES);
 
-    const account = await store.metadataStore.get(CLIENT_ID, ACCOUNT_ID);
+    const account = await store.metadataStore.get(createTestCall(), CLIENT_ID, ACCOUNT_ID);
     expect(account?.metadata).toMatchObject({
       usageAuthState: 'reauth-required',
       usageAuthCode: USAGE_AUTH_CODE_TRANSIENT,
@@ -704,22 +728,22 @@ describe('UsageTracker transient failure escalation', () => {
     tracker = buildTracker(bus, store, provider);
 
     // Two transient failures
-    await emitSwitched(bus);
+    await emitSwitched(createTestCall(), bus);
     await vi.advanceTimersByTimeAsync(PAST_COOLDOWN_MS);
-    await emitSwitched(bus);
+    await emitSwitched(createTestCall(), bus);
     await vi.advanceTimersByTimeAsync(PAST_COOLDOWN_MS);
 
     // One success — resets the counter
-    await emitSwitched(bus);
+    await emitSwitched(createTestCall(), bus);
     await vi.advanceTimersByTimeAsync(PAST_COOLDOWN_MS);
 
     // Two more transient failures — should NOT escalate (counter was reset)
-    await emitSwitched(bus);
+    await emitSwitched(createTestCall(), bus);
     await vi.advanceTimersByTimeAsync(PAST_COOLDOWN_MS);
-    await emitSwitched(bus);
+    await emitSwitched(createTestCall(), bus);
 
     expect(callIndex).toBe(5);
-    const account = await store.metadataStore.get(CLIENT_ID, ACCOUNT_ID);
+    const account = await store.metadataStore.get(createTestCall(), CLIENT_ID, ACCOUNT_ID);
     expect(account?.metadata.usageAuthState).toBeUndefined();
   });
 
@@ -734,22 +758,22 @@ describe('UsageTracker transient failure escalation', () => {
     tracker = buildTracker(bus, store, provider);
 
     // Two transient failures
-    await emitSwitched(bus);
+    await emitSwitched(createTestCall(), bus);
     await vi.advanceTimersByTimeAsync(PAST_COOLDOWN_MS);
-    await emitSwitched(bus);
+    await emitSwitched(createTestCall(), bus);
     await vi.advanceTimersByTimeAsync(PAST_COOLDOWN_MS);
 
     // External invalidation resets the counter
-    tracker.clearAccountState(CLIENT_ID, ACCOUNT_ID);
+    tracker.clearAccountState(createTestCall(), CLIENT_ID, ACCOUNT_ID);
     await vi.advanceTimersByTimeAsync(PAST_COOLDOWN_MS);
 
     // Two more transient failures — should NOT escalate (counter was reset)
-    await emitSwitched(bus);
+    await emitSwitched(createTestCall(), bus);
     await vi.advanceTimersByTimeAsync(PAST_COOLDOWN_MS);
-    await emitSwitched(bus);
+    await emitSwitched(createTestCall(), bus);
 
     expect(resolveCount).toBe(4);
-    const account = await store.metadataStore.get(CLIENT_ID, ACCOUNT_ID);
+    const account = await store.metadataStore.get(createTestCall(), CLIENT_ID, ACCOUNT_ID);
     expect(account?.metadata.usageAuthState).toBeUndefined();
   });
 });
@@ -831,7 +855,7 @@ describe('UsageTracker window reset detection', () => {
     });
 
     try {
-      await emitSwitched(bus);
+      await emitSwitched(createTestCall(), bus);
       expect(events).toHaveLength(1);
       expect(events[0]).toMatchObject({
         clientId: CLIENT_ID,
@@ -860,11 +884,11 @@ describe('UsageTracker window reset detection', () => {
 
     try {
       // First poll — event should fire.
-      await emitSwitched(bus);
+      await emitSwitched(createTestCall(), bus);
       expect(events).toHaveLength(1);
 
       // Second poll with same expiredAt — must be deduped.
-      await emitSwitched(bus);
+      await emitSwitched(createTestCall(), bus);
       expect(events).toHaveLength(1);
     } finally {
       cleanup();
@@ -891,12 +915,12 @@ describe('UsageTracker window reset detection', () => {
     });
 
     try {
-      await emitSwitched(bus);
+      await emitSwitched(createTestCall(), bus);
       await vi.waitFor(() => {
         const inFlightFetches = Reflect.get(tracker as object, 'inFlightFetches') as Map<string, Promise<void>>;
         expect(inFlightFetches.size).toBe(0);
       });
-      await emitSwitched(bus);
+      await emitSwitched(createTestCall(), bus);
 
       expect(events).toEqual([{ expiredAt: firstExpiredAt }, { expiredAt: secondExpiredAt }]);
     } finally {
@@ -929,19 +953,19 @@ describe('UsageTracker window reset detection', () => {
 
     try {
       // Poll 1: expired window → event fires for firstExpiredAt.
-      await emitSwitched(bus);
+      await emitSwitched(createTestCall(), bus);
       expect(events).toHaveLength(1);
       expect(events[0].expiredAt).toBe(firstExpiredAt);
 
       // Poll 2: future window → pending entry cleared, no new event.
-      await emitSwitched(bus);
+      await emitSwitched(createTestCall(), bus);
       expect(events).toHaveLength(1);
 
       // Advance past the future resetsAt so the third poll sees an expired window.
       await vi.advanceTimersByTimeAsync(futureResetsAt - startTime + 1_000);
 
       // Poll 3: same window now expired again → fresh event fires.
-      await emitSwitched(bus);
+      await emitSwitched(createTestCall(), bus);
       expect(events).toHaveLength(2);
       expect(events[1].expiredAt).toBe(futureResetsAt);
     } finally {
@@ -967,13 +991,13 @@ describe('UsageTracker window reset detection', () => {
     });
 
     try {
-      await emitSwitched(bus);
+      await emitSwitched(createTestCall(), bus);
       expect(events).toHaveLength(1);
 
-      await emitSwitched(bus);
+      await emitSwitched(createTestCall(), bus);
       expect(events).toHaveLength(1);
 
-      await emitSwitched(bus);
+      await emitSwitched(createTestCall(), bus);
       expect(events).toEqual([
         { windowId: '5h', expiredAt },
         { windowId: '5h', expiredAt },
@@ -1017,9 +1041,9 @@ describe('UsageTracker window reset detection', () => {
     cacheKeyIndex.set(createUsageCacheKey(CLIENT_ID, ACCOUNT_B), { clientId: CLIENT_ID, accountId: ACCOUNT_B });
 
     // Trigger a fetch for ACCOUNT_ID to populate the expired-window cache entry.
-    await emitSwitched(bus);
+    await emitSwitched(createTestCall(), bus);
 
-    const result = await bus.request(AccountManagerSubjects.usage.getPendingResets, {});
+    const result = await bus.request(createTestCall(), AccountManagerSubjects.usage.getPendingResets, {});
     expect(result.pending).toHaveLength(1);
     expect(result.pending[0]).toMatchObject({
       clientId: CLIENT_ID,
@@ -1060,10 +1084,10 @@ describe('UsageTracker window reset detection', () => {
     cacheKeyIndex.set(createUsageCacheKey(CLIENT_ID, ACCOUNT_B), { clientId: CLIENT_ID, accountId: ACCOUNT_B });
 
     // Trigger fetch for ACCOUNT_ID.
-    await emitSwitched(bus);
+    await emitSwitched(createTestCall(), bus);
 
     // Filter by accountId — should return only ACCOUNT_ID's window.
-    const filtered = await bus.request(AccountManagerSubjects.usage.getPendingResets, {
+    const filtered = await bus.request(createTestCall(), AccountManagerSubjects.usage.getPendingResets, {
       clientId: CLIENT_ID,
       accountId: ACCOUNT_ID,
     });
@@ -1071,7 +1095,7 @@ describe('UsageTracker window reset detection', () => {
     expect(filtered.pending[0].accountId).toBe(ACCOUNT_ID);
 
     // Filter by clientId only — both expired windows should appear.
-    const byClient = await bus.request(AccountManagerSubjects.usage.getPendingResets, {
+    const byClient = await bus.request(createTestCall(), AccountManagerSubjects.usage.getPendingResets, {
       clientId: CLIENT_ID,
     });
     expect(byClient.pending).toHaveLength(2);
@@ -1098,9 +1122,11 @@ describe('UsageTracker window reset detection', () => {
     tracker = buildTracker(bus, store, provider);
 
     // Trigger fetch — populates pendingResets.
-    await emitSwitched(bus);
+    await emitSwitched(createTestCall(), bus);
 
-    await expect(bus.request(AccountManagerSubjects.usage.getPendingResets, {})).resolves.toMatchObject({
+    await expect(
+      bus.request(createTestCall(), AccountManagerSubjects.usage.getPendingResets, {}),
+    ).resolves.toMatchObject({
       pending: [
         {
           clientId: CLIENT_ID,
@@ -1111,12 +1137,14 @@ describe('UsageTracker window reset detection', () => {
       ],
     });
 
-    tracker.clearAccountState(CLIENT_ID, ACCOUNT_ID);
+    tracker.clearAccountState(createTestCall(), CLIENT_ID, ACCOUNT_ID);
 
     // Re-seed so the store lookup succeeds after the generation bump.
     await seedAccount(store);
 
-    await expect(bus.request(AccountManagerSubjects.usage.getPendingResets, {})).resolves.toEqual({ pending: [] });
+    await expect(bus.request(createTestCall(), AccountManagerSubjects.usage.getPendingResets, {})).resolves.toEqual({
+      pending: [],
+    });
   });
 
   it('does not emit usage.windowResetAvailable when the fetch result is null (stale snapshot path)', async () => {
@@ -1146,11 +1174,11 @@ describe('UsageTracker window reset detection', () => {
 
     try {
       // First fetch: fresh snapshot with expired window → event fires.
-      await emitSwitched(bus);
+      await emitSwitched(createTestCall(), bus);
       expect(events).toHaveLength(1);
 
       // Second fetch: null result → stale snapshot path → no new reset event.
-      await emitSwitched(bus);
+      await emitSwitched(createTestCall(), bus);
       expect(events).toHaveLength(1);
     } finally {
       cleanup();

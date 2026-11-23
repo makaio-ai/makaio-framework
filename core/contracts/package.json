@@ -47,6 +47,7 @@
     "./skill": "./src/skill/index.ts",
     "./toast": "./src/toast/index.ts",
     "./timeout": "./src/timeout/index.ts",
+    "./call-context": "./src/call-context/index.ts",
     "./variant": "./src/variant/index.ts",
     "./worker": "./src/worker/index.ts",
     "./platform": "./src/platform/index.ts",
@@ -63,6 +64,7 @@
     "zod": "4.4.3"
   },
   "peerDependencies": {
+    "@makaio/framework": "workspace:*",
     "react": "^18.0.0 || ^19.0.0"
   },
   "peerDependenciesMeta": {
@@ -212,6 +214,10 @@
       "./timeout": {
         "types": "./dist/timeout/index.d.ts",
         "default": "./dist/timeout/index.mjs"
+      },
+      "./call-context": {
+        "types": "./dist/call-context/index.d.ts",
+        "default": "./dist/call-context/index.mjs"
       },
       "./variant": {
         "types": "./dist/variant/index.d.ts",

@@ -29,7 +29,7 @@
 
 import type { IMakaioBus } from '@makaio/bus-core';
 import { randomUUID } from 'node:crypto';
-import type { TransportReceiveContext } from '@makaio/core';
+import { MAKAIO_LOOPBACK_PARTY_KIND, type TransportReceiveContext } from '@makaio/core';
 import { startBusServer, HonoWebSocketBridge, type BusServer } from '@makaio/bus-server';
 import { createWebSocketCloseEvent, DispatchingAuth } from '@makaio/bus-transport-websocket';
 import type { TransportAuth, WebSocketCloseEvent, WebSocketLike } from '@makaio/bus-transport-websocket';
@@ -62,7 +62,6 @@ export interface BunBusServerTransportOptions {
 }
 
 const DEFAULT_LOOPBACK_NAME = 'bun';
-const LOOPBACK_PEER_KIND = 'makaio-loopback';
 
 /**
  * Whether a host-confirmed listener is restricted to a loopback literal.
@@ -78,10 +77,12 @@ class LoopbackReceiveContextAuth implements TransportAuth {
   private readonly contexts = new Map<WebSocketLike, TransportReceiveContext>();
   public async authenticateClient(_send: (message: unknown) => void): Promise<void> {}
   public async authenticateServer(socket: WebSocketLike, _send: (message: unknown) => void): Promise<void> {
+    const connectionId = randomUUID();
     this.contexts.set(socket, {
       transportName: '',
-      connectionId: randomUUID(),
-      peer: { kind: LOOPBACK_PEER_KIND, authenticated: false },
+      connectionId,
+      authenticated: false,
+      caller: { kind: MAKAIO_LOOPBACK_PARTY_KIND, id: connectionId },
     });
   }
   public handleAuthMessage(_message: unknown, _socket?: WebSocketLike): boolean {

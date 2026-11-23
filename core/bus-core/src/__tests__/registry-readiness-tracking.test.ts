@@ -12,7 +12,8 @@
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import type { BusMessage, BusTransport, BusTransportKeys } from '../index.js';
-import { createBusInstance, createBusContext } from '../bus.js';
+import { createBusInstance } from '../bus.js';
+import { busContextOf, createBusContext } from '../kernel-api.js';
 
 // ---------------------------------------------------------------------------
 // Minimal transport stub factory
@@ -81,7 +82,7 @@ describe('Transport registry readiness tracking', () => {
   // -------------------------------------------------------------------------
 
   it('returns an empty array when no transports are registered', () => {
-    const pending = bus.getContext().transportRegistry.getPendingReady();
+    const pending = busContextOf(bus).transportRegistry.getPendingReady();
     expect(pending).toHaveLength(0);
   });
 
@@ -91,9 +92,9 @@ describe('Transport registry readiness tracking', () => {
 
   it('does not track a transport that has no ready property', () => {
     const transport = createTrackingTransport({ name: 'no-ready' });
-    bus.getContext().transportRegistry.registerTransport('no-ready' as BusTransportKeys, transport);
+    busContextOf(bus).transportRegistry.registerTransport('no-ready' as BusTransportKeys, transport);
 
-    const pending = bus.getContext().transportRegistry.getPendingReady();
+    const pending = busContextOf(bus).transportRegistry.getPendingReady();
     expect(pending).toHaveLength(0);
   });
 
@@ -108,9 +109,9 @@ describe('Transport registry readiness tracking', () => {
     });
 
     const transport = createTrackingTransport({ name: 'pending', ready });
-    bus.getContext().transportRegistry.registerTransport('pending' as BusTransportKeys, transport);
+    busContextOf(bus).transportRegistry.registerTransport('pending' as BusTransportKeys, transport);
 
-    const pending = bus.getContext().transportRegistry.getPendingReady();
+    const pending = busContextOf(bus).transportRegistry.getPendingReady();
     expect(pending).toHaveLength(1);
 
     // Prevent the unresolved promise from leaking across tests.
@@ -128,17 +129,17 @@ describe('Transport registry readiness tracking', () => {
     });
 
     const transport = createTrackingTransport({ name: 'self-clean', ready });
-    bus.getContext().transportRegistry.registerTransport('self-clean' as BusTransportKeys, transport);
+    busContextOf(bus).transportRegistry.registerTransport('self-clean' as BusTransportKeys, transport);
 
     // Confirm tracked before resolution.
-    expect(bus.getContext().transportRegistry.getPendingReady()).toHaveLength(1);
+    expect(busContextOf(bus).transportRegistry.getPendingReady()).toHaveLength(1);
 
     resolve();
     // Allow the `.then(cleanup)` microtask inside trackPendingReady to run.
     await ready;
     await Promise.resolve();
 
-    expect(bus.getContext().transportRegistry.getPendingReady()).toHaveLength(0);
+    expect(busContextOf(bus).transportRegistry.getPendingReady()).toHaveLength(0);
   });
 
   // -------------------------------------------------------------------------
@@ -151,13 +152,16 @@ describe('Transport registry readiness tracking', () => {
     const ready = new Promise<void>(() => {});
 
     const transport = createTrackingTransport({ name: 'unregister-clean', ready });
-    const reg = bus.getContext().transportRegistry.registerTransport('unregister-clean' as BusTransportKeys, transport);
+    const reg = busContextOf(bus).transportRegistry.registerTransport(
+      'unregister-clean' as BusTransportKeys,
+      transport,
+    );
 
-    expect(bus.getContext().transportRegistry.getPendingReady()).toHaveLength(1);
+    expect(busContextOf(bus).transportRegistry.getPendingReady()).toHaveLength(1);
 
     reg.unregister();
 
-    expect(bus.getContext().transportRegistry.getPendingReady()).toHaveLength(0);
+    expect(busContextOf(bus).transportRegistry.getPendingReady()).toHaveLength(0);
   });
 
   // -------------------------------------------------------------------------
@@ -166,7 +170,7 @@ describe('Transport registry readiness tracking', () => {
   // -------------------------------------------------------------------------
 
   it('restricts pending entries to the requested transport names', () => {
-    const registry = bus.getContext().transportRegistry;
+    const registry = busContextOf(bus).transportRegistry;
     registry.registerTransport(
       'filter-wanted' as BusTransportKeys,
       createTrackingTransport({ name: 'filter-wanted', ready: new Promise<void>(() => {}) }),
@@ -188,7 +192,7 @@ describe('Transport registry readiness tracking', () => {
   // -------------------------------------------------------------------------
 
   it('reports the transport name alongside each pending ready promise', () => {
-    const registry = bus.getContext().transportRegistry;
+    const registry = busContextOf(bus).transportRegistry;
     const ready = new Promise<void>(() => {});
     registry.registerTransport(
       'named-entry' as BusTransportKeys,

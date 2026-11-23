@@ -2,16 +2,15 @@
  * Tests for the SubagentService origin guard.
  *
  * The origin guard blocks remote spawn/execute requests unless the sending
- * peer is an authenticated workflow execution or its identity appears in the
+ * caller is a job run or its identity appears in the
  * service's delegation allow-set.
  *
- * The tests use an isolated bus (createBusInstance) + MockTransport to
+ * The tests use an isolated bus (createBusInstance) + StubTransport to
  * drive the remote-origin code paths without real WebSocket I/O.
  */
 
 import { describe, expect, it, afterEach } from 'vitest';
 import {
-  createBusContext,
   createBusInstance,
   type BusMessage,
   type BusReceiveHandler,
@@ -19,6 +18,7 @@ import {
   NO_HANDLER_ERROR_CODE,
 } from '@makaio/bus-core';
 import type { TransportReceiveContext } from '@makaio/core';
+import { createTestCall } from '@makaio/test-utils';
 import {
   AdapterSubjects,
   SessionStorageSubjects,
@@ -144,7 +144,7 @@ describe('SubagentService — origin guard on spawn', () => {
   });
 
   it('handles spawn from a local origin', async () => {
-    const bus = createBusInstance({ context: createBusContext() });
+    const bus = createBusInstance();
     const service = new SubagentService(bus);
     cleanup.push(() => service.destroy());
     await service.init();
@@ -156,14 +156,14 @@ describe('SubagentService — origin guard on spawn', () => {
       // swallow the fire-and-forget spawned event
     });
 
-    const result = await bus.request(SubagentSubjects.spawn, SPAWN_PAYLOAD);
+    const result = await bus.request(createTestCall(), SubagentSubjects.spawn, SPAWN_PAYLOAD);
 
     // Spawn RPC sets result immediately; the actual execution is fire-and-forget.
     expect(result).toMatchObject({ status: 'spawning' });
   });
 
   it('declines a spawn from an unauthenticated remote origin when the delegation allow-set is empty', async () => {
-    const bus = createBusInstance({ context: createBusContext() });
+    const bus = createBusInstance();
     // No delegation allow-set → empty set by default
     const service = new SubagentService(bus);
     cleanup.push(() => service.destroy());
@@ -174,7 +174,7 @@ describe('SubagentService — origin guard on spawn', () => {
 
     await transport.simulateReceive(makeRemoteSpawnRequest(), {
       transportName: 'remote-transport',
-      peer: { kind: 'workflow-execution', id: 'exec-unknown' },
+      caller: { kind: 'makaio.anonymous', id: 'exec-unknown' },
     });
 
     // The handler returned without calling setResult, so the bus sent back a
@@ -191,8 +191,8 @@ describe('SubagentService — origin guard on spawn', () => {
     });
   });
 
-  it('handles a spawn from an authenticated workflow execution without an explicit grant', async () => {
-    const bus = createBusInstance({ context: createBusContext() });
+  it('handles a spawn from a job run without an explicit grant', async () => {
+    const bus = createBusInstance();
     const service = new SubagentService(bus);
     cleanup.push(() => service.destroy());
     await service.init();
@@ -203,7 +203,7 @@ describe('SubagentService — origin guard on spawn', () => {
 
     await transport.simulateReceive(makeRemoteSpawnRequest(), {
       transportName: 'workflow-transport',
-      peer: { kind: 'workflow-execution', id: 'exec-authorized-by-identity', authenticated: true },
+      caller: { kind: 'makaio.job-run', id: 'exec-authorized-by-identity' },
     });
 
     const responseMessages = transport.messages.filter((m) => m.type === 'response');
@@ -215,9 +215,9 @@ describe('SubagentService — origin guard on spawn', () => {
     });
   });
 
-  it('handles a spawn from a remote origin when the peer is in the delegation allow-set', async () => {
-    const bus = createBusInstance({ context: createBusContext() });
-    const allowSet = new Set(['workflow-execution:exec-authorized']);
+  it('handles a spawn from a remote origin when the caller is in the delegation allow-set', async () => {
+    const bus = createBusInstance();
+    const allowSet = new Set(['makaio.machine:exec-authorized']);
     const service = new SubagentService(bus, undefined, allowSet);
     cleanup.push(() => service.destroy());
     await service.init();
@@ -230,7 +230,7 @@ describe('SubagentService — origin guard on spawn', () => {
 
     await transport.simulateReceive(makeRemoteSpawnRequest(), {
       transportName: 'authorized-transport',
-      peer: { kind: 'workflow-execution', id: 'exec-authorized', authenticated: true },
+      caller: { kind: 'makaio.machine', id: 'exec-authorized' },
     });
 
     // The handler called setResult, so a successful response was sent.
@@ -244,7 +244,7 @@ describe('SubagentService — origin guard on spawn', () => {
   });
 
   it('declines an unauthenticated execute from a remote origin when the delegation allow-set is empty', async () => {
-    const bus = createBusInstance({ context: createBusContext() });
+    const bus = createBusInstance();
     const service = new SubagentService(bus);
     cleanup.push(() => service.destroy());
     await service.init();
@@ -254,7 +254,7 @@ describe('SubagentService — origin guard on spawn', () => {
 
     await transport.simulateReceive(makeRemoteExecuteRequest(), {
       transportName: 'remote-transport',
-      peer: { kind: 'workflow-execution', id: 'exec-unknown' },
+      caller: { kind: 'makaio.anonymous', id: 'exec-unknown' },
     });
 
     const responseMessages = transport.messages.filter((m) => m.type === 'response');
@@ -269,9 +269,9 @@ describe('SubagentService — origin guard on spawn', () => {
     });
   });
 
-  it('handles an execute from a remote origin when the peer is in the delegation allow-set', async () => {
-    const bus = createBusInstance({ context: createBusContext() });
-    const allowSet = new Set(['workflow-execution:exec-authorized']);
+  it('handles an execute from a remote origin when the caller is in the delegation allow-set', async () => {
+    const bus = createBusInstance();
+    const allowSet = new Set(['makaio.machine:exec-authorized']);
     const service = new SubagentService(bus, undefined, allowSet);
     cleanup.push(() => service.destroy());
     await service.init();
@@ -310,7 +310,7 @@ describe('SubagentService — origin guard on spawn', () => {
 
     await transport.simulateReceive(makeRemoteExecuteRequest(), {
       transportName: 'authorized-transport',
-      peer: { kind: 'workflow-execution', id: 'exec-authorized', authenticated: true },
+      caller: { kind: 'makaio.machine', id: 'exec-authorized' },
     });
 
     const responseMessages = transport.messages.filter((m) => m.type === 'response');
@@ -322,8 +322,8 @@ describe('SubagentService — origin guard on spawn', () => {
     });
   });
 
-  it('handles an execute from an authenticated workflow execution without an explicit grant', async () => {
-    const bus = createBusInstance({ context: createBusContext() });
+  it('handles an execute from a job run without an explicit grant', async () => {
+    const bus = createBusInstance();
     const service = new SubagentService(bus);
     cleanup.push(() => service.destroy());
     await service.init();
@@ -362,7 +362,7 @@ describe('SubagentService — origin guard on spawn', () => {
 
     await transport.simulateReceive(makeRemoteExecuteRequest(), {
       transportName: 'workflow-transport',
-      peer: { kind: 'workflow-execution', id: 'exec-authorized-by-identity', authenticated: true },
+      caller: { kind: 'makaio.job-run', id: 'exec-authorized-by-identity' },
     });
 
     const responseMessages = transport.messages.filter((m) => m.type === 'response');

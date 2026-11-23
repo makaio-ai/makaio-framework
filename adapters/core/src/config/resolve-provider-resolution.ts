@@ -1,5 +1,6 @@
 import type { IMakaioBus } from '@makaio/bus-core';
 import type { ProtocolId, ResolvedProviderAuth } from '@makaio/contracts';
+import type { CallContext } from '@makaio/core';
 import { AdapterSubsystemSubjects } from '@makaio/services-core/adapter-subsystem';
 import type { ProviderConfigFileRecord } from '@makaio/services-core/adapter-subsystem';
 import type { ProviderRecord } from '@makaio/services-core/settings/storage';
@@ -45,17 +46,19 @@ export interface ProviderResolution {
  * The adapter subsystem is the sole owner of auth-method validation and returns
  * the safe config, refs-only context, and provider definition from one captured
  * snapshot. This helper never opens the credential DirectChannel.
+ * @param call - Call context the snapshot request is sent under
  * @param bus - Bus instance for the atomic adapter-subsystem snapshot request.
  * @param providerConfigId - Explicit provider config ID.
  * @param protocol - Wire protocol used to select the endpoint URL.
  * @returns Definition-backed provider resolution without plaintext credentials.
  */
 export async function resolveProviderResolution(
+  call: CallContext,
   bus: IMakaioBus,
   providerConfigId: string,
   protocol: ProtocolId,
 ): Promise<ProviderResolution> {
-  const { snapshot } = await bus.request(AdapterSubsystemSubjects.resolveProviderRuntimeSnapshot, {
+  const { snapshot } = await bus.request(call, AdapterSubsystemSubjects.resolveProviderRuntimeSnapshot, {
     providerConfigId,
   });
   if (!snapshot) {

@@ -24,9 +24,10 @@ import type { AddressInfo } from 'node:net';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createBusInstance } from '@makaio/bus-core';
 import type { IMakaioBus } from '@makaio/bus-core';
-import type { CredentialResolver } from '@makaio/contracts';
+import type { CallContext, CredentialResolver, Party } from '@makaio/contracts';
 import type { CredentialRef } from '@makaio/contracts/config';
 import { KernelSubjects } from '@makaio/kernel/namespace';
+import { createTestCall } from '@makaio/test-utils';
 import { parseGatewayConfig, type GatewayConfig } from '../config.js';
 import { GatewayService } from '../gateway-service.js';
 import { createCapturingLogger, type CapturingLogger } from './helpers/capturing-logger.js';
@@ -46,6 +47,7 @@ import { startMockServer, type MockServer } from './helpers/mock-upstream.js';
 class MapCredentialResolver implements CredentialResolver {
   private readonly store: ReadonlyMap<string, string>;
   public callCount = 0;
+  public lastCall?: CallContext;
 
   /**
    * @param entries - Map from credential ref string to plaintext value. Refs
@@ -57,11 +59,13 @@ class MapCredentialResolver implements CredentialResolver {
 
   /**
    * Resolve a credential reference from the in-process store.
+   * @param call - Call context of the lookup, recorded for assertions.
    * @param ref - Branded credential reference string.
    * @returns Plaintext value, or `null` when the ref is not in the store.
    */
-  public resolve(ref: CredentialRef): Promise<string | null> {
+  public resolve(call: CallContext, ref: CredentialRef): Promise<string | null> {
     this.callCount += 1;
+    this.lastCall = call;
     return Promise.resolve(this.store.get(ref) ?? null);
   }
 }
@@ -83,10 +87,11 @@ class LateCredentialResolver implements CredentialResolver {
 
   /**
    * Resolve a credential reference, reporting it unavailable the first time.
+   * @param _call - Call context of the lookup, ignored.
    * @param _ref - Branded credential reference string, ignored.
    * @returns `null` on the first call, the configured plaintext afterwards.
    */
-  public resolve(_ref: CredentialRef): Promise<string | null> {
+  public resolve(_call: CallContext, _ref: CredentialRef): Promise<string | null> {
     this.callCount += 1;
     return Promise.resolve(this.callCount === 1 ? null : this.value);
   }
@@ -117,10 +122,11 @@ class GatedCredentialResolver implements CredentialResolver {
 
   /**
    * Resolve a credential reference, gating the first call on {@link release}.
+   * @param _call - Call context of the lookup, ignored.
    * @param _ref - Branded credential reference string, ignored.
    * @returns The configured plaintext, once the first call has been released.
    */
-  public resolve(_ref: CredentialRef): Promise<string | null> {
+  public resolve(_call: CallContext, _ref: CredentialRef): Promise<string | null> {
     this.callCount += 1;
     if (this.callCount > 1) {
       return Promise.resolve(this.value);
@@ -271,12 +277,19 @@ describe('GatewayService', () => {
   // ---------------------------------------------------------------------------
 
   it('resolves the litellm master key at the barrier and says nothing when it succeeds', async () => {
+    const personA: Party = { kind: 'test.user', id: 'alice' };
+    const personB: Party = { kind: 'test.user', id: 'bob' };
+    const payload = { machineId: 'test-machine' };
     const resolver = new MapCredentialResolver({ 'env:LITELLM_MASTER_KEY': 'resolved-master-key' });
     const service = buildService(LITELLM_CONFIG, resolver);
     await service.init();
 
-    await coordinatorReady();
+    await bus.broadcast(createTestCall({ principal: personA }), KernelSubjects.phase.coordinatorReady, payload);
+    expect(resolver.callCount).toBe(1);
+    expect(resolver.lastCall?.principal).not.toEqual(personA);
+    expect(resolver.lastCall).toBe(bus.own('shared-work'));
 
+    await bus.broadcast(createTestCall({ principal: personB }), KernelSubjects.phase.coordinatorReady, payload);
     expect(resolver.callCount).toBe(1);
     expect(captured.lines).toEqual([]);
 

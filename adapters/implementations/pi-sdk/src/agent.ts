@@ -182,13 +182,13 @@ export class PiAgent extends AIAgent<PiSdkBus, PiConnector> {
    * @param connector - The PiConnector to subscribe on
    */
   private wireTurnLifecycleEvents(connector: PiConnector): void {
-    this.subscribeConnector(connector, PiSdkSubjects.agent_started, async () => {
-      await this.emitStart();
+    this.subscribeConnector(connector, PiSdkSubjects.agent_started, async (ctx) => {
+      await this.emitStart(ctx.call);
     });
 
     this.subscribeConnector(connector, PiSdkSubjects.agent_complete, async (ctx) => {
       const text = ctx.payload.text ?? '';
-      await this.emitGlobal(AgentSubjects.message, { content: text });
+      await this.emitGlobal(ctx.call, AgentSubjects.message, { content: text });
     });
   }
 
@@ -209,27 +209,27 @@ export class PiAgent extends AIAgent<PiSdkBus, PiConnector> {
   private wireMessageEvents(connector: PiConnector): void {
     // --- Text streaming ---
     this.subscribeConnector(connector, PiSdkSubjects.text_delta, async (ctx) => {
-      await this.emitGlobal(AgentSubjects.message_delta, { text: ctx.payload.delta });
+      await this.emitGlobal(ctx.call, AgentSubjects.message_delta, { text: ctx.payload.delta });
     });
 
     this.subscribeConnector(connector, PiSdkSubjects.text_complete, async (ctx) => {
       const { text } = ctx.payload;
-      await this.emitStepStarted('text', { type: 'text' });
-      await this.emitStepFinished('text', { type: 'text', content: text });
+      await this.emitStepStarted(ctx.call, 'text', { type: 'text' });
+      await this.emitStepFinished(ctx.call, 'text', { type: 'text', content: text });
       // AgentSubjects.message is emitted once at agent_complete (turn end), not per
       // text block — aligned with qwen-acp, which emits it only at turn completion.
     });
 
     // --- Reasoning streaming ---
     this.subscribeConnector(connector, PiSdkSubjects.thinking_delta, async (ctx) => {
-      await this.emitGlobal(AgentSubjects.reasoning_delta, { content: ctx.payload.delta });
+      await this.emitGlobal(ctx.call, AgentSubjects.reasoning_delta, { content: ctx.payload.delta });
     });
 
     this.subscribeConnector(connector, PiSdkSubjects.thinking_complete, async (ctx) => {
       const { text } = ctx.payload;
-      await this.emitStepStarted('reasoning', { type: 'reasoning' });
-      await this.emitStepFinished('reasoning', { type: 'reasoning', content: text });
-      await this.emitGlobal(AgentSubjects.reasoning, { content: text });
+      await this.emitStepStarted(ctx.call, 'reasoning', { type: 'reasoning' });
+      await this.emitStepFinished(ctx.call, 'reasoning', { type: 'reasoning', content: text });
+      await this.emitGlobal(ctx.call, AgentSubjects.reasoning, { content: text });
     });
   }
 
@@ -244,9 +244,9 @@ export class PiAgent extends AIAgent<PiSdkBus, PiConnector> {
     this.subscribeConnector(connector, PiSdkSubjects.tool_started, async (ctx) => {
       const { messageId, toolName, toolCallId, args } = ctx.payload;
       const normalizedArgs = normalizeToolArgs(args);
-      await this.emitToolUse(messageId, toolName, normalizedArgs, toolCallId);
-      await this.emitGlobal(AgentSubjects.tool.started, { messageId, toolName, toolCallId });
-      await this.eventBridge.emitStepStartedForMessage(messageId, 'tool_use', {
+      await this.emitToolUse(ctx.call, messageId, toolName, normalizedArgs, toolCallId);
+      await this.emitGlobal(ctx.call, AgentSubjects.tool.started, { messageId, toolName, toolCallId });
+      await this.eventBridge.emitStepStartedForMessage(ctx.call, messageId, 'tool_use', {
         type: 'tool_use',
         toolName,
         toolCallId,
@@ -257,15 +257,15 @@ export class PiAgent extends AIAgent<PiSdkBus, PiConnector> {
       const { messageId, toolName, toolCallId, result, isError } = ctx.payload;
       const output = normalizeToolOutput(result);
 
-      await this.eventBridge.emitStepFinishedForMessage(messageId, 'tool_use', {
+      await this.eventBridge.emitStepFinishedForMessage(ctx.call, messageId, 'tool_use', {
         type: 'tool_output',
         toolCallId,
         output,
         isError,
       });
 
-      const resolved = await this.emitToolOutput(messageId, output, { nativeId: toolCallId, toolName });
-      await this.emitGlobal(AgentSubjects.tool.completed, {
+      const resolved = await this.emitToolOutput(ctx.call, messageId, output, { nativeId: toolCallId, toolName });
+      await this.emitGlobal(ctx.call, AgentSubjects.tool.completed, {
         messageId,
         toolName: resolved.toolName,
         args: resolved.args,
@@ -318,11 +318,11 @@ export class PiAgent extends AIAgent<PiSdkBus, PiConnector> {
         costProvenance: 'provider-reported',
       };
 
-      await this.trackUsage(normalized);
+      await this.trackUsage(ctx.call, normalized);
 
       const currentTokens = normalized.totalTokens;
       const maxTokens = this.getContextWindowSize() ?? 200_000;
-      await this.emitContextWindowUpdate({
+      await this.emitContextWindowUpdate(ctx.call, {
         currentTokens,
         maxTokens,
         cachedTokens: normalized.inputCachedTokens,
@@ -336,7 +336,7 @@ export class PiAgent extends AIAgent<PiSdkBus, PiConnector> {
    *
    * Uses `registerToolApprovalHandler` from tool-handling.ts for consistent
    * approval flow shared with the test harness. The lazy callback resolves
-   * `adapterSessionId` at request time via `getAdapterSessionId()` to avoid
+   * `adapterSessionId` at request time via `getAdapterSessionId(call)` to avoid
    * the race condition where the session hasn't started yet at wire time.
    *
    * `sessionId` is always set when running within a Makaio session; the assertion
@@ -348,7 +348,7 @@ export class PiAgent extends AIAgent<PiSdkBus, PiConnector> {
     this.addConnectorWiringCleanup(
       registerToolApprovalHandler(
         connector,
-        async () => {
+        async (call) => {
           if (this.sessionId == null) {
             throw new Error('[PiAgent] sessionId is required for tool approval');
           }
@@ -356,7 +356,7 @@ export class PiAgent extends AIAgent<PiSdkBus, PiConnector> {
             adapterId: this.adapterId,
             adapterName: this.adapterName,
             agentId: this.agentId,
-            adapterSessionId: await this.getAdapterSessionId(),
+            adapterSessionId: await this.getAdapterSessionId(call),
             sessionId: this.sessionId,
           };
         },

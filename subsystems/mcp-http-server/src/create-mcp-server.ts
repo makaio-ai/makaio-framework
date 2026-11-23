@@ -167,13 +167,17 @@ export async function createMcpServer(bus: IMakaioBus, sessionId: string, option
   const { contextRegistry, toolDiscovery, resolveContextOverrides } = options ?? {};
   const toolExecutionTimeoutMs = validateToolExecutionTimeout(options?.toolExecutionTimeoutMs);
   const server = new Server({ name: 'makaio', version: '1.0.0' }, { capabilities: { tools: { listChanged: true } } });
-  const requestToolApproval: RequestToolApproval = (payload) => bus.request(AgentSubjects.toolApprove, payload);
+  // The MCP server is a boundary sender: requests arrive over MCP, not as bus messages, so there is
+  // no incoming call to forward. Every send uses the root context of this server's bus carrier.
+  // TODO(FACT-375 follow-up): derive the principal from the verified connection instead of the host root; current behaviour: the host is caller and principal for this boundary traffic.
+  const call = bus.own('root');
+  const requestToolApproval: RequestToolApproval = (payload) => bus.request(call, AgentSubjects.toolApprove, payload);
 
   server.setRequestHandler(ListToolsRequestSchema, async (_request, extra) => {
     const listSessionId = extractAdapterSessionId(extra);
     const identity = resolveAdapterIdentity(listSessionId, contextRegistry);
 
-    const resolved = await resolveMcpTools(bus, toolDiscovery, identity);
+    const resolved = await resolveMcpTools(call, bus, toolDiscovery, identity);
     return {
       tools: [...resolved.tools, ...(contextRegistry ? [buildApproveToolDefinition()] : [])],
     };
@@ -202,7 +206,7 @@ export async function createMcpServer(bus: IMakaioBus, sessionId: string, option
 
     const callIdentity = resolveAdapterIdentity(adapterSessionId, contextRegistry);
 
-    const resolved = await resolveMcpTools(bus, toolDiscovery, callIdentity);
+    const resolved = await resolveMcpTools(call, bus, toolDiscovery, callIdentity);
     const requestedTool = resolved.byMcpName.get(request.params.name);
     if (!requestedTool) {
       throw new McpError(ErrorCode.InvalidParams, `Tool ${request.params.name} not found`);
@@ -221,8 +225,8 @@ export async function createMcpServer(bus: IMakaioBus, sessionId: string, option
     };
     const execution =
       toolExecutionTimeoutMs === undefined
-        ? await bus.requestOptional(ToolSubjects.execute, executePayload)
-        : await bus.requestOptional(ToolSubjects.execute, executePayload, { timeout: toolExecutionTimeoutMs });
+        ? await bus.requestOptional(call, ToolSubjects.execute, executePayload)
+        : await bus.requestOptional(call, ToolSubjects.execute, executePayload, { timeout: toolExecutionTimeoutMs });
     if (!execution.handled) {
       throw new McpError(ErrorCode.InternalError, 'Tool execution handler unavailable');
     }

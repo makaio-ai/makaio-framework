@@ -53,7 +53,7 @@ export function requestInputTool() {
       }
 
       try {
-        const result = await context.bus.request(SubagentSubjects.requestInput, {
+        const result = await context.bus.request(context.call, SubagentSubjects.requestInput, {
           subagentId: context.subagentId,
           question: input.question,
           context: input.context,

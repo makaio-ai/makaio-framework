@@ -40,7 +40,8 @@
  */
 
 import type { IMakaioBus } from '@makaio/bus-core';
-import { MakaioBus, RequestError } from '@makaio/bus-core';
+import { RequestError } from '@makaio/bus-core';
+import type { CallContext } from '@makaio/core';
 import {
   BinaryNotFoundError,
   ClientSubjects,
@@ -184,7 +185,7 @@ export class CodexClientSessionService extends BaseService {
 
   /**
    * Creates a new Codex client session service.
-   * @param bus - Bus instance used for subscribing and emitting events
+   * @param bus - Bus instance used for subscribing and emitting events (required, no process-wide default)
    * @param settings - Optional {@link CodexClientSettings} instance for tests
    *   that need exact filesystem paths. Production callers should omit it so
    *   the service can resolve the active managed config dir via the bus.
@@ -203,7 +204,7 @@ export class CodexClientSessionService extends BaseService {
    *   this will typically be `undefined`.
    */
   public constructor(
-    bus: IMakaioBus = MakaioBus,
+    bus: IMakaioBus,
     settings?: CodexClientSettings,
     machineId?: string,
     sessionConfigHandler: CodexSessionConfigHandler = new CodexSessionConfigHandler(),
@@ -254,8 +255,8 @@ export class CodexClientSessionService extends BaseService {
       }
     });
 
-    this.registerHandler(CodexClientSubjects.hook.received, async ({ payload }) => {
-      await this.handleHookReceived(payload);
+    this.registerHandler(CodexClientSubjects.hook.received, async ({ payload, call }) => {
+      await this.handleHookReceived(call, payload);
     });
 
     this.registerHookHandleHandler();
@@ -344,7 +345,7 @@ export class CodexClientSessionService extends BaseService {
         ctx.setResult({ exitCode: 0, stdout: '', stderr: '' });
         return;
       }
-      return composeCodexHookResponse(this.hookResponseRegistry, ctx.payload, {
+      return composeCodexHookResponse(ctx.call, this.hookResponseRegistry, ctx.payload, {
         deadline: ctx.deadline,
         signal: ctx.signal,
         onDiagnostics: (diagnostics) =>
@@ -405,13 +406,18 @@ export class CodexClientSessionService extends BaseService {
 
   /**
    * Resolve the active Codex config dir via `client.resolveBinary`.
+   *
+   * The result is cached and shared by every requester, so the lookup serves no
+   * single caller and sends with the service's own shared-work context.
    * @returns Config directory returned by the binary resolver, or `undefined`
    *   when no resolver/global binary is available.
    */
   private async doResolveConfigDir(): Promise<string | undefined> {
     let result;
     try {
-      result = await this.bus.requestOptional(ClientSubjects.resolveBinary, { clientId: CLIENT_ID });
+      result = await this.bus.requestOptional(this.bus.own('shared-work'), ClientSubjects.resolveBinary, {
+        clientId: CLIENT_ID,
+      });
     } catch (error) {
       if (isResolveBinaryMissingGlobalBinary(error)) {
         return undefined;
@@ -467,11 +473,12 @@ export class CodexClientSessionService extends BaseService {
    * One raw hook may produce multiple normalized events (e.g. `UserPromptSubmit`
    * yields `turn.started` then `userPrompt.submitted`). Events are emitted in
    * the order returned by the normalizer.
+   * @param call - Call context of the `client:codex.hook.received` message; every emission follows it
    * @param raw - Raw hook payload delivered on `client:codex.hook.received`
    */
-  private async handleHookReceived(raw: Parameters<typeof normalizeCodexHook>[0]): Promise<void> {
+  private async handleHookReceived(call: CallContext, raw: Parameters<typeof normalizeCodexHook>[0]): Promise<void> {
     const events = normalizeCodexHook(raw, this.machineId);
-    await this.observeRootRuntime(raw, events);
+    await this.observeRootRuntime(call, raw, events);
 
     // Diagnostic: warn when a SubagentStart/SubagentStop produces no events.
     // The normalizer silently drops these hooks when agent_id is absent; this
@@ -506,22 +513,22 @@ export class CodexClientSessionService extends BaseService {
       try {
         switch (normalized.subject) {
           case ClientSubjects.session.started:
-            await this.bus.emit(ClientSubjects.session.started, await this.enrichForkLineage(normalized.payload));
+            await this.bus.emit(call, ClientSubjects.session.started, await this.enrichForkLineage(normalized.payload));
             break;
           case ClientSubjects.session.userPrompt.submitted:
-            await this.bus.emit(ClientSubjects.session.userPrompt.submitted, normalized.payload);
+            await this.bus.emit(call, ClientSubjects.session.userPrompt.submitted, normalized.payload);
             break;
           case ClientSubjects.session.turn.started:
-            await this.bus.emit(ClientSubjects.session.turn.started, normalized.payload);
+            await this.bus.emit(call, ClientSubjects.session.turn.started, normalized.payload);
             break;
           case ClientSubjects.session.turn.completed:
-            await this.bus.emit(ClientSubjects.session.turn.completed, normalized.payload);
+            await this.bus.emit(call, ClientSubjects.session.turn.completed, normalized.payload);
             break;
           case ClientSubjects.session.tool.pre:
-            await this.bus.emit(ClientSubjects.session.tool.pre, normalized.payload);
+            await this.bus.emit(call, ClientSubjects.session.tool.pre, normalized.payload);
             break;
           case ClientSubjects.session.tool.post:
-            await this.bus.emit(ClientSubjects.session.tool.post, normalized.payload);
+            await this.bus.emit(call, ClientSubjects.session.tool.post, normalized.payload);
             break;
           case ClientSubjects.session.subagent.started: {
             // Switch-case narrowing on SubjectDefinition objects requires an explicit
@@ -531,7 +538,7 @@ export class CodexClientSessionService extends BaseService {
               CodexNormalizedEvent,
               { subject: typeof ClientSubjects.session.subagent.started }
             >;
-            await this.bus.emit(ClientSubjects.session.subagent.started, subagentStartedPayload);
+            await this.bus.emit(call, ClientSubjects.session.subagent.started, subagentStartedPayload);
             break;
           }
           case ClientSubjects.session.subagent.completed: {
@@ -539,7 +546,7 @@ export class CodexClientSessionService extends BaseService {
               CodexNormalizedEvent,
               { subject: typeof ClientSubjects.session.subagent.completed }
             >;
-            await this.bus.emit(ClientSubjects.session.subagent.completed, subagentCompletedPayload);
+            await this.bus.emit(call, ClientSubjects.session.subagent.completed, subagentCompletedPayload);
             break;
           }
           case ClientSubjects.session.compaction.pre: {
@@ -547,7 +554,7 @@ export class CodexClientSessionService extends BaseService {
               CodexNormalizedEvent,
               { subject: typeof ClientSubjects.session.compaction.pre }
             >;
-            await this.bus.emit(ClientSubjects.session.compaction.pre, compactionPrePayload);
+            await this.bus.emit(call, ClientSubjects.session.compaction.pre, compactionPrePayload);
             break;
           }
           default:
@@ -583,10 +590,12 @@ export class CodexClientSessionService extends BaseService {
    * Subagent hooks never produce `client.session.started`, so they cannot bind
    * a root runtime. The supervisor correlation key joins observations; it does
    * not grant ownership of an arbitrary native session.
+   * @param call - Call context of the hook message being processed.
    * @param raw - Raw hook payload delivered on `client:codex.hook.received`.
    * @param events - Normalized events derived from the raw hook.
    */
   private async observeRootRuntime(
+    call: CallContext,
     raw: Parameters<typeof normalizeCodexHook>[0],
     events: readonly CodexNormalizedEvent[],
   ): Promise<void> {
@@ -604,7 +613,7 @@ export class CodexClientSessionService extends BaseService {
     }
 
     try {
-      const result = await this.bus.requestOptional(ClientSubjects.runtime.observe, {
+      const result = await this.bus.requestOptional(call, ClientSubjects.runtime.observe, {
         clientId: CLIENT_ID,
         source: { layer: 'client-hook', producer: 'codex-client-session-service' },
         observedAt: raw.receivedAt,

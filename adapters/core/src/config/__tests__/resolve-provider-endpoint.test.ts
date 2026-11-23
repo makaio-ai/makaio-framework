@@ -7,6 +7,7 @@ import {
   type ResolvedProviderAuth,
 } from '@makaio/contracts';
 import { AdapterSubsystemSubjects, type ProviderRuntimeSnapshot } from '@makaio/services-core/adapter-subsystem';
+import { createTestCall } from '@makaio/test-utils';
 import { ProviderEndpointAuthError, resolveProviderEndpoint } from '../resolve-provider-endpoint.js';
 import { resolveProviderResolution } from '../resolve-provider-resolution.js';
 
@@ -133,7 +134,7 @@ function setupCredentialChannel(value: string | null): Array<() => void> {
     setResult({ token });
   });
   const endpoint: ChannelEndpoint = createChannelEndpoint(
-    MakaioBus.getContext(),
+    MakaioBus,
     'credentials',
     (channel) => {
       channel.on(CredentialSubjects.resolve, ({ payload, setResult }) => {
@@ -158,7 +159,7 @@ describe('provider endpoint resolution', () => {
   ] as const)('resolves static and override endpoint metadata for %s auth without materializing secrets', async (_mode, auth) => {
     const cleanup = setupSnapshot(auth);
 
-    await expect(resolveProviderResolution(MakaioBus, 'config-1', 'openai')).resolves.toMatchObject({
+    await expect(resolveProviderResolution(createTestCall(), MakaioBus, 'config-1', 'openai')).resolves.toMatchObject({
       baseUrl: 'https://override.example/v1',
       auth: { mode: auth.mode },
     });
@@ -169,7 +170,9 @@ describe('provider endpoint resolution', () => {
     const cleanup = setupSnapshot(EXPLICIT_AUTH);
     const credentialCleanups = setupCredentialChannel('selected-api-key');
 
-    await expect(resolveProviderEndpoint(MakaioBus, 'config-1', 'openai', API_KEY_REQUIREMENT)).resolves.toEqual({
+    await expect(
+      resolveProviderEndpoint(createTestCall(), MakaioBus, 'config-1', 'openai', API_KEY_REQUIREMENT),
+    ).resolves.toEqual({
       baseUrl: 'https://override.example/v1',
       apiKey: 'selected-api-key',
     });
@@ -187,7 +190,9 @@ describe('provider endpoint resolution', () => {
       tokenRequest();
     });
 
-    await expect(resolveProviderEndpoint(MakaioBus, 'config-1', 'openai', API_KEY_REQUIREMENT)).rejects.toMatchObject({
+    await expect(
+      resolveProviderEndpoint(createTestCall(), MakaioBus, 'config-1', 'openai', API_KEY_REQUIREMENT),
+    ).rejects.toMatchObject({
       code: 'fetch-auth-unsupported',
     } satisfies Partial<ProviderEndpointAuthError>);
     expect(tokenRequest).not.toHaveBeenCalled();
@@ -199,9 +204,13 @@ describe('provider endpoint resolution', () => {
     const cleanup = setupSnapshot(EXPLICIT_AUTH);
     const credentialCleanups = setupCredentialChannel(null);
 
-    const error = await resolveProviderEndpoint(MakaioBus, 'config-1', 'openai', API_KEY_REQUIREMENT).catch(
-      (value: unknown) => value,
-    );
+    const error = await resolveProviderEndpoint(
+      createTestCall(),
+      MakaioBus,
+      'config-1',
+      'openai',
+      API_KEY_REQUIREMENT,
+    ).catch((value: unknown) => value);
 
     expect(error).toBeInstanceOf(ProviderEndpointAuthError);
     expect(error).toMatchObject({ code: 'fetch-auth-missing' });
@@ -217,7 +226,9 @@ describe('provider endpoint resolution', () => {
       tokenRequest();
     });
 
-    await expect(resolveProviderEndpoint(MakaioBus, 'config-1', 'openai', API_KEY_REQUIREMENT)).rejects.toMatchObject({
+    await expect(
+      resolveProviderEndpoint(createTestCall(), MakaioBus, 'config-1', 'openai', API_KEY_REQUIREMENT),
+    ).rejects.toMatchObject({
       code: 'fetch-auth-unsupported',
     } satisfies Partial<ProviderEndpointAuthError>);
     expect(tokenRequest).not.toHaveBeenCalled();
@@ -229,7 +240,9 @@ describe('provider endpoint resolution', () => {
     const cleanup = setupSnapshot(MULTI_FIELD_AUTH);
     const credentialCleanups = setupCredentialChannel('selected-api-key');
 
-    await expect(resolveProviderEndpoint(MakaioBus, 'config-1', 'openai', API_KEY_REQUIREMENT)).resolves.toEqual({
+    await expect(
+      resolveProviderEndpoint(createTestCall(), MakaioBus, 'config-1', 'openai', API_KEY_REQUIREMENT),
+    ).resolves.toEqual({
       baseUrl: 'https://override.example/v1',
       apiKey: 'selected-api-key',
     });

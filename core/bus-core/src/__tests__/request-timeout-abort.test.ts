@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import { createBusNamespace } from '@makaio/core';
 import { MakaioBus, type BusMessage, type BusRequestMessage, type BusTransport } from '../index.js';
+import { busContextOf } from '../kernel-api.js';
 
 class PendingRequestTransport implements BusTransport {
   public readonly name = 'pending-request-transport';
@@ -54,7 +55,7 @@ declare module '../index.js' {
   }
 }
 
-const { registerTransport } = MakaioBus.getContext().transportRegistry;
+const { registerTransport } = busContextOf(MakaioBus).transportRegistry;
 
 describe('request timeout=0 with AbortSignal', () => {
   let transport: PendingRequestTransport;
@@ -80,7 +81,12 @@ describe('request timeout=0 with AbortSignal', () => {
     setTimeout(() => controller.abort(new Error('local-abort')), 10);
 
     await expect(
-      MakaioBus.request(RequestTimeoutSubjects.wait, { value: 'x' }, { timeout: 0, signal: controller.signal }),
+      MakaioBus.request(
+        MakaioBus.own('root'),
+        RequestTimeoutSubjects.wait,
+        { value: 'x' },
+        { timeout: 0, signal: controller.signal },
+      ),
     ).rejects.toThrow('local-abort');
   });
 
@@ -92,7 +98,12 @@ describe('request timeout=0 with AbortSignal', () => {
       ctx.setResult({ ok: true });
     });
 
-    const result = await MakaioBus.request(RequestTimeoutSubjects.wait, { value: 'x' }, { signal: controller.signal });
+    const result = await MakaioBus.request(
+      MakaioBus.own('root'),
+      RequestTimeoutSubjects.wait,
+      { value: 'x' },
+      { signal: controller.signal },
+    );
 
     expect(result).toEqual({ ok: true });
     expect(observedSignal).toBe(controller.signal);
@@ -100,7 +111,7 @@ describe('request timeout=0 with AbortSignal', () => {
 
   it('aborts transport requests when timeout is 0 and forwards timeout to transport', async () => {
     // Advertise the pending transport as the handler so dispatch routes to it.
-    MakaioBus.getContext().remoteRequestHandlers.set('requestTimeoutAbort.wait', [
+    busContextOf(MakaioBus).remoteRequestHandlers.set('requestTimeoutAbort.wait', [
       { transport: 'pending', priority: 0 },
     ]);
 
@@ -108,7 +119,12 @@ describe('request timeout=0 with AbortSignal', () => {
     setTimeout(() => controller.abort(new Error('transport-abort')), 10);
 
     await expect(
-      MakaioBus.request(RequestTimeoutSubjects.wait, { value: 'x' }, { timeout: 0, signal: controller.signal }),
+      MakaioBus.request(
+        MakaioBus.own('root'),
+        RequestTimeoutSubjects.wait,
+        { value: 'x' },
+        { timeout: 0, signal: controller.signal },
+      ),
     ).rejects.toThrow('transport-abort');
 
     expect(transport.lastTimeout).toBe(0);
@@ -120,15 +136,15 @@ describe('request timeout=0 with AbortSignal', () => {
     Number.NaN,
     Number.POSITIVE_INFINITY,
   ])('rejects timeout %s with a RangeError before anything is dispatched', async (timeout) => {
-    MakaioBus.getContext().remoteRequestHandlers.set('requestTimeoutAbort.wait', [
+    busContextOf(MakaioBus).remoteRequestHandlers.set('requestTimeoutAbort.wait', [
       { transport: 'pending', priority: 0 },
     ]);
 
     // Only `0` means "no timeout": an invalid budget must not reach the
     // transport, where the request would outlive the caller's rejection.
-    await expect(MakaioBus.request(RequestTimeoutSubjects.wait, { value: 'x' }, { timeout })).rejects.toThrow(
-      RangeError,
-    );
+    await expect(
+      MakaioBus.request(MakaioBus.own('root'), RequestTimeoutSubjects.wait, { value: 'x' }, { timeout }),
+    ).rejects.toThrow(RangeError);
     expect(transport.lastTimeout).toBeUndefined();
   });
 });

@@ -10,6 +10,7 @@
  */
 
 import type { AgentSelection } from '@makaio/contracts';
+import type { CallContext } from '@makaio/contracts/call-context';
 import type { ModelFilterMode, ModelVisibility, ProtocolEndpoints } from '@makaio/contracts/provider';
 import type { BindingRecord } from '@makaio/services-core/adapter-subsystem';
 import type { IMakaioBus } from '@makaio/bus-core';
@@ -109,9 +110,11 @@ export interface OnboardingProviderConfigDraft {
  *
  * This keeps plaintext credential capture on the host side while allowing
  * the framework-owned orchestrator to delegate provider creation through a
- * narrow inversion-of-control seam.
+ * narrow inversion-of-control seam. The `call` is the call context of the user
+ * action that creates the config.
  */
 export type OnboardingProviderConfigCreator = (
+  call: CallContext,
   bus: IMakaioBus,
   input: OnboardingProviderConfigDraft,
 ) => Promise<string>;

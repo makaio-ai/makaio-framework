@@ -3,14 +3,22 @@ import type { CliContribution } from '../cli/types.js';
 import type { WindowRegistry } from '../window/window-registry.js';
 import type { ExtensionEntry, KernelMakaioExtension } from './types.js';
 
+/** A CLI contribution paired with the extension that contributes it. */
+export interface OwnedCliContribution {
+  /** Name of the contributing extension; resolves its carrier bus through the coordinator entries. */
+  readonly extensionName: string;
+  /** The CLI contribution declared by that extension. */
+  readonly contribution: CliContribution;
+}
+
 /** Mutable extension surfaces collected during coordinator load. */
 export interface ExtensionSurfaceCollections {
   /** Registry populated with extension-declared windows. */
   readonly windowRegistry: WindowRegistry;
   /** Tray entries collected in load order. */
   readonly trayEntries: Array<TrayManifest & { readonly packageName: string }>;
-  /** CLI contributions collected in load order. */
-  readonly cliContributions: CliContribution[];
+  /** CLI contributions with their contributing extension, collected in load order. */
+  readonly cliContributions: OwnedCliContribution[];
 }
 
 /**
@@ -30,7 +38,7 @@ export function collectExtensionSurfaces(collections: ExtensionSurfaceCollection
   if (pkg.cli) {
     const cli = pkg.cli as CliContribution;
     if ('subcommands' in cli) {
-      collections.cliContributions.push(cli);
+      collections.cliContributions.push({ extensionName: pkg.name, contribution: cli });
     }
   }
 }

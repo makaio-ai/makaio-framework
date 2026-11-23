@@ -212,6 +212,289 @@ fn conformance_assertions_use_supported_kinds_and_shapes() {
     }
 }
 
+/// Maps each conformance case that asserts a caller or principal decision to the test in this
+/// file that runs it. Scope: only what this SDK itself does. The receiver's decision (caller,
+/// principal, attestation) is checked by the core against its real implementation.
+const PRINCIPAL_CASE_TESTS: &[(&str, &str)] = &[
+    (
+        "request-without-metadata-is-connector-call",
+        "sender_sends_request_frame_without_metadata",
+    ),
+    (
+        "request-unknown-envelope-field-ignored",
+        "receive_path_handles_request_as_if_unknown_envelope_field_were_absent",
+    ),
+    (
+        "request-with-principal-metadata",
+        "envelope_with_principal_metadata_decodes_and_reserializes_without_metadata",
+    ),
+];
+
+const PRINCIPAL_ASSERTION_KINDS: &[&str] = &[
+    "principal-declared",
+    "envelope-field-ignored",
+    "principal-is-caller",
+];
+
+#[test]
+fn principal_cases_are_all_mapped_to_existing_tests() {
+    let cases = conformance_cases();
+    let mut declared: Vec<String> = cases["cases"]
+        .as_array()
+        .expect("conformance cases should be an array")
+        .iter()
+        .filter(|case| {
+            case["assertions"]
+                .as_array()
+                .expect("conformance case should have assertions")
+                .iter()
+                .any(|assertion| {
+                    assertion["kind"]
+                        .as_str()
+                        .is_some_and(|kind| PRINCIPAL_ASSERTION_KINDS.contains(&kind))
+                })
+        })
+        .map(|case| {
+            case["id"]
+                .as_str()
+                .expect("case should have an id")
+                .to_string()
+        })
+        .collect();
+    let mut mapped: Vec<String> = PRINCIPAL_CASE_TESTS
+        .iter()
+        .map(|(case_id, _)| (*case_id).to_string())
+        .collect();
+    declared.sort();
+    mapped.sort();
+    assert_eq!(
+        declared, mapped,
+        "every caller/principal conformance case needs exactly one entry in PRINCIPAL_CASE_TESTS"
+    );
+
+    let this_file = include_str!("bus_client.rs");
+    for (case_id, test_name) in PRINCIPAL_CASE_TESTS {
+        assert!(
+            this_file.contains(&format!("fn {test_name}(")),
+            "{case_id} maps to {test_name}, which does not exist in this file"
+        );
+    }
+}
+
+/// Fixture message of the single wire entry of a conformance case.
+fn case_fixture(case_id: &str) -> (Value, Value) {
+    let cases = conformance_cases();
+    let case = cases["cases"]
+        .as_array()
+        .expect("conformance cases should be an array")
+        .iter()
+        .find(|case| case["id"] == case_id)
+        .unwrap_or_else(|| panic!("conformance case {case_id} should exist"))
+        .clone();
+    let message_ref = case["wire"][0]["messageRef"]
+        .as_str()
+        .unwrap_or_else(|| panic!("{case_id} should reference a wire message"))
+        .to_string();
+    let fixture = conformance_messages()
+        .get(&message_ref)
+        .unwrap_or_else(|| panic!("{case_id} references missing fixture {message_ref}"))
+        .clone();
+    (case, fixture)
+}
+
+/// The SDK sender never emits a `metadata` key: the request is the connector's own call.
+#[tokio::test]
+async fn sender_sends_request_frame_without_metadata() {
+    let (case, fixture) = case_fixture("request-without-metadata-is-connector-call");
+    assert_eq!(case["assertions"][0]["kind"], "principal-is-caller");
+    let subject = format!(
+        "{}.{}",
+        fixture["namespace"].as_str().expect("fixture namespace"),
+        fixture["subject"].as_str().expect("fixture subject")
+    );
+    assert_eq!(subject, subjects::approval::REQUEST);
+
+    let (seen_tx, seen_rx) = oneshot::channel();
+    let server = serve_once(move |mut ws| async move {
+        let request = loop {
+            let message = ws
+                .next()
+                .await
+                .expect("websocket should remain open")
+                .expect("message should be valid");
+            if let Some(value) = wire_value(message) {
+                if value["type"] == "request" {
+                    break value;
+                }
+            }
+        };
+        let correlation_id = request["correlationId"]
+            .as_str()
+            .expect("request should carry a correlation id")
+            .to_string();
+        let _ = seen_tx.send(request);
+        send_bus_message(
+            &mut ws,
+            BusMessage::Response(ResponseMessage {
+                correlation_id,
+                result: Some(json!({ "ok": true })),
+                error: None,
+            }),
+        )
+        .await;
+    })
+    .await;
+
+    let bus = BusClient::connect_with_dispatch(&server.url, DispatchMode::Remote)
+        .await
+        .expect("client should connect");
+    bus.request(&subject, fixture["payload"].clone())
+        .await
+        .expect("request should resolve");
+
+    let frame = seen_rx
+        .await
+        .expect("server should observe the request frame");
+    let frame = frame
+        .as_object()
+        .expect("request frame should be an object");
+    assert!(
+        !frame.contains_key("metadata"),
+        "the SDK sender must not send a metadata key, got {frame:?}"
+    );
+    bus.close().await.expect("client should close");
+    server.assert_completed().await;
+}
+
+/// What the registered handler observed, plus the response frame the SDK sent back.
+struct ReceivedRequest {
+    subject: String,
+    message_id: String,
+    correlation_id: String,
+    payload: Value,
+    response: Value,
+}
+
+/// Sends `frame` as a request to a client with a local `approval.request` handler and records what
+/// the handler saw and what the client answered.
+async fn deliver_request_frame(frame: Value) -> ReceivedRequest {
+    let (response_tx, response_rx) = oneshot::channel();
+    let server = serve_once(move |mut ws| async move {
+        let subscribe = read_bus_message(&mut ws).await;
+        assert!(matches!(subscribe, BusMessage::Subscribe(_)));
+        ws.send(Message::Text(frame.to_string().into()))
+            .await
+            .expect("request frame should send");
+        let response = loop {
+            let message = ws
+                .next()
+                .await
+                .expect("websocket should remain open")
+                .expect("message should be valid");
+            if let Some(value) = wire_value(message) {
+                if value["type"] == "response" {
+                    break value;
+                }
+            }
+        };
+        let _ = response_tx.send(response);
+    })
+    .await;
+
+    let (seen_tx, mut seen_rx) = mpsc::unbounded_channel();
+    let bus = BusClient::connect(&server.url)
+        .await
+        .expect("client should connect");
+    let _handler = bus
+        .on_request(subjects::approval::REQUEST, move |request| {
+            let seen_tx = seen_tx.clone();
+            async move {
+                let _ = seen_tx.send((
+                    request.subject.clone(),
+                    request.message_id.clone(),
+                    request.correlation_id.clone(),
+                    request.payload().clone(),
+                ));
+                Ok(json!({ "handled": true }))
+            }
+        })
+        .await
+        .expect("handler should register");
+
+    let response = response_rx
+        .await
+        .expect("server should observe the handler response");
+    let (subject, message_id, correlation_id, payload) =
+        seen_rx.recv().await.expect("handler should have run");
+    bus.close().await.expect("client should close");
+    server.assert_completed().await;
+    ReceivedRequest {
+        subject,
+        message_id,
+        correlation_id,
+        payload,
+        response,
+    }
+}
+
+/// The SDK receive path treats a request with an unknown envelope field exactly like one without.
+#[tokio::test]
+async fn receive_path_handles_request_as_if_unknown_envelope_field_were_absent() {
+    let (case, fixture) = case_fixture("request-unknown-envelope-field-ignored");
+    let field = case["assertions"][0]["field"]
+        .as_str()
+        .expect("assertion should name the unknown field");
+    assert!(fixture.get(field).is_some(), "fixture should carry {field}");
+    let mut without_field = fixture.clone();
+    without_field
+        .as_object_mut()
+        .expect("fixture should be an object")
+        .remove(field);
+
+    let with = deliver_request_frame(fixture.clone()).await;
+    let without = deliver_request_frame(without_field).await;
+
+    assert_eq!(with.subject, subjects::approval::REQUEST);
+    assert_eq!(with.message_id, fixture["messageId"]);
+    assert_eq!(with.correlation_id, fixture["correlationId"]);
+    assert_eq!(with.payload, fixture["payload"]);
+    assert_eq!(with.response["correlationId"], fixture["correlationId"]);
+    assert_eq!(with.response["result"], json!({ "handled": true }));
+    assert_eq!(with.subject, without.subject);
+    assert_eq!(with.message_id, without.message_id);
+    assert_eq!(with.correlation_id, without.correlation_id);
+    assert_eq!(with.payload, without.payload);
+    assert_eq!(with.response, without.response);
+}
+
+/// `metadata.principal` is tolerated by the envelope: it decodes as a request and the SDK, which
+/// has no field for `metadata`, serializes it back without it. Which principal the receiver
+/// derives from it is decided by the core, not by this SDK.
+#[test]
+fn envelope_with_principal_metadata_decodes_and_reserializes_without_metadata() {
+    let (case, fixture) = case_fixture("request-with-principal-metadata");
+    assert_eq!(case["assertions"][0]["kind"], "principal-declared");
+    assert!(
+        fixture.get("metadata").is_some(),
+        "fixture should carry metadata"
+    );
+
+    let decoded = serde_json::from_value::<BusMessage>(fixture.clone())
+        .expect("envelope with metadata.principal should decode");
+    let request = match &decoded {
+        BusMessage::Request(request) => request,
+        other => panic!("expected request, received {other:?}"),
+    };
+    assert_eq!(request.payload, fixture["payload"]);
+    assert_eq!(request.correlation_id, fixture["correlationId"]);
+
+    let reserialized = serde_json::to_value(&decoded).expect("request should serialize");
+    assert!(
+        reserialized.get("metadata").is_none(),
+        "the SDK has no metadata field, got {reserialized}"
+    );
+}
+
 #[tokio::test]
 async fn subscribe_and_emit_use_expected_event_framing() {
     let (seen_tx, mut seen_rx) = mpsc::unbounded_channel();
@@ -2878,6 +3161,52 @@ fn assert_conformance_assertion_shape(
                 );
             }
         }
+        "principal-declared" => {
+            assert_message_ref_resolves(case_id, kind, assertion, messages);
+            assert!(
+                assertion["principal"]["kind"].is_string(),
+                "{case_id} principal-declared assertions must declare principal.kind"
+            );
+            assert!(
+                assertion["principal"]["id"].is_string(),
+                "{case_id} principal-declared assertions must declare principal.id"
+            );
+            assert!(
+                assertion["caller"].is_string(),
+                "{case_id} principal-declared assertions must declare a caller"
+            );
+        }
+        "envelope-field-ignored" => {
+            let message = assert_message_ref_resolves(case_id, kind, assertion, messages);
+            let field = assertion["field"].as_str().unwrap_or_else(|| {
+                panic!("{case_id} envelope-field-ignored assertions must declare a field")
+            });
+            assert!(
+                message.get(field).is_some(),
+                "{case_id} names envelope field {field} that its fixture does not carry"
+            );
+        }
+        "principal-is-caller" => {
+            assert_message_ref_resolves(case_id, kind, assertion, messages);
+            assert!(
+                assertion["caller"].is_string(),
+                "{case_id} principal-is-caller assertions must declare a caller"
+            );
+        }
         _ => panic!("{case_id} declares unsupported assertion kind {kind}"),
     }
+}
+
+fn assert_message_ref_resolves<'a>(
+    case_id: &str,
+    kind: &str,
+    assertion: &Value,
+    messages: &'a serde_json::Map<String, Value>,
+) -> &'a Value {
+    let message_ref = assertion["messageRef"]
+        .as_str()
+        .unwrap_or_else(|| panic!("{case_id} {kind} assertions must declare a messageRef"));
+    messages
+        .get(message_ref)
+        .unwrap_or_else(|| panic!("{case_id} references missing fixture {message_ref}"))
 }

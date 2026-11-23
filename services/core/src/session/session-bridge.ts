@@ -1,4 +1,5 @@
-import { MakaioBus, type IMakaioBus } from '@makaio/bus-core';
+import type { IMakaioBus } from '@makaio/bus-core';
+import type { CallContext } from '@makaio/core';
 import { AgentSubjects, SessionSubjects, type SessionMessageBlock } from '@makaio/contracts';
 import { MessageStorageSubjects } from './messages/namespace.js';
 import { MessageRoutingSubjects } from './message-routing/namespace.js';
@@ -39,7 +40,7 @@ export class SessionBridge {
   private readonly pendingAssistantResponses = new Map<string, PendingAssistantResponse>();
   private readonly cleanups: Array<() => void> = [];
 
-  public constructor(private readonly bus: IMakaioBus = MakaioBus) {
+  public constructor(private readonly bus: IMakaioBus) {
     this.registerHandlers();
   }
 
@@ -227,13 +228,14 @@ export class SessionBridge {
         this.pendingAssistantResponses.delete(key);
         try {
           await this.storeAssistantMessage(
+            ctx.call,
             pending,
             outcome === 'error' ? undefined : adapterSessionId,
             outcome === 'error' ? error : undefined,
             structuredOutputValidation !== undefined ? { content: message } : undefined,
           );
         } finally {
-          await this.bus.emit(SessionSubjects.turn.assistantPersistenceSettled, {
+          await this.bus.emit(ctx.call, SessionSubjects.turn.assistantPersistenceSettled, {
             sessionId: pending.sessionId,
             turnId: pending.turnId,
             agentId,
@@ -246,12 +248,14 @@ export class SessionBridge {
 
   /**
    * Store accumulated blocks as an assistant message.
+   * @param call - Call context of the completion message that triggered the persistence
    * @param response - Detached turn-scoped response to persist
    * @param adapterSessionId - Optional adapter session ID
    * @param error - Optional error message if agent failed
    * @param messageOverride - Optional validated terminal message to store instead of accumulated provider blocks
    */
   private async storeAssistantMessage(
+    call: CallContext,
     response: PendingAssistantResponse & { agentId: string },
     adapterSessionId?: string,
     error?: string,
@@ -277,7 +281,7 @@ export class SessionBridge {
 
     try {
       // Store assistant message — skip silently if no storage handler is registered
-      const appendResult = await this.bus.requestOptional(MessageStorageSubjects.append, {
+      const appendResult = await this.bus.requestOptional(call, MessageStorageSubjects.append, {
         message: {
           messageId,
           turnId: response.turnId,
@@ -295,7 +299,7 @@ export class SessionBridge {
       }
 
       // Update routing status to completed — also optional; skip if no routing handler registered
-      const getResult = await this.bus.requestOptional(MessageStorageSubjects.getByTurn, {
+      const getResult = await this.bus.requestOptional(call, MessageStorageSubjects.getByTurn, {
         turnId: response.turnId,
       });
       if (getResult.handled) {
@@ -306,7 +310,7 @@ export class SessionBridge {
           // Fire-and-forget: routing records are non-critical audit metadata.
           // The result is intentionally not checked — a missing routing handler
           // (e.g. in ephemeral mode) is silently ignored.
-          await this.bus.requestOptional(MessageRoutingSubjects.record, {
+          await this.bus.requestOptional(call, MessageRoutingSubjects.record, {
             messageId: userMessage.messageId,
             agentId: response.agentId,
             status: 'completed',

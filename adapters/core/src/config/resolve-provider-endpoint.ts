@@ -1,5 +1,6 @@
 import type { IMakaioBus } from '@makaio/bus-core';
 import { AuthFieldIdSchema, type ProtocolId } from '@makaio/contracts';
+import type { CallContext } from '@makaio/core';
 import { ConnectorCredentialResolutionError, resolveConnectorCredentials } from './resolve-connector-credentials.js';
 import { resolveProviderResolution } from './resolve-provider-resolution.js';
 
@@ -65,6 +66,7 @@ export interface ProviderEndpointAuthRequirement {
  *
  * Credentials are resolved from the normalized explicit auth selection. No
  * environment or SDK ambient fallback is consulted.
+ * @param call - Call context of the work the endpoint lookup belongs to
  * @param bus - Makaio bus instance used to query storage and resolve credential refs
  * @param providerConfigId - UUID of the ProviderConfig entity to resolve
  * @param protocol - Wire protocol to select the correct endpoint URL
@@ -74,12 +76,13 @@ export interface ProviderEndpointAuthRequirement {
  *   when `baseUrl` or `apiKey` cannot be resolved from any source
  */
 export async function resolveProviderEndpoint(
+  call: CallContext,
   bus: IMakaioBus,
   providerConfigId: string,
   protocol: ProtocolId,
   authRequirement: ProviderEndpointAuthRequirement,
 ): Promise<ProviderEndpoint> {
-  const { baseUrl, auth } = await resolveProviderResolution(bus, providerConfigId, protocol);
+  const { baseUrl, auth } = await resolveProviderResolution(call, bus, providerConfigId, protocol);
 
   if (!baseUrl) {
     throw new Error(
@@ -109,7 +112,7 @@ export async function resolveProviderEndpoint(
 
   let apiKey: string | undefined;
   try {
-    apiKey = (await resolveConnectorCredentials(bus, { apiKey: apiKeyRef })).apiKey;
+    apiKey = (await resolveConnectorCredentials(call, bus, { apiKey: apiKeyRef })).apiKey;
   } catch (error) {
     if (error instanceof ConnectorCredentialResolutionError && error.code === 'credential-unavailable') {
       throw new ProviderEndpointAuthError('fetch-auth-missing');

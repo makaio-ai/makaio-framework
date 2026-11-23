@@ -1,4 +1,5 @@
 import type { IMakaioBus } from '@makaio/bus-core';
+import type { CallContext } from '@makaio/contracts';
 import type { WindowManagerState } from './window-session.js';
 import { UiSubjects } from '@makaio/ui-kernel';
 import type { WindowRegistry, WindowRegistration } from '@makaio/kernel';
@@ -169,10 +170,11 @@ interface NavigationHandlerDeps {
    * This is the module-level `createWindow` helper from `main.ts`, not
    * `windowManager.createWindow` directly. It owns all bus interaction around
    * window creation.
+   * @param call - Call context of the navigation request
    * @param options - Window creation options (registrationId, params)
    * @returns The window ID of the created or focused window
    */
-  createWindow: (options: WindowCreateRequest) => number;
+  createWindow: (call: CallContext, options: WindowCreateRequest) => number;
   /** Window manager for querying and focusing existing windows. */
   windowManager: INavigationWindowManager;
   /** Window registry for resolving navigation URLs to registrations. */
@@ -227,7 +229,7 @@ export function registerHostNavigationHandler(bus: IMakaioBus, deps: NavigationH
         }
       }
 
-      deps.createWindow({
+      deps.createWindow(ctx.call, {
         registrationId: qualifiedId,
         params: resolvedParams,
       });

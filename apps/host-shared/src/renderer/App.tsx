@@ -79,7 +79,7 @@ function SurfaceReadyEmitter({ surface }: Pick<AppProps, 'surface'>): null {
     }
 
     emittedReadySurfaces.add(surface);
-    void bus.emit(UiSubjects.ready, { surface, timestamp: Date.now() });
+    void bus.emit(bus.own('start'), UiSubjects.ready, { surface, timestamp: Date.now() });
 
     return () => {
       const resetTimer = window.setTimeout(() => {

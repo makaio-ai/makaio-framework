@@ -38,7 +38,7 @@ export function createPinMessageAction(ctx: SessionEventActionContext) {
      * @returns Whether to show the action
      */
     when: async (whenCtx) => {
-      const { isPinned } = await whenCtx.bus.request(PinStorageSubjects.check, {
+      const { isPinned } = await whenCtx.bus.request(whenCtx.call, PinStorageSubjects.check, {
         messageId: whenCtx.message.messageId,
       });
       return !isPinned;
@@ -51,7 +51,7 @@ export function createPinMessageAction(ctx: SessionEventActionContext) {
      * @returns Execution result
      */
     onExecute: async (execCtx) => {
-      await execCtx.bus.request(PinStorageSubjects.add, {
+      await execCtx.bus.request(execCtx.call, PinStorageSubjects.add, {
         sessionId: execCtx.sessionId,
         messageId: execCtx.entrypoint.messageId,
       });

@@ -15,6 +15,7 @@ import { describe, expect, it } from 'vitest';
 import { ClientHookProviderContractRegistry, ClientHookResponseRegistry } from '@makaio/subsystem-client';
 import type { ContributorDefinition } from '@makaio/contracts/client';
 import { createSessionTokenEffect } from '@makaio/contracts/client';
+import { createTestCall } from '@makaio/test-utils';
 import { composeHookResponse } from '../hook-response-composer.js';
 import { claudeCodeToolResponseContract } from '../hook-response-contracts.js';
 
@@ -66,6 +67,7 @@ describe('composeHookResponse — session.token scope rules', () => {
     });
 
     await composeHookResponse(
+      createTestCall(),
       responseRegistry,
       {
         eventName: 'SubagentStart',
@@ -100,6 +102,7 @@ describe('composeHookResponse — session.token scope rules', () => {
     // SessionStart payload with a stray agent_id: the sink is called, but
     // the scope must contain only adapterSessionId (no agentId key).
     await composeHookResponse(
+      createTestCall(),
       responseRegistry,
       {
         eventName: 'SessionStart',

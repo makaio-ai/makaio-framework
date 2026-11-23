@@ -23,7 +23,7 @@ export function registerOpenCommand(program: Command): void {
         try {
           const auth = resolveClientAuth(health);
           bus = await connectBusClient(undefined, { auth });
-          const result = await bus.request(HostSubjects.app.focus, {});
+          const result = await bus.request(bus.own('root'), HostSubjects.app.focus, {});
           if (result.focused) {
             console.info('Makaio is now in the foreground.');
           } else {

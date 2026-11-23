@@ -2,11 +2,13 @@ import { describe, expect, it, vi } from 'vitest';
 import { createBusInstance } from '@makaio/bus-core';
 import {
   WorkflowNamespace,
+  type CallContext,
   type StationHandler,
   type WorkflowDefinition,
   type WorkflowExecution,
   type WorkflowGateNode,
 } from '@makaio/contracts';
+import { createTestCall } from '@makaio/test-utils';
 import { RuntimeContext, type RuntimeExecutionOptions } from '../runtime/runtime-context.js';
 import { executeGateNode, type GateNodeOutput } from '../runtime/gate-node.js';
 import { WorkflowSubjects } from '../namespace.js';
@@ -59,12 +61,13 @@ function makeBus(): ReturnType<typeof createBusInstance> {
  * Create a fresh RuntimeContext with an isolated bus.
  * @param options - Optional runtime execution options (e.g. suspension strategy).
  * @param signal - Optional abort signal.
- * @returns A runtime context and its underlying bus.
+ * @returns A runtime context, its underlying bus, and the simulated run call.
  */
 function makeCtx(
   options: RuntimeExecutionOptions = {},
   signal: AbortSignal = new AbortController().signal,
 ): {
+  call: CallContext;
   ctx: RuntimeContext;
   bus: ReturnType<typeof createBusInstance>;
 } {
@@ -82,7 +85,7 @@ function makeCtx(
     undefined,
     options,
   );
-  return { ctx, bus };
+  return { call: createTestCall(), ctx, bus };
 }
 
 /**
@@ -103,12 +106,13 @@ function makeGateNode(overrides: Partial<WorkflowGateNode> = {}): WorkflowGateNo
 
 /**
  * Create a frame ID for the gate node in the given context.
+ * @param call - Simulated workflow run call.
  * @param ctx - Runtime context to register the frame in.
  * @param nodeId - Node ID for the frame.
  * @returns The created frame ID.
  */
-function makeGateFrame(ctx: RuntimeContext, nodeId: string): string {
-  const frame = ctx.createFrame({ nodeId, nodeType: 'gate', path: [] });
+function makeGateFrame(call: CallContext, ctx: RuntimeContext, nodeId: string): string {
+  const frame = ctx.createFrame(call, { nodeId, nodeType: 'gate', path: [] });
   frame.status = 'running';
   frame.startedAt = Date.now();
   return frame.frameId;
@@ -123,9 +127,9 @@ const emptyExpressionCtx = { inputs: {}, trigger: {}, frames: {}, previousSteps:
 
 describe('executeGateNode — suspension', () => {
   it('emits gate.suspended with the node prompt and empty schema when no resumeSchema', async () => {
-    const { ctx, bus } = makeCtx();
+    const { call, ctx, bus } = makeCtx();
     const node = makeGateNode({ id: 'gate-suspend', prompt: 'Confirm deletion?' });
-    const frameId = makeGateFrame(ctx, 'gate-suspend');
+    const frameId = makeGateFrame(call, ctx, 'gate-suspend');
 
     const suspendedPayloads: unknown[] = [];
     bus.on(WorkflowSubjects.gate.suspended, (c) => {
@@ -142,7 +146,7 @@ describe('executeGateNode — suspension', () => {
       });
     });
 
-    await executeGateNode(node, ctx, emptyExpressionCtx, frameId);
+    await executeGateNode(call, node, ctx, emptyExpressionCtx, frameId);
 
     expect(suspendedPayloads).toHaveLength(1);
     expect(suspendedPayloads[0]).toMatchObject({
@@ -155,10 +159,10 @@ describe('executeGateNode — suspension', () => {
   });
 
   it('includes the resumeSchema in the gate.suspended event when declared', async () => {
-    const { ctx, bus } = makeCtx();
+    const { call, ctx, bus } = makeCtx();
     const resumeSchema = { type: 'object', properties: { decision: { type: 'string' } } };
     const node = makeGateNode({ id: 'gate-schema', resumeSchema });
-    const frameId = makeGateFrame(ctx, 'gate-schema');
+    const frameId = makeGateFrame(call, ctx, 'gate-schema');
 
     const suspendedPayloads: unknown[] = [];
     bus.on(WorkflowSubjects.gate.suspended, (c) => {
@@ -174,19 +178,19 @@ describe('executeGateNode — suspension', () => {
       });
     });
 
-    await executeGateNode(node, ctx, emptyExpressionCtx, frameId);
+    await executeGateNode(call, node, ctx, emptyExpressionCtx, frameId);
 
     expect(suspendedPayloads[0]).toMatchObject({ schema: resumeSchema });
   });
 
   it('emits gate.suspended with a prompt rendered from the expression context', async () => {
-    const { ctx, bus } = makeCtx();
+    const { call, ctx, bus } = makeCtx();
     const node = makeGateNode({
       id: 'gate-prompt',
       prompt:
         'Review {{ ctx.inputs.branch }} in {{ config.repository }} after {{ steps.analyze.output.findings }} findings',
     });
-    const frameId = makeGateFrame(ctx, 'gate-prompt');
+    const frameId = makeGateFrame(call, ctx, 'gate-prompt');
 
     const suspendedPayloads: unknown[] = [];
     const persistedGatePrompts: unknown[] = [];
@@ -208,6 +212,7 @@ describe('executeGateNode — suspension', () => {
     });
 
     await executeGateNode(
+      call,
       node,
       ctx,
       {
@@ -227,9 +232,9 @@ describe('executeGateNode — suspension', () => {
   });
 
   it('transitions the frame to waiting status while suspended', async () => {
-    const { ctx, bus } = makeCtx();
+    const { call, ctx, bus } = makeCtx();
     const node = makeGateNode({ id: 'gate-waiting' });
-    const frameId = makeGateFrame(ctx, 'gate-waiting');
+    const frameId = makeGateFrame(call, ctx, 'gate-waiting');
 
     let frameStatusWhileWaiting: string | undefined;
     bus.on(WorkflowSubjects.gate.suspended, () => {
@@ -245,7 +250,7 @@ describe('executeGateNode — suspension', () => {
       });
     });
 
-    await executeGateNode(node, ctx, emptyExpressionCtx, frameId);
+    await executeGateNode(call, node, ctx, emptyExpressionCtx, frameId);
 
     expect(frameStatusWhileWaiting).toBe('waiting');
   });
@@ -253,11 +258,11 @@ describe('executeGateNode — suspension', () => {
   it('returns cancelled immediately when the signal is already aborted', async () => {
     const ctrl = new AbortController();
     ctrl.abort();
-    const { ctx } = makeCtx({}, ctrl.signal);
+    const { call, ctx } = makeCtx({}, ctrl.signal);
     const node = makeGateNode({ id: 'gate-pre-aborted' });
-    const frameId = makeGateFrame(ctx, 'gate-pre-aborted');
+    const frameId = makeGateFrame(call, ctx, 'gate-pre-aborted');
 
-    const outcome = await executeGateNode(node, ctx, emptyExpressionCtx, frameId);
+    const outcome = await executeGateNode(call, node, ctx, emptyExpressionCtx, frameId);
 
     expect(outcome.status).toBe('cancelled');
   });
@@ -269,9 +274,9 @@ describe('executeGateNode — suspension', () => {
 
 describe('executeGateNode — resume', () => {
   it('completes with the submitted resumeData as output', async () => {
-    const { ctx, bus } = makeCtx();
+    const { call, ctx, bus } = makeCtx();
     const node = makeGateNode({ id: 'gate-resume' });
-    const frameId = makeGateFrame(ctx, 'gate-resume');
+    const frameId = makeGateFrame(call, ctx, 'gate-resume');
 
     const resumePayload = { decision: 'approved', comment: 'Looks good' };
 
@@ -284,7 +289,7 @@ describe('executeGateNode — resume', () => {
       });
     });
 
-    const outcome = await executeGateNode(node, ctx, emptyExpressionCtx, frameId);
+    const outcome = await executeGateNode(call, node, ctx, emptyExpressionCtx, frameId);
 
     expect(outcome.status).toBe('completed');
     if (outcome.status === 'completed') {
@@ -294,9 +299,9 @@ describe('executeGateNode — resume', () => {
   });
 
   it('emits gate.resumed with resumeData after successful response', async () => {
-    const { ctx, bus } = makeCtx();
+    const { call, ctx, bus } = makeCtx();
     const node = makeGateNode({ id: 'gate-emit-resumed' });
-    const frameId = makeGateFrame(ctx, 'gate-emit-resumed');
+    const frameId = makeGateFrame(call, ctx, 'gate-emit-resumed');
 
     const resumedPayloads: unknown[] = [];
     bus.on(WorkflowSubjects.gate.resumed, (c) => {
@@ -316,7 +321,7 @@ describe('executeGateNode — resume', () => {
       });
     });
 
-    await executeGateNode(node, ctx, emptyExpressionCtx, frameId);
+    await executeGateNode(call, node, ctx, emptyExpressionCtx, frameId);
 
     expect(resumedPayloads).toHaveLength(1);
     expect(resumedPayloads[0]).toMatchObject({
@@ -338,9 +343,9 @@ describe('executeGateNode — resume', () => {
   });
 
   it('records user reject responses as rejected gate resolutions while resuming with typed data', async () => {
-    const { ctx, bus } = makeCtx();
+    const { call, ctx, bus } = makeCtx();
     const node = makeGateNode({ id: 'gate-reject-response' });
-    const frameId = makeGateFrame(ctx, 'gate-reject-response');
+    const frameId = makeGateFrame(call, ctx, 'gate-reject-response');
 
     const resumedPayloads: unknown[] = [];
     bus.on(WorkflowSubjects.gate.resumed, (c) => {
@@ -361,7 +366,7 @@ describe('executeGateNode — resume', () => {
       });
     });
 
-    const outcome = await executeGateNode(node, ctx, emptyExpressionCtx, frameId);
+    const outcome = await executeGateNode(call, node, ctx, emptyExpressionCtx, frameId);
 
     expect(outcome.status).toBe('completed');
     if (outcome.status === 'completed') {
@@ -388,9 +393,9 @@ describe('executeGateNode — resume', () => {
   });
 
   it('returns accepted: true when responding to a waiting gate', async () => {
-    const { ctx, bus } = makeCtx();
+    const { call, ctx, bus } = makeCtx();
     const node = makeGateNode({ id: 'gate-accepted' });
-    const frameId = makeGateFrame(ctx, 'gate-accepted');
+    const frameId = makeGateFrame(call, ctx, 'gate-accepted');
 
     let accepted: boolean | undefined;
     setImmediate(() => {
@@ -406,15 +411,15 @@ describe('executeGateNode — resume', () => {
         });
     });
 
-    await executeGateNode(node, ctx, emptyExpressionCtx, frameId);
+    await executeGateNode(call, node, ctx, emptyExpressionCtx, frameId);
 
     expect(accepted).toBe(true);
   });
 
   it('returns no handler when a second response arrives after the gate has resolved and unsubscribed', async () => {
-    const { ctx, bus } = makeCtx();
+    const { call, ctx, bus } = makeCtx();
     const node = makeGateNode({ id: 'gate-late-respond' });
-    const frameId = makeGateFrame(ctx, 'gate-late-respond');
+    const frameId = makeGateFrame(call, ctx, 'gate-late-respond');
 
     // First respond resolves the gate.
     setImmediate(() => {
@@ -426,7 +431,7 @@ describe('executeGateNode — resume', () => {
       });
     });
 
-    await executeGateNode(node, ctx, emptyExpressionCtx, frameId);
+    await executeGateNode(call, node, ctx, emptyExpressionCtx, frameId);
 
     // Second respond arrives after gate resolved and unsubscribed — no handler remains.
     const secondResponse = await bus.requestOptional(WorkflowSubjects.gate.respond, {
@@ -440,9 +445,9 @@ describe('executeGateNode — resume', () => {
   });
 
   it('filters responses by executionId and gateId — ignores mismatches', async () => {
-    const { ctx, bus } = makeCtx();
+    const { call, ctx, bus } = makeCtx();
     const node = makeGateNode({ id: 'gate-filter' });
-    const frameId = makeGateFrame(ctx, 'gate-filter');
+    const frameId = makeGateFrame(call, ctx, 'gate-filter');
 
     // Wrong executionId and gateId — should not resolve the gate.
     // These use requestOptional since the gate does not "own" mismatched requests.
@@ -475,7 +480,7 @@ describe('executeGateNode — resume', () => {
       });
     });
 
-    const outcome = await executeGateNode(node, ctx, emptyExpressionCtx, frameId);
+    const outcome = await executeGateNode(call, node, ctx, emptyExpressionCtx, frameId);
 
     expect(outcome.status).toBe('completed');
     if (outcome.status === 'completed') {
@@ -487,9 +492,9 @@ describe('executeGateNode — resume', () => {
   });
 
   it('requires the opening Attempt identity and publishes it with the suspended gate', async () => {
-    const { ctx, bus } = makeCtx({ executionAttemptId: 'attempt-gate-owner' });
+    const { call, ctx, bus } = makeCtx({ executionAttemptId: 'attempt-gate-owner' });
     const node = makeGateNode({ id: 'gate-attempt-filter' });
-    const frameId = makeGateFrame(ctx, 'gate-attempt-filter');
+    const frameId = makeGateFrame(call, ctx, 'gate-attempt-filter');
     let suspendedAttemptId: string | undefined;
     bus.on(WorkflowSubjects.gate.suspended, (suspendedCtx) => {
       suspendedAttemptId = suspendedCtx.payload.executionAttemptId;
@@ -514,16 +519,16 @@ describe('executeGateNode — resume', () => {
       });
     });
 
-    const outcome = await executeGateNode(node, ctx, emptyExpressionCtx, frameId);
+    const outcome = await executeGateNode(call, node, ctx, emptyExpressionCtx, frameId);
 
     expect(suspendedAttemptId).toBe('attempt-gate-owner');
     expect(outcome).toMatchObject({ status: 'completed', output: { resumeData: 'correct' } });
   });
 
   it('filters by frameId when provided in the response', async () => {
-    const { ctx, bus } = makeCtx();
+    const { call, ctx, bus } = makeCtx();
     const node = makeGateNode({ id: 'gate-frameid' });
-    const frameId = makeGateFrame(ctx, 'gate-frameid');
+    const frameId = makeGateFrame(call, ctx, 'gate-frameid');
 
     setImmediate(async () => {
       // Wrong frameId — returns { accepted: false } since it doesn't match this frame.
@@ -549,7 +554,7 @@ describe('executeGateNode — resume', () => {
       });
     });
 
-    const outcome = await executeGateNode(node, ctx, emptyExpressionCtx, frameId);
+    const outcome = await executeGateNode(call, node, ctx, emptyExpressionCtx, frameId);
 
     expect(outcome.status).toBe('completed');
     if (outcome.status === 'completed') {
@@ -564,9 +569,9 @@ describe('executeGateNode — resume', () => {
 
 describe('executeGateNode — reason (in-process)', () => {
   it('carries reason through gate instance and gate.resolved when respond includes it', async () => {
-    const { ctx, bus } = makeCtx();
+    const { call, ctx, bus } = makeCtx();
     const node = makeGateNode({ id: 'gate-reason-present' });
-    const frameId = makeGateFrame(ctx, 'gate-reason-present');
+    const frameId = makeGateFrame(call, ctx, 'gate-reason-present');
 
     const persistedGates: unknown[] = [];
     bus.on(WorkflowStorageSubjects.setGateInstance, (c) => {
@@ -588,7 +593,7 @@ describe('executeGateNode — reason (in-process)', () => {
       });
     });
 
-    const outcome = await executeGateNode(node, ctx, emptyExpressionCtx, frameId);
+    const outcome = await executeGateNode(call, node, ctx, emptyExpressionCtx, frameId);
 
     expect(outcome.status).toBe('completed');
     // Persisted gate instance carries the reason.
@@ -608,9 +613,9 @@ describe('executeGateNode — reason (in-process)', () => {
   });
 
   it('does not set reason on gate instance or gate.resolved when respond omits it', async () => {
-    const { ctx, bus } = makeCtx();
+    const { call, ctx, bus } = makeCtx();
     const node = makeGateNode({ id: 'gate-reason-absent' });
-    const frameId = makeGateFrame(ctx, 'gate-reason-absent');
+    const frameId = makeGateFrame(call, ctx, 'gate-reason-absent');
 
     const persistedGates: unknown[] = [];
     bus.on(WorkflowStorageSubjects.setGateInstance, (c) => {
@@ -631,7 +636,7 @@ describe('executeGateNode — reason (in-process)', () => {
       });
     });
 
-    const outcome = await executeGateNode(node, ctx, emptyExpressionCtx, frameId);
+    const outcome = await executeGateNode(call, node, ctx, emptyExpressionCtx, frameId);
 
     expect(outcome.status).toBe('completed');
     // Persisted gate instance should not have a reason field.
@@ -652,15 +657,15 @@ describe('executeGateNode — timeout', () => {
     vi.useFakeTimers();
 
     try {
-      const { ctx, bus } = makeCtx();
+      const { call, ctx, bus } = makeCtx();
       const node = makeGateNode({ id: 'gate-timeout', timeoutMs: 1000 });
-      const frameId = makeGateFrame(ctx, 'gate-timeout');
+      const frameId = makeGateFrame(call, ctx, 'gate-timeout');
       const resolvedPayloads: unknown[] = [];
       bus.on(WorkflowSubjects.gate.resolved, (c) => {
         resolvedPayloads.push(c.payload);
       });
 
-      const outcomePromise = executeGateNode(node, ctx, emptyExpressionCtx, frameId);
+      const outcomePromise = executeGateNode(call, node, ctx, emptyExpressionCtx, frameId);
 
       // Advance past the timeout.
       await vi.advanceTimersByTimeAsync(1001);
@@ -692,15 +697,15 @@ describe('executeGateNode — timeout', () => {
     vi.useFakeTimers();
 
     try {
-      const { ctx, bus } = makeCtx();
+      const { call, ctx, bus } = makeCtx();
       const node = makeGateNode({ id: 'gate-timeout-approve', autoAction: 'approve', timeoutMs: 1000 });
-      const frameId = makeGateFrame(ctx, 'gate-timeout-approve');
+      const frameId = makeGateFrame(call, ctx, 'gate-timeout-approve');
       const resolvedPayloads: unknown[] = [];
       bus.on(WorkflowSubjects.gate.resolved, (c) => {
         resolvedPayloads.push(c.payload);
       });
 
-      const outcomePromise = executeGateNode(node, ctx, emptyExpressionCtx, frameId);
+      const outcomePromise = executeGateNode(call, node, ctx, emptyExpressionCtx, frameId);
 
       await vi.advanceTimersByTimeAsync(1001);
 
@@ -729,11 +734,11 @@ describe('executeGateNode — timeout', () => {
     vi.useFakeTimers();
 
     try {
-      const { ctx, bus } = makeCtx();
+      const { call, ctx, bus } = makeCtx();
       const node = makeGateNode({ id: 'gate-no-timeout', timeoutMs: 500 });
-      const frameId = makeGateFrame(ctx, 'gate-no-timeout');
+      const frameId = makeGateFrame(call, ctx, 'gate-no-timeout');
 
-      const outcomePromise = executeGateNode(node, ctx, emptyExpressionCtx, frameId);
+      const outcomePromise = executeGateNode(call, node, ctx, emptyExpressionCtx, frameId);
 
       // Respond before the timeout fires.
       await vi.advanceTimersByTimeAsync(100);
@@ -760,9 +765,9 @@ describe('executeGateNode — timeout', () => {
 describe('executeGateNode — cancellation', () => {
   it('returns cancelled when the abort signal fires while waiting', async () => {
     const ctrl = new AbortController();
-    const { ctx, bus } = makeCtx({}, ctrl.signal);
+    const { call, ctx, bus } = makeCtx({}, ctrl.signal);
     const node = makeGateNode({ id: 'gate-abort' });
-    const frameId = makeGateFrame(ctx, 'gate-abort');
+    const frameId = makeGateFrame(call, ctx, 'gate-abort');
     const resumedPayloads: unknown[] = [];
     const resolvedPayloads: unknown[] = [];
     bus.on(WorkflowSubjects.gate.resumed, (c) => {
@@ -772,7 +777,7 @@ describe('executeGateNode — cancellation', () => {
       resolvedPayloads.push(c.payload);
     });
 
-    const outcomePromise = executeGateNode(node, ctx, emptyExpressionCtx, frameId);
+    const outcomePromise = executeGateNode(call, node, ctx, emptyExpressionCtx, frameId);
 
     // Abort after a microtask so the gate has time to register.
     setImmediate(() => ctrl.abort());
@@ -795,11 +800,11 @@ describe('executeGateNode — cancellation', () => {
 
   it('returns accepted: false for a respond call after cancellation', async () => {
     const ctrl = new AbortController();
-    const { ctx, bus } = makeCtx({}, ctrl.signal);
+    const { call, ctx, bus } = makeCtx({}, ctrl.signal);
     const node = makeGateNode({ id: 'gate-post-cancel' });
-    const frameId = makeGateFrame(ctx, 'gate-post-cancel');
+    const frameId = makeGateFrame(call, ctx, 'gate-post-cancel');
 
-    const outcomePromise = executeGateNode(node, ctx, emptyExpressionCtx, frameId);
+    const outcomePromise = executeGateNode(call, node, ctx, emptyExpressionCtx, frameId);
 
     setImmediate(() => ctrl.abort());
     await outcomePromise;
@@ -824,9 +829,9 @@ describe('executeGateNode — cancellation', () => {
 
 describe('executeGateNode — resume data passthrough', () => {
   it('passes any JsonValue as resumeData when no resumeSchema is declared', async () => {
-    const { ctx, bus } = makeCtx();
+    const { call, ctx, bus } = makeCtx();
     const node = makeGateNode({ id: 'gate-any-data' });
-    const frameId = makeGateFrame(ctx, 'gate-any-data');
+    const frameId = makeGateFrame(call, ctx, 'gate-any-data');
 
     const complexData = { nested: { value: [1, 2, 3] }, flag: true };
 
@@ -839,7 +844,7 @@ describe('executeGateNode — resume data passthrough', () => {
       });
     });
 
-    const outcome = await executeGateNode(node, ctx, emptyExpressionCtx, frameId);
+    const outcome = await executeGateNode(call, node, ctx, emptyExpressionCtx, frameId);
 
     expect(outcome.status).toBe('completed');
     if (outcome.status === 'completed') {
@@ -848,9 +853,9 @@ describe('executeGateNode — resume data passthrough', () => {
   });
 
   it('passes null resumeData through without error', async () => {
-    const { ctx, bus } = makeCtx();
+    const { call, ctx, bus } = makeCtx();
     const node = makeGateNode({ id: 'gate-null-data' });
-    const frameId = makeGateFrame(ctx, 'gate-null-data');
+    const frameId = makeGateFrame(call, ctx, 'gate-null-data');
 
     setImmediate(() => {
       void bus.request(WorkflowSubjects.gate.respond, {
@@ -861,7 +866,7 @@ describe('executeGateNode — resume data passthrough', () => {
       });
     });
 
-    const outcome = await executeGateNode(node, ctx, emptyExpressionCtx, frameId);
+    const outcome = await executeGateNode(call, node, ctx, emptyExpressionCtx, frameId);
 
     expect(outcome.status).toBe('completed');
     if (outcome.status === 'completed') {
@@ -872,7 +877,7 @@ describe('executeGateNode — resume data passthrough', () => {
 
 describe('executeGateNode — resume data validation', () => {
   it('rejects invalid resumeData and continues waiting for a valid response', async () => {
-    const { ctx, bus } = makeCtx();
+    const { call, ctx, bus } = makeCtx();
     const node = makeGateNode({
       id: 'gate-validated-data',
       resumeSchema: {
@@ -882,7 +887,7 @@ describe('executeGateNode — resume data validation', () => {
         additionalProperties: false,
       },
     });
-    const frameId = makeGateFrame(ctx, 'gate-validated-data');
+    const frameId = makeGateFrame(call, ctx, 'gate-validated-data');
 
     const acceptedResponses: boolean[] = [];
     setImmediate(async () => {
@@ -903,7 +908,7 @@ describe('executeGateNode — resume data validation', () => {
       acceptedResponses.push(validResponse.accepted);
     });
 
-    const outcome = await executeGateNode(node, ctx, emptyExpressionCtx, frameId);
+    const outcome = await executeGateNode(call, node, ctx, emptyExpressionCtx, frameId);
 
     expect(acceptedResponses).toEqual([false, true]);
     expect(outcome.status).toBe('completed');
@@ -913,14 +918,14 @@ describe('executeGateNode — resume data validation', () => {
   });
 
   it('fails before suspension when resumeSchema is not a valid JSON Schema document', async () => {
-    const { ctx } = makeCtx();
+    const { call, ctx } = makeCtx();
     const node = makeGateNode({
       id: 'gate-invalid-schema',
       resumeSchema: { type: 123 },
     });
-    const frameId = makeGateFrame(ctx, 'gate-invalid-schema');
+    const frameId = makeGateFrame(call, ctx, 'gate-invalid-schema');
 
-    const outcome = await executeGateNode(node, ctx, emptyExpressionCtx, frameId);
+    const outcome = await executeGateNode(call, node, ctx, emptyExpressionCtx, frameId);
 
     expect(outcome.status).toBe('failed');
     if (outcome.status === 'failed') {
@@ -932,7 +937,7 @@ describe('executeGateNode — resume data validation', () => {
     vi.useFakeTimers();
 
     try {
-      const { ctx } = makeCtx();
+      const { call, ctx } = makeCtx();
       const node = makeGateNode({
         id: 'gate-timeout-schema',
         autoAction: 'approve',
@@ -944,9 +949,9 @@ describe('executeGateNode — resume data validation', () => {
           additionalProperties: false,
         },
       });
-      const frameId = makeGateFrame(ctx, 'gate-timeout-schema');
+      const frameId = makeGateFrame(call, ctx, 'gate-timeout-schema');
 
-      const outcomePromise = executeGateNode(node, ctx, emptyExpressionCtx, frameId);
+      const outcomePromise = executeGateNode(call, node, ctx, emptyExpressionCtx, frameId);
 
       await vi.advanceTimersByTimeAsync(1001);
       const outcome = await outcomePromise;
@@ -966,7 +971,7 @@ describe('executeGateNode — resume data validation', () => {
     vi.useFakeTimers();
 
     try {
-      const { ctx } = makeCtx();
+      const { call, ctx } = makeCtx();
       const node = makeGateNode({
         id: 'gate-timeout-schema-match',
         autoAction: 'approve',
@@ -981,9 +986,9 @@ describe('executeGateNode — resume data validation', () => {
           additionalProperties: false,
         },
       });
-      const frameId = makeGateFrame(ctx, 'gate-timeout-schema-match');
+      const frameId = makeGateFrame(call, ctx, 'gate-timeout-schema-match');
 
-      const outcomePromise = executeGateNode(node, ctx, emptyExpressionCtx, frameId);
+      const outcomePromise = executeGateNode(call, node, ctx, emptyExpressionCtx, frameId);
 
       await vi.advanceTimersByTimeAsync(1001);
       const outcome = await outcomePromise;
@@ -1024,9 +1029,9 @@ describe('executeGateNode — parking (exit-and-redispatch)', () => {
   }
 
   it('parks instead of waiting when suspension strategy exits the runner', async () => {
-    const { ctx: runtimeCtx, bus } = makeCtx({ suspensionStrategy: 'exit-and-redispatch' });
+    const { call, ctx: runtimeCtx, bus } = makeCtx({ suspensionStrategy: 'exit-and-redispatch' });
     const node = makeGateNode({ id: 'gate-park' });
-    const frameId = makeGateFrame(runtimeCtx, 'gate-park');
+    const frameId = makeGateFrame(call, runtimeCtx, 'gate-park');
     const gateRows: unknown[] = [];
     registerMissingPersistedGate(bus);
     registerFramePersistence(bus);
@@ -1035,7 +1040,7 @@ describe('executeGateNode — parking (exit-and-redispatch)', () => {
       c.setResult({ id: c.payload.gate.frameId });
     });
 
-    const outcome = await executeGateNode(node, runtimeCtx, emptyExpressionCtx, frameId);
+    const outcome = await executeGateNode(call, node, runtimeCtx, emptyExpressionCtx, frameId);
 
     expect(outcome).toEqual({ status: 'paused', pausedAtGateId: 'gate-park', pausedAtFrameId: frameId });
     expect(runtimeCtx.getFrame(frameId)?.status).toBe('waiting');
@@ -1043,9 +1048,9 @@ describe('executeGateNode — parking (exit-and-redispatch)', () => {
   });
 
   it('parks finite-timeout gates under exit strategy', async () => {
-    const { ctx: runtimeCtx, bus } = makeCtx({ suspensionStrategy: 'exit-and-redispatch' });
+    const { call, ctx: runtimeCtx, bus } = makeCtx({ suspensionStrategy: 'exit-and-redispatch' });
     const node = makeGateNode({ id: 'gate-park-timeout', autoAction: 'approve', timeoutMs: 1000 });
-    const frameId = makeGateFrame(runtimeCtx, 'gate-park-timeout');
+    const frameId = makeGateFrame(call, runtimeCtx, 'gate-park-timeout');
     const gateRows: unknown[] = [];
     registerMissingPersistedGate(bus);
     registerFramePersistence(bus);
@@ -1054,7 +1059,7 @@ describe('executeGateNode — parking (exit-and-redispatch)', () => {
       c.setResult({ id: c.payload.gate.frameId });
     });
 
-    const outcome = await executeGateNode(node, runtimeCtx, emptyExpressionCtx, frameId);
+    const outcome = await executeGateNode(call, node, runtimeCtx, emptyExpressionCtx, frameId);
 
     expect(outcome).toEqual({
       status: 'paused',
@@ -1065,9 +1070,9 @@ describe('executeGateNode — parking (exit-and-redispatch)', () => {
   });
 
   it('does not accept synchronous responses before the exit-based gate parks', async () => {
-    const { ctx: runtimeCtx, bus } = makeCtx({ suspensionStrategy: 'exit-and-redispatch' });
+    const { call, ctx: runtimeCtx, bus } = makeCtx({ suspensionStrategy: 'exit-and-redispatch' });
     const node = makeGateNode({ id: 'gate-sync-respond' });
-    const frameId = makeGateFrame(runtimeCtx, 'gate-sync-respond');
+    const frameId = makeGateFrame(call, runtimeCtx, 'gate-sync-respond');
     const gateRows: unknown[] = [];
     let syncResponse: Awaited<ReturnType<typeof bus.requestOptional<typeof WorkflowSubjects.gate.respond>>> | undefined;
 
@@ -1077,8 +1082,8 @@ describe('executeGateNode — parking (exit-and-redispatch)', () => {
       gateRows.push(c.payload.gate);
       c.setResult({ id: c.payload.gate.frameId });
     });
-    bus.on(WorkflowSubjects.gate.suspended, async () => {
-      syncResponse = await bus.requestOptional(WorkflowSubjects.gate.respond, {
+    bus.on(WorkflowSubjects.gate.suspended, async (suspendedCtx) => {
+      syncResponse = await bus.requestOptional(suspendedCtx.call, WorkflowSubjects.gate.respond, {
         executionId: runtimeCtx.executionId,
         gateId: 'gate-sync-respond',
         frameId,
@@ -1087,7 +1092,7 @@ describe('executeGateNode — parking (exit-and-redispatch)', () => {
       });
     });
 
-    const outcome = await executeGateNode(node, runtimeCtx, emptyExpressionCtx, frameId);
+    const outcome = await executeGateNode(call, node, runtimeCtx, emptyExpressionCtx, frameId);
 
     expect(outcome).toEqual({
       status: 'paused',
@@ -1099,31 +1104,31 @@ describe('executeGateNode — parking (exit-and-redispatch)', () => {
   });
 
   it('fails exit-based parking when the gate storage handler is missing', async () => {
-    const { ctx: runtimeCtx } = makeCtx({ suspensionStrategy: 'exit-and-redispatch' });
+    const { call, ctx: runtimeCtx } = makeCtx({ suspensionStrategy: 'exit-and-redispatch' });
     const node = makeGateNode({ id: 'gate-missing-storage' });
-    const frameId = makeGateFrame(runtimeCtx, 'gate-missing-storage');
+    const frameId = makeGateFrame(call, runtimeCtx, 'gate-missing-storage');
 
-    await expect(executeGateNode(node, runtimeCtx, emptyExpressionCtx, frameId)).rejects.toThrow();
+    await expect(executeGateNode(call, node, runtimeCtx, emptyExpressionCtx, frameId)).rejects.toThrow();
   });
 
   it('fails exit-based parking when the waiting gate row cannot be persisted', async () => {
-    const { ctx: runtimeCtx, bus } = makeCtx({ suspensionStrategy: 'exit-and-redispatch' });
+    const { call, ctx: runtimeCtx, bus } = makeCtx({ suspensionStrategy: 'exit-and-redispatch' });
     const node = makeGateNode({ id: 'gate-storage-fails' });
-    const frameId = makeGateFrame(runtimeCtx, 'gate-storage-fails');
+    const frameId = makeGateFrame(call, runtimeCtx, 'gate-storage-fails');
     registerMissingPersistedGate(bus);
     bus.on(WorkflowStorageSubjects.setGateInstance, () => {
       throw new Error('gate storage unavailable');
     });
 
-    await expect(executeGateNode(node, runtimeCtx, emptyExpressionCtx, frameId)).rejects.toThrow(
+    await expect(executeGateNode(call, node, runtimeCtx, emptyExpressionCtx, frameId)).rejects.toThrow(
       'gate storage unavailable',
     );
   });
 
   it('fails exit-based parking when the waiting frame cannot be persisted', async () => {
-    const { ctx: runtimeCtx, bus } = makeCtx({ suspensionStrategy: 'exit-and-redispatch' });
+    const { call, ctx: runtimeCtx, bus } = makeCtx({ suspensionStrategy: 'exit-and-redispatch' });
     const node = makeGateNode({ id: 'gate-frame-storage-fails' });
-    const frameId = makeGateFrame(runtimeCtx, 'gate-frame-storage-fails');
+    const frameId = makeGateFrame(call, runtimeCtx, 'gate-frame-storage-fails');
     registerMissingPersistedGate(bus);
     bus.on(WorkflowStorageSubjects.setGateInstance, (c) => {
       c.setResult({ id: c.payload.gate.frameId });
@@ -1132,15 +1137,15 @@ describe('executeGateNode — parking (exit-and-redispatch)', () => {
       throw new Error('frame storage unavailable');
     });
 
-    await expect(executeGateNode(node, runtimeCtx, emptyExpressionCtx, frameId)).rejects.toThrow(
+    await expect(executeGateNode(call, node, runtimeCtx, emptyExpressionCtx, frameId)).rejects.toThrow(
       'frame storage unavailable',
     );
   });
 
   it('completes a parked gate from a persisted rejected response with valid resume data', async () => {
-    const { ctx: runtimeCtx, bus } = makeCtx({ suspensionStrategy: 'exit-and-redispatch' });
+    const { call, ctx: runtimeCtx, bus } = makeCtx({ suspensionStrategy: 'exit-and-redispatch' });
     const node = makeGateNode({ id: 'gate-resume' });
-    const frameId = makeGateFrame(runtimeCtx, 'gate-resume');
+    const frameId = makeGateFrame(call, runtimeCtx, 'gate-resume');
     bus.on(WorkflowStorageSubjects.getGateInstance, (c) => {
       c.setResult({
         gate: {
@@ -1159,13 +1164,13 @@ describe('executeGateNode — parking (exit-and-redispatch)', () => {
       });
     });
 
-    const outcome = await executeGateNode(node, runtimeCtx, emptyExpressionCtx, frameId);
+    const outcome = await executeGateNode(call, node, runtimeCtx, emptyExpressionCtx, frameId);
 
     expect(outcome).toEqual({ status: 'completed', output: { resumeData: { decision: 'needs-changes' } } });
   });
 
   it('validates persisted resume data against the persisted gate schema on redispatch', async () => {
-    const { ctx: runtimeCtx, bus } = makeCtx({ suspensionStrategy: 'exit-and-redispatch' });
+    const { call, ctx: runtimeCtx, bus } = makeCtx({ suspensionStrategy: 'exit-and-redispatch' });
     const node = makeGateNode({
       id: 'gate-persisted-schema',
       resumeSchema: {
@@ -1175,7 +1180,7 @@ describe('executeGateNode — parking (exit-and-redispatch)', () => {
         additionalProperties: false,
       },
     });
-    const frameId = makeGateFrame(runtimeCtx, 'gate-persisted-schema');
+    const frameId = makeGateFrame(call, runtimeCtx, 'gate-persisted-schema');
 
     bus.on(WorkflowStorageSubjects.getGateInstance, (c) => {
       c.setResult({
@@ -1200,15 +1205,15 @@ describe('executeGateNode — parking (exit-and-redispatch)', () => {
       });
     });
 
-    const outcome = await executeGateNode(node, runtimeCtx, emptyExpressionCtx, frameId);
+    const outcome = await executeGateNode(call, node, runtimeCtx, emptyExpressionCtx, frameId);
 
     expect(outcome).toEqual({ status: 'completed', output: { resumeData: { decision: 'approved' } } });
   });
 
   it('applies timeout semantics to an expired persisted waiting gate on redispatch', async () => {
-    const { ctx: runtimeCtx, bus } = makeCtx({ suspensionStrategy: 'exit-and-redispatch' });
+    const { call, ctx: runtimeCtx, bus } = makeCtx({ suspensionStrategy: 'exit-and-redispatch' });
     const node = makeGateNode({ id: 'gate-expired', timeoutMs: 1000 });
-    const frameId = makeGateFrame(runtimeCtx, 'gate-expired');
+    const frameId = makeGateFrame(call, runtimeCtx, 'gate-expired');
     const persistedUpdates: unknown[] = [];
     const resolvedPayloads: unknown[] = [];
 
@@ -1235,7 +1240,7 @@ describe('executeGateNode — parking (exit-and-redispatch)', () => {
       resolvedPayloads.push(c.payload);
     });
 
-    const outcome = await executeGateNode(node, runtimeCtx, emptyExpressionCtx, frameId);
+    const outcome = await executeGateNode(call, node, runtimeCtx, emptyExpressionCtx, frameId);
 
     expect(outcome.status).toBe('failed');
     if (outcome.status === 'failed') {
@@ -1257,9 +1262,9 @@ describe('executeGateNode — parking (exit-and-redispatch)', () => {
   });
 
   it('auto-approves an expired persisted waiting gate on redispatch', async () => {
-    const { ctx: runtimeCtx, bus } = makeCtx({ suspensionStrategy: 'exit-and-redispatch' });
+    const { call, ctx: runtimeCtx, bus } = makeCtx({ suspensionStrategy: 'exit-and-redispatch' });
     const node = makeGateNode({ id: 'gate-expired-approve', autoAction: 'approve', timeoutMs: 1000 });
-    const frameId = makeGateFrame(runtimeCtx, 'gate-expired-approve');
+    const frameId = makeGateFrame(call, runtimeCtx, 'gate-expired-approve');
     const persistedUpdates: unknown[] = [];
 
     bus.on(WorkflowStorageSubjects.getGateInstance, (c) => {
@@ -1282,7 +1287,7 @@ describe('executeGateNode — parking (exit-and-redispatch)', () => {
       c.setResult({ id: c.payload.gate.frameId });
     });
 
-    const outcome = await executeGateNode(node, runtimeCtx, emptyExpressionCtx, frameId);
+    const outcome = await executeGateNode(call, node, runtimeCtx, emptyExpressionCtx, frameId);
 
     expect(outcome).toEqual({
       status: 'completed',
@@ -1298,7 +1303,7 @@ describe('executeGateNode — parking (exit-and-redispatch)', () => {
   });
 
   it('validates persisted auto-approve timeout data against the persisted gate schema on redispatch', async () => {
-    const { ctx: runtimeCtx, bus } = makeCtx({ suspensionStrategy: 'exit-and-redispatch' });
+    const { call, ctx: runtimeCtx, bus } = makeCtx({ suspensionStrategy: 'exit-and-redispatch' });
     const node = makeGateNode({
       id: 'gate-expired-schema-policy',
       autoAction: 'reject',
@@ -1310,7 +1315,7 @@ describe('executeGateNode — parking (exit-and-redispatch)', () => {
         additionalProperties: false,
       },
     });
-    const frameId = makeGateFrame(runtimeCtx, 'gate-expired-schema-policy');
+    const frameId = makeGateFrame(call, runtimeCtx, 'gate-expired-schema-policy');
 
     bus.on(WorkflowStorageSubjects.getGateInstance, (c) => {
       c.setResult({
@@ -1339,7 +1344,7 @@ describe('executeGateNode — parking (exit-and-redispatch)', () => {
       c.setResult({ id: c.payload.gate.frameId });
     });
 
-    const outcome = await executeGateNode(node, runtimeCtx, emptyExpressionCtx, frameId);
+    const outcome = await executeGateNode(call, node, runtimeCtx, emptyExpressionCtx, frameId);
 
     expect(outcome).toEqual({
       status: 'completed',
@@ -1348,9 +1353,9 @@ describe('executeGateNode — parking (exit-and-redispatch)', () => {
   });
 
   it('uses persisted timeout policy when redispatching an expired waiting gate', async () => {
-    const { ctx: runtimeCtx, bus } = makeCtx({ suspensionStrategy: 'exit-and-redispatch' });
+    const { call, ctx: runtimeCtx, bus } = makeCtx({ suspensionStrategy: 'exit-and-redispatch' });
     const node = makeGateNode({ id: 'gate-expired-policy', autoAction: 'reject', timeoutMs: 60_000 });
-    const frameId = makeGateFrame(runtimeCtx, 'gate-expired-policy');
+    const frameId = makeGateFrame(call, runtimeCtx, 'gate-expired-policy');
     const persistedUpdates: unknown[] = [];
 
     bus.on(WorkflowStorageSubjects.getGateInstance, (c) => {
@@ -1373,7 +1378,7 @@ describe('executeGateNode — parking (exit-and-redispatch)', () => {
       c.setResult({ id: c.payload.gate.frameId });
     });
 
-    const outcome = await executeGateNode(node, runtimeCtx, emptyExpressionCtx, frameId);
+    const outcome = await executeGateNode(call, node, runtimeCtx, emptyExpressionCtx, frameId);
 
     expect(outcome).toEqual({
       status: 'completed',
@@ -1388,9 +1393,9 @@ describe('executeGateNode — parking (exit-and-redispatch)', () => {
   });
 
   it('carries reason through gate.resolved on redispatch when persisted gate row includes it', async () => {
-    const { ctx: runtimeCtx, bus } = makeCtx({ suspensionStrategy: 'exit-and-redispatch' });
+    const { call, ctx: runtimeCtx, bus } = makeCtx({ suspensionStrategy: 'exit-and-redispatch' });
     const node = makeGateNode({ id: 'gate-parked-reason' });
-    const frameId = makeGateFrame(runtimeCtx, 'gate-parked-reason');
+    const frameId = makeGateFrame(call, runtimeCtx, 'gate-parked-reason');
     const resolvedPayloads: unknown[] = [];
 
     bus.on(WorkflowStorageSubjects.getGateInstance, (c) => {
@@ -1415,7 +1420,7 @@ describe('executeGateNode — parking (exit-and-redispatch)', () => {
       resolvedPayloads.push(c.payload);
     });
 
-    const outcome = await executeGateNode(node, runtimeCtx, emptyExpressionCtx, frameId);
+    const outcome = await executeGateNode(call, node, runtimeCtx, emptyExpressionCtx, frameId);
 
     expect(outcome).toEqual({ status: 'completed', output: { resumeData: { decision: 'approved' } } });
     expect(resolvedPayloads).toEqual([
@@ -1430,9 +1435,9 @@ describe('executeGateNode — parking (exit-and-redispatch)', () => {
   });
 
   it('does not include reason in gate.resolved on redispatch when persisted gate row omits it', async () => {
-    const { ctx: runtimeCtx, bus } = makeCtx({ suspensionStrategy: 'exit-and-redispatch' });
+    const { call, ctx: runtimeCtx, bus } = makeCtx({ suspensionStrategy: 'exit-and-redispatch' });
     const node = makeGateNode({ id: 'gate-parked-no-reason' });
-    const frameId = makeGateFrame(runtimeCtx, 'gate-parked-no-reason');
+    const frameId = makeGateFrame(call, runtimeCtx, 'gate-parked-no-reason');
     const resolvedPayloads: unknown[] = [];
 
     bus.on(WorkflowStorageSubjects.getGateInstance, (c) => {
@@ -1456,7 +1461,7 @@ describe('executeGateNode — parking (exit-and-redispatch)', () => {
       resolvedPayloads.push(c.payload);
     });
 
-    const outcome = await executeGateNode(node, runtimeCtx, emptyExpressionCtx, frameId);
+    const outcome = await executeGateNode(call, node, runtimeCtx, emptyExpressionCtx, frameId);
 
     expect(outcome).toEqual({ status: 'completed', output: { resumeData: { decision: 'approved' } } });
     expect(resolvedPayloads[0]).not.toHaveProperty('reason');

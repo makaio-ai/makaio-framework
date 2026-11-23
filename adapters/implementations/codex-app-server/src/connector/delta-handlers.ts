@@ -6,12 +6,8 @@
  */
 
 import { z } from 'zod';
-import { CodexAppServerSubjects, type CodexAppServerBus } from '../namespaces/index.js';
-
-/**
- * Emit function type for bus events.
- */
-type EmitFn = CodexAppServerBus['emit'];
+import { CodexAppServerSubjects } from '../namespaces/index.js';
+import type { CodexTurnEmit } from './turn-flow-handlers.js';
 
 /**
  * Create a type guard validator for a Zod schema.
@@ -98,12 +94,12 @@ const isValidFileChangeDeltaNotification = createValidator(FileChangeDeltaNotifi
 
 /**
  * Handle agent message delta notification.
- * @param emit - Bus emit function
+ * @param emit - Emitter bound to the operation of this notification
  * @param params - Delta notification params
  * @param onAccumulate - Callback to accumulate content
  */
 export async function handleAgentMessageDelta(
-  emit: EmitFn,
+  emit: CodexTurnEmit,
   params: unknown,
   onAccumulate: (delta: string) => void,
 ): Promise<void> {
@@ -133,10 +129,10 @@ export async function handleAgentMessageDelta(
 
 /**
  * Handle command output delta notification.
- * @param emit - Bus emit function
+ * @param emit - Emitter bound to the operation of this notification
  * @param params - Delta notification params
  */
-export async function handleCommandOutputDelta(emit: EmitFn, params: unknown): Promise<void> {
+export async function handleCommandOutputDelta(emit: CodexTurnEmit, params: unknown): Promise<void> {
   if (!isValidCommandOutputDeltaNotification(params)) {
     console.warn('[delta-handlers] Skipping invalid command output delta notification');
     return;
@@ -154,10 +150,10 @@ export async function handleCommandOutputDelta(emit: EmitFn, params: unknown): P
 
 /**
  * Handle reasoning delta notification.
- * @param emit - Bus emit function
+ * @param emit - Emitter bound to the operation of this notification
  * @param params - Delta notification params
  */
-export async function handleReasoningDelta(emit: EmitFn, params: unknown): Promise<void> {
+export async function handleReasoningDelta(emit: CodexTurnEmit, params: unknown): Promise<void> {
   if (!isValidReasoningDeltaNotification(params)) {
     console.warn('[delta-handlers] Skipping invalid reasoning delta notification');
     return;
@@ -175,10 +171,10 @@ export async function handleReasoningDelta(emit: EmitFn, params: unknown): Promi
 
 /**
  * Handle file change delta notification.
- * @param emit - Bus emit function
+ * @param emit - Emitter bound to the operation of this notification
  * @param params - Delta notification params
  */
-export async function handleFileChangeDelta(emit: EmitFn, params: unknown): Promise<void> {
+export async function handleFileChangeDelta(emit: CodexTurnEmit, params: unknown): Promise<void> {
   if (!isValidFileChangeDeltaNotification(params)) {
     console.warn('[delta-handlers] Skipping invalid file change delta notification');
     return;

@@ -19,13 +19,17 @@ export type { WildcardUnifiedHandler } from './handler-types.js';
 export type {
   BaseMessageContext,
   EventMessagePayload,
-  MessageOrigin,
-  PrincipalContext,
   RequestMessagePayload,
   MessagePayload,
-  TransportPeerContext,
+  TransportConnectionInfo,
   TransportReceiveContext,
+  ConnectionAttestation,
+  AttestingConnectionRole,
+  InboundAttestingConnectionRole,
+  OutboundAttestingConnectionRole,
 } from './message.js';
+
+export { ATTESTING_CONNECTION_ROLES } from './message.js';
 
 export type { JsonValue } from './json-value.js';
 export { JsonValueSchema } from './json-value.js';

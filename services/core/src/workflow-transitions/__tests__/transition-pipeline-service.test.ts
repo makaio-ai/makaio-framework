@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { createBusInstance, type IMakaioBus } from '@makaio/bus-core';
 import { ArtifactSubjects, WorkflowSubjects, type ArtifactRevision } from '@makaio/contracts';
+import { createTestCall } from '@makaio/test-utils';
 import { TransitionPipelineService } from '../transition-pipeline-service.js';
 
 function makeArtifact(overrides: Partial<ArtifactRevision> = {}): ArtifactRevision {
@@ -43,7 +44,7 @@ describe('TransitionPipelineService', () => {
       },
     ]);
 
-    await bus.emit(ArtifactSubjects.created, { artifact: makeArtifact() });
+    await bus.emit(createTestCall(), ArtifactSubjects.created, { artifact: makeArtifact() });
 
     expect(handled).toBe(true);
     await service.destroy();
@@ -99,7 +100,7 @@ describe('TransitionPipelineService', () => {
       },
     ]);
 
-    await bus.emit(ArtifactSubjects.status.changed, {
+    await bus.emit(createTestCall(), ArtifactSubjects.status.changed, {
       artifact: artifactRef,
       path: '/data/status',
       previous: 'draft',
@@ -175,7 +176,7 @@ describe('TransitionPipelineService', () => {
       },
     ]);
 
-    await bus.emit(ArtifactSubjects.revised, {
+    await bus.emit(createTestCall(), ArtifactSubjects.revised, {
       previous: previousRef,
       artifact: revisedArtifact,
     });
@@ -236,7 +237,11 @@ describe('TransitionPipelineService', () => {
       },
     ]);
 
-    await bus.emit(ArtifactSubjects.status.changed, { artifact: artifactRef, path: '/data/status', current: 'triage' });
+    await bus.emit(createTestCall(), ArtifactSubjects.status.changed, {
+      artifact: artifactRef,
+      path: '/data/status',
+      current: 'triage',
+    });
 
     expect(fired).toEqual(['previous-absent']);
     await service.destroy();
@@ -267,7 +272,7 @@ describe('TransitionPipelineService', () => {
       },
     ]);
 
-    await bus.emit(ArtifactSubjects.status.changed, {
+    await bus.emit(createTestCall(), ArtifactSubjects.status.changed, {
       artifact: { refClass: 'artifact', kind: 'implementation-plan', id: 'artifact-1', revision: 'missing-rev' },
       path: '/data/status',
       previous: 'draft',
@@ -288,7 +293,7 @@ describe('TransitionPipelineService', () => {
     await service.init();
     service.actionRegistry.register('pkg-transition', {
       'pkg-transition.capture': () => ({
-        async execute(_invocation, context) {
+        async execute(_call, _invocation, context) {
           fired.push(context._transition.ruleId);
         },
       }),
@@ -309,7 +314,7 @@ describe('TransitionPipelineService', () => {
       },
     ]);
 
-    await bus.emit(ArtifactSubjects.created, { artifact: makeArtifact() });
+    await bus.emit(createTestCall(), ArtifactSubjects.created, { artifact: makeArtifact() });
 
     expect(logError).toHaveBeenCalledTimes(1);
     expect(logError.mock.calls[0]?.[0]).toContain('pkg-transition.broken-condition');

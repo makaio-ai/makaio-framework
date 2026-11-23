@@ -204,6 +204,7 @@ describe('AIAdapter.createAgent forwards fork directive from startAgent fork mod
         capturedInputs.push(input);
         return {
           bus: input.bus,
+          globalBus: input.globalBus,
           agentId: input.agentId,
           adapterId: input.adapterId,
           adapterName: input.adapterName,

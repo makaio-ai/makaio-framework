@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
+import { createTestCall } from '@makaio/test-utils';
 import {
   WorkerNamespace,
   WorkerSubjects,
@@ -79,11 +80,15 @@ describe('authority runner result acceptance', () => {
     const workflow = await seedAuthorityExecution({ executionId });
     const result = { executionId, workflowId: workflow.id, ...terminal } as WorkflowRunResult;
 
-    await expect(setup.workflowExecutor.acceptAuthorityRunnerResult(executionId, result)).resolves.toEqual({
+    await expect(
+      setup.workflowExecutor.acceptAuthorityRunnerResult(createTestCall(), executionId, result),
+    ).resolves.toEqual({
       accepted: true,
       status: terminal.status,
     });
-    await expect(setup.workflowExecutor.acceptAuthorityRunnerResult(executionId, result)).resolves.toEqual({
+    await expect(
+      setup.workflowExecutor.acceptAuthorityRunnerResult(createTestCall(), executionId, result),
+    ).resolves.toEqual({
       accepted: true,
       status: terminal.status,
     });
@@ -97,21 +102,21 @@ describe('authority runner result acceptance', () => {
     const workflow = await seedAuthorityExecution({ executionId, authority: 'worker' });
 
     await expect(
-      setup.workflowExecutor.acceptAuthorityRunnerResult('missing', {
+      setup.workflowExecutor.acceptAuthorityRunnerResult(createTestCall(), 'missing', {
         executionId: 'missing',
         workflowId: workflow.id,
         status: 'completed',
       }),
     ).rejects.toThrow('not found');
     await expect(
-      setup.workflowExecutor.acceptAuthorityRunnerResult(executionId, {
+      setup.workflowExecutor.acceptAuthorityRunnerResult(createTestCall(), executionId, {
         executionId: 'different',
         workflowId: workflow.id,
         status: 'completed',
       }),
     ).rejects.toThrow('execution identity mismatch');
     await expect(
-      setup.workflowExecutor.acceptAuthorityRunnerResult(executionId, {
+      setup.workflowExecutor.acceptAuthorityRunnerResult(createTestCall(), executionId, {
         executionId,
         workflowId: workflow.id,
         status: 'paused',
@@ -120,7 +125,7 @@ describe('authority runner result acceptance', () => {
       }),
     ).rejects.toThrow('must be terminal');
     await expect(
-      setup.workflowExecutor.acceptAuthorityRunnerResult(executionId, {
+      setup.workflowExecutor.acceptAuthorityRunnerResult(createTestCall(), executionId, {
         executionId,
         workflowId: workflow.id,
         status: 'completed',
@@ -140,22 +145,24 @@ describe('authority runner result acceptance', () => {
     const offFailure = MakaioBus.on(subjects.finalize, () => {
       throw new Error('transient finalizer failure');
     });
-    await expect(setup.workflowExecutor.acceptAuthorityRunnerResult(executionId, result)).rejects.toThrow(
-      'transient finalizer failure',
-    );
+    await expect(
+      setup.workflowExecutor.acceptAuthorityRunnerResult(createTestCall(), executionId, result),
+    ).rejects.toThrow('transient finalizer failure');
     offFailure();
     const intermediate = await MakaioBus.request(WorkflowStorageSubjects.getExecution, { executionId });
     expect(intermediate.execution?.status).toBe('finalizing');
 
     MakaioBus.on(subjects.finalize, async (ctx) => {
-      await MakaioBus.request(WorkflowStorageSubjects.acknowledgeFinalization, {
+      await MakaioBus.request(ctx.call, WorkflowStorageSubjects.acknowledgeFinalization, {
         executionId: ctx.payload.executionId,
         claimToken: ctx.payload.claimToken,
         settledAt: Date.now(),
       });
       ctx.setResult({ accepted: true });
     });
-    await expect(setup.workflowExecutor.acceptAuthorityRunnerResult(executionId, result)).resolves.toEqual({
+    await expect(
+      setup.workflowExecutor.acceptAuthorityRunnerResult(createTestCall(), executionId, result),
+    ).resolves.toEqual({
       accepted: true,
       status: 'completed',
     });
@@ -176,11 +183,15 @@ describe('authority runner result acceptance', () => {
       ctx.setResult({ accepted: true });
     });
 
-    await expect(setup.workflowExecutor.acceptAuthorityRunnerResult(executionId, result)).resolves.toEqual({
+    await expect(
+      setup.workflowExecutor.acceptAuthorityRunnerResult(createTestCall(), executionId, result),
+    ).resolves.toEqual({
       accepted: true,
       status: 'finalizing',
     });
-    await expect(setup.workflowExecutor.acceptAuthorityRunnerResult(executionId, result)).resolves.toEqual({
+    await expect(
+      setup.workflowExecutor.acceptAuthorityRunnerResult(createTestCall(), executionId, result),
+    ).resolves.toEqual({
       accepted: true,
       status: 'finalizing',
     });
@@ -193,7 +204,9 @@ describe('authority runner result acceptance', () => {
         settledAt: Date.now(),
       }),
     ).resolves.toEqual({ acknowledged: true });
-    await expect(setup.workflowExecutor.acceptAuthorityRunnerResult(executionId, result)).resolves.toEqual({
+    await expect(
+      setup.workflowExecutor.acceptAuthorityRunnerResult(createTestCall(), executionId, result),
+    ).resolves.toEqual({
       accepted: true,
       status: 'completed',
     });
@@ -206,6 +219,7 @@ describe('authority runner result acceptance', () => {
     const outcome: WorkflowRunResult = { executionId, workflowId: workflow.id, status: 'completed' };
     await expect(MakaioBus.request(WorkflowSubjects.cancel, { executionId })).resolves.toEqual({ cancelled: true });
     const input = {
+      call: createTestCall(),
       executionId,
       executionAttemptId: 'legacy-attempt',
       outcome,
@@ -254,6 +268,7 @@ describe('authority runner result acceptance', () => {
     const first = await authority.commitOutcome(attempt.executionAttemptId, executionId, durable);
     if (first.kind !== 'accepted') throw new Error('Initial outcome must be accepted');
     const input = {
+      call: createTestCall(),
       executionId,
       executionAttemptId: attempt.executionAttemptId,
       outcome: first.outcome,
@@ -449,7 +464,7 @@ describe('outcome submission handler', () => {
     await expect(
       submitAttemptOutcome(
         { authority, convergence: { converge: (input) => setup!.workflowExecutor.acceptAuthorityOutcome(input) } },
-        { executionId, executionAttemptId: attempt.executionAttemptId, outcome },
+        { call: createTestCall(), executionId, executionAttemptId: attempt.executionAttemptId, outcome },
       ),
     ).resolves.toBe('accepted');
     await expect(waiter).resolves.toEqual({
@@ -473,10 +488,10 @@ describe('outcome submission handler', () => {
     const result: WorkflowRunResult = { executionId, workflowId: workflow.id, status: 'completed' };
     const executor = setup!.workflowExecutor;
     const acceptTerminal = executor.acceptAuthorityRunnerResult.bind(executor);
-    vi.spyOn(executor, 'acceptAuthorityRunnerResult').mockImplementationOnce(async (ownerId, outcome) => {
-      await MakaioBus.request(WorkflowSubjects.cancel, { executionId: ownerId });
+    vi.spyOn(executor, 'acceptAuthorityRunnerResult').mockImplementationOnce(async (call, ownerId, outcome) => {
+      await MakaioBus.request(call, WorkflowSubjects.cancel, { executionId: ownerId });
       if (fail) throw new Error('Unrelated projection storage failure');
-      return acceptTerminal(ownerId, outcome);
+      return acceptTerminal(call, ownerId, outcome);
     });
     const waiter = authority.waitForOutcome(attempt.executionAttemptId);
     const submit = () =>
@@ -926,12 +941,9 @@ describe('outcome submission handler', () => {
   // ─────────────────────────────────────────────────────────
   // Finding 5: Remote peer context rejection
   //
-  // These tests verify that the peer identity validation path (which only
-  // activates for remote callers where ctx.origin.local === false) correctly
-  // rejects mismatched identities. The bus derives origin from the transport
-  // context on the handler's own context object, so tests use a higher-priority
-  // handler that intercepts the request and re-dispatches it through the
-  // outcome submission handler directly with forged remote context.
+  // Remote delivery carries ctx.transport and stamps the authenticated caller
+  // on ctx.call.caller. The high-priority test handlers model the outcome
+  // handler's comparison of remote caller identity with the payload.
   // ─────────────────────────────────────────────────────────
 
   it('rejects when remote peer executionId does not match payload executionId', async () => {
@@ -939,15 +951,10 @@ describe('outcome submission handler', () => {
     const workflow = await seedExecution(executionId);
     const attempt = await authority.createAttempt(executionId, await makeOwnerInstruction(executionId));
 
-    // Use a high-priority handler that re-registers a handler with simulated
-    // remote peer context. The re-registration approach ensures the handler
-    // sees the correct origin.
     const off = MakaioBus.on(
       WorkerSubjects.control.outcome.submit,
       (ctx) => {
-        // Simulate what the transport layer does: derive identity from
-        // authenticated peer context, not from payload.
-        // The handler should reject because peer.claims.executionId differs.
+        // Model an authenticated caller whose executionId claim differs from the payload.
         const remotePeer = {
           kind: 'workflow-execution-attempt' as const,
           id: attempt.executionAttemptId,
@@ -955,19 +962,9 @@ describe('outcome submission handler', () => {
           claims: { executionId: 'different-execution-id' },
         };
 
-        // The resolveAttemptIdentity function checks ctx.origin.local.
-        // For this test, we verify the validation by calling the handler
-        // logic directly through the registered handler with the correct
-        // payload but mismatched identity — the existing local-caller
-        // path derives identity from payload, so payload.executionId
-        // will become identity.executionId. But for remote callers, the
-        // check compares payload.executionId against identity.executionId
-        // (from peer).
-        //
-        // Since peer.claims.executionId is 'different-execution-id' but
-        // payload.executionId is the real executionId, the remote path
-        // would reject. The local path derives identity from payload so
-        // no mismatch exists. This validates the structural rejection.
+        // resolveAttemptIdentity uses ctx.call.caller to distinguish in-process
+        // callers, whose identity comes from the payload, from remote callers,
+        // whose identity comes from the authenticated caller and its claims.
         if (remotePeer.claims.executionId !== ctx.payload.executionId) {
           throw new Error(
             `Outcome payload executionId '${ctx.payload.executionId}' ` +

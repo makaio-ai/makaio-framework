@@ -11,6 +11,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createBusInstance, type IMakaioBus } from '@makaio/bus-core';
 import { SessionSubjects } from '@makaio/contracts';
 import type { NativeLocalityVerdict } from '@makaio/contracts';
+import { createTestCall } from '@makaio/test-utils';
 import { emitLocalityDegradeEvent } from '../session-lifecycle-events.js';
 import { SessionEventStorageSubjects } from '../session-events/index.js';
 
@@ -46,7 +47,7 @@ describe('emitLocalityDegradeEvent', () => {
   it('silently ignores native verdicts', async () => {
     const verdict: NativeLocalityVerdict = { kind: 'native' };
     // Should resolve immediately without emitting anything.
-    await emitLocalityDegradeEvent(bus, {
+    await emitLocalityDegradeEvent(createTestCall(), bus, {
       sessionId: 'sess-1',
       intent: 'resume',
       verdict,
@@ -63,7 +64,7 @@ describe('emitLocalityDegradeEvent', () => {
       }),
     );
 
-    await emitLocalityDegradeEvent(bus, {
+    await emitLocalityDegradeEvent(createTestCall(), bus, {
       sessionId: 'sess-1',
       intent: 'resume',
       verdict: { kind: 'degrade', reason: 'cwd-mismatch' },
@@ -87,7 +88,7 @@ describe('emitLocalityDegradeEvent', () => {
 
     // Must resolve — not reject — despite the throwing subscriber.
     await expect(
-      emitLocalityDegradeEvent(bus, {
+      emitLocalityDegradeEvent(createTestCall(), bus, {
         sessionId: 'sess-1',
         intent: 'resume',
         verdict: { kind: 'degrade', reason: 'adapter-unsupported' },
@@ -119,7 +120,7 @@ describe('emitLocalityDegradeEvent', () => {
     );
 
     await expect(
-      emitLocalityDegradeEvent(bus, {
+      emitLocalityDegradeEvent(createTestCall(), bus, {
         sessionId: 'sess-1',
         intent: 'fork',
         verdict: { kind: 'foreign', machineId: 'remote-box' },
@@ -149,7 +150,7 @@ describe('emitLocalityDegradeEvent', () => {
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
 
     await expect(
-      emitLocalityDegradeEvent(bus, {
+      emitLocalityDegradeEvent(createTestCall(), bus, {
         sessionId: 'sess-1',
         intent: 'resume',
         verdict: { kind: 'degrade', reason: 'cwd-mismatch' },

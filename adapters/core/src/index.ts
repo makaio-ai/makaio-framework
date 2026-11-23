@@ -193,6 +193,8 @@ export type {
   StartAgentOptions,
   AgentSendMessageOptions,
   ConnectorSendMessageOptions,
+  Forbid,
+  ForbiddenKeys,
   ConnectorStartOptions,
   ExecutionContext,
 } from './agent/index.js';

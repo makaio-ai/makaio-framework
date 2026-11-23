@@ -473,7 +473,7 @@ describe('runtime registration handler', () => {
       REGISTER.$meta.namespace,
       REGISTER.subject as string,
       { executionAttemptId: attemptId, runtimeIncarnationId: INCARNATION },
-      { kind: 'test-identity', id: attemptId, authenticated: true },
+      { kind: 'test.identity', id: attemptId },
     );
 
     expect(response.error?.message).toContain('authenticated workflow-execution-attempt peer');

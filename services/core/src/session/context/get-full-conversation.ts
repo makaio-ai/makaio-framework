@@ -1,4 +1,5 @@
 import type { IMakaioBus } from '@makaio/bus-core';
+import type { CallContext } from '@makaio/core';
 import type { SessionMessage, IMakaioSession, ForkTransforms, SegmentPolicy } from '@makaio/contracts';
 import { SessionStorageSubjects } from '../storage/namespace.js';
 import { buildSessionContext } from './build-context.js';
@@ -15,11 +16,16 @@ import { stripToolOutputBlocks } from '../session-editor/actions/strip-tool-outp
  *
  * IMPORTANT: forkPointMessageId must be a Makaio message ID (not adapter ID).
  * Normalization happens at adapter session link time.
+ * @param call - Call context of the handled message the history is assembled for; forwarded to every request
  * @param bus - Bus instance for RPC calls
  * @param sessionId - Session to get conversation for
  * @returns Full conversation with lineage
  */
-export async function getFullConversation(bus: IMakaioBus, sessionId: string): Promise<ContextAssemblyResult> {
+export async function getFullConversation(
+  call: CallContext,
+  bus: IMakaioBus,
+  sessionId: string,
+): Promise<ContextAssemblyResult> {
   const sessionChain: string[] = [];
   let ancestorMessages: SessionMessage[] = [];
   let targetMessages: SessionMessage[] = [];
@@ -40,7 +46,7 @@ export async function getFullConversation(bus: IMakaioBus, sessionId: string): P
   let expectedParentId: string | undefined;
 
   while (currentSessionId) {
-    const sessionResult: { session: IMakaioSession | null } = await bus.request(SessionStorageSubjects.get, {
+    const sessionResult: { session: IMakaioSession | null } = await bus.request(call, SessionStorageSubjects.get, {
       sessionId: currentSessionId,
     });
 
@@ -73,7 +79,7 @@ export async function getFullConversation(bus: IMakaioBus, sessionId: string): P
     sessionChain.push(chainSessionId);
 
     // Build context for this session
-    const result = await buildSessionContext(bus, { sessionId: chainSessionId });
+    const result = await buildSessionContext(call, bus, { sessionId: chainSessionId });
 
     if (result.hasSquashBoundary) {
       hasSquashBoundary = true;
@@ -107,7 +113,7 @@ export async function getFullConversation(bus: IMakaioBus, sessionId: string): P
 
   // Apply transforms to ancestor messages only (not target's own messages)
   if (targetTransforms) {
-    ancestorMessages = await applyForkTransforms(ancestorMessages, targetTransforms);
+    ancestorMessages = await applyForkTransforms(call, ancestorMessages, targetTransforms);
   }
 
   // Combine: transformed ancestors + target's own messages
@@ -128,11 +134,16 @@ export async function getFullConversation(bus: IMakaioBus, sessionId: string): P
  * When `transforms.segments` is present, segment-based execution takes
  * precedence and the legacy `removedMessageIds`/`appliedPipeline` fields
  * are ignored.
+ * @param call - Call context of the handled message the history is assembled for
  * @param messages - Ancestor messages to transform
  * @param transforms - Transform configuration from fork session
  * @returns Transformed messages
  */
-async function applyForkTransforms(messages: SessionMessage[], transforms: ForkTransforms): Promise<SessionMessage[]> {
+async function applyForkTransforms(
+  call: CallContext,
+  messages: SessionMessage[],
+  transforms: ForkTransforms,
+): Promise<SessionMessage[]> {
   // Segment path takes precedence over the legacy fields
   if (transforms.segments?.length) {
     // Segments are defined against the source session range, not necessarily the
@@ -166,7 +177,7 @@ async function applyForkTransforms(messages: SessionMessage[], transforms: ForkT
 
   // 2. Apply pipeline transforms
   if (transforms.appliedPipeline?.length) {
-    const pipelineResult = await executePipeline(result, transforms.appliedPipeline);
+    const pipelineResult = await executePipeline(call, result, transforms.appliedPipeline);
     result = pipelineResult.messages;
   }
 

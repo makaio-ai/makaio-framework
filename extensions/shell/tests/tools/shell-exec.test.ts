@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest';
+import { createTestCall } from '@makaio/test-utils';
 import { shellExecTool } from '../../src/tools/shell-exec.js';
 import { DEFAULT_CONSTRAINTS } from '../../src/types.js';
 import { getRequiredShellInstance, setupShellManagerTest } from './shared.js';
@@ -20,6 +21,7 @@ describe('shellExecTool', () => {
   describe('execute', () => {
     it('starts shell and returns shell ID', async () => {
       const result = await ctx.registry.execute(
+        createTestCall(),
         'shell_exec',
         { command: 'echo "hello"', colors: false },
         { contextOverrides: { constraints: ctx.constraints } },
@@ -42,6 +44,7 @@ describe('shellExecTool', () => {
     it('uses provided cwd', async () => {
       const tmpDir = '/tmp';
       const result = await ctx.registry.execute(
+        createTestCall(),
         'shell_exec',
         { command: 'pwd', cwd: tmpDir, colors: false },
         { contextOverrides: { constraints: ctx.constraints } },
@@ -61,6 +64,7 @@ describe('shellExecTool', () => {
 
     it('uses context cwd when not provided in input', async () => {
       const result = await ctx.registry.execute(
+        createTestCall(),
         'shell_exec',
         { command: 'pwd', colors: false },
         { contextOverrides: { cwd: '/tmp', constraints: ctx.constraints } },
@@ -87,6 +91,7 @@ describe('shellExecTool', () => {
 
       // Start first shell (sleeps to stay running)
       const result1 = await ctx.registry.execute(
+        createTestCall(),
         'shell_exec',
         { command: 'sleep 10', colors: false },
         { contextOverrides: { constraints: constrainedConstraints } },
@@ -95,6 +100,7 @@ describe('shellExecTool', () => {
 
       // Second shell should fail
       const result2 = await ctx.registry.execute(
+        createTestCall(),
         'shell_exec',
         { command: 'echo "second"', colors: false },
         { contextOverrides: { constraints: constrainedConstraints } },
@@ -117,6 +123,7 @@ describe('shellExecTool', () => {
 
     it('falls back to default limits for invalid numeric constraints', async () => {
       const result = await ctx.registry.execute(
+        createTestCall(),
         'shell_exec',
         { command: 'echo "sanitized"', colors: false },
         {
@@ -146,6 +153,7 @@ describe('shellExecTool', () => {
 
     it('passes environment variables to shell', async () => {
       const result = await ctx.registry.execute(
+        createTestCall(),
         'shell_exec',
         {
           command: 'echo $TEST_VAR',
@@ -176,6 +184,7 @@ describe('shellExecTool', () => {
 
       // Start and wait for first shell
       const result1 = await ctx.registry.execute(
+        createTestCall(),
         'shell_exec',
         { command: 'echo "first"', colors: false },
         { contextOverrides: { constraints: constrainedConstraints } },
@@ -190,6 +199,7 @@ describe('shellExecTool', () => {
 
       // Second shell should succeed now
       const result2 = await ctx.registry.execute(
+        createTestCall(),
         'shell_exec',
         { command: 'echo "second"', colors: false },
         { contextOverrides: { constraints: constrainedConstraints } },
@@ -205,6 +215,7 @@ describe('shellExecTool', () => {
 
     it('respects timeout from input (shorter than constraint)', async () => {
       const result = await ctx.registry.execute(
+        createTestCall(),
         'shell_exec',
         {
           command: 'sleep 30',

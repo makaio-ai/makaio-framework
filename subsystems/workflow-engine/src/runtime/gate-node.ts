@@ -1,5 +1,6 @@
 /* eslint max-lines: ["error", { "max": 410, "skipBlankLines": true, "skipComments": true }] */
 import { NoHandlerError } from '@makaio/bus-core';
+import type { CallContext } from '@makaio/core';
 import { resolveTemplate } from '@makaio/expression';
 import type { ValidateFunction } from 'ajv';
 import type { JsonValue, WorkflowGateInstance, WorkflowGateNode } from '@makaio/contracts';
@@ -16,7 +17,15 @@ import {
   validateGateResumeData,
   validateGateResumeDataForSchema,
 } from './gate-resume-validation.js';
-import { buildDeferred, type Deferred } from './deferred.js';
+import { buildDeferred } from './deferred.js';
+import {
+  AUTO_APPROVE_TIMEOUT_RESUME_DATA,
+  maybeReason,
+  raceGateSuspension,
+  type GatePersistenceOptions,
+  type GateRaceResult,
+  type GateUserResponse,
+} from './gate-suspension.js';
 
 // ─────────────────────────────────────────────────────────────
 // Gate node output
@@ -32,116 +41,13 @@ export interface GateNodeOutput {
   readonly resumeData: JsonValue;
 }
 
-// ─────────────────────────────────────────────────────────────
-// Internal gate suspension helpers
-// ─────────────────────────────────────────────────────────────
-
-/**
- * Result type from {@link raceGateSuspension}.
- */
-interface GateRaceResult {
-  readonly action: 'approve' | 'reject';
-  readonly resumeData: JsonValue;
-  readonly timedOut: boolean;
-  readonly wasCancelled: boolean;
-  /** Human-readable rationale supplied by the responder; absent for timeout and cancellation paths. */
-  readonly reason?: string;
-}
-
-/** User response payload accepted by the gate suspension race. */
-interface GateUserResponse {
-  readonly action: 'approve' | 'reject';
-  readonly resumeData: JsonValue;
-  /** Human-readable rationale supplied by the responder. */
-  readonly reason?: string;
-}
-
-interface GatePersistenceOptions {
-  readonly required?: boolean;
-}
-
-/** Resume payload produced when a gate timeout auto-approves. */
-const AUTO_APPROVE_TIMEOUT_RESUME_DATA = { action: 'approve', source: 'timeout' } as const satisfies JsonValue;
-
-/**
- * Return `{ reason }` when `reason` is defined, or an empty object otherwise.
- *
- * Used for conditional spreading so callers keep a flat object literal without
- * introducing an inline ternary that would inflate cyclomatic complexity.
- * @param reason - Optional rationale string.
- * @returns An object with a `reason` key, or an empty object.
- */
-function maybeReason(reason: string | undefined): { reason: string } | Record<never, never> {
-  if (reason !== undefined) return { reason };
-  return {};
-}
-
-/**
- * Race the gate resume promise against an optional timeout and abort signal.
- *
- * Sets up the abort handler and optional timeout, races the promises, and
- * returns the settled result so the caller can apply the correct gate outcome
- * without duplicating the try-catch / cleanup pattern.
- * @param deferred - The resume deferred promise to race.
- * @param pending - Mutable at-most-once flag shared with the respond handler.
- * @param signal - Cancellation signal.
- * @param timeoutMs - Optional timeout in milliseconds (`null` means no timeout).
- * @returns Settled race result indicating resume data, timeout, or cancellation.
- */
-async function raceGateSuspension(
-  deferred: Deferred<GateUserResponse>,
-  pending: { value: boolean },
-  signal: AbortSignal,
-  timeoutMs: number | null,
-): Promise<GateRaceResult> {
-  const abortHandler = (): void => {
-    if (!pending.value) return;
-    pending.value = false;
-    deferred.reject('cancelled');
-  };
-  signal.addEventListener('abort', abortHandler, { once: true });
-  if (signal.aborted) {
-    abortHandler();
-  }
-
-  const racePromises: Promise<GateUserResponse>[] = [deferred.promise];
-  let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
-
-  if (timeoutMs !== null) {
-    const timeoutDeferred = buildDeferred<GateUserResponse>();
-    timeoutHandle = setTimeout(() => {
-      if (!pending.value) return;
-      pending.value = false;
-      signal.removeEventListener('abort', abortHandler);
-      timeoutDeferred.reject('timed-out');
-    }, timeoutMs);
-    racePromises.push(timeoutDeferred.promise);
-  }
-
-  try {
-    const response = await Promise.race(racePromises);
-    signal.removeEventListener('abort', abortHandler);
-    if (timeoutHandle !== undefined) clearTimeout(timeoutHandle);
-    return {
-      action: response.action,
-      resumeData: response.resumeData,
-      timedOut: false,
-      wasCancelled: false,
-      reason: response.reason,
-    };
-  } catch (raceError) {
-    if (timeoutHandle !== undefined) clearTimeout(timeoutHandle);
-    signal.removeEventListener('abort', abortHandler);
-    if (raceError === 'timed-out') {
-      return { action: 'reject', resumeData: null, timedOut: true, wasCancelled: false };
-    }
-    return { action: 'reject', resumeData: null, timedOut: false, wasCancelled: true };
-  }
-}
-
 /**
  * Apply the settled gate race result, persist the final gate instance, and
  * return the terminal node outcome.
+ *
+ * A user response settles with the call context of its `gate.respond` message;
+ * timeout and cancellation have no such message and settle with the run's call.
+ * @param runCall - Call context of the message that drives this execution run.
  * @param ctx - Runtime context for bus and storage.
  * @param node - Gate node used for stable identity and emitted lifecycle subjects.
  * @param frameId - Gate frame ID.
@@ -151,6 +57,7 @@ async function raceGateSuspension(
  * @returns Terminal node outcome.
  */
 async function settleGateOutcome(
+  runCall: CallContext,
   ctx: RuntimeContext,
   node: WorkflowGateNode,
   frameId: string,
@@ -158,20 +65,22 @@ async function settleGateOutcome(
   resumeValidator: ValidateFunction | undefined,
   raceResult: GateRaceResult,
 ): Promise<NodeOutcome> {
-  const gatePersistence = { required: ctx.suspensionStrategy !== 'wait-in-process' };
+  const call = raceResult.call ?? runCall;
+  const persist = { required: ctx.suspensionStrategy !== 'wait-in-process' };
   if (raceResult.timedOut) {
     const resolvedAt = Date.now();
     if (gateInstance.autoAction === 'approve') {
       const validation = validateGateResumeData(resumeValidator, AUTO_APPROVE_TIMEOUT_RESUME_DATA);
       if (!validation.valid) {
-        await upsertGateInstance(ctx, { ...gateInstance, status: 'timed-out', resolvedAt }, gatePersistence);
-        await emitGateResolved(ctx, node.id, frameId, { action: 'reject', source: 'timeout' });
+        await upsertGateInstance(call, ctx, { ...gateInstance, status: 'timed-out', resolvedAt }, persist);
+        await emitGateResolved(call, ctx, node.id, frameId, { action: 'reject', source: 'timeout' });
         return {
           status: 'failed',
           error: `Gate '${node.id}' auto-approve timeout resume data does not match resumeSchema: ${validation.error}`,
         };
       }
       await upsertGateInstance(
+        call,
         ctx,
         {
           ...gateInstance,
@@ -179,25 +88,26 @@ async function settleGateOutcome(
           resumeData: AUTO_APPROVE_TIMEOUT_RESUME_DATA,
           resolvedAt,
         },
-        gatePersistence,
+        persist,
       );
-      await emitGateResolved(ctx, node.id, frameId, { action: 'approve', source: 'timeout' });
+      await emitGateResolved(call, ctx, node.id, frameId, { action: 'approve', source: 'timeout' });
       return { status: 'completed', output: { resumeData: AUTO_APPROVE_TIMEOUT_RESUME_DATA } };
     }
-    await upsertGateInstance(ctx, { ...gateInstance, status: 'timed-out', resolvedAt }, gatePersistence);
-    await emitGateResolved(ctx, node.id, frameId, { action: 'reject', source: 'timeout' });
+    await upsertGateInstance(call, ctx, { ...gateInstance, status: 'timed-out', resolvedAt }, persist);
+    await emitGateResolved(call, ctx, node.id, frameId, { action: 'reject', source: 'timeout' });
     return {
       status: 'failed',
       error: `Gate '${node.id}' timed out after ${String(gateInstance.timeoutMs)}ms and auto-rejected`,
     };
   }
   if (raceResult.wasCancelled || ctx.signal.aborted) {
-    await upsertGateInstance(ctx, { ...gateInstance, status: 'cancelled', resolvedAt: Date.now() }, gatePersistence);
-    await emitGateResolved(ctx, node.id, frameId, { source: 'cancelled' });
+    await upsertGateInstance(call, ctx, { ...gateInstance, status: 'cancelled', resolvedAt: Date.now() }, persist);
+    await emitGateResolved(call, ctx, node.id, frameId, { source: 'cancelled' });
     return { status: 'cancelled' };
   }
   const resolvedAt = Date.now();
   await upsertGateInstance(
+    call,
     ctx,
     {
       ...gateInstance,
@@ -206,10 +116,10 @@ async function settleGateOutcome(
       ...maybeReason(raceResult.reason),
       resolvedAt,
     },
-    gatePersistence,
+    persist,
   );
   try {
-    await ctx.bus.emit(WorkflowSubjects.gate.resumed, {
+    await ctx.bus.emit(call, WorkflowSubjects.gate.resumed, {
       executionId: ctx.executionId,
       frameId,
       nodeId: node.id,
@@ -218,7 +128,7 @@ async function settleGateOutcome(
     // User reject is lifecycle metadata for approval surfaces. The gate still
     // resumes with typed domain data so workflows can handle rejections in
     // ordinary downstream logic instead of forcing every reject to fail.
-    await emitGateResolved(ctx, node.id, frameId, {
+    await emitGateResolved(call, ctx, node.id, frameId, {
       action: raceResult.action,
       source: 'user',
       ...maybeReason(raceResult.reason),
@@ -273,6 +183,7 @@ async function settleGateOutcome(
  * The gate node's frame is transitioned to `'waiting'` while suspended. The
  * `primitive-runtime.ts` sequence loop handles the final terminal transition
  * (`completed` / `failed` / `cancelled`) from the returned outcome.
+ * @param call - Call context of the message that drives this execution run.
  * @param node - The gate node to execute.
  * @param ctx - Execution-wide runtime context.
  * @param expressionCtx - Expression evaluation context used to render the gate prompt.
@@ -280,6 +191,7 @@ async function settleGateOutcome(
  * @returns Terminal execution outcome for this gate node.
  */
 export async function executeGateNode(
+  call: CallContext,
   node: WorkflowGateNode,
   ctx: RuntimeContext,
   expressionCtx: PrimitiveExpressionContext,
@@ -295,7 +207,7 @@ export async function executeGateNode(
   // already exists from a previous run (resume path) or indicates we were
   // previously parked here (re-entry path).
   if (ctx.suspensionStrategy !== 'wait-in-process') {
-    const earlyOutcome = await resolvePersistedGate(ctx, node, frameId);
+    const earlyOutcome = await resolvePersistedGate(call, ctx, node, frameId);
     if (earlyOutcome !== undefined) {
       return earlyOutcome;
     }
@@ -306,13 +218,14 @@ export async function executeGateNode(
     return { status: 'failed', error: resumeValidator.error };
   }
 
-  return suspendGateInProcess(ctx, node, expressionCtx, frameId, schema, resumeValidator.validator);
+  return suspendGateInProcess(call, ctx, node, expressionCtx, frameId, schema, resumeValidator.validator);
 }
 
 /**
  * Open a gate suspension: persist the gate instance, emit `gate.suspended`,
  * and either park the runner for exit-based strategies or wait on an
  * in-process response handler.
+ * @param call - Call context of the message that drives this execution run.
  * @param ctx - Execution-wide runtime context.
  * @param node - Gate node being suspended.
  * @param expressionCtx - Expression evaluation context for prompt rendering.
@@ -322,6 +235,7 @@ export async function executeGateNode(
  * @returns Terminal node outcome.
  */
 async function suspendGateInProcess(
+  call: CallContext,
   ctx: RuntimeContext,
   node: WorkflowGateNode,
   expressionCtx: PrimitiveExpressionContext,
@@ -344,14 +258,14 @@ async function suspendGateInProcess(
   };
 
   const requiresDurableParkingState = ctx.suspensionStrategy !== 'wait-in-process';
-  await upsertGateInstance(ctx, gateInstance, { required: requiresDurableParkingState });
-  await ctx.updateFrame(frameId, { status: 'waiting' }, { requireFrameStorage: requiresDurableParkingState });
+  await upsertGateInstance(call, ctx, gateInstance, { required: requiresDurableParkingState });
+  await ctx.updateFrame(call, frameId, { status: 'waiting' }, { requireFrameStorage: requiresDurableParkingState });
 
   // Exit-based gates are not owned by the in-process deferred response path.
   // Registering a local respond handler before emitting suspension would let a
   // synchronous listener accept a response before the runner has durably parked.
   if (requiresDurableParkingState) {
-    await emitGateSuspended(ctx, node, frameId, schema, prompt, gateInstance.createdAt);
+    await emitGateSuspended(call, ctx, node, frameId, schema, prompt, gateInstance.createdAt);
     return { status: 'paused', pausedAtGateId: node.id, pausedAtFrameId: frameId };
   }
 
@@ -394,15 +308,15 @@ async function suspendGateInProcess(
     }
     pending.value = false;
     respondCtx.setResult({ accepted: true });
-    deferred.resolve({ action, resumeData: resumeData as JsonValue, reason });
+    deferred.resolve({ action, resumeData: resumeData as JsonValue, reason, call: respondCtx.call });
   });
 
-  await emitGateSuspended(ctx, node, frameId, schema, prompt, gateInstance.createdAt);
+  await emitGateSuspended(call, ctx, node, frameId, schema, prompt, gateInstance.createdAt);
 
   const raceResult = await raceGateSuspension(deferred, pending, ctx.signal, node.timeoutMs);
   unsubRespond();
 
-  return settleGateOutcome(ctx, node, frameId, gateInstance, validator, raceResult);
+  return settleGateOutcome(call, ctx, node, frameId, gateInstance, validator, raceResult);
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -411,6 +325,7 @@ async function suspendGateInProcess(
 
 /**
  * Emit the gate-suspended event with the rendered approval prompt.
+ * @param call - Call context of the message that drives this execution run.
  * @param ctx - Runtime context providing execution identity and bus access.
  * @param node - Gate node being suspended.
  * @param frameId - Runtime frame identifier for this gate instance.
@@ -419,6 +334,7 @@ async function suspendGateInProcess(
  * @param openedAt - Epoch milliseconds when the gate opened.
  */
 async function emitGateSuspended(
+  call: CallContext,
   ctx: RuntimeContext,
   node: WorkflowGateNode,
   frameId: string,
@@ -427,7 +343,7 @@ async function emitGateSuspended(
   openedAt: number,
 ): Promise<void> {
   try {
-    await ctx.bus.emit(WorkflowSubjects.gate.suspended, {
+    await ctx.bus.emit(call, WorkflowSubjects.gate.suspended, {
       executionId: ctx.executionId,
       ...(ctx.executionAttemptId !== undefined ? { executionAttemptId: ctx.executionAttemptId } : {}),
       frameId,
@@ -449,18 +365,20 @@ async function emitGateSuspended(
  *
  * Returns `null` when no handler is registered (e.g., in-process test
  * environments without storage) or when no row exists for the given key.
+ * @param call - Call context of the message that drives this execution run.
  * @param ctx - Runtime context providing bus access and execution identity.
  * @param nodeId - Gate node identifier.
  * @param frameId - Frame ID for this gate instance.
  * @returns The persisted gate instance, or `null` when absent.
  */
 async function loadGateInstance(
+  call: CallContext,
   ctx: RuntimeContext,
   nodeId: string,
   frameId: string,
 ): Promise<WorkflowGateInstance | null> {
   if (ctx.suspensionStrategy !== 'wait-in-process') {
-    const result = await ctx.bus.request(WorkflowStorageSubjects.getGateInstance, {
+    const result = await ctx.bus.request(call, WorkflowStorageSubjects.getGateInstance, {
       executionId: ctx.executionId,
       nodeId,
       frameId,
@@ -468,7 +386,7 @@ async function loadGateInstance(
     return result.gate;
   }
 
-  const result = await ctx.bus.requestOptional(WorkflowStorageSubjects.getGateInstance, {
+  const result = await ctx.bus.requestOptional(call, WorkflowStorageSubjects.getGateInstance, {
     executionId: ctx.executionId,
     nodeId,
     frameId,
@@ -487,6 +405,7 @@ async function loadGateInstance(
  * - Still-waiting gate before its deadline: return `paused` so the runner exits
  *   without re-opening.
  * - Gate in an unresumable status (e.g. `timed-out`, `cancelled`): fail fast.
+ * @param call - Call context of the message that drives this execution run.
  * @param ctx - Runtime context providing bus and execution identity.
  * @param node - Gate node being executed.
  * @param frameId - Frame ID for this gate instance.
@@ -494,11 +413,12 @@ async function loadGateInstance(
  *   when no persisted row exists and the gate should open fresh.
  */
 async function resolvePersistedGate(
+  call: CallContext,
   ctx: RuntimeContext,
   node: WorkflowGateNode,
   frameId: string,
 ): Promise<NodeOutcome | undefined> {
-  const persistedGate = await loadGateInstance(ctx, node.id, frameId);
+  const persistedGate = await loadGateInstance(call, ctx, node.id, frameId);
   if (
     (persistedGate?.status === 'resumed' || persistedGate?.status === 'rejected') &&
     persistedGate.resumeData !== undefined
@@ -511,7 +431,7 @@ async function resolvePersistedGate(
       };
     }
     try {
-      await ctx.bus.emit(WorkflowSubjects.gate.resumed, {
+      await ctx.bus.emit(call, WorkflowSubjects.gate.resumed, {
         executionId: ctx.executionId,
         frameId,
         nodeId: node.id,
@@ -520,7 +440,7 @@ async function resolvePersistedGate(
     } catch (emitError) {
       console.error(`[GateNode] gate.resumed emit failed for '${node.id}':`, emitError);
     }
-    await emitGateResolved(ctx, node.id, frameId, {
+    await emitGateResolved(call, ctx, node.id, frameId, {
       action: persistedGate.status === 'rejected' ? 'reject' : 'approve',
       source: 'user',
       ...maybeReason(persistedGate.reason),
@@ -533,7 +453,7 @@ async function resolvePersistedGate(
       if (resumeValidator.status === 'failed') {
         return { status: 'failed', error: resumeValidator.error };
       }
-      return settleGateOutcome(ctx, node, frameId, persistedGate, resumeValidator.validator, {
+      return settleGateOutcome(call, ctx, node, frameId, persistedGate, resumeValidator.validator, {
         action: 'reject',
         resumeData: null,
         timedOut: true,
@@ -572,20 +492,22 @@ async function resolvePersistedGate(
  * unit tests and wait-in-process runs without storage can still execute. Exit-
  * based parking paths pass `required: true` because a paused remote run cannot
  * be resumed safely without the durable waiting gate row.
+ * @param call - Call context of the message that drives this execution run.
  * @param ctx - Runtime context providing the bus.
  * @param gate - Gate instance to upsert.
  * @param options - Persistence behavior for this write.
  */
 async function upsertGateInstance(
+  call: CallContext,
   ctx: RuntimeContext,
   gate: WorkflowGateInstance,
   options: GatePersistenceOptions = {},
 ): Promise<void> {
   try {
     if (options.required === true) {
-      await ctx.bus.request(WorkflowStorageSubjects.setGateInstance, { gate });
+      await ctx.bus.request(call, WorkflowStorageSubjects.setGateInstance, { gate });
     } else {
-      await ctx.bus.requestOptional(WorkflowStorageSubjects.setGateInstance, { gate });
+      await ctx.bus.requestOptional(call, WorkflowStorageSubjects.setGateInstance, { gate });
     }
   } catch (error) {
     if (options.required === true) {
@@ -598,6 +520,7 @@ async function upsertGateInstance(
 /**
  * Emit the gate-resolved lifecycle event for UI consumers that close approval
  * surfaces after a concrete gate frame has settled.
+ * @param call - Call context of the message that caused the resolution.
  * @param ctx - Runtime context providing execution identity and bus access.
  * @param gateId - Gate node identifier.
  * @param frameId - Runtime frame identifier for this gate instance.
@@ -605,6 +528,7 @@ async function upsertGateInstance(
  * because the workflow never resumed with user or timeout data.
  */
 async function emitGateResolved(
+  call: CallContext,
   ctx: RuntimeContext,
   gateId: string,
   frameId: string,
@@ -614,7 +538,7 @@ async function emitGateResolved(
     | { readonly source: 'cancelled' },
 ): Promise<void> {
   try {
-    await ctx.bus.emit(WorkflowSubjects.gate.resolved, {
+    await ctx.bus.emit(call, WorkflowSubjects.gate.resolved, {
       executionId: ctx.executionId,
       stepId: gateId,
       stepType: 'gate',

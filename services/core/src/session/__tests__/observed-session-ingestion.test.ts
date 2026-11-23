@@ -29,18 +29,20 @@ import { MakaioBus } from '@makaio/bus-core';
 import {
   ClientSubjects,
   MessageStorageSubjects,
+  type CallContext,
   type ClientSessionStarted,
   type ClientSessionTurnCompleted,
   type IMakaioSession,
 } from '@makaio/contracts';
 import type { ClientRuntimeSourceLayer } from '@makaio/contracts/client';
+import { createTestCall } from '@makaio/test-utils';
 import { SessionStorageSubjects } from '../storage/namespace.js';
 import { registerMemorySessionStorage } from '../storage/memory-handler.js';
 import { LogImportTriggerSubjects } from '../log-import-trigger-subjects.js';
 import { MANAGED_SESSION_CAP, ObservedSessionIngestionService } from '../observed-session-ingestion.js';
 import {
   registerObservedSessionIngestionPolicyProvider,
-  type IObservedSessionIngestionPolicyProvider,
+  type ObservedSessionIngestionPolicyInput,
 } from '../observed-session-ingestion-policy.js';
 import { resetBusHandlers } from './shared.js';
 
@@ -105,7 +107,7 @@ function stubLogImportSeams(options?: { importerClientId?: string; importSession
  * @param overrides - Payload field overrides
  */
 async function emitSessionStarted(overrides?: Partial<ClientSessionStarted>): Promise<void> {
-  await MakaioBus.emit(ClientSubjects.session.started, {
+  await MakaioBus.emit(createTestCall(), ClientSubjects.session.started, {
     clientId: CLIENT_ID,
     source: 'native-hook',
     observedAt: 1_000,
@@ -119,7 +121,7 @@ async function emitSessionStarted(overrides?: Partial<ClientSessionStarted>): Pr
  * @param overrides - Payload field overrides
  */
 async function emitTurnCompleted(overrides?: Partial<ClientSessionTurnCompleted>): Promise<void> {
-  await MakaioBus.emit(ClientSubjects.session.turn.completed, {
+  await MakaioBus.emit(createTestCall(), ClientSubjects.session.turn.completed, {
     clientId: CLIENT_ID,
     source: 'native-hook',
     observedAt: 2_000,
@@ -130,16 +132,18 @@ async function emitTurnCompleted(overrides?: Partial<ClientSessionTurnCompleted>
 
 /**
  * Emit a `client.runtime.started` observation feeding the managed gate.
+ * @param call - Call for the runtime observation
  * @param adapterSessionId - Adapter session id carried as runtime evidence
  * @param layer - Source layer of the observation
  * @param sessionId - Framework session id, when the observation resolved one
  */
 async function emitRuntimeStarted(
+  call: CallContext,
   adapterSessionId: string,
   layer: ClientRuntimeSourceLayer,
   sessionId?: string,
 ): Promise<void> {
-  await MakaioBus.emit(ClientSubjects.runtime.started, {
+  await MakaioBus.emit(call, ClientSubjects.runtime.started, {
     clientRuntimeId: `rt-${adapterSessionId}`,
     clientId: CLIENT_ID,
     status: 'started',
@@ -232,13 +236,12 @@ describe('ObservedSessionIngestionService', () => {
 
   it('registers policy-discovered observed sessions without triggering content import', async () => {
     const { importFileRequests, importSessionRequests } = stubLogImportSeams();
-    const decisions: Array<Parameters<IObservedSessionIngestionPolicyProvider['decideObservedSessionIngestion']>[0]> =
-      [];
+    const decisions: ObservedSessionIngestionPolicyInput[] = [];
 
-    await registerObservedSessionIngestionPolicyProvider(MakaioBus, {
+    await registerObservedSessionIngestionPolicyProvider(MakaioBus.own('start'), MakaioBus, {
       id: 'test-policy',
       displayName: 'Test policy',
-      decideObservedSessionIngestion(input) {
+      decideObservedSessionIngestion(_call, input) {
         decisions.push(input);
         return { importStatus: 'discovered' };
       },
@@ -274,8 +277,7 @@ describe('ObservedSessionIngestionService', () => {
 
   it('re-checks policy before importing content for discovery stubs without client identity', async () => {
     const { importFileRequests, importSessionRequests } = stubLogImportSeams();
-    const decisions: Array<Parameters<IObservedSessionIngestionPolicyProvider['decideObservedSessionIngestion']>[0]> =
-      [];
+    const decisions: ObservedSessionIngestionPolicyInput[] = [];
 
     await MakaioBus.request(SessionStorageSubjects.importUpsert, {
       kind: 'root',
@@ -287,10 +289,10 @@ describe('ObservedSessionIngestionService', () => {
       logFilePath: '/logs/ext-1.jsonl',
       startedAt: 500,
     });
-    await registerObservedSessionIngestionPolicyProvider(MakaioBus, {
+    await registerObservedSessionIngestionPolicyProvider(MakaioBus.own('start'), MakaioBus, {
       id: 'test-policy',
       displayName: 'Test policy',
-      decideObservedSessionIngestion(input) {
+      decideObservedSessionIngestion(_call, input) {
         decisions.push(input);
         return { importStatus: 'discovered' };
       },
@@ -315,7 +317,7 @@ describe('ObservedSessionIngestionService', () => {
     const { importFileRequests } = stubLogImportSeams();
 
     // Managed by the orchestration path: adapter-layer runtime evidence.
-    await emitRuntimeStarted('managed-1', 'adapter');
+    await emitRuntimeStarted(createTestCall(), 'managed-1', 'adapter');
     await emitSessionStarted({ adapterSessionId: 'managed-1' });
     await emitTurnCompleted({ adapterSessionId: 'managed-1', transcriptPath: '/logs/managed-1.jsonl' });
 
@@ -323,7 +325,7 @@ describe('ObservedSessionIngestionService', () => {
     expect(importFileRequests).toEqual([]);
 
     // Non-adapter source layers must NOT suppress observed ingestion.
-    await emitRuntimeStarted('observed-1', 'statusline');
+    await emitRuntimeStarted(createTestCall(), 'observed-1', 'statusline');
     await emitSessionStarted({ adapterSessionId: 'observed-1' });
     await emitTurnCompleted({ adapterSessionId: 'observed-1', transcriptPath: '/logs/observed-1.jsonl' });
 
@@ -351,7 +353,7 @@ describe('ObservedSessionIngestionService', () => {
         adapterSessionId: 'managed-compacted',
       },
     });
-    await emitRuntimeStarted('managed-compacted', 'adapter');
+    await emitRuntimeStarted(createTestCall(), 'managed-compacted', 'adapter');
 
     await emitSessionStarted({ adapterSessionId: 'managed-compacted', startMode: 'compact' });
 
@@ -384,7 +386,7 @@ describe('ObservedSessionIngestionService', () => {
       },
     });
     // The runtime reports the rotated id together with the framework session id.
-    await emitRuntimeStarted('rotated-id', 'adapter', sessionId);
+    await emitRuntimeStarted(createTestCall(), 'rotated-id', 'adapter', sessionId);
 
     await emitSessionStarted({ adapterSessionId: 'rotated-id', startMode: 'compact' });
 
@@ -434,7 +436,7 @@ describe('ObservedSessionIngestionService', () => {
         // After the write lands, before the hook side re-checks the gate: the
         // exact window the post-write double-check was built for.
         await ctx.next();
-        await emitRuntimeStarted('raced', 'adapter', managedSessionId);
+        await emitRuntimeStarted(ctx.call, 'raced', 'adapter', managedSessionId);
       },
       { priority: 100 },
     );
@@ -478,7 +480,7 @@ describe('ObservedSessionIngestionService', () => {
         // The answer a source-less managed row really produces, then the gate
         // fills before the hook side gets to look at it again.
         ctx.setResult({ outcome: 'not-found' });
-        await emitRuntimeStarted('unwritten', 'adapter', managedSessionId);
+        await emitRuntimeStarted(ctx.call, 'unwritten', 'adapter', managedSessionId);
       },
       { priority: 100 },
     );
@@ -510,7 +512,7 @@ describe('ObservedSessionIngestionService', () => {
         adapterSessionId: 'managed-resume',
       },
     });
-    await emitRuntimeStarted('managed-resume', 'adapter');
+    await emitRuntimeStarted(createTestCall(), 'managed-resume', 'adapter');
 
     await emitSessionStarted({ adapterSessionId: 'managed-resume', startMode: 'resume' });
 
@@ -525,7 +527,7 @@ describe('ObservedSessionIngestionService', () => {
     // it. Without the advance that follows, the compaction that caused the
     // registration would be the one compaction nobody ever counts.
     stubLogImportSeams();
-    await registerObservedSessionIngestionPolicyProvider(MakaioBus, {
+    await registerObservedSessionIngestionPolicyProvider(MakaioBus.own('start'), MakaioBus, {
       id: 'discovered-policy',
       displayName: 'Discovered policy',
       decideObservedSessionIngestion: () => ({ importStatus: 'discovered' }),
@@ -588,10 +590,10 @@ describe('ObservedSessionIngestionService', () => {
   it('evicts the oldest managed session id once the FIFO cap is reached', async () => {
     const { importFileRequests } = stubLogImportSeams();
 
-    await emitRuntimeStarted('managed-first', 'adapter');
+    await emitRuntimeStarted(createTestCall(), 'managed-first', 'adapter');
     // Fill the gate past the cap so 'managed-first' is evicted FIFO.
     for (let index = 0; index < MANAGED_SESSION_CAP; index += 1) {
-      await emitRuntimeStarted(`managed-${index}`, 'adapter');
+      await emitRuntimeStarted(createTestCall(), `managed-${index}`, 'adapter');
     }
 
     // Evicted id is no longer suppressed …
@@ -734,7 +736,7 @@ describe('ObservedSessionIngestionService', () => {
 
   it('leaves an unknown continuation to the transcript import when policy tracks content', async () => {
     stubLogImportSeams();
-    await registerObservedSessionIngestionPolicyProvider(MakaioBus, {
+    await registerObservedSessionIngestionPolicyProvider(MakaioBus.own('start'), MakaioBus, {
       id: 'tracking-policy',
       displayName: 'Tracking policy',
       decideObservedSessionIngestion: () => ({ importStatus: 'tracking' }),
@@ -754,7 +756,7 @@ describe('ObservedSessionIngestionService', () => {
 
   it('registers an unknown continuation as metadata-only when policy never imports its content', async () => {
     const { importFileRequests, importSessionRequests } = stubLogImportSeams();
-    await registerObservedSessionIngestionPolicyProvider(MakaioBus, {
+    await registerObservedSessionIngestionPolicyProvider(MakaioBus.own('start'), MakaioBus, {
       id: 'discovered-policy',
       displayName: 'Discovered policy',
       decideObservedSessionIngestion: () => ({ importStatus: 'discovered' }),

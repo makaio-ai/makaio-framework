@@ -1,5 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
 import { MessageHandle, normalizeMessageInput } from '@makaio/ai-adapters-core';
+import { MakaioBus } from '@makaio/bus-core';
+import { createTestCall } from '@makaio/test-utils';
+import type { CallContext } from '@makaio/contracts';
 import { createClaudeConnectorNamespace } from '../namespace/index.js';
 import { ClaudeConnectorTurn } from './claude-connector-turn.js';
 
@@ -13,10 +16,11 @@ interface PauseResult {
  *
  * Uses `normalizeMessageInput` to construct the message payload and returns a
  * `MessageHandle` bound to adapter session `session-1`.
+ * @param call - Call of the message driving the turn.
  * @returns MessageHandle initialized with id `message-1`, content `hello`, and adapterSessionId `session-1`.
  */
-function createMessageHandle(): MessageHandle {
-  const handle = new MessageHandle('message-1', normalizeMessageInput('hello'), 'enqueue');
+function createMessageHandle(call: CallContext): MessageHandle {
+  const handle = new MessageHandle(call, 'message-1', normalizeMessageInput('hello'), 'enqueue');
   handle.adapterSessionId = 'session-1';
   return handle;
 }
@@ -26,7 +30,8 @@ describe('ClaudeConnectorTurn.finishOnError', () => {
     const namespace = createClaudeConnectorNamespace(
       `adapter:claude-turn-test-${Date.now()}-${Math.random().toString(36).slice(2)}`,
     );
-    const bus = await namespace.scopedBus();
+    const bus = await namespace.scopedBus(MakaioBus);
+    const call = createTestCall();
     const interrupt = vi.fn(async () => {});
     const turn = new ClaudeConnectorTurn(
       bus,
@@ -35,12 +40,12 @@ describe('ClaudeConnectorTurn.finishOnError', () => {
       'claude-code',
       'agent-1',
       { interrupt },
-      createMessageHandle(),
+      createMessageHandle(call),
     );
 
-    await turn.start();
-    const pausePromise = turn.pause();
-    await turn.finishOnError();
+    await turn.start(call);
+    const pausePromise = turn.pause(call);
+    await turn.finishOnError(call);
 
     const expectedPauseResult: PauseResult = {
       stateBeforePause: 'turn_finished',

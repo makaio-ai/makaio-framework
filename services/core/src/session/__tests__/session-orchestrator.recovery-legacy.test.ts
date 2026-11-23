@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { AdapterSubjects, AgentSubjects } from '@makaio/contracts';
+import { createTestCall } from '@makaio/test-utils';
 import { FRESH_WITH_HISTORY_RECOVERY_PLAN } from '../recovery-plan.js';
 import { verifyAndRecoverAgents } from '../session-orchestrator-helpers.js';
 import { callerOwnedSuccessFields } from '../testing/caller-owned-adapter-stub.js';
@@ -44,7 +45,7 @@ describe('SessionOrchestrator recovery helpers for legacy rows', () => {
       }),
     );
 
-    const verified = await verifyAndRecoverAgents(harness.bus, [legacyAgent], {
+    const verified = await verifyAndRecoverAgents(createTestCall(), harness.bus, [legacyAgent], {
       plan: FRESH_WITH_HISTORY_RECOVERY_PLAN,
       machineId: RECOVERY_HELPERS_MACHINE_ID,
     });

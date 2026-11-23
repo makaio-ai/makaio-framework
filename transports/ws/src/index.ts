@@ -62,9 +62,10 @@ export type { ClientTransportCodec } from './types.js';
 
 // Export URL-based client transport with built-in reconnection
 export { WebSocketClientTransport } from './ws-client-transport.js';
+/** Options for a URL-based client, including its explicit local trust policy. */
+export type WebSocketClientTransportOptions = ConstructorParameters<typeof WebSocketClientTransport>[0];
 export type {
   WebSocketClientTransportHeartbeatOptions,
-  WebSocketClientTransportOptions,
   WebSocketClientTransportReadinessMode,
   WebSocketClientTransportReconnectOptions,
 } from './ws-client-transport.js';
@@ -80,7 +81,6 @@ export { extractSocketErrorMessage } from './transport-helpers.js';
 export { HmacAuth } from './auth/index.js';
 export {
   MAKAIO_LOCAL_CLI_HMAC_IDENTITY_ID,
-  MAKAIO_LOCAL_CLI_PEER_KIND,
   registerMakaioLocalCliHmacIdentity,
 } from './auth/index.js';
 export {
@@ -89,7 +89,7 @@ export {
   registerHmacIdentitySecret,
   resolveHmacIdentityAllowedMessageSubjects,
   resolveHmacIdentityAllowedSubscriptionSubjects,
-  resolveHmacIdentityPeer,
+  resolveHmacIdentityParty,
   resolveHmacIdentitySecret,
   rotateHmacIdentitySecret,
 } from './auth/index.js';

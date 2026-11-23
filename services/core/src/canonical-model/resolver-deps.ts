@@ -1,3 +1,4 @@
+import type { CallContext } from '@makaio/core';
 import type { ProviderDefinition } from '@makaio/contracts';
 import type { BindingRecord } from '../adapter-subsystem/index.js';
 
@@ -30,33 +31,44 @@ export type DefaultModelResolution =
  * wires these to bus RPCs; tests can stub them directly.
  */
 export interface CanonicalModelResolverDeps {
-  /** List all enabled adapter names. */
-  listEnabledAdapterNames(): Promise<string[]>;
+  /**
+   * List all enabled adapter names.
+   * @param call - Call context of the message being handled
+   */
+  listEnabledAdapterNames(call: CallContext): Promise<string[]>;
 
   /**
    * Get the preferred binding for an adapter.
+   * @param call - Call context of the message being handled
    * @param adapterName - The adapter to retrieve the default binding for
    */
-  getDefaultBinding(adapterName: string): Promise<BindingRecord | undefined>;
+  getDefaultBinding(call: CallContext, adapterName: string): Promise<BindingRecord | undefined>;
 
   /**
    * Find a provider config by name (case-insensitive slug match). Returns minimal identity.
+   * @param call - Call context of the message being handled
    * @param name - The provider config name to search for
    */
-  findProviderConfigByName(name: string): Promise<{ readonly id: string } | undefined>;
+  findProviderConfigByName(call: CallContext, name: string): Promise<{ readonly id: string } | undefined>;
 
   /**
    * Find a {@link ProviderDefinition} by ID.
+   * @param call - Call context of the message being handled
    * @param id - The provider definition ID to look up
    * @param enabledAdapterNames - Optional enabled adapter names already loaded by the caller
    */
-  findProviderDefinition(id: string, enabledAdapterNames?: readonly string[]): Promise<ProviderDefinition | undefined>;
+  findProviderDefinition(
+    call: CallContext,
+    id: string,
+    enabledAdapterNames?: readonly string[],
+  ): Promise<ProviderDefinition | undefined>;
 
   /**
    * Get all bindings for a given provider config ID.
+   * @param call - Call context of the message being handled
    * @param providerConfigId - The provider config ID to list bindings for
    */
-  listBindingsForConfig(providerConfigId: string): Promise<BindingRecord[]>;
+  listBindingsForConfig(call: CallContext, providerConfigId: string): Promise<BindingRecord[]>;
 
   /**
    * Find the default provider config for a provider definition.
@@ -64,9 +76,10 @@ export interface CanonicalModelResolverDeps {
    * Returns the config marked `isDefault` for the given definition,
    * falling back to the first enabled config when no default is set.
    * Only the config's `id` is consumed by the resolver.
+   * @param call - Call context of the message being handled
    * @param definitionId - The provider definition ID to look up
    */
-  findDefaultConfigForDefinition(definitionId: string): Promise<{ readonly id: string } | undefined>;
+  findDefaultConfigForDefinition(call: CallContext, definitionId: string): Promise<{ readonly id: string } | undefined>;
 
   /**
    * Find a provider config for a definition that is bound to a specific adapter.
@@ -74,10 +87,12 @@ export interface CanonicalModelResolverDeps {
    * Searches enabled configs for the definition in preference order
    * (`isDefault` first), returning the first that has a binding to the
    * given adapter.
+   * @param call - Call context of the message being handled
    * @param definitionId - The provider definition ID
    * @param adapterName - The adapter to require a binding for
    */
   findConfigForDefinitionAndAdapter(
+    call: CallContext,
     definitionId: string,
     adapterName: string,
   ): Promise<{ readonly id: string } | undefined>;
@@ -86,7 +101,8 @@ export interface CanonicalModelResolverDeps {
    * Resolve a bare model name to a target via the default chain.
    *
    * This is the seam for future framework-owned preference policies.
+   * @param call - Call context of the message being handled
    * @param model - The bare model name to resolve
    */
-  resolveDefaultModelTarget(model: string): Promise<DefaultModelResolution>;
+  resolveDefaultModelTarget(call: CallContext, model: string): Promise<DefaultModelResolution>;
 }

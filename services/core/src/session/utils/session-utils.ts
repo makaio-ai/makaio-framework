@@ -1,9 +1,11 @@
 import type { IMakaioBus } from '@makaio/bus-core';
+import type { CallContext } from '@makaio/core';
 import { SessionSubjects, type IMakaioSession, type MakaioSessionAgent, type SessionContext } from '@makaio/contracts';
 import { Turn } from '../entities/turn.js';
 
 /**
  * Get existing session or create a new one.
+ * @param call - Call context of the handled message this lookup serves
  * @param bus - Makaio bus instance
  * @param providedSessionId - Session ID to look up
  * @param _sessionContext - Optional session context (scope fields removed in W1-A)
@@ -12,13 +14,14 @@ import { Turn } from '../entities/turn.js';
  * @returns Session ID and session object
  */
 export async function getOrCreateSession(
+  call: CallContext,
   bus: IMakaioBus,
   providedSessionId: string,
   _sessionContext?: SessionContext,
   originWindowId?: string,
   machineId?: string,
 ): Promise<{ sessionId: string; session: IMakaioSession }> {
-  const { session } = await bus.request(SessionSubjects.get, { sessionId: providedSessionId });
+  const { session } = await bus.request(call, SessionSubjects.get, { sessionId: providedSessionId });
   if (session) {
     if (session.status !== 'active') {
       throw new Error(`[getOrCreateSession] Session is not active: ${providedSessionId}`);
@@ -26,12 +29,12 @@ export async function getOrCreateSession(
     return { sessionId: providedSessionId, session };
   }
 
-  await bus.request(SessionSubjects.create, {
+  await bus.request(call, SessionSubjects.create, {
     sessionId: providedSessionId,
     originWindowId,
     ...(machineId !== undefined && { machineId }),
   });
-  const { session: created } = await bus.request(SessionSubjects.get, { sessionId: providedSessionId });
+  const { session: created } = await bus.request(call, SessionSubjects.get, { sessionId: providedSessionId });
   if (!created) {
     throw new Error(`[getOrCreateSession] Failed to create session: ${providedSessionId}`);
   }

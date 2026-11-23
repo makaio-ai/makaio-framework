@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
 import { MessageHandle, UserMessageQueue, type MessageResult } from '@makaio/ai-adapters-core';
 import type { SDKMessage } from '@makaio/client-claude-code';
+import { createTestCall } from '@makaio/test-utils';
 
 const transportStub = vi.hoisted(() => {
   // The real transport settles its exit observation from the child's `exit`
@@ -35,6 +36,7 @@ const transportHarness = makeTransportHarness(transportStub.transport);
 
 function makeHandle(): MessageHandle {
   return new MessageHandle(
+    createTestCall(),
     'message-structured-output',
     {
       role: 'user',
@@ -92,7 +94,7 @@ function createDeferred(): { promise: Promise<void>; resolve: () => void } {
 }
 
 async function makeActiveSession() {
-  const bus = await ClaudeCodeCliConnectorNamespace.scopedBus();
+  const bus = await ClaudeCodeCliConnectorNamespace.scopedBus(MakaioBus);
   const handle = makeHandle();
   const emitSdkEvent = vi.fn(async () => undefined);
   const onTurnComplete = vi.fn();
@@ -120,7 +122,7 @@ describe('ClaudeCliSession result message handling', () => {
   });
 
   it('serializes native structured_output into the terminal message', async () => {
-    const bus = await ClaudeCodeCliConnectorNamespace.scopedBus();
+    const bus = await ClaudeCodeCliConnectorNamespace.scopedBus(MakaioBus);
     const handle = makeHandle();
     const onTurnComplete = vi.fn();
     const session = new ClaudeCliSession({
@@ -157,7 +159,7 @@ describe('ClaudeCliSession result message handling', () => {
   });
 
   it('ignores late transport errors once result completion has started', async () => {
-    const bus = await ClaudeCodeCliConnectorNamespace.scopedBus();
+    const bus = await ClaudeCodeCliConnectorNamespace.scopedBus(MakaioBus);
     const turnFinishedPayloads: unknown[] = [];
     const unsubscribeTurnFinished = bus.on(ClaudeCodeCliConnectorNamespace.subjects.turn.turn_finished, (payload) => {
       turnFinishedPayloads.push(payload);
@@ -223,7 +225,7 @@ describe('ClaudeCliSession result message handling', () => {
       outcome: 'completed',
       result: { message: '{"ok":true}' },
     });
-    expect(emitSdkEvent).toHaveBeenCalledWith(terminalResult);
+    expect(emitSdkEvent).toHaveBeenCalledWith(handle.call, terminalResult);
     expect(onTurnComplete).toHaveBeenCalledTimes(1);
     expect(transportHarness.transport.close).toHaveBeenCalledTimes(1);
   });

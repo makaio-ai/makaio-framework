@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
 import { SessionSubjects } from '@makaio/contracts';
 import { TurnStorageSubjects } from '@makaio/services-core/turn';
+import { createTestCall } from '@makaio/test-utils';
 import { buildPostTurnContext } from '../contexts/post-turn.js';
 
 describe('buildPostTurnContext', () => {
@@ -35,6 +36,7 @@ describe('buildPostTurnContext', () => {
 
     const context = await buildPostTurnContext(
       {
+        call: createTestCall(),
         subject: SessionSubjects.turn.completed.subject,
         payload: {
           sessionId: 'session-1',

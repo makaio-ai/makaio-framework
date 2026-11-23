@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
+import { createTestCall } from '@makaio/test-utils';
 import { AccountManagerSubjects } from '../bus/namespace.js';
 import type { RawCredential } from '../interfaces/credential-source.js';
 import { AccountManager } from '../account-manager.js';
@@ -61,7 +62,7 @@ describe('switchAccount', () => {
     expect(accountA).toBeDefined();
 
     // Switch back to A via bus handler using the stable UUID.
-    const result = await MakaioBus.request(AccountManagerSubjects.credentials.switch, {
+    const result = await MakaioBus.request(createTestCall(), AccountManagerSubjects.credentials.switch, {
       clientId: 'claude-code',
       accountId: accountA!.id,
     });
@@ -93,7 +94,7 @@ describe('switchAccount', () => {
     expect(accounts.find((a) => a.id === accountB!.id)?.active).toBe(true);
     expect(accounts.find((a) => a.id === accountA!.id)?.active).toBe(false);
 
-    await MakaioBus.request(AccountManagerSubjects.credentials.switch, {
+    await MakaioBus.request(createTestCall(), AccountManagerSubjects.credentials.switch, {
       clientId: 'claude-code',
       accountId: accountA!.id,
     });
@@ -126,7 +127,7 @@ describe('switchAccount', () => {
 
     try {
       const beforeSwitch = Date.now();
-      await MakaioBus.request(AccountManagerSubjects.credentials.switch, {
+      await MakaioBus.request(createTestCall(), AccountManagerSubjects.credentials.switch, {
         clientId: 'claude-code',
         accountId: accountA!.id,
       });
@@ -162,7 +163,7 @@ describe('switchAccount', () => {
     expect(accountA).toBeDefined();
 
     // Switch to A writes credA to source and updates lastSeen
-    await MakaioBus.request(AccountManagerSubjects.credentials.switch, {
+    await MakaioBus.request(createTestCall(), AccountManagerSubjects.credentials.switch, {
       clientId: 'claude-code',
       accountId: accountA!.id,
     });
@@ -182,7 +183,7 @@ describe('switchAccount', () => {
   });
 
   it('returns error for a non-existent account', async () => {
-    const result = await MakaioBus.request(AccountManagerSubjects.credentials.switch, {
+    const result = await MakaioBus.request(createTestCall(), AccountManagerSubjects.credentials.switch, {
       clientId: 'claude-code',
       accountId: 'non-existent-id',
     });
@@ -194,7 +195,7 @@ describe('switchAccount', () => {
   it('clears stale active metadata rows that have no matching credential during a switch', async () => {
     const target = makeCredential('token-target');
 
-    await store.metadataStore.upsert('claude-code', {
+    await store.metadataStore.upsert(createTestCall(), 'claude-code', {
       id: 'stale-metadata-only',
       label: 'Stale Metadata',
       metadata: { source: 'metadata-only' },
@@ -213,14 +214,14 @@ describe('switchAccount', () => {
       credential: target,
     });
 
-    const result = await MakaioBus.request(AccountManagerSubjects.credentials.switch, {
+    const result = await MakaioBus.request(createTestCall(), AccountManagerSubjects.credentials.switch, {
       clientId: 'claude-code',
       accountId: 'target-account',
     });
 
     expect(result.success).toBe(true);
 
-    const metadataAccounts = await store.metadataStore.list('claude-code');
+    const metadataAccounts = await store.metadataStore.list(createTestCall(), 'claude-code');
     expect(metadataAccounts.find((account) => account.id === 'stale-metadata-only')?.active).toBe(false);
     expect(metadataAccounts.find((account) => account.id === 'target-account')?.active).toBe(true);
   });
@@ -237,7 +238,7 @@ describe('switchAccount', () => {
 
     const writesBefore = source.getWriteHistory().length;
 
-    const result = await MakaioBus.request(AccountManagerSubjects.credentials.switch, {
+    const result = await MakaioBus.request(createTestCall(), AccountManagerSubjects.credentials.switch, {
       clientId: 'claude-code',
       accountId: account!.id,
     });

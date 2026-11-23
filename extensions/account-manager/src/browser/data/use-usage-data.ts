@@ -14,6 +14,7 @@
 
 import { useCallback, useSyncExternalStore } from 'react';
 import { useOptionalBus } from '@makaio/ui-hooks';
+import type { CallContext } from '@makaio/contracts/call-context';
 import { AccountManagerSubjects } from '@makaio/extension-account-manager/subjects';
 import type { AccountUsage } from '@makaio/extension-account-manager/schemas';
 import { createAccountCacheKey } from '@makaio/extension-account-manager/utils';
@@ -161,7 +162,7 @@ function getUsageObserver(
       }
       refreshPending = true;
       void bus
-        .request(AccountManagerSubjects.usage.refresh, { clientId, accountId })
+        .request(bus.own('root'), AccountManagerSubjects.usage.refresh, { clientId, accountId })
         .catch((error: unknown) => {
           if (disposed) {
             return;
@@ -177,7 +178,7 @@ function getUsageObserver(
     dispose: () => undefined,
   };
 
-  const fetchUsage = async (): Promise<void> => {
+  const fetchUsage = async (call: CallContext): Promise<void> => {
     if (disposed) {
       return;
     }
@@ -186,7 +187,7 @@ function getUsageObserver(
     updateObserverState(observer, { loading: true });
 
     try {
-      const result = await bus.request(AccountManagerSubjects.usage.get, { clientId, accountId });
+      const result = await bus.request(call, AccountManagerSubjects.usage.get, { clientId, accountId });
       if (disposed || requestId !== latestRequestId) {
         return;
       }
@@ -216,18 +217,18 @@ function getUsageObserver(
 
   const handleVisibilityChange = (): void => {
     if (documentRef.visibilityState === 'visible') {
-      void fetchUsage();
+      void fetchUsage(bus.own('observer'));
     }
   };
 
-  const unsubscribeSwitched = bus.on(AccountManagerSubjects.credentials.switched, () => void fetchUsage(), {
+  const unsubscribeSwitched = bus.on(AccountManagerSubjects.credentials.switched, (ctx) => void fetchUsage(ctx.call), {
     filter: { clientId },
   });
   const unsubscribeRefreshed = bus.on(
     AccountManagerSubjects.credentials.refreshed,
     (ctx) => {
       if (ctx.payload.account.id === accountId) {
-        void fetchUsage();
+        void fetchUsage(ctx.call);
       }
     },
     { filter: { clientId } },
@@ -253,11 +254,11 @@ function getUsageObserver(
 
   const pollHandle = setInterval(() => {
     if (documentRef.visibilityState === 'visible') {
-      void fetchUsage();
+      void fetchUsage(bus.own('schedule'));
     }
   }, POLL_INTERVAL_MS);
   documentRef.addEventListener('visibilitychange', handleVisibilityChange);
-  void fetchUsage();
+  void fetchUsage(bus.own('observer'));
 
   observer.dispose = () => {
     if (disposed) {

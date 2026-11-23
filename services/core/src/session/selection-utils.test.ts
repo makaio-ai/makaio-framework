@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
+import { createTestCall } from '@makaio/test-utils';
 import { AdapterRuntimeSubjects } from '../adapter-runtime/namespace.js';
 import { resolveAdapterNameById } from './selection-utils.js';
 
@@ -14,7 +15,7 @@ describe('resolveAdapterNameById', () => {
 
     try {
       await expect(
-        resolveAdapterNameById(MakaioBus, 'machine-1:adapter:name:with:colons', undefined, '[test] '),
+        resolveAdapterNameById(createTestCall(), MakaioBus, 'machine-1:adapter:name:with:colons', undefined, '[test] '),
       ).resolves.toBe('adapter:name:with:colons');
     } finally {
       cleanup();
@@ -31,7 +32,13 @@ describe('resolveAdapterNameById', () => {
 
     try {
       await expect(
-        resolveAdapterNameById(MakaioBus, 'machine-1:adapter:name:with:colons', 'other-adapter', '[test] '),
+        resolveAdapterNameById(
+          createTestCall(),
+          MakaioBus,
+          'machine-1:adapter:name:with:colons',
+          'other-adapter',
+          '[test] ',
+        ),
       ).rejects.toThrow(
         '[test] adapterName "other-adapter" does not match adapterId "machine-1:adapter:name:with:colons"',
       );
@@ -49,9 +56,9 @@ describe('resolveAdapterNameById', () => {
     });
 
     try {
-      await expect(resolveAdapterNameById(MakaioBus, ':adapter', undefined, '[test] ')).rejects.toThrow(
-        'Adapter not found for adapterId=":adapter"',
-      );
+      await expect(
+        resolveAdapterNameById(createTestCall(), MakaioBus, ':adapter', undefined, '[test] '),
+      ).rejects.toThrow('Adapter not found for adapterId=":adapter"');
     } finally {
       cleanup();
       MakaioBus.__resetHandlers?.();
@@ -68,7 +75,13 @@ describe('resolveAdapterNameById', () => {
 
     try {
       await expect(
-        resolveAdapterNameById(MakaioBus, 'remote-machine:adapter:name:with:colons', undefined, '[test] '),
+        resolveAdapterNameById(
+          createTestCall(),
+          MakaioBus,
+          'remote-machine:adapter:name:with:colons',
+          undefined,
+          '[test] ',
+        ),
       ).resolves.toBe('adapter:name:with:colons');
     } finally {
       cleanup();

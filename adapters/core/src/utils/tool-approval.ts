@@ -12,6 +12,7 @@ import {
   AgentToolApproveSchema,
   type AgentToolApproveRequest,
   type AgentToolApproveResponse,
+  type CallContext,
 } from '@makaio/contracts';
 import type { AIAgentConnector } from '../connector/index.js';
 import type { RequestContext, ScopedSubjectDefinition } from '@makaio/core';
@@ -294,7 +295,7 @@ export function createToolApprovalHandler<
   toGlobal: ToGlobalToolApprovalFn<TPayload, TContext>,
   fromGlobal: FromGlobalToolApprovalFn<TResponse>,
 ) {
-  type ContextProvider = TContext | (() => Promise<TContext>);
+  type ContextProvider = TContext | ((call: CallContext) => Promise<TContext>);
 
   // The public parameter uses Pick<AIAgentConnector, 'on'> rather than
   // IToolApprovalBus because that is what every adapter passes in.
@@ -310,9 +311,11 @@ export function createToolApprovalHandler<
       try {
         // Resolve context lazily if callback provided (avoids race condition with adapterSessionId)
         const resolvedContext: TContext =
-          typeof context === 'function' ? await (context as () => Promise<TContext>)() : (context as TContext);
+          typeof context === 'function'
+            ? await (context as (call: CallContext) => Promise<TContext>)(ctx.call)
+            : (context as TContext);
         const request = toGlobal(ctx.payload, resolvedContext);
-        const globalResponse = await globalBus.request(AgentSubjects.toolApprove, request);
+        const globalResponse = await globalBus.request(ctx.call, AgentSubjects.toolApprove, request);
         ctx.setResult(fromGlobal(globalResponse));
       } catch (error) {
         console.error('[createToolApprovalHandler] Tool approval request failed:', error);

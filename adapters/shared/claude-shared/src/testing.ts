@@ -3,7 +3,7 @@
  * @packageDocumentation
  */
 
-import { createChannelEndpoint, MakaioBus } from '@makaio/bus-core';
+import { createChannelEndpoint, type IMakaioBus } from '@makaio/bus-core';
 import { CredentialSubjects } from '@makaio/contracts';
 
 /**
@@ -12,21 +12,22 @@ import { CredentialSubjects } from '@makaio/contracts';
  * Useful for integration tests that need credential resolution without a full
  * credential store. The returned function tears down both the channel token
  * handler and the channel endpoint.
+ * @param bus - Bus instance that carries both the token handler and the channel endpoint
  * @param value - Plaintext credential value returned for every resolve request
  * @returns Cleanup function that removes all registered handlers
  */
-export function setupFixedCredentialBus(value: string): () => void {
+export function setupFixedCredentialBus(bus: IMakaioBus, value: string): () => void {
   const cleanups: Array<() => void> = [];
   const token = `test-credential-token-${crypto.randomUUID()}`;
 
   cleanups.push(
-    MakaioBus.on(CredentialSubjects.getChannelToken, (ctx) => {
+    bus.on(CredentialSubjects.getChannelToken, (ctx) => {
       ctx.setResult({ token });
     }),
   );
 
   const endpoint = createChannelEndpoint(
-    MakaioBus.getContext(),
+    bus,
     'credentials',
     (channel) => {
       channel.on(CredentialSubjects.resolve, (ctx) => {

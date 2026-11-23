@@ -1,4 +1,4 @@
-import type { RequestContext } from '@makaio/core';
+import type { CallContext, RequestContext } from '@makaio/core';
 import type { ExtractSubjectPayload, ExtractSubjectResponse } from '@makaio/core';
 import { AdapterSubjects } from '@makaio/contracts';
 import type { AgentDisposalReport, AgentTeardownOptions } from './agent-registry.js';
@@ -8,8 +8,12 @@ type StopAgentResponse = ExtractSubjectResponse<typeof AdapterSubjects.stopAgent
 
 /** Dependencies for the exact-owner stop handler. */
 export interface StopAgentHandlerDeps {
-  /** Dispose one locally hosted agent. */
-  readonly disposeAgent: (agentId: string, options: AgentTeardownOptions) => Promise<AgentDisposalReport>;
+  /** Dispose one locally hosted agent, sending with the handled message's call. */
+  readonly disposeAgent: (
+    call: CallContext,
+    agentId: string,
+    options: AgentTeardownOptions,
+  ) => Promise<AgentDisposalReport>;
 }
 
 /**
@@ -21,7 +25,7 @@ export function createStopAgentHandler(
   deps: StopAgentHandlerDeps,
 ): (ctx: RequestContext<StopAgentPayload, StopAgentResponse>) => Promise<void> {
   return async (ctx) => {
-    const report = await deps.disposeAgent(ctx.payload.agentId, {
+    const report = await deps.disposeAgent(ctx.call, ctx.payload.agentId, {
       deadline: ctx.deadline,
       ...(ctx.payload.teardown === 'connector-only' && { responsibility: 'connector-only' as const }),
     });

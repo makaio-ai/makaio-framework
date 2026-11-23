@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import type { IMakaioBus } from '@makaio/bus-core';
+import type { CallContext } from '@makaio/core';
 import { AccountManagerSubjects } from '../bus/namespace.js';
 import type { RawCredential } from '../interfaces/credential-source.js';
 import type {
@@ -69,15 +70,20 @@ export class CredentialTracker {
 
   /**
    * Runs the initial poll synchronously then starts the polling interval.
+   *
+   * The startup work (dedup and first poll) sends with the passed `call`. The
+   * interval ticks are timer work without a triggering message, so each tick
+   * takes its own `schedule` context from the extension bus; none is stored.
+   * @param call - Call context of the startup work (the carrier's `own('start')`)
    * @returns Promise that resolves after the first poll completes
    */
-  public async start(): Promise<void> {
-    await this.bootstrapDedup();
-    await this.poll();
+  public async start(call: CallContext): Promise<void> {
+    await this.bootstrapDedup(call);
+    await this.poll(call);
     this.handle = setInterval(() => {
       if (this.polling) return;
       this.polling = true;
-      void this.poll().finally(() => (this.polling = false));
+      void this.poll(this.bus.own('schedule')).finally(() => (this.polling = false));
     }, this.pollIntervalMs);
   }
 
@@ -139,8 +145,9 @@ export class CredentialTracker {
    * 2. Known + inactive → user switched back to a previously seen account
    * 3. Unknown fingerprint, matching credential key → fingerprint reconciliation
    * 4. Unknown fingerprint, no credential key match → new account detected
+   * @param call - Call context every store access and bus send of this poll uses
    */
-  public async poll(): Promise<void> {
+  public async poll(call: CallContext): Promise<void> {
     for (const source of this.sources) {
       try {
         // The mutation block returns the accountId that changed (if any).
@@ -149,9 +156,9 @@ export class CredentialTracker {
         // agent.credential.change → credential.activate → withClientMutation (same client).
         const changedAccountId = await this.withClientMutation(source.clientId, async () => {
           if (!(await source.isAvailable())) {
-            const active = await this.metadataStore.getActive(source.clientId);
+            const active = await this.metadataStore.getActive(call, source.clientId);
             if (active) {
-              await this.metadataStore.upsert(source.clientId, { ...active, active: false });
+              await this.metadataStore.upsert(call, source.clientId, { ...active, active: false });
               this._lastSeen.delete(source.clientId);
             }
             return undefined;
@@ -160,15 +167,15 @@ export class CredentialTracker {
           if (!current) {
             // Credential disappeared (e.g. user logged out) — deactivate
             // any stored active account so the UI reflects the real state.
-            const active = await this.metadataStore.getActive(source.clientId);
+            const active = await this.metadataStore.getActive(call, source.clientId);
             if (active) {
-              await this.metadataStore.upsert(source.clientId, { ...active, active: false });
+              await this.metadataStore.upsert(call, source.clientId, { ...active, active: false });
               this._lastSeen.delete(source.clientId);
             }
             return undefined;
           }
 
-          const accounts = await listStoredAccounts(this.metadataStore, this.credentialStore, source.clientId);
+          const accounts = await listStoredAccounts(call, this.metadataStore, this.credentialStore, source.clientId);
           const match = accounts.find((a) => a.fingerprint === current.fingerprint);
           const lastFingerprint = this._lastSeen.get(source.clientId);
           const unchanged =
@@ -184,7 +191,7 @@ export class CredentialTracker {
           if (unchanged) {
             if (match && !match.label) {
               // Emit a refreshed event so LabelResolver can retry.
-              await this.bus.emit(AccountManagerSubjects.credentials.refreshed, {
+              await this.bus.emit(call, AccountManagerSubjects.credentials.refreshed, {
                 clientId: source.clientId,
                 account: toPublicAccount(match),
                 reason: 'label-retry',
@@ -195,10 +202,10 @@ export class CredentialTracker {
 
           let activatedAccountId: string;
           if (match && match.active) {
-            await this.handleCredentialRefresh(source.clientId, match, current);
+            await this.handleCredentialRefresh(call, source.clientId, match, current);
             activatedAccountId = match.id;
           } else if (match && !match.active) {
-            await this.handleKnownAccountSwitch(source.clientId, accounts, match, current);
+            await this.handleKnownAccountSwitch(call, source.clientId, accounts, match, current);
             activatedAccountId = match.id;
           } else {
             // Secondary dedup: when the source supports extractCredentialKey,
@@ -209,9 +216,15 @@ export class CredentialTracker {
             if (reconciledMatch) {
               // Fingerprint changed but the underlying credential key matches —
               // reconcile the stored account to the new fingerprint identity.
-              activatedAccountId = await this.reconcileFingerprint(source.clientId, accounts, reconciledMatch, current);
+              activatedAccountId = await this.reconcileFingerprint(
+                call,
+                source.clientId,
+                accounts,
+                reconciledMatch,
+                current,
+              );
             } else {
-              activatedAccountId = await this.handleNewAccount(source, accounts, current);
+              activatedAccountId = await this.handleNewAccount(call, source, accounts, current);
             }
           }
 
@@ -222,10 +235,10 @@ export class CredentialTracker {
         });
 
         if (changedAccountId !== undefined) {
-          await emitCredentialChangedForClient(this.bus, source.clientId, changedAccountId);
+          await emitCredentialChangedForClient(call, this.bus, source.clientId, changedAccountId);
         }
       } catch (error) {
-        await this.bus.emit(AccountManagerSubjects.credentials.error, {
+        await this.bus.emit(call, AccountManagerSubjects.credentials.error, {
           clientId: source.clientId,
           message: error instanceof Error ? error.message : String(error),
         });
@@ -239,11 +252,13 @@ export class CredentialTracker {
    * The active account identity stayed the same, but the underlying source
    * credential changed. This includes token rotation and metadata-only refreshes.
    * Updates the stored credential and emits `credentials.refreshed`.
+   * @param call - Call context of the surrounding poll
    * @param clientId - The client identifier
    * @param account - The matched active account
    * @param current - The current credential from the source
    */
   private async handleCredentialRefresh(
+    call: CallContext,
     clientId: string,
     account: StoredAccount,
     current: RawCredential,
@@ -256,9 +271,9 @@ export class CredentialTracker {
       account.label = undefined;
     }
     account.lastSeenAt = Date.now();
-    await upsertStoredAccount(this.metadataStore, this.credentialStore, clientId, account);
+    await upsertStoredAccount(call, this.metadataStore, this.credentialStore, clientId, account);
 
-    await this.bus.emit(AccountManagerSubjects.credentials.refreshed, {
+    await this.bus.emit(call, AccountManagerSubjects.credentials.refreshed, {
       clientId,
       account: toPublicAccount(account),
       reason: 'credential-updated',
@@ -275,6 +290,7 @@ export class CredentialTracker {
    * changes: if publication fails after durable activation succeeds, Makaio's
    * durable state is restored to the last known good snapshot before the poll
    * can observe the new account as active.
+   * @param call - Call context of the surrounding poll
    * @param clientId - Client whose active account is changing
    * @param accounts - Caller-owned joined snapshot
    * @param target - Account that should become active
@@ -283,6 +299,7 @@ export class CredentialTracker {
    * @param publishActivation - Callback that publishes the activation event
    */
   private async commitActivationAndPublish(
+    call: CallContext,
     clientId: string,
     accounts: StoredAccount[],
     target: StoredAccount,
@@ -296,7 +313,7 @@ export class CredentialTracker {
     const previousTargetSnapshot = previousTarget ? structuredClone(previousTarget) : null;
     const fromPayload = previousActive ? toPublicAccount(previousActive) : null;
 
-    await commitActivatedAccountState({
+    await commitActivatedAccountState(call, {
       metadataStore: this.metadataStore,
       credentialStore: this.credentialStore,
       clientId,
@@ -309,7 +326,7 @@ export class CredentialTracker {
       await publishActivation(fromPayload);
     } catch (error) {
       try {
-        await rollbackActivatedAccountState({
+        await rollbackActivatedAccountState(call, {
           metadataStore: this.metadataStore,
           credentialStore: this.credentialStore,
           clientId,
@@ -328,6 +345,7 @@ export class CredentialTracker {
     }
 
     await appendActivationTimelineBestEffort(
+      call,
       this.metadataStore,
       {
         clientId,
@@ -345,12 +363,14 @@ export class CredentialTracker {
    *
    * The user logged into a previously seen account via the tool's native CLI.
    * Deactivates all accounts and activates the matched one. Emits `credentials.switched`.
+   * @param call - Call context of the surrounding poll
    * @param clientId - The client identifier
    * @param accounts - All accounts for this client
    * @param match - The matched inactive account
    * @param current - The current credential from the source
    */
   private async handleKnownAccountSwitch(
+    call: CallContext,
     clientId: string,
     accounts: StoredAccount[],
     match: StoredAccount,
@@ -367,13 +387,14 @@ export class CredentialTracker {
     };
 
     await this.commitActivationAndPublish(
+      call,
       clientId,
       accounts,
       updatedMatch,
       switchedAt,
       'switch',
       async (fromPayload) => {
-        await this.bus.emit(AccountManagerSubjects.credentials.switched, {
+        await this.bus.emit(call, AccountManagerSubjects.credentials.switched, {
           clientId,
           from: fromPayload,
           to: toPublicAccount(updatedMatch),
@@ -392,12 +413,14 @@ export class CredentialTracker {
    * Performs one inline automatic-label attempt before publishing the
    * detection event so consumers can trust `autoLabeled` immediately instead
    * of racing a later retry loop.
+   * @param call - Call context of the surrounding poll
    * @param source - The credential source that produced the account
    * @param accounts - All existing accounts for this client
    * @param current - The new credential from the source
    * @returns The stable UUID assigned to the new account
    */
   private async handleNewAccount(
+    call: CallContext,
     source: CredentialSourceWithOptionalLabel,
     accounts: StoredAccount[],
     current: RawCredential,
@@ -419,15 +442,23 @@ export class CredentialTracker {
       newAccount.label = autoLabel;
     }
 
-    await this.commitActivationAndPublish(source.clientId, accounts, newAccount, detectedAt, 'detected', async () => {
-      await this.bus.emit(AccountManagerSubjects.credentials.detected, {
-        clientId: source.clientId,
-        account: toPublicAccount(newAccount),
-        autoLabeled: autoLabel !== null,
-      });
-    });
+    await this.commitActivationAndPublish(
+      call,
+      source.clientId,
+      accounts,
+      newAccount,
+      detectedAt,
+      'detected',
+      async () => {
+        await this.bus.emit(call, AccountManagerSubjects.credentials.detected, {
+          clientId: source.clientId,
+          account: toPublicAccount(newAccount),
+          autoLabeled: autoLabel !== null,
+        });
+      },
+    );
     if (autoLabel) {
-      await this.emitAutoLabeledBestEffort(source.clientId, newAccount);
+      await this.emitAutoLabeledBestEffort(call, source.clientId, newAccount);
     }
     // Credential fanout deferred to caller — see handleCredentialRefresh comment.
     return newAccount.id;
@@ -440,12 +471,13 @@ export class CredentialTracker {
    * invariant-bearing activation boundary. A later `accounts.labeled` failure
    * must not roll the account back after subscribers have already observed the
    * successful detection event carrying the label.
+   * @param call - Call context of the surrounding poll
    * @param clientId - Client identifier for the detected account
    * @param account - Newly detected account with an inline auto-label
    */
-  private async emitAutoLabeledBestEffort(clientId: string, account: StoredAccount): Promise<void> {
+  private async emitAutoLabeledBestEffort(call: CallContext, clientId: string, account: StoredAccount): Promise<void> {
     try {
-      await this.bus.emit(AccountManagerSubjects.accounts.labeled, {
+      await this.bus.emit(call, AccountManagerSubjects.accounts.labeled, {
         clientId,
         account: toPublicAccount(account),
       });
@@ -488,6 +520,7 @@ export class CredentialTracker {
    * a UUID → hash fingerprint transition on cold start). The account is updated
    * in place — the stable UUID `id` is preserved while only the `fingerprint`
    * and credential payload are refreshed. Emits `credentials.switched`.
+   * @param call - Call context of the surrounding poll
    * @param clientId - The client identifier
    * @param accounts - All currently stored accounts for this client
    * @param oldAccount - The stored account being reconciled
@@ -495,6 +528,7 @@ export class CredentialTracker {
    * @returns The stable UUID of the reconciled account
    */
   private async reconcileFingerprint(
+    call: CallContext,
     clientId: string,
     accounts: StoredAccount[],
     oldAccount: StoredAccount,
@@ -511,13 +545,14 @@ export class CredentialTracker {
     };
 
     await this.commitActivationAndPublish(
+      call,
       clientId,
       accounts,
       updatedAccount,
       switchedAt,
       'switch',
       async (fromPayload) => {
-        await this.bus.emit(AccountManagerSubjects.credentials.switched, {
+        await this.bus.emit(call, AccountManagerSubjects.credentials.switched, {
           clientId,
           from: fromPayload,
           to: toPublicAccount(updatedAccount),
@@ -551,24 +586,25 @@ export class CredentialTracker {
    *
    * Each client's work runs inside {@link withClientMutation} to serialize
    * against concurrent poll/switch operations.
+   * @param call - Call context of the startup work
    */
-  private async bootstrapDedup(): Promise<void> {
+  private async bootstrapDedup(call: CallContext): Promise<void> {
     for (const source of this.sources) {
       try {
         await this.withClientMutation(source.clientId, async () => {
-          const accounts = await listStoredAccounts(this.metadataStore, this.credentialStore, source.clientId);
+          const accounts = await listStoredAccounts(call, this.metadataStore, this.credentialStore, source.clientId);
           const canonical = canonicalizeBootstrapAccounts(accounts);
 
           for (const survivor of canonical.accounts) {
-            await upsertStoredAccount(this.metadataStore, this.credentialStore, source.clientId, survivor);
+            await upsertStoredAccount(call, this.metadataStore, this.credentialStore, source.clientId, survivor);
           }
 
           for (const accountId of canonical.removedAccountIds) {
-            await removeStoredAccount(this.metadataStore, this.credentialStore, source.clientId, accountId);
+            await removeStoredAccount(call, this.metadataStore, this.credentialStore, source.clientId, accountId);
           }
         });
       } catch (error) {
-        await this.bus.emit(AccountManagerSubjects.credentials.error, {
+        await this.bus.emit(call, AccountManagerSubjects.credentials.error, {
           clientId: source.clientId,
           message: error instanceof Error ? error.message : String(error),
         });

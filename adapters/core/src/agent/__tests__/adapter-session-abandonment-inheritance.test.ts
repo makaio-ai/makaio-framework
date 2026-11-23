@@ -16,15 +16,18 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
-import { AgentSubjects, type AdapterSessionMoved } from '@makaio/contracts';
+import { AgentSubjects, type AdapterSessionMoved, type CallContext } from '@makaio/contracts';
+import { createTestCall } from '@makaio/test-utils';
 import type { ConfigFactoryInput } from '../../adapter/index.js';
 import { MockConnector, createTestableAgent, type TestableAgent } from './helpers/mock-agent.js';
 
 vi.mock('@makaio/hooks', () => ({
-  runPreUserMessageHooks: vi.fn(async (payload: { message: unknown; sessionContext?: unknown }) => ({
-    message: payload.message,
-    sessionContext: payload.sessionContext,
-  })),
+  runPreUserMessageHooks: vi.fn(
+    async (_call: CallContext, payload: { message: unknown; sessionContext?: unknown }) => ({
+      message: payload.message,
+      sessionContext: payload.sessionContext,
+    }),
+  ),
   runPostUserMessageHooks: vi.fn(async () => {}),
 }));
 
@@ -91,18 +94,18 @@ describe('resume-target inheritance after an abandoned provider session', () => 
   });
 
   it('does not hand the abandoned provider session to a swap without a resume decision', async () => {
-    await agent!.init();
+    await agent!.init(createTestCall());
     // The test agent does not support native resume, so this dispatch declines
     // it and abandons the armed target. No `system.init` follows: the generation
     // keeps reporting a pending rotation, exactly like a turn that failed or
     // idled before the provider confirmed a successor.
-    await agent!.start('hello');
+    await agent!.start(createTestCall(), 'hello');
 
     expect(movements.filter((movement) => movement.confirmed === false)).toHaveLength(1);
 
     // A cwd swap carries no resume decision, so it inherits whatever the agent
     // config still advertises.
-    await agent!.swapConnector({ cwd: '/swapped/cwd' });
+    await agent!.swapConnector(createTestCall(), { cwd: '/swapped/cwd' });
 
     expect(connectors).toHaveLength(2);
     expect(configInputs[configInputs.length - 1]?.resumeAdapterSessionId).toBeUndefined();
@@ -114,22 +117,22 @@ describe('resume-target inheritance after an abandoned provider session', () => 
     // a successor, later swaps have to continue that thread. Clearing the field
     // as the whole fix would have left this agent on fresh-swap semantics
     // permanently — and no existing test would have noticed.
-    await agent!.init();
-    await agent!.start('hello');
+    await agent!.init(createTestCall());
+    await agent!.start(createTestCall(), 'hello');
 
     // `system.init` arrives late: the generation stops reporting a pending
     // rotation and names the session the provider actually committed to.
     connectors[0].rotationPending = false;
     connectors[0].confirmedSuccessor = SUCCESSOR_THREAD;
     // Payload enrichment on the agent's next event is what samples it.
-    await agent!.testEmitStart();
+    await agent!.testEmitStart(createTestCall());
 
     expect(movements[movements.length - 1]).toMatchObject({
       adapterSessionId: SUCCESSOR_THREAD,
       confirmed: true,
     });
 
-    await agent!.swapConnector({ cwd: '/swapped/cwd' });
+    await agent!.swapConnector(createTestCall(), { cwd: '/swapped/cwd' });
 
     expect(configInputs[configInputs.length - 1]?.resumeAdapterSessionId).toBe(SUCCESSOR_THREAD);
   });
@@ -137,8 +140,8 @@ describe('resume-target inheritance after an abandoned provider session', () => 
   it('still inherits the start-time target for a swap before any dispatch abandoned it', async () => {
     // Counter-check that keeps the fix honest: an idle attach whose armed target
     // is untouched must keep resuming it across a swap.
-    await agent!.init();
-    await agent!.swapConnector({ cwd: '/swapped/cwd' });
+    await agent!.init(createTestCall());
+    await agent!.swapConnector(createTestCall(), { cwd: '/swapped/cwd' });
 
     expect(movements.filter((movement) => movement.confirmed === false)).toHaveLength(0);
     expect(configInputs[configInputs.length - 1]?.resumeAdapterSessionId).toBe(ABANDONED_TARGET);

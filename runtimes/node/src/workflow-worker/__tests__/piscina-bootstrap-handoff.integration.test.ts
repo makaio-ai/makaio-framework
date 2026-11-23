@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { createTestCall } from '@makaio/test-utils';
 import { ThinWorkflowPiscinaRunner } from '../thin-workflow-piscina-runner.js';
 import { PiscinaPoolRunner } from '../runtime/piscina-pool-runner.js';
 import { dispatchWithBootstrapHandoff } from '../piscina-bootstrap-handoff.js';
@@ -33,6 +34,7 @@ describe('real Piscina bootstrap budget ownership', () => {
   it('expires a queued attempt without starting it or aborting the unrelated occupying task', async () => {
     const { root, runner } = await fixture();
     const occupying = runner.run(
+      createTestCall(),
       makeWorkerConfig({
         inputs: { started: join(root, 'occupying'), release: join(root, 'release') },
       }),
@@ -56,9 +58,11 @@ describe('real Piscina bootstrap budget ownership', () => {
     ]);
     await writeFile(join(root, 'release'), 'release');
     await expect(occupying).resolves.toMatchObject({ result: { status: 'completed' } });
-    await expect(runner.run(makeWorkerConfig(), new AbortController().signal)).resolves.toMatchObject({
-      result: { status: 'completed' },
-    });
+    await expect(runner.run(createTestCall(), makeWorkerConfig(), new AbortController().signal)).resolves.toMatchObject(
+      {
+        result: { status: 'completed' },
+      },
+    );
     expect(existsSync(join(root, 'queued'))).toBe(false);
   }, 15_000);
 
@@ -93,7 +97,7 @@ describe('real Piscina bootstrap budget ownership', () => {
     const { root, runner } = await fixture();
     // Warm the same worker first; the short budget below measures handoff, not
     // dependency compilation on the test host.
-    await runner.run(makeWorkerConfig(), new AbortController().signal);
+    await runner.run(createTestCall(), makeWorkerConfig(), new AbortController().signal);
     const controller = new AbortController();
     const deadlineAt = new Date(Date.now() + 1000).toISOString();
     const pending = runner.runWithReadiness(

@@ -7,6 +7,7 @@
 
 import { describe, it, expect, beforeEach } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
+import { createTestCall } from '@makaio/test-utils';
 import type {
   RawMessageStreamEvent,
   Usage,
@@ -152,7 +153,7 @@ async function collectSdkEvents(events: RawMessageStreamEvent[]): Promise<SdkEve
   };
 
   try {
-    await processStream(makeStream(events), config);
+    await processStream(createTestCall(), makeStream(events), config);
   } finally {
     cleanup();
   }

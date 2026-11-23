@@ -1,4 +1,6 @@
 import { beforeAll, describe, expect, it } from 'vitest';
+import { createBusInstance } from '@makaio/bus-core';
+import { createTestCall } from '@makaio/test-utils';
 import type { ChatCompletionChunk } from 'openai/resources/index.js';
 import { chunksDeepSeek_V3_2_ToolCall } from './fixtures/deekseep-v3_2/tool-call.js';
 import { chunksGlm_4_5_Air_ToolCall } from './fixtures/glm-4-5-air/tool-call.js';
@@ -41,14 +43,14 @@ describe('stream-bridge', () => {
 
       beforeAll(async () => {
         events = [];
-        const bus = await OpenAINodeConnectorNamespace.scopedBus();
+        const bus = await OpenAINodeConnectorNamespace.scopedBus(createBusInstance());
 
         bus.on(OpenAINodeConnectorSubjects.sdk.event, (context) => {
           envelopes.push(context.payload);
           events.push(context.payload.event);
         });
 
-        await processStream(toAsyncIterable(sample), {
+        await processStream(createTestCall(), toAsyncIterable(sample), {
           bus,
           agentId: 'test-agent',
           adapterId: 'test-adapter',
@@ -135,7 +137,7 @@ describe('stream-bridge', () => {
 
   it('keeps hidden finalizer tool calls out of public tool_calls events', async () => {
     const events: SdkEventMessage[] = [];
-    const bus = await OpenAINodeConnectorNamespace.scopedBus();
+    const bus = await OpenAINodeConnectorNamespace.scopedBus(createBusInstance());
     const finalizerChunks: ChatCompletionChunk[] = [
       {
         id: 'chunk-1',
@@ -175,7 +177,7 @@ describe('stream-bridge', () => {
       events.push(context.payload.event);
     });
 
-    await processStream(toAsyncIterable(finalizerChunks), {
+    await processStream(createTestCall(), toAsyncIterable(finalizerChunks), {
       bus,
       agentId: 'test-agent',
       adapterId: 'test-adapter',

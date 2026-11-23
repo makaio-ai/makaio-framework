@@ -46,7 +46,7 @@ export function reportProgressTool() {
       }
 
       try {
-        const result = await context.bus.request(SubagentSubjects.reportProgress, {
+        const result = await context.bus.request(context.call, SubagentSubjects.reportProgress, {
           subagentId: context.subagentId,
           update: input.update,
           percentComplete: input.percentComplete,

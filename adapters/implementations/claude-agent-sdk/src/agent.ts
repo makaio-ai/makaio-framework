@@ -4,7 +4,7 @@ import {
 } from '@makaio/ai-adapters-claude-shared';
 import type { AgentStartResult, NormalizedMessageInput, StartAgentOptions } from '@makaio/ai-adapters-core';
 import { AgentSubjects, ClientSubjects } from '@makaio/contracts';
-import type { MessageInput } from '@makaio/contracts';
+import type { CallContext, MessageInput } from '@makaio/contracts';
 import { buildClientSessionBase, emitBestEffort } from '@makaio/subsystem-client';
 import { ClaudeSdkConnector } from './connector.js';
 import { ClaudeCodeConnectorNamespace } from './namespace/index.js';
@@ -52,28 +52,31 @@ export class ClaudeCodeAgent extends ClaudeCodeAgentBase<'adapter:claude-code', 
   /**
    * Initialize the agent and publish runtime evidence after the connector has
    * confirmed its adapter session ID.
+   * @param call - Call of the request that drives the initialization.
    * @param options - Optional initialization options.
    * @returns Confirmed adapter session ID, or `undefined` for unconfirmed fork sessions.
    */
-  public override async initialize(options?: StartAgentOptions): Promise<string | undefined> {
-    const confirmedId = await super.initialize(options);
-    this.observeCurrentRuntime();
+  public override async initialize(call: CallContext, options?: StartAgentOptions): Promise<string | undefined> {
+    const confirmedId = await super.initialize(call, options);
+    this.observeCurrentRuntime(call);
     return confirmedId;
   }
 
   /**
    * Start the agent and publish runtime evidence after the initial turn creates
    * or resumes the adapter session.
+   * @param call - Call of the request that drives the start.
    * @param message - Initial user message.
    * @param options - Optional start options.
    * @returns Agent start result from the connector.
    */
   public override async start(
+    call: CallContext,
     message: NormalizedMessageInput | MessageInput,
     options?: StartAgentOptions,
   ): Promise<AgentStartResult> {
-    const result = await super.start(message, options);
-    this.observeCurrentRuntime();
+    const result = await super.start(call, message, options);
+    this.observeCurrentRuntime(call);
     return result;
   }
 
@@ -103,26 +106,26 @@ export class ClaudeCodeAgent extends ClaudeCodeAgentBase<'adapter:claude-code', 
     const filteredBus = this.globalBus.withFilter({ agentId: this.agentId });
 
     this.addBusHandlerCleanup(
-      filteredBus.on(AgentSubjects.started, () => {
+      filteredBus.on(AgentSubjects.started, (ctx) => {
         emitBestEffort(async () => {
-          await this.globalBus.emit(ClientSubjects.session.started, this.getClientSessionBase());
+          await this.globalBus.emit(ctx.call, ClientSubjects.session.started, this.getClientSessionBase());
         });
-        this.observeCurrentRuntime();
+        this.observeCurrentRuntime(ctx.call);
       }),
     );
 
     this.addBusHandlerCleanup(
-      filteredBus.on(AgentSubjects.turn.started, () => {
+      filteredBus.on(AgentSubjects.turn.started, (ctx) => {
         emitBestEffort(async () => {
-          await this.globalBus.emit(ClientSubjects.session.turn.started, this.getClientSessionBase());
+          await this.globalBus.emit(ctx.call, ClientSubjects.session.turn.started, this.getClientSessionBase());
         });
       }),
     );
 
     this.addBusHandlerCleanup(
-      filteredBus.on(AgentSubjects.turn.completed, () => {
+      filteredBus.on(AgentSubjects.turn.completed, (ctx) => {
         emitBestEffort(async () => {
-          await this.globalBus.emit(ClientSubjects.session.turn.completed, this.getClientSessionBase());
+          await this.globalBus.emit(ctx.call, ClientSubjects.session.turn.completed, this.getClientSessionBase());
         });
       }),
     );
@@ -131,7 +134,7 @@ export class ClaudeCodeAgent extends ClaudeCodeAgentBase<'adapter:claude-code', 
       filteredBus.on(AgentSubjects.user_message.sent, (ctx) => {
         const prompt = ctx.payload.content.message;
         emitBestEffort(async () => {
-          await this.globalBus.emit(ClientSubjects.session.userPrompt.submitted, {
+          await this.globalBus.emit(ctx.call, ClientSubjects.session.userPrompt.submitted, {
             ...this.getClientSessionBase(),
             ...(prompt !== undefined && { prompt }),
           });
@@ -142,8 +145,9 @@ export class ClaudeCodeAgent extends ClaudeCodeAgentBase<'adapter:claude-code', 
 
   /**
    * Publish best-effort runtime evidence for the current connector session.
+   * @param call - Call of the lifecycle operation that produced the evidence.
    */
-  private observeCurrentRuntime(): void {
+  private observeCurrentRuntime(call: CallContext): void {
     const adapterSessionId = this.connector?.adapterSessionId;
     if (!adapterSessionId) {
       return;
@@ -164,7 +168,7 @@ export class ClaudeCodeAgent extends ClaudeCodeAgentBase<'adapter:claude-code', 
     this.inFlightRuntimeObservationKey = observationKey;
 
     void this.globalBus
-      .requestOptional(ClientSubjects.runtime.observe, {
+      .requestOptional(call, ClientSubjects.runtime.observe, {
         clientId,
         source: { layer: 'adapter', producer: 'claude-agent-sdk' },
         observedAt: Date.now(),
@@ -189,11 +193,11 @@ export class ClaudeCodeAgent extends ClaudeCodeAgentBase<'adapter:claude-code', 
           return;
         }
 
-        this.retryPendingRuntimeObservation(observationKey);
+        this.retryPendingRuntimeObservation(call, observationKey);
       })
       .catch(() => {
         if (this.inFlightRuntimeObservationKey === observationKey) {
-          this.retryPendingRuntimeObservation(observationKey);
+          this.retryPendingRuntimeObservation(call, observationKey);
         }
       });
   }
@@ -201,15 +205,16 @@ export class ClaudeCodeAgent extends ClaudeCodeAgentBase<'adapter:claude-code', 
   /**
    * Clear an unhandled observation reservation and replay one duplicate
    * lifecycle signal if it arrived while the request was in flight.
+   * @param call - Call of the lifecycle operation whose observation is retried.
    * @param observationKey - Runtime observation key that just settled unhandled.
    */
-  private retryPendingRuntimeObservation(observationKey: string): void {
+  private retryPendingRuntimeObservation(call: CallContext, observationKey: string): void {
     const shouldRetry = this.pendingRuntimeObservationRetryKey === observationKey;
     this.inFlightRuntimeObservationKey = undefined;
     this.pendingRuntimeObservationRetryKey = undefined;
 
     if (shouldRetry) {
-      this.observeCurrentRuntime();
+      this.observeCurrentRuntime(call);
     }
   }
 }

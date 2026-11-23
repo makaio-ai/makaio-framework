@@ -105,7 +105,10 @@ export function createBusEventAutomationTrigger(bus: IMakaioBus): AutomationTrig
 
             const { correlationId } = eventContext;
             void context
-              .emit(payload.data, correlationId === undefined ? undefined : { correlationId })
+              .emit(payload.data, {
+                call: eventContext.call,
+                ...(correlationId === undefined ? {} : { correlationId }),
+              })
               .catch((error: unknown) => {
                 console.error(`${LOG_PREFIX} emit failed for '${eventContext.subject}':`, error);
               });

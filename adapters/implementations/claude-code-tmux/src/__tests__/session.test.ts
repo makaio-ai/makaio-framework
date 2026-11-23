@@ -43,6 +43,7 @@ describe('TmuxSession', () => {
   it('subscribes to hook events with the expected Claude session filter', () => {
     const onSpy = vi.spyOn(MakaioBus, 'on');
     const session = new TmuxSession({
+      bus: MakaioBus,
       ptyProcess: makePtyProcess(),
       expectedClaudeSessionId: 'claude-session-123',
     });
@@ -58,6 +59,7 @@ describe('TmuxSession', () => {
 
   it('can observe a SessionStart hook before the full hook subscription is attached', async () => {
     const session = new TmuxSession({
+      bus: MakaioBus,
       ptyProcess: makePtyProcess(),
       expectedClaudeSessionId: 'claude-session-123',
     });
@@ -71,6 +73,7 @@ describe('TmuxSession', () => {
   it('sends Escape via tmux named-key delivery', () => {
     const ptyProcess = makePtyProcess();
     const session = new TmuxSession({
+      bus: MakaioBus,
       ptyProcess,
       expectedClaudeSessionId: 'claude-session-123',
     });
@@ -84,6 +87,7 @@ describe('TmuxSession', () => {
   it('sends message text via write and submits via named-key Enter', async () => {
     const ptyProcess = makePtyProcess();
     const session = new TmuxSession({
+      bus: MakaioBus,
       ptyProcess,
       expectedClaudeSessionId: 'claude-session-123',
     });
@@ -98,6 +102,7 @@ describe('TmuxSession', () => {
     const ptyProcess = makePtyProcess();
     vi.mocked(ptyProcess.captureVisible).mockReturnValue(null);
     const session = new TmuxSession({
+      bus: MakaioBus,
       ptyProcess,
       expectedClaudeSessionId: 'claude-session-123',
     });
@@ -108,6 +113,7 @@ describe('TmuxSession', () => {
   it('clears draft input via named-key C-c', () => {
     const ptyProcess = makePtyProcess();
     const session = new TmuxSession({
+      bus: MakaioBus,
       ptyProcess,
       expectedClaudeSessionId: 'claude-session-123',
     });

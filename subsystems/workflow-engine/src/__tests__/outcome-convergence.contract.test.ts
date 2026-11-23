@@ -1,4 +1,5 @@
-import type { AcceptedAttemptOutcome } from '@makaio/contracts';
+import type { AcceptedAttemptOutcome, CallContext } from '@makaio/contracts';
+import { createTestCall } from '@makaio/test-utils';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ExecutionAttemptAuthority } from '../execution-attempt-authority.js';
 import { submitAttemptOutcome, type OutcomeConvergence, type OutcomeConvergenceInput } from '../outcome-convergence.js';
@@ -70,11 +71,13 @@ async function settlementOf(promise: Promise<unknown>): Promise<'pending' | 'res
 }
 
 describe('submitAttemptOutcome (generic contract)', () => {
+  let call: CallContext;
   let repository: InMemoryAttemptRepository<CounterOutcome>;
   let authority: ExecutionAttemptAuthority<CounterOutcome>;
   let convergence: ConvergenceFake<CounterOutcome>;
 
   beforeEach(() => {
+    call = createTestCall();
     repository = createInMemoryAttemptRepository(counterCodec);
     authority = new ExecutionAttemptAuthority(repository, { bootstrapTimeoutMs: 60_000 });
     convergence = createConvergenceFake<CounterOutcome>();
@@ -94,13 +97,14 @@ describe('submitAttemptOutcome (generic contract)', () => {
 
     const decision = await submitAttemptOutcome(
       { authority, convergence },
-      { executionId: EXECUTION_ID, executionAttemptId: attempt.executionAttemptId, outcome: 1 },
+      { call, executionId: EXECUTION_ID, executionAttemptId: attempt.executionAttemptId, outcome: 1 },
     );
 
     expect(decision).toBe('accepted');
     expect(committedWhenConverging).toBe('{"counter":1}');
     expect(convergence.calls).toEqual([
       {
+        call,
         executionId: EXECUTION_ID,
         executionAttemptId: attempt.executionAttemptId,
         outcome: 1,
@@ -138,7 +142,7 @@ describe('submitAttemptOutcome (generic contract)', () => {
     await expect(
       submitAttemptOutcome(
         { authority, convergence },
-        { executionId: EXECUTION_ID, executionAttemptId: attempt.executionAttemptId, outcome: 8 },
+        { call, executionId: EXECUTION_ID, executionAttemptId: attempt.executionAttemptId, outcome: 8 },
       ),
     ).resolves.toBe('accepted');
 
@@ -167,7 +171,7 @@ describe('submitAttemptOutcome (generic contract)', () => {
     await expect(
       submitAttemptOutcome(
         { authority, convergence },
-        { executionId: EXECUTION_ID, executionAttemptId: attempt.executionAttemptId, outcome: 9 },
+        { call, executionId: EXECUTION_ID, executionAttemptId: attempt.executionAttemptId, outcome: 9 },
       ),
     ).resolves.toBe('duplicate');
 
@@ -182,7 +186,7 @@ describe('submitAttemptOutcome (generic contract)', () => {
     await expect(
       submitAttemptOutcome(
         { authority, convergence, validation },
-        { executionId: EXECUTION_ID, executionAttemptId: attempt.executionAttemptId, outcome: 1 },
+        { call, executionId: EXECUTION_ID, executionAttemptId: attempt.executionAttemptId, outcome: 1 },
       ),
     ).rejects.toThrow('owner rejected');
 
@@ -201,7 +205,7 @@ describe('submitAttemptOutcome (generic contract)', () => {
     await expect(
       submitAttemptOutcome(
         { authority, convergence },
-        { executionId: EXECUTION_ID, executionAttemptId: attempt.executionAttemptId, outcome: 2 },
+        { call, executionId: EXECUTION_ID, executionAttemptId: attempt.executionAttemptId, outcome: 2 },
       ),
     ).rejects.toThrow('owner state unavailable');
 
@@ -230,7 +234,7 @@ describe('submitAttemptOutcome (generic contract)', () => {
     boxedConvergence.failNext = new Error('first convergence failed');
     await submitAttemptOutcome(
       { authority: boxedAuthority, convergence: boxedConvergence },
-      { executionId: EXECUTION_ID, executionAttemptId: attempt.executionAttemptId, outcome: { counter: 3 } },
+      { call, executionId: EXECUTION_ID, executionAttemptId: attempt.executionAttemptId, outcome: { counter: 3 } },
     ).catch(() => undefined);
 
     // Later cleanup intent cannot replace the control facts recorded with the
@@ -246,7 +250,7 @@ describe('submitAttemptOutcome (generic contract)', () => {
     const resubmitted: BoxedCounterOutcome = { counter: 3 };
     const decision = await submitAttemptOutcome(
       { authority: boxedAuthority, convergence: boxedConvergence },
-      { executionId: EXECUTION_ID, executionAttemptId: attempt.executionAttemptId, outcome: resubmitted },
+      { call, executionId: EXECUTION_ID, executionAttemptId: attempt.executionAttemptId, outcome: resubmitted },
     );
 
     expect(decision).toBe('duplicate');
@@ -307,7 +311,7 @@ describe('submitAttemptOutcome (generic contract)', () => {
         if (outcome !== 7) throw new Error('owner rejected');
       }),
     };
-    const submission = { executionId: EXECUTION_ID, executionAttemptId: attempt.executionAttemptId, outcome: 7 };
+    const submission = { call, executionId: EXECUTION_ID, executionAttemptId: attempt.executionAttemptId, outcome: 7 };
 
     await expect(submitAttemptOutcome({ authority, convergence, validation }, submission)).rejects.toThrow(
       'notification publish failed',
@@ -355,7 +359,7 @@ describe('submitAttemptOutcome (generic contract)', () => {
 
     const decision = await submitAttemptOutcome(
       { authority: boxedAuthority, convergence: boxedConvergence, validation },
-      { executionId: EXECUTION_ID, executionAttemptId: attempt.executionAttemptId, outcome: submitted },
+      { call, executionId: EXECUTION_ID, executionAttemptId: attempt.executionAttemptId, outcome: submitted },
     );
 
     expect(decision).toBe('accepted');
@@ -378,13 +382,13 @@ describe('submitAttemptOutcome (generic contract)', () => {
     >;
     await submitAttemptOutcome(
       { authority, convergence },
-      { executionId: EXECUTION_ID, executionAttemptId: attempt.executionAttemptId, outcome: 4 },
+      { call, executionId: EXECUTION_ID, executionAttemptId: attempt.executionAttemptId, outcome: 4 },
     );
     await waiter;
 
     const decision = await submitAttemptOutcome(
       { authority, convergence },
-      { executionId: EXECUTION_ID, executionAttemptId: attempt.executionAttemptId, outcome: 5 },
+      { call, executionId: EXECUTION_ID, executionAttemptId: attempt.executionAttemptId, outcome: 5 },
     );
 
     expect(decision).toBe('conflict');
@@ -402,7 +406,7 @@ describe('submitAttemptOutcome (generic contract)', () => {
 
     const decision = await submitAttemptOutcome(
       { authority, convergence },
-      { executionId: EXECUTION_ID, executionAttemptId: first.executionAttemptId, outcome: 6 },
+      { call, executionId: EXECUTION_ID, executionAttemptId: first.executionAttemptId, outcome: 6 },
     );
 
     expect(decision).toBe('fenced');
@@ -425,7 +429,7 @@ describe('submitAttemptOutcome (generic contract)', () => {
 
     const decision = await submitAttemptOutcome(
       { authority: normalizingAuthority, convergence, validation },
-      { executionId: EXECUTION_ID, executionAttemptId: attempt.executionAttemptId, outcome: 1.2 },
+      { call, executionId: EXECUTION_ID, executionAttemptId: attempt.executionAttemptId, outcome: 1.2 },
     );
 
     expect(decision).toBe('accepted');
@@ -459,6 +463,7 @@ describe('submitAttemptOutcome (generic contract)', () => {
     const decision = await submitAttemptOutcome(
       { authority: urlAuthority, convergence: urlConvergence, validation },
       {
+        call,
         executionId: EXECUTION_ID,
         executionAttemptId: attempt.executionAttemptId,
         outcome: new URL('https://outcome.test/a'),
@@ -489,6 +494,7 @@ describe('submitAttemptOutcome (generic contract)', () => {
     const decision = await submitAttemptOutcome(
       { authority: urlAuthority, convergence: urlConvergence },
       {
+        call,
         executionId: EXECUTION_ID,
         executionAttemptId: attempt.executionAttemptId,
         outcome: new URL('https://outcome.test/a'),
@@ -524,13 +530,13 @@ describe('submitAttemptOutcome (generic contract)', () => {
     orderConvergence.failNext = new Error('first convergence failed');
     await submitAttemptOutcome(
       { authority: orderAuthority, convergence: orderConvergence },
-      { executionId: EXECUTION_ID, executionAttemptId: attempt.executionAttemptId, outcome: { a: 1, b: 2 } },
+      { call, executionId: EXECUTION_ID, executionAttemptId: attempt.executionAttemptId, outcome: { a: 1, b: 2 } },
     ).catch(() => undefined);
     expect(orderRepository.committedOutcomes.get(attempt.executionAttemptId)).toBe('{"a":1,"b":2}');
 
     const decision = await submitAttemptOutcome(
       { authority: orderAuthority, convergence: orderConvergence },
-      { executionId: EXECUTION_ID, executionAttemptId: attempt.executionAttemptId, outcome: { b: 2, a: 1 } },
+      { call, executionId: EXECUTION_ID, executionAttemptId: attempt.executionAttemptId, outcome: { b: 2, a: 1 } },
     );
 
     expect(decision).toBe('duplicate');
@@ -549,6 +555,7 @@ describe('submitAttemptOutcome (generic contract)', () => {
       submitAttemptOutcome(
         { authority, convergence },
         {
+          call,
           executionId: EXECUTION_ID,
           executionAttemptId: attempt.executionAttemptId,
           outcome: invalidCounterOutcome(),

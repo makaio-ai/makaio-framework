@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { IMakaioBus } from '@makaio/bus-core';
 import type { SessionMessage } from '@makaio/contracts';
+import { createTestCall } from '@makaio/test-utils';
 import { MessageStorageSubjects } from '../namespace.js';
 import { SessionEventStorageSubjects } from '../../session-events/namespace.js';
 import { emitMessageSessionEvent } from '../shared.js';
@@ -30,16 +31,19 @@ describe('emitMessageSessionEvent', () => {
     request.mockResolvedValue({ success: true });
 
     const message = createMessage();
-    await emitMessageSessionEvent(bus, message);
+    const call = createTestCall();
+    await emitMessageSessionEvent(call, bus, message);
 
     expect(emit).toHaveBeenCalledWith(
+      call,
       MessageStorageSubjects.stored,
       expect.objectContaining({ message: expect.objectContaining(message) }),
     );
-    const emittedMessage = emit.mock.calls[0]?.[1]?.message as SessionMessage;
+    const emittedMessage = emit.mock.calls[0]?.[2]?.message as SessionMessage;
     expect(emittedMessage).not.toBe(message);
     expect(emittedMessage.blocks).not.toBe(message.blocks);
     expect(request).toHaveBeenCalledWith(
+      call,
       SessionEventStorageSubjects.append,
       expect.objectContaining({
         event: expect.objectContaining({
@@ -62,7 +66,7 @@ describe('emitMessageSessionEvent', () => {
     try {
       request.mockRejectedValue(new Error('append failed'));
 
-      await expect(emitMessageSessionEvent(bus, createMessage())).resolves.toBeUndefined();
+      await expect(emitMessageSessionEvent(createTestCall(), bus, createMessage())).resolves.toBeUndefined();
 
       expect(emit).toHaveBeenCalledTimes(1);
       expect(errorSpy).toHaveBeenCalledWith(

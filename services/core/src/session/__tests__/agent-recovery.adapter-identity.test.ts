@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createBusInstance, type IMakaioBus } from '@makaio/bus-core';
+import { createTestCall } from '@makaio/test-utils';
 import {
   AdapterSubjects,
   SessionOwnershipStorageSubjects,
@@ -113,10 +114,15 @@ describe('verifyAndRecoverAgents adapter identity', () => {
       }),
     );
 
-    const { usable, recoveredAgentIds, deferredAgentIds } = await verifyAndRecoverAgents(bus, agents, {
-      plan: FRESH_WITH_HISTORY_RECOVERY_PLAN,
-      machineId: MACHINE_ID,
-    });
+    const { usable, recoveredAgentIds, deferredAgentIds } = await verifyAndRecoverAgents(
+      createTestCall(),
+      bus,
+      agents,
+      {
+        plan: FRESH_WITH_HISTORY_RECOVERY_PLAN,
+        machineId: MACHINE_ID,
+      },
+    );
 
     // Case 96: the recovery dispatches with `callerOwnsAgentRow`, which is what
     // suppresses the adapter's own status write for a row the service owns.
@@ -155,7 +161,7 @@ describe('verifyAndRecoverAgents adapter identity', () => {
       }),
     );
 
-    const { usable, deferredAgentIds } = await verifyAndRecoverAgents(bus, [agent], {
+    const { usable, deferredAgentIds } = await verifyAndRecoverAgents(createTestCall(), bus, [agent], {
       plan: FRESH_WITH_HISTORY_RECOVERY_PLAN,
       machineId: MACHINE_ID,
     });
@@ -189,10 +195,15 @@ describe('verifyAndRecoverAgents adapter identity', () => {
       }),
     );
 
-    const { usable, recoveredAgentIds, deferredAgentIds } = await verifyAndRecoverAgents(bus, [agent], {
-      plan: FRESH_WITH_HISTORY_RECOVERY_PLAN,
-      machineId: MACHINE_ID,
-    });
+    const { usable, recoveredAgentIds, deferredAgentIds } = await verifyAndRecoverAgents(
+      createTestCall(),
+      bus,
+      [agent],
+      {
+        plan: FRESH_WITH_HISTORY_RECOVERY_PLAN,
+        machineId: MACHINE_ID,
+      },
+    );
 
     expect(deferredAgentIds).toEqual(new Set(['dead-unscopable']));
     expect(usable).toEqual([]);
@@ -228,7 +239,7 @@ describe('verifyAndRecoverAgents adapter identity', () => {
       }),
     );
 
-    const { usable, recoveredAgentIds } = await verifyAndRecoverAgents(bus, [agent], {
+    const { usable, recoveredAgentIds } = await verifyAndRecoverAgents(createTestCall(), bus, [agent], {
       plan: FRESH_WITH_HISTORY_RECOVERY_PLAN,
     });
 
@@ -252,7 +263,9 @@ describe('verifyAndRecoverAgents adapter identity', () => {
       }),
     );
 
-    const result = await verifyAndRecoverAgents(bus, [agent], { plan: FRESH_WITH_HISTORY_RECOVERY_PLAN });
+    const result = await verifyAndRecoverAgents(createTestCall(), bus, [agent], {
+      plan: FRESH_WITH_HISTORY_RECOVERY_PLAN,
+    });
 
     expect(result.deferredAgentIds).toEqual(new Set(['dead-unresolvable']));
     expect(rehydrateTargets).toEqual([]);
@@ -317,7 +330,7 @@ describe('verifyAndRecoverAgents adapter identity', () => {
         async (ctx) => {
           if (!stalePlanInjected && ctx.payload.recoveryGuard !== undefined) {
             stalePlanInjected = true;
-            const moved = await bus.request(SessionOwnershipStorageSubjects.settleMovement, {
+            const moved = await bus.request(ctx.call, SessionOwnershipStorageSubjects.settleMovement, {
               machineId: FOREIGN_MACHINE_ID,
               adapterId: OPAQUE_FOREIGN_ADAPTER_ID,
               adapterName: 'claude-code',
@@ -334,7 +347,7 @@ describe('verifyAndRecoverAgents adapter identity', () => {
             if (moved.outcome !== 'settled' || moved.claim === null) {
               throw new Error(`failed to move the opaque-owner recovery currency: ${moved.outcome}`);
             }
-            await bus.request(SessionOwnershipStorageSubjects.release, {
+            await bus.request(ctx.call, SessionOwnershipStorageSubjects.release, {
               agentId,
               claimToken: moved.claim.claimToken,
               disposition: 'released',
@@ -356,7 +369,7 @@ describe('verifyAndRecoverAgents adapter identity', () => {
       }),
     );
 
-    const result = await verifyAndRecoverAgents(bus, [opaqueOwnerAgent], {
+    const result = await verifyAndRecoverAgents(createTestCall(), bus, [opaqueOwnerAgent], {
       plan: { kind: 'native-resume', resumeAdapterSessionId: originalProviderSessionId },
       machineId: FOREIGN_MACHINE_ID,
     });

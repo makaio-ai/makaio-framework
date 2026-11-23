@@ -1,5 +1,6 @@
 import type { IMakaioBus } from '@makaio/bus-core';
 import { MaterializationSubjects, type SurfaceBindingRegistration } from '@makaio/contracts/materialization';
+import type { CallContext } from '@makaio/core';
 import { BaseService } from '@makaio/service-base';
 import { canonicalStringify } from '@makaio/utils';
 
@@ -43,7 +44,7 @@ export class SurfaceBindingRegistry extends BaseService {
    */
   protected async onInit(): Promise<void> {
     this.registerHandler(MaterializationSubjects.surfaceBinding.register, (ctx) => {
-      this.registerBinding(ctx.payload);
+      this.registerBindingWithCall(ctx.call, ctx.payload);
       ctx.setResult({ registered: true });
     });
 
@@ -62,17 +63,36 @@ export class SurfaceBindingRegistry extends BaseService {
   }
 
   /**
+   * Register a contribution received directly from another carrier.
+   * @param registration - Registration payload to store.
+   */
+  public registerBinding(registration: SurfaceBindingRegistration): void {
+    // ORIGIN: Direct calls from another carrier start work on this registry's bus.
+    this.registerBindingWithCall(this.bus.own('shared-work'), registration);
+  }
+
+  /**
+   * Remove a contribution received directly from another carrier.
+   * @param id - Registration identifier to remove.
+   */
+  public deregisterBinding(id: string): void {
+    // ORIGIN: Direct calls from another carrier start work on this registry's bus.
+    this.deregisterBindingWithCall(this.bus.own('shared-work'), id);
+  }
+
+  /**
    * Store a surface binding registration, rejecting conflicting duplicates.
    *
    * An identical re-registration (same `id` and all fields) is silently
    * accepted. A registration that differs in any field is rejected with an error.
    *
-   * The bus RPC handler delegates here; the contribution processor also calls
-   * this directly.
+   * The bus RPC handler delegates here with its received call.
+   * This method becomes public as soon as a handler on another carrier must pass a received call into this registry.
+   * @param call - Call context for the operation that registers the binding.
    * @param registration - Surface binding registration payload to store.
    * @throws If a conflicting registration for the same binding `id` already exists.
    */
-  public registerBinding(registration: SurfaceBindingRegistration): void {
+  private registerBindingWithCall(call: CallContext, registration: SurfaceBindingRegistration): void {
     const existing = this.bindings.get(registration.id);
     if (existing) {
       if (canonicalStringify(existing) !== canonicalStringify(registration)) {
@@ -84,26 +104,38 @@ export class SurfaceBindingRegistry extends BaseService {
     this.bindings.set(registration.id, cloneRegistration(registration));
     // Fire-and-forget; the bus does not guarantee ordering with the RPC
     // response, so callers that need the event should subscribe before calling.
-    void this.bus.emit(MaterializationSubjects.surfaceBinding.changed, {
-      id: registration.id,
-      provider: registration.provider,
-    });
+    this.emitChanged(call, registration);
   }
 
   /**
    * Remove a surface binding registration by stable identifier.
+   * This method becomes public as soon as a handler on another carrier must pass a received call into this registry.
+   * @param call - Call context for the operation that removes the binding.
    * @param id - Surface binding identifier to remove.
    */
-  public deregisterBinding(id: string): void {
+  private deregisterBindingWithCall(call: CallContext, id: string): void {
     const existing = this.bindings.get(id);
     if (!existing) {
       return;
     }
     this.bindings.delete(id);
-    void this.bus.emit(MaterializationSubjects.surfaceBinding.changed, {
-      id,
-      provider: existing.provider,
-    });
+    this.emitChanged(call, existing);
+  }
+
+  /**
+   * Emit a registry change and report asynchronous delivery failures.
+   * @param call - Call context for the registration change.
+   * @param binding - Binding identifying the changed surface.
+   */
+  private emitChanged(call: CallContext, binding: SurfaceBindingRegistration): void {
+    void this.bus
+      .emit(call, MaterializationSubjects.surfaceBinding.changed, { id: binding.id, provider: binding.provider })
+      .catch((error) =>
+        console.warn(
+          `[SurfaceBindingRegistry] Failed to emit ${MaterializationSubjects.surfaceBinding.changed.subject}:`,
+          error,
+        ),
+      );
   }
 
   /**

@@ -90,6 +90,8 @@ export type {
   StartAgentOptions,
   AgentSendMessageOptions,
   ConnectorSendMessageOptions,
+  Forbid,
+  ForbiddenKeys,
   ConnectorStartOptions,
   ExecutionContext,
 } from './types.js';

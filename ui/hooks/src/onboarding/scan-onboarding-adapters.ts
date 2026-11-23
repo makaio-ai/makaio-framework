@@ -6,6 +6,7 @@
  * @packageDocumentation
  */
 import { MakaioBus } from '@makaio/bus-core';
+import type { CallContext } from '@makaio/contracts/call-context';
 import { ClientSubjects } from '@makaio/contracts/client';
 import { ClientStorageSubjects } from '@makaio/services-core/settings/storage';
 import { SettingsSubjects } from '@makaio/services-core/settings/namespace';
@@ -94,12 +95,13 @@ export interface ScanContext {
  * scan functions.
  *
  * Returns `null` when there are no scannable clients (callers should return `[]`).
+ * @param call - Call context of the operation requesting the scan.
  * @returns Populated scan context, or null when no scannable clients exist
  */
-export async function buildScanContext(): Promise<ScanContext | null> {
+export async function buildScanContext(call: CallContext): Promise<ScanContext | null> {
   const [{ clients }, { adapters }] = await Promise.all([
-    MakaioBus.request(ClientStorageSubjects.list, {}),
-    MakaioBus.request(SettingsSubjects.adapter.list, {}),
+    MakaioBus.request(call, ClientStorageSubjects.list, {}),
+    MakaioBus.request(call, SettingsSubjects.adapter.list, {}),
   ]);
 
   const scannableClients = clients
@@ -115,7 +117,7 @@ export async function buildScanContext(): Promise<ScanContext | null> {
     return null;
   }
 
-  const { results } = await MakaioBus.request(ClientSubjects.scan, {
+  const { results } = await MakaioBus.request(call, ClientSubjects.scan, {
     targets: scannableClients.map((client) => ({
       clientId: client.id,
       binaryName: client.binary,
@@ -265,14 +267,15 @@ function buildClientResults(ctx: ScanContext): OnboardingClient[] {
  *
  * Prefer {@link scanOnboarding} when both adapter and client results are needed
  * to avoid issuing duplicate bus requests.
+ * @param call - Call context of the operation requesting the scan.
  * @returns Enriched adapter list with canonical client scan results
  * @example
  * ```typescript
- * const adapters = await scanOnboardingAdapters();
+ * const adapters = await scanOnboardingAdapters(call);
  * ```
  */
-export async function scanOnboardingAdapters(): Promise<OnboardingAdapter[]> {
-  const ctx = await buildScanContext();
+export async function scanOnboardingAdapters(call: CallContext): Promise<OnboardingAdapter[]> {
+  const ctx = await buildScanContext(call);
   if (!ctx) return [];
   return buildAdapterResults(ctx);
 }
@@ -286,10 +289,11 @@ export async function scanOnboardingAdapters(): Promise<OnboardingAdapter[]> {
  *
  * Prefer {@link scanOnboarding} when both adapter and client results are needed
  * to avoid issuing duplicate bus requests.
+ * @param call - Call context of the operation requesting the scan.
  * @returns Client-grouped scan results
  */
-export async function scanOnboardingClients(): Promise<OnboardingClient[]> {
-  const ctx = await buildScanContext();
+export async function scanOnboardingClients(call: CallContext): Promise<OnboardingClient[]> {
+  const ctx = await buildScanContext(call);
   if (!ctx) return [];
   return buildClientResults(ctx);
 }
@@ -299,13 +303,14 @@ export async function scanOnboardingClients(): Promise<OnboardingClient[]> {
  *
  * Avoids duplicate bus requests that would occur when calling
  * {@link scanOnboardingAdapters} and {@link scanOnboardingClients} independently.
+ * @param call - Call context of the operation requesting the scan.
  * @returns Combined scan results for adapters and clients
  */
-export async function scanOnboarding(): Promise<{
+export async function scanOnboarding(call: CallContext): Promise<{
   adapters: OnboardingAdapter[];
   clients: OnboardingClient[];
 }> {
-  const ctx = await buildScanContext();
+  const ctx = await buildScanContext(call);
   if (!ctx) return { adapters: [], clients: [] };
   return {
     adapters: buildAdapterResults(ctx),

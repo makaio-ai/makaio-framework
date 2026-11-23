@@ -1,4 +1,5 @@
 import type { IMakaioBus, ScopedBus } from '@makaio/bus-core';
+import type { CallContext } from '@makaio/core';
 import type { ProviderContext } from '@makaio/contracts';
 import type { AIAgentConnector } from '../connector/index.js';
 import { AgentConnectorLifecycleManager, type ConnectorSwapCommitGuard } from './agent-connector-lifecycle-manager.js';
@@ -106,11 +107,13 @@ export class AgentConnectorSwapCoordinator<TBus extends ScopedBus<string>, TConn
 
   /**
    * Atomically activate an optional managed account and replace the connector.
+   * @param call - Call context of the operation that triggers the swap
    * @param configOverrides - Connector construction overrides
    * @param beforeCommit - Optional caller guard before account commit and publication
    * @param settledByCaller - Whether the caller settles the replacement's currency itself
    */
   public async swapConnector(
+    call: CallContext,
     configOverrides?: AgentConnectorConfigOverrides,
     beforeCommit?: ConnectorSwapCommitGuard,
     settledByCaller = false,
@@ -120,22 +123,24 @@ export class AgentConnectorSwapCoordinator<TBus extends ScopedBus<string>, TConn
       try {
         if (configOverrides?.providerContext !== undefined) {
           activation = await AgentProviderContextActivation.prepare(
+            call,
             this.config.globalBus,
             configOverrides.providerContext,
           );
         }
         await this.swapConnectorUnlocked(
+          call,
           configOverrides,
           async () => {
-            await beforeCommit?.();
-            await activation?.commit();
+            await beforeCommit?.(call);
+            await activation?.commit(call);
           },
           settledByCaller,
         );
       } catch (error) {
         if (activation !== undefined) {
           try {
-            await activation.rollbackPending();
+            await activation.rollbackPending(call);
           } catch (rollbackError) {
             const sanitizedPrimary = new Error('Public connector replacement failed.');
             throw new AggregateError(
@@ -169,6 +174,7 @@ export class AgentConnectorSwapCoordinator<TBus extends ScopedBus<string>, TConn
    * Settling in this function's own `finally` is equally load-bearing: a producer
    * that throws after admission still settles, so a teardown already waiting does
    * not wait out its whole bound for a replacement that is over.
+   * @param call - Call context of the operation that triggers the swap
    * @param configOverrides - Connector construction overrides
    * @param beforeCommit - Final guard after initialization and before publication
    * @param settledByCaller - Whether the caller settles the replacement's currency itself
@@ -176,6 +182,7 @@ export class AgentConnectorSwapCoordinator<TBus extends ScopedBus<string>, TConn
    *   holds no runtime to replace
    */
   public async swapConnectorUnlocked(
+    call: CallContext,
     configOverrides?: AgentConnectorConfigOverrides,
     beforeCommit?: ConnectorSwapCommitGuard,
     settledByCaller = false,
@@ -186,6 +193,7 @@ export class AgentConnectorSwapCoordinator<TBus extends ScopedBus<string>, TConn
     let outcome: 'committed' | 'rolled-back' = 'rolled-back';
     try {
       const confirmedAdapterSessionId = await this.config.lifecycleManager.swapConnector(
+        call,
         configOverrides,
         beforeCommit,
         settledByCaller,
@@ -214,7 +222,7 @@ export class AgentConnectorSwapCoordinator<TBus extends ScopedBus<string>, TConn
         // generation whose end nobody could wait for, one layer up.
         if (!handover.reportsConsumedByWaiter) this.config.recordUnreportedCloseReports(closeReports);
         if (handover.abandonedByWaiter) {
-          await this.closeRuntimesForAbandonedWaiter(unclosed);
+          await this.closeRuntimesForAbandonedWaiter(call, unclosed);
         }
       } finally {
         admission.retire();
@@ -272,13 +280,17 @@ export class AgentConnectorSwapCoordinator<TBus extends ScopedBus<string>, TConn
    * left a successor answering beside a stale handler. What is left here is the
    * connector wiring of the runtimes below, cleared **before** the closes so
    * nothing can be admitted onto a runtime this method is already taking apart.
+   * @param call - Call context of the replacement that owns the runtimes
    * @param unclosed - Runtimes this replacement could not prove closed
    */
-  private async closeRuntimesForAbandonedWaiter(unclosed: readonly ClosableConnectorRuntime[]): Promise<void> {
+  private async closeRuntimesForAbandonedWaiter(
+    call: CallContext,
+    unclosed: readonly ClosableConnectorRuntime[],
+  ): Promise<void> {
     this.config.lifecycleManager.clearConnectorWiring();
     const survivor = this.config.detachConnectorRuntime();
     for (const runtime of survivor === undefined ? unclosed : [survivor, ...unclosed]) {
-      const report = await closeConnectorRuntime(runtime);
+      const report = await closeConnectorRuntime(call, runtime);
       if (report.closeError !== undefined) {
         console.warn(
           `[AIAgent] Agent ${this.config.agentId} connector replacement inherited a teardown's runtimes and could not close one:`,

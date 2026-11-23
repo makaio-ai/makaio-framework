@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
+import { createTestCall } from '@makaio/test-utils';
 import {
   SessionSubjects,
   type IWorkflowRunner,
@@ -41,7 +42,7 @@ describe('workflow public subjects', () => {
       name: 'Public List Executions',
       steps: [],
     });
-    await MakaioBus.request(WorkflowSubjects.setDefinition, { workflow });
+    await MakaioBus.request(createTestCall(), WorkflowSubjects.setDefinition, { workflow });
 
     const projectScope = {
       type: 'external',
@@ -52,7 +53,7 @@ describe('workflow public subjects', () => {
 
     const projectExecutionIds: string[] = [];
     for (let index = 0; index < 4; index++) {
-      const { executionId } = await MakaioBus.request(WorkflowSubjects.start, {
+      const { executionId } = await MakaioBus.request(createTestCall(), WorkflowSubjects.start, {
         workflowId: workflow.id,
         scope: projectScope,
         input: { index },
@@ -60,14 +61,14 @@ describe('workflow public subjects', () => {
       projectExecutionIds.push(executionId);
     }
     for (let index = 0; index < 2; index++) {
-      await MakaioBus.request(WorkflowSubjects.start, {
+      await MakaioBus.request(createTestCall(), WorkflowSubjects.start, {
         workflowId: workflow.id,
         scope: otherScope,
         input: { index },
       });
     }
 
-    const page1 = await MakaioBus.request(WorkflowSubjects.listExecutions, {
+    const page1 = await MakaioBus.request(createTestCall(), WorkflowSubjects.listExecutions, {
       scope: projectScope,
       limit: 2,
     });
@@ -78,7 +79,7 @@ describe('workflow public subjects', () => {
       throw new Error('Expected first execution page to include a cursor source.');
     }
 
-    const page2 = await MakaioBus.request(WorkflowSubjects.listExecutions, {
+    const page2 = await MakaioBus.request(createTestCall(), WorkflowSubjects.listExecutions, {
       scope: projectScope,
       limit: 2,
       cursor: { startedAt: cursorSource.startedAt, id: cursorSource.id },
@@ -110,15 +111,15 @@ describe('workflow public subjects', () => {
       scope: { type: 'global' },
       steps: [],
     });
-    await MakaioBus.request(WorkflowSubjects.setDefinition, { workflow });
+    await MakaioBus.request(createTestCall(), WorkflowSubjects.setDefinition, { workflow });
 
     const executionScope = { type: 'session', id: 'session-public-start' } satisfies WorkflowExecutionScope;
-    const { executionId } = await MakaioBus.request(WorkflowSubjects.start, {
+    const { executionId } = await MakaioBus.request(createTestCall(), WorkflowSubjects.start, {
       workflowId: workflow.id,
       scope: executionScope,
     });
 
-    const { execution } = await MakaioBus.request(WorkflowSubjects.getExecution, { executionId });
+    const { execution } = await MakaioBus.request(createTestCall(), WorkflowSubjects.getExecution, { executionId });
 
     expect(execution?.scope).toEqual(executionScope);
   });
@@ -133,7 +134,7 @@ describe('workflow public subjects', () => {
       name: 'Public Start Non Object Input',
       root: { id: 'public-start-non-object-input-root', type: 'sequence', nodes: [] },
     });
-    await MakaioBus.request(WorkflowSubjects.setDefinition, { workflow });
+    await MakaioBus.request(createTestCall(), WorkflowSubjects.setDefinition, { workflow });
 
     const starts = [
       { suffix: 'array', input: ['item-1', 'item-2'] },
@@ -148,14 +149,16 @@ describe('workflow public subjects', () => {
           resolve(ctx.payload.executionId);
         });
       });
-      const { executionId } = await MakaioBus.request(WorkflowSubjects.start, {
+      const { executionId } = await MakaioBus.request(createTestCall(), WorkflowSubjects.start, {
         workflowId: workflow.id,
         input: start.input,
       });
       await expect(completedPromise).resolves.toBe(executionId);
 
-      const { execution } = await MakaioBus.request(WorkflowSubjects.getExecution, { executionId });
-      const { runContext } = await MakaioBus.request(WorkflowStorageSubjects.getRunContext, { executionId });
+      const { execution } = await MakaioBus.request(createTestCall(), WorkflowSubjects.getExecution, { executionId });
+      const { runContext } = await MakaioBus.request(createTestCall(), WorkflowStorageSubjects.getRunContext, {
+        executionId,
+      });
 
       expect(execution?.inputs).toEqual(start.input);
       expect(runContext?.inputs).toEqual(start.input);
@@ -170,12 +173,13 @@ describe('workflow public subjects', () => {
 
     const capturedConfigs: WorkflowWorkerConfig[] = [];
     const workflowRunner: IWorkflowRunner = {
-      async run(config, signal): Promise<WorkflowRunnerCompletion> {
+      async run(call, config, signal): Promise<WorkflowRunnerCompletion> {
         capturedConfigs.push(config);
         if (config.definition === undefined) {
           throw new Error('Definition-backed runner config must include a workflow definition snapshot.');
         }
         const result = await runWorkflowOrchestrator({
+          call,
           config,
           loaded: {
             definition: config.definition,
@@ -195,7 +199,7 @@ describe('workflow public subjects', () => {
       name: 'Public Start Runner Input Hints',
       root: { id: 'public-start-runner-input-hints-root', type: 'sequence', nodes: [] },
     });
-    await MakaioBus.request(WorkflowSubjects.setDefinition, { workflow });
+    await MakaioBus.request(createTestCall(), WorkflowSubjects.setDefinition, { workflow });
 
     const starts = [['item-1', 'item-2'], null] as const;
 
@@ -206,7 +210,7 @@ describe('workflow public subjects', () => {
           resolve(ctx.payload.executionId);
         });
       });
-      const { executionId } = await MakaioBus.request(WorkflowSubjects.start, {
+      const { executionId } = await MakaioBus.request(createTestCall(), WorkflowSubjects.start, {
         workflowId: workflow.id,
         input,
       });
@@ -233,7 +237,7 @@ describe('workflow public subjects', () => {
 
     const capturedConfigs: WorkflowWorkerConfig[] = [];
     const workflowRunner: IWorkflowRunner = {
-      async run(config): Promise<WorkflowRunnerCompletion> {
+      async run(_call, config): Promise<WorkflowRunnerCompletion> {
         capturedConfigs.push(config);
         if (returnedStatus === 'failed') {
           return {
@@ -275,7 +279,7 @@ describe('workflow public subjects', () => {
       name: 'Public Start Runner Returned Result',
       root: { id: 'public-start-runner-returned-result-root', type: 'sequence', nodes: [] },
     });
-    await MakaioBus.request(WorkflowSubjects.setDefinition, { workflow });
+    await MakaioBus.request(createTestCall(), WorkflowSubjects.setDefinition, { workflow });
 
     const terminalPromise = new Promise<string>((resolve) => {
       const unsubscribers = [
@@ -293,10 +297,12 @@ describe('workflow public subjects', () => {
         }),
       ];
     });
-    const { executionId } = await MakaioBus.request(WorkflowSubjects.start, { workflowId: workflow.id });
+    const { executionId } = await MakaioBus.request(createTestCall(), WorkflowSubjects.start, {
+      workflowId: workflow.id,
+    });
 
     await expect(terminalPromise).resolves.toBe(executionId);
-    const { execution } = await MakaioBus.request(WorkflowSubjects.getExecution, { executionId });
+    const { execution } = await MakaioBus.request(createTestCall(), WorkflowSubjects.getExecution, { executionId });
 
     expect(capturedConfigs).toHaveLength(1);
     expect(execution?.status).toBe(expectedStatus);
@@ -333,7 +339,7 @@ describe('workflow start with parentSessionId', () => {
       name: 'Start Stale Parent',
       steps: [],
     });
-    await MakaioBus.request(WorkflowSubjects.setDefinition, { workflow });
+    await MakaioBus.request(createTestCall(), WorkflowSubjects.setDefinition, { workflow });
 
     // Track coordinator session creation attempts — should be zero for a stale parent.
     const coordinatorSessionIds: string[] = [];
@@ -343,7 +349,7 @@ describe('workflow start with parentSessionId', () => {
 
     try {
       await expect(
-        MakaioBus.request(WorkflowSubjects.start, {
+        MakaioBus.request(createTestCall(), WorkflowSubjects.start, {
           workflowId: workflow.id,
           parentSessionId: 'session-does-not-exist',
         }),
@@ -363,25 +369,27 @@ describe('workflow start with parentSessionId', () => {
       name: 'Start Valid Parent',
       steps: [],
     });
-    await MakaioBus.request(WorkflowSubjects.setDefinition, { workflow });
+    await MakaioBus.request(createTestCall(), WorkflowSubjects.setDefinition, { workflow });
 
     // Create a real parent session through the session service.
-    const { sessionId: parentSessionId } = await MakaioBus.request(SessionSubjects.create, {
+    const { sessionId: parentSessionId } = await MakaioBus.request(createTestCall(), SessionSubjects.create, {
       title: 'Parent Session',
     });
 
-    const { executionId } = await MakaioBus.request(WorkflowSubjects.start, {
+    const { executionId } = await MakaioBus.request(createTestCall(), WorkflowSubjects.start, {
       workflowId: workflow.id,
       parentSessionId,
     });
 
     // The run context must record the coordinator session that was created as a
     // child of the supplied parent.
-    const { runContext } = await MakaioBus.request(WorkflowStorageSubjects.getRunContext, { executionId });
+    const { runContext } = await MakaioBus.request(createTestCall(), WorkflowStorageSubjects.getRunContext, {
+      executionId,
+    });
     expect(runContext).not.toBeNull();
 
     // Verify the coordinator session was created with the parent linked.
-    const { session } = await MakaioBus.request(SessionSubjects.get, {
+    const { session } = await MakaioBus.request(createTestCall(), SessionSubjects.get, {
       sessionId: runContext!.coordinatorSessionId,
     });
     expect(session?.parentSessionId).toBe(parentSessionId);

@@ -13,10 +13,11 @@ import * as http from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { createBusInstance, type IMakaioBus } from '@makaio/bus-core';
-import type { CredentialResolver } from '@makaio/contracts';
+import type { CallContext, CredentialResolver } from '@makaio/contracts';
 import type { CredentialRef } from '@makaio/contracts/config';
 import type { ExtensionService, ExtensionToken, NodeExtensionContext } from '@makaio/contracts/extension';
-import { makeStubNodeExtensionContext, stubExtensionIdentity } from '@makaio/test-utils';
+import { KernelSubjects } from '@makaio/kernel/namespace';
+import { createTestCall, makeStubNodeExtensionContext, stubExtensionIdentity } from '@makaio/test-utils';
 import { Hono } from 'hono';
 import { gatewayExtension } from '../index.js';
 import { GatewayNamespace, GatewaySubjects } from '../contracts/index.js';
@@ -35,6 +36,7 @@ const ACCESS_TOKEN = 'e2e-gateway-token';
  */
 class MapCredentialResolver implements CredentialResolver {
   private readonly store: ReadonlyMap<string, string>;
+  public readonly calls: CallContext[] = [];
 
   /**
    * @param entries - Map from credential reference string to plaintext value.
@@ -45,10 +47,12 @@ class MapCredentialResolver implements CredentialResolver {
 
   /**
    * Resolve a credential reference from the in-process store.
+   * @param call - Call context of the lookup, recorded for assertions.
    * @param ref - Branded credential reference string.
    * @returns Plaintext value, or `null` when the reference is unknown.
    */
-  public resolve(ref: CredentialRef): Promise<string | null> {
+  public resolve(call: CallContext, ref: CredentialRef): Promise<string | null> {
+    this.calls.push(call);
     return Promise.resolve(this.store.get(ref) ?? null);
   }
 }
@@ -125,63 +129,100 @@ function createContext(
   });
 }
 
-let upstream: Upstream;
-let bus: IMakaioBus;
-let shutdown: AbortController;
-let service: ExtensionService;
-let hostApp: Hono;
-/** Events observed on the bus, not through the router's injected emitter. */
-let busEvents: RequestRoutedEvent[];
-
-beforeAll(async () => {
-  upstream = await startUpstream();
-
-  // Compose exactly as the coordinator does: register the manifest's declared
-  // namespaces on the bus, then call the factory with the runtime context.
-  bus = createBusInstance();
-  bus.registerNamespaces([GatewayNamespace]);
-
-  busEvents = [];
-  bus.on(GatewaySubjects.requestRouted, (event) => {
-    busEvents.push(event.payload);
-  });
-
-  shutdown = new AbortController();
+/**
+ * Create and initialize the service through its extension manifest.
+ * @param bus - Bus on which the host and extension communicate.
+ * @param shutdown - Host shutdown signal.
+ * @param credentials - Resolver supplied by the host.
+ * @param upstreamUrl - Optional URL of the test upstream.
+ * @returns The initialized extension service.
+ */
+async function startGateway(
+  bus: IMakaioBus,
+  shutdown: AbortSignal,
+  credentials: CredentialResolver,
+  upstreamUrl?: string,
+): Promise<ExtensionService> {
   const create = gatewayExtension.create;
   if (create === undefined) {
     throw new Error('gateway extension must expose a create() factory');
   }
-  service = await create(
+  const service = await create(
     createContext(
       bus,
       {
-        upstreams: { anthropic: { kind: 'anthropic', url: `http://127.0.0.1:${upstream.port}` } },
+        upstreams: { anthropic: { kind: 'anthropic', url: upstreamUrl } },
         default: 'anthropic',
         rules: [{ match: 'claude-*', to: 'anthropic' }],
         accessToken: ACCESS_TOKEN_REF,
       },
-      shutdown.signal,
-      new MapCredentialResolver({ [ACCESS_TOKEN_REF]: ACCESS_TOKEN }),
+      shutdown,
+      credentials,
     ),
   );
 
   await service.init?.();
+  return service;
+}
 
-  hostApp = new Hono();
-  const mount = gatewayExtension.http?.mount;
-  if (mount === undefined) {
-    throw new Error('gateway extension must expose an http.mount contribution');
+it('warms credentials on the coordinator-ready barrier under the gateway shared-work principal', async () => {
+  const bus = createBusInstance();
+  bus.registerNamespaces([GatewayNamespace]);
+  const shutdown = new AbortController();
+  const resolver = new MapCredentialResolver({ [ACCESS_TOKEN_REF]: ACCESS_TOKEN });
+  const service = await startGateway(bus, shutdown.signal, resolver);
+  const first = createTestCall({ principal: { kind: 'test.user', id: 'alice' } });
+  const second = createTestCall({ principal: { kind: 'test.user', id: 'bob' } });
+  const payload = { machineId: 'e2e-machine' };
+
+  try {
+    await bus.broadcast(first, KernelSubjects.phase.coordinatorReady, payload);
+    expect(resolver.calls).toHaveLength(1);
+    expect(resolver.calls[0]?.principal).toEqual(bus.own('shared-work').principal);
+    expect(resolver.calls[0]).toBe(bus.own('shared-work'));
+
+    await bus.broadcast(second, KernelSubjects.phase.coordinatorReady, payload);
+    expect(resolver.calls).toHaveLength(1);
+  } finally {
+    await service.destroy?.();
+    shutdown.abort();
   }
-  mount(hostApp);
-});
-
-afterAll(async () => {
-  await service.destroy?.();
-  shutdown.abort();
-  await upstream.close();
 });
 
 describe('gateway extension composition seam', () => {
+  let upstream: Upstream;
+  let shutdown: AbortController;
+  let service: ExtensionService;
+  let hostApp: Hono;
+  /** Events observed on the real bus. */
+  let busEvents: RequestRoutedEvent[] = [];
+
+  beforeAll(async () => {
+    upstream = await startUpstream();
+    const bus = createBusInstance();
+    bus.registerNamespaces([GatewayNamespace]);
+    bus.on(GatewaySubjects.requestRouted, (event) => {
+      busEvents.push(event.payload);
+    });
+
+    shutdown = new AbortController();
+    const resolver = new MapCredentialResolver({ [ACCESS_TOKEN_REF]: ACCESS_TOKEN });
+    service = await startGateway(bus, shutdown.signal, resolver, `http://127.0.0.1:${upstream.port}`);
+
+    hostApp = new Hono();
+    const mount = gatewayExtension.http?.mount;
+    if (mount === undefined) {
+      throw new Error('gateway extension must expose an http.mount contribution');
+    }
+    mount(hostApp);
+  });
+
+  afterAll(async () => {
+    await service?.destroy?.();
+    shutdown?.abort();
+    await upstream?.close();
+  });
+
   // Reset the shared event array before each test so that no test depends on
   // side effects produced by a previous test (order independence).
   beforeEach(() => {

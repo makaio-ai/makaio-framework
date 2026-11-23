@@ -26,6 +26,7 @@ import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import { createBusInstance, type BusTransport, type IMakaioBus } from '@makaio/bus-core';
+import { busContextOf } from '@makaio/bus-core/kernel-api';
 import type { DetachedDescriptor } from '@makaio/contracts/extension';
 import type { NodeExtensionContext, ExtensionServiceLifecycle, ExtensionService } from '@makaio/contracts';
 import { createBusNamespace } from '@makaio/core';
@@ -193,7 +194,7 @@ describe('detached extension integration (bus-stdio)', () => {
     await service.init!();
 
     // After init(), the transport must be registered in the bus context.
-    const registeredTransports = bus.getContext().transportRegistry.all();
+    const registeredTransports = busContextOf(bus).transportRegistry.all();
     expect(registeredTransports).toHaveLength(1);
     expect(registeredTransports[0]?.name).toBe('test-detached');
   }, 30_000);
@@ -207,7 +208,7 @@ describe('detached extension integration (bus-stdio)', () => {
     service = await resolveService(pkg.create!(ctx));
     await service.init!();
 
-    const [transport] = bus.getContext().transportRegistry.all();
+    const [transport] = busContextOf(bus).transportRegistry.all();
     expect(transport).toBeDefined();
     // isReady() is true when the subscribe-sync handshake is complete.
     expect((transport as BusTransport & { isReady(): boolean }).isReady()).toBe(true);
@@ -260,7 +261,7 @@ describe('detached extension integration (bus-stdio)', () => {
     service = await resolveService(pkg.create!(ctx));
     await service.init!();
 
-    const [transport] = bus.getContext().transportRegistry.all();
+    const [transport] = busContextOf(bus).transportRegistry.all();
     expect(transport).toBeDefined();
 
     await bus.emit(TestSubjects.ping, { hello: 'world' });
@@ -289,7 +290,7 @@ describe('detached extension integration (bus-stdio)', () => {
     await service.init!();
 
     // Verify transport is registered before destroy.
-    expect(bus.getContext().transportRegistry.all()).toHaveLength(1);
+    expect(busContextOf(bus).transportRegistry.all()).toHaveLength(1);
 
     await service.destroy!();
     service = undefined; // Prevent afterEach from calling destroy() again.
@@ -298,7 +299,7 @@ describe('detached extension integration (bus-stdio)', () => {
     expect(stoppedPayloads[0]).toStrictEqual({ stopped: true });
 
     // Transport must be removed from the registry.
-    expect(bus.getContext().transportRegistry.all()).toHaveLength(0);
+    expect(busContextOf(bus).transportRegistry.all()).toHaveLength(0);
   }, 30_000);
 
   it('aborts a start that is waiting for the subscribe-sync handshake when the signal aborts, and stops the child', async () => {

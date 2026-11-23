@@ -1,4 +1,5 @@
 import type { IMakaioBus } from '@makaio/bus-core';
+import type { CallContext } from '@makaio/core';
 import { SessionEventStorageSubjects } from '@makaio/services-core/session';
 
 /**
@@ -20,18 +21,23 @@ export interface SessionCompactedEventInput {
  * This helper owns the existence check for the common case. If a concurrent
  * importer wins the race between that check and the append, we re-check by
  * `eventId` and treat the duplicate as success.
+ * @param call - Call context of the import this event belongs to; forwarded to every request
  * @param bus - Bus instance for event storage requests
  * @param event - Fully materialized compaction event payload
  */
-export async function appendSessionCompactedEvent(bus: IMakaioBus, event: SessionCompactedEventInput): Promise<void> {
-  const { events: existingEvents } = await bus.request(SessionEventStorageSubjects.getByIds, {
+export async function appendSessionCompactedEvent(
+  call: CallContext,
+  bus: IMakaioBus,
+  event: SessionCompactedEventInput,
+): Promise<void> {
+  const { events: existingEvents } = await bus.request(call, SessionEventStorageSubjects.getByIds, {
     sessionId: event.sessionId,
     eventIds: [event.eventId],
   });
   if (existingEvents.length > 0) return;
 
   try {
-    await bus.request(SessionEventStorageSubjects.append, {
+    await bus.request(call, SessionEventStorageSubjects.append, {
       event: {
         sessionId: event.sessionId,
         eventId: event.eventId,
@@ -46,7 +52,7 @@ export async function appendSessionCompactedEvent(bus: IMakaioBus, event: Sessio
       },
     });
   } catch (error) {
-    const { events: persistedEvents } = await bus.request(SessionEventStorageSubjects.getByIds, {
+    const { events: persistedEvents } = await bus.request(call, SessionEventStorageSubjects.getByIds, {
       sessionId: event.sessionId,
       eventIds: [event.eventId],
     });

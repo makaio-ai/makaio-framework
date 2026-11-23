@@ -13,6 +13,7 @@ import {
   type ProviderRuntimeSnapshot,
 } from '@makaio/services-core/adapter-subsystem';
 import { resetCredentialChangeSequences } from '@makaio/services-core/credential-change';
+import { createTestCall } from '@makaio/test-utils';
 
 import { AccountManager } from '../account-manager.js';
 import { AccountManagerSubjects } from '../bus/namespace.js';
@@ -196,7 +197,9 @@ describe('AccountManager bus handlers', () => {
     source.setCredential(makeCredential('token-1'));
     await vi.advanceTimersByTimeAsync(1000);
 
-    const result = await MakaioBus.request(AccountManagerSubjects.accounts.list, { clientId: 'claude-code' });
+    const result = await MakaioBus.request(createTestCall(), AccountManagerSubjects.accounts.list, {
+      clientId: 'claude-code',
+    });
     expect(result.accounts).toHaveLength(1);
     expect(result.accounts[0].id).toMatch(/^[0-9a-f-]+$/);
     expect('credential' in result.accounts[0]).toBe(false);
@@ -204,17 +207,19 @@ describe('AccountManager bus handlers', () => {
 
   it('returns the active account and null before any account exists', async () => {
     await expect(
-      MakaioBus.request(AccountManagerSubjects.accounts.getActive, { clientId: 'claude-code' }),
+      MakaioBus.request(createTestCall(), AccountManagerSubjects.accounts.getActive, { clientId: 'claude-code' }),
     ).resolves.toEqual({ account: null });
 
     source.setCredential(makeCredential('token-1'));
     await vi.advanceTimersByTimeAsync(1000);
-    const result = await MakaioBus.request(AccountManagerSubjects.accounts.getActive, { clientId: 'claude-code' });
+    const result = await MakaioBus.request(createTestCall(), AccountManagerSubjects.accounts.getActive, {
+      clientId: 'claude-code',
+    });
     expect(result.account).toMatchObject({ active: true });
   });
 
   it('reports available credential sources', async () => {
-    const result = await MakaioBus.request(AccountManagerSubjects.accounts.getSources, {});
+    const result = await MakaioBus.request(createTestCall(), AccountManagerSubjects.accounts.getSources, {});
     expect(result.sources).toContainEqual(
       expect.objectContaining({ clientId: 'claude-code', displayName: 'Claude Code', available: true }),
     );
@@ -235,7 +240,7 @@ describe('AccountManager bus handlers', () => {
     });
     source.setCredential(makeCredential('token-other'));
 
-    const result = await MakaioBus.request(CredentialSubjects.activate, {
+    const result = await MakaioBus.request(createTestCall(), CredentialSubjects.activate, {
       providerContext: makeProviderContext('provider-config-1', accountId),
     });
 
@@ -262,7 +267,7 @@ describe('AccountManager bus handlers', () => {
     source.setRefreshHandler(async () => ({ status: 'refreshed', credential: refreshed }));
 
     await expect(
-      MakaioBus.request(CredentialSubjects.activate, {
+      MakaioBus.request(createTestCall(), CredentialSubjects.activate, {
         providerContext: makeProviderContext('provider-config-1', accountId),
       }),
     ).resolves.toEqual({ success: true });
@@ -270,7 +275,7 @@ describe('AccountManager bus handlers', () => {
   });
 
   it('credential.activate reports a typed missing-account failure without mutating native state', async () => {
-    const result = await MakaioBus.request(CredentialSubjects.activate, {
+    const result = await MakaioBus.request(createTestCall(), CredentialSubjects.activate, {
       providerContext: makeProviderContext('provider-config-1', 'missing-account'),
     });
 
@@ -283,9 +288,9 @@ describe('AccountManager bus handlers', () => {
     if (context.auth.mode !== 'inferred' || !context.auth.account) throw new Error('Expected inferred auth fixture.');
     context.auth.account.managerId = 'other-manager';
 
-    await expect(MakaioBus.requestOptional(CredentialSubjects.activate, { providerContext: context })).resolves.toEqual(
-      { handled: false },
-    );
+    await expect(
+      MakaioBus.requestOptional(createTestCall(), CredentialSubjects.activate, { providerContext: context }),
+    ).resolves.toEqual({ handled: false });
   });
 
   it('consumes prepared activation tokens exactly once', async () => {
@@ -302,19 +307,25 @@ describe('AccountManager bus handlers', () => {
       credential: target,
     });
 
-    const prepared = await MakaioBus.request(CredentialSubjects.activation.prepare, {
+    const prepared = await MakaioBus.request(createTestCall(), CredentialSubjects.activation.prepare, {
       providerContext: makeProviderContext('provider-config-transaction', accountId),
     });
     if (!prepared.success) throw new Error('Expected activation transaction to prepare.');
 
     await expect(
-      MakaioBus.request(CredentialSubjects.activation.commit, { transactionId: prepared.transactionId }),
+      MakaioBus.request(createTestCall(), CredentialSubjects.activation.commit, {
+        transactionId: prepared.transactionId,
+      }),
     ).resolves.toEqual({ success: true });
     await expect(
-      MakaioBus.request(CredentialSubjects.activation.commit, { transactionId: prepared.transactionId }),
+      MakaioBus.request(createTestCall(), CredentialSubjects.activation.commit, {
+        transactionId: prepared.transactionId,
+      }),
     ).resolves.toEqual({ success: false, code: 'transaction-not-found' });
     await expect(
-      MakaioBus.request(CredentialSubjects.activation.rollback, { transactionId: prepared.transactionId }),
+      MakaioBus.request(createTestCall(), CredentialSubjects.activation.rollback, {
+        transactionId: prepared.transactionId,
+      }),
     ).resolves.toEqual({ success: false, code: 'transaction-not-found' });
   });
 
@@ -334,17 +345,17 @@ describe('AccountManager bus handlers', () => {
     const commitStarted = Promise.withResolvers<void>();
     const continueCommit = Promise.withResolvers<void>();
     const appendTimeline = store.metadataStore.appendTimeline.bind(store.metadataStore);
-    vi.spyOn(store.metadataStore, 'appendTimeline').mockImplementation(async (entry) => {
+    vi.spyOn(store.metadataStore, 'appendTimeline').mockImplementation(async (call, entry) => {
       commitStarted.resolve();
       await continueCommit.promise;
-      await appendTimeline(entry);
+      await appendTimeline(call, entry);
     });
 
-    const prepared = await MakaioBus.request(CredentialSubjects.activation.prepare, {
+    const prepared = await MakaioBus.request(createTestCall(), CredentialSubjects.activation.prepare, {
       providerContext: makeProviderContext('provider-config-finalization-in-flight', accountId),
     });
     if (!prepared.success) throw new Error('Expected activation transaction to prepare.');
-    const commit = MakaioBus.request(CredentialSubjects.activation.commit, {
+    const commit = MakaioBus.request(createTestCall(), CredentialSubjects.activation.commit, {
       transactionId: prepared.transactionId,
     });
     await commitStarted.promise;
@@ -355,10 +366,10 @@ describe('AccountManager bus handlers', () => {
     });
     await Promise.resolve();
     const settledBeforeCommit = destroySettled;
-    const duplicateCommit = MakaioBus.request(CredentialSubjects.activation.commit, {
+    const duplicateCommit = MakaioBus.request(createTestCall(), CredentialSubjects.activation.commit, {
       transactionId: prepared.transactionId,
     });
-    const conflictingRollback = MakaioBus.request(CredentialSubjects.activation.rollback, {
+    const conflictingRollback = MakaioBus.request(createTestCall(), CredentialSubjects.activation.rollback, {
       transactionId: prepared.transactionId,
     });
     continueCommit.resolve();
@@ -412,7 +423,7 @@ describe('AccountManager bus handlers', () => {
       credential: target,
     });
 
-    const acceptedPrepare = isolatedBus.request(CredentialSubjects.activation.prepare, {
+    const acceptedPrepare = isolatedBus.request(createTestCall(), CredentialSubjects.activation.prepare, {
       providerContext: makeProviderContext('provider-config-accepted-before-shutdown', accountId),
     });
     await pausingSource.writeStarted.promise;
@@ -420,7 +431,7 @@ describe('AccountManager bus handlers', () => {
     const destroy = service.destroy().then(() => {
       destroySettled = true;
     });
-    const latePrepare = isolatedBus.request(CredentialSubjects.activation.prepare, {
+    const latePrepare = isolatedBus.request(createTestCall(), CredentialSubjects.activation.prepare, {
       providerContext: makeProviderContext('provider-config-rejected-during-shutdown', accountId),
     });
     await Promise.resolve();
@@ -432,7 +443,7 @@ describe('AccountManager bus handlers', () => {
     await destroy;
     expect(settledBeforeWrite).toBe(false);
     await expect(pausingSource.read()).resolves.toBeNull();
-    await expect(isolatedStore.metadataStore.getActive('claude-code')).resolves.toBeNull();
+    await expect(isolatedStore.metadataStore.getActive(createTestCall(), 'claude-code')).resolves.toBeNull();
   });
 
   it('keeps prepare admission closed when initialization fails after handlers register', async () => {
@@ -457,14 +468,14 @@ describe('AccountManager bus handlers', () => {
     const failSync = Promise.withResolvers<void>();
     const list = isolatedStore.metadataStore.list.bind(isolatedStore.metadataStore);
     let listCalls = 0;
-    vi.spyOn(isolatedStore.metadataStore, 'list').mockImplementation(async (clientId) => {
+    vi.spyOn(isolatedStore.metadataStore, 'list').mockImplementation(async (call, clientId) => {
       listCalls += 1;
       if (listCalls === 2) {
         syncStarted.resolve();
         await failSync.promise;
         throw new Error('startup account sync failed');
       }
-      return list(clientId);
+      return list(call, clientId);
     });
     service = new AccountManager(isolatedBus, {
       sources: [isolatedSource],
@@ -482,7 +493,7 @@ describe('AccountManager bus handlers', () => {
     );
     await syncStarted.promise;
     await expect(
-      isolatedBus.request(CredentialSubjects.activation.prepare, {
+      isolatedBus.request(createTestCall(), CredentialSubjects.activation.prepare, {
         providerContext: makeProviderContext('provider-config-during-failed-init', accountId),
       }),
     ).resolves.toEqual({ success: false, code: 'activation-failed' });
@@ -510,17 +521,19 @@ describe('AccountManager bus handlers', () => {
     });
     source.setCredential(null);
 
-    const prepared = await MakaioBus.request(CredentialSubjects.activation.prepare, {
+    const prepared = await MakaioBus.request(createTestCall(), CredentialSubjects.activation.prepare, {
       providerContext: makeProviderContext('provider-config-first-native', accountId),
     });
     if (!prepared.success) throw new Error('Expected activation transaction to prepare.');
     expect(await source.read()).toEqual(target);
 
     await expect(
-      MakaioBus.request(CredentialSubjects.activation.rollback, { transactionId: prepared.transactionId }),
+      MakaioBus.request(createTestCall(), CredentialSubjects.activation.rollback, {
+        transactionId: prepared.transactionId,
+      }),
     ).resolves.toEqual({ success: true });
     expect(await source.read()).toBeNull();
-    expect(await store.metadataStore.getActive('claude-code')).toBeNull();
+    expect(await store.metadataStore.getActive(createTestCall(), 'claude-code')).toBeNull();
   });
 
   it('keeps the prepared durable selection when native rollback is superseded by a newer generation', async () => {
@@ -551,17 +564,19 @@ describe('AccountManager bus handlers', () => {
     });
     source.setCredential(accountA);
 
-    const prepared = await MakaioBus.request(CredentialSubjects.activation.prepare, {
+    const prepared = await MakaioBus.request(createTestCall(), CredentialSubjects.activation.prepare, {
       providerContext: makeProviderContext('provider-config-superseded-rollback', accountBId),
     });
     if (!prepared.success) throw new Error('Expected activation transaction to prepare.');
     source.setCredential(refreshedAccountB);
 
     await expect(
-      MakaioBus.request(CredentialSubjects.activation.rollback, { transactionId: prepared.transactionId }),
+      MakaioBus.request(createTestCall(), CredentialSubjects.activation.rollback, {
+        transactionId: prepared.transactionId,
+      }),
     ).resolves.toEqual({ success: false, code: 'rollback-failed' });
     expect(await source.read()).toEqual(refreshedAccountB);
-    expect(await store.metadataStore.getActive('claude-code')).toMatchObject({ id: accountBId });
+    expect(await store.metadataStore.getActive(createTestCall(), 'claude-code')).toMatchObject({ id: accountBId });
   });
 
   it('aborts and fully restores a prepare whose native write coordination is uncertain', async () => {
@@ -612,12 +627,14 @@ describe('AccountManager bus handlers', () => {
     uncertainSource.setCredential(accountA);
 
     await expect(
-      isolatedBus.request(CredentialSubjects.activation.prepare, {
+      isolatedBus.request(createTestCall(), CredentialSubjects.activation.prepare, {
         providerContext: makeProviderContext('provider-config-uncertain-write', accountBId),
       }),
     ).resolves.toEqual({ success: false, code: 'activation-failed' });
     expect(await uncertainSource.read()).toEqual(accountA);
-    expect(await isolatedStore.metadataStore.getActive('claude-code')).toMatchObject({ id: accountAId });
+    expect(await isolatedStore.metadataStore.getActive(createTestCall(), 'claude-code')).toMatchObject({
+      id: accountAId,
+    });
   });
 
   it('surfaces uncertain rollback coordination after restoring native and durable state', async () => {
@@ -665,15 +682,19 @@ describe('AccountManager bus handlers', () => {
     }
     uncertainSource.setCredential(accountA);
 
-    const prepared = await isolatedBus.request(CredentialSubjects.activation.prepare, {
+    const prepared = await isolatedBus.request(createTestCall(), CredentialSubjects.activation.prepare, {
       providerContext: makeProviderContext('provider-config-uncertain-rollback', accountBId),
     });
     if (!prepared.success) throw new Error('Expected activation transaction to prepare.');
     await expect(
-      isolatedBus.request(CredentialSubjects.activation.rollback, { transactionId: prepared.transactionId }),
+      isolatedBus.request(createTestCall(), CredentialSubjects.activation.rollback, {
+        transactionId: prepared.transactionId,
+      }),
     ).resolves.toEqual({ success: false, code: 'rollback-failed' });
     expect(await uncertainSource.read()).toEqual(accountA);
-    expect(await isolatedStore.metadataStore.getActive('claude-code')).toMatchObject({ id: accountAId });
+    expect(await isolatedStore.metadataStore.getActive(createTestCall(), 'claude-code')).toMatchObject({
+      id: accountAId,
+    });
   });
 
   it('self-rolls back native and durable state when strict commit persistence fails', async () => {
@@ -704,17 +725,19 @@ describe('AccountManager bus handlers', () => {
     source.setCredential(accountA);
     vi.spyOn(store.metadataStore, 'appendTimeline').mockRejectedValueOnce(new Error('timeline unavailable'));
 
-    const prepared = await MakaioBus.request(CredentialSubjects.activation.prepare, {
+    const prepared = await MakaioBus.request(createTestCall(), CredentialSubjects.activation.prepare, {
       providerContext: makeProviderContext('provider-config-strict-commit', accountBId),
     });
     if (!prepared.success) throw new Error('Expected activation transaction to prepare.');
     expect(await source.read()).toEqual(accountB);
 
     await expect(
-      MakaioBus.request(CredentialSubjects.activation.commit, { transactionId: prepared.transactionId }),
+      MakaioBus.request(createTestCall(), CredentialSubjects.activation.commit, {
+        transactionId: prepared.transactionId,
+      }),
     ).resolves.toEqual({ success: false, code: 'commit-failed' });
     expect(await source.read()).toEqual(accountA);
-    expect(await store.metadataStore.getActive('claude-code')).toMatchObject({ id: accountAId });
+    expect(await store.metadataStore.getActive(createTestCall(), 'claude-code')).toMatchObject({ id: accountAId });
   });
 
   it('switchAccount emits full normalized contexts for pinned and current-native configs', async () => {
@@ -737,7 +760,7 @@ describe('AccountManager bus handlers', () => {
 
     try {
       await expect(
-        MakaioBus.request(AccountManagerSubjects.credentials.switch, {
+        MakaioBus.request(createTestCall(), AccountManagerSubjects.credentials.switch, {
           clientId: 'claude-code',
           accountId: accountB,
         }),
@@ -772,7 +795,7 @@ describe('AccountManager bus handlers', () => {
     );
 
     try {
-      await MakaioBus.request(AccountManagerSubjects.credentials.switch, {
+      await MakaioBus.request(createTestCall(), AccountManagerSubjects.credentials.switch, {
         clientId: 'claude-code',
         accountId: accountB,
       });
@@ -803,7 +826,7 @@ describe('AccountManager bus handlers', () => {
     );
 
     try {
-      await MakaioBus.request(AccountManagerSubjects.credentials.switch, {
+      await MakaioBus.request(createTestCall(), AccountManagerSubjects.credentials.switch, {
         clientId: 'claude-code',
         accountId: accountB,
       });
@@ -838,7 +861,7 @@ describe('AccountManager bus handlers', () => {
     );
 
     try {
-      await MakaioBus.request(AccountManagerSubjects.credentials.switch, {
+      await MakaioBus.request(createTestCall(), AccountManagerSubjects.credentials.switch, {
         clientId: 'claude-code',
         accountId: accountB,
       });
@@ -863,7 +886,7 @@ describe('AccountManager bus handlers', () => {
     const accountId = (await store.list('claude-code'))[0].id;
 
     await expect(
-      MakaioBus.request(AccountManagerSubjects.accounts.label, {
+      MakaioBus.request(createTestCall(), AccountManagerSubjects.accounts.label, {
         clientId: 'claude-code',
         accountId,
         label: 'Work',
@@ -872,13 +895,16 @@ describe('AccountManager bus handlers', () => {
     expect((await store.list('claude-code'))[0].label).toBe('Work');
 
     await expect(
-      MakaioBus.request(AccountManagerSubjects.accounts.remove, { clientId: 'claude-code', accountId }),
+      MakaioBus.request(createTestCall(), AccountManagerSubjects.accounts.remove, {
+        clientId: 'claude-code',
+        accountId,
+      }),
     ).resolves.toEqual({ success: true });
     expect(await store.list('claude-code')).toHaveLength(0);
   });
 
   it('configureFileMode reports unsupported sources', async () => {
-    const result = await MakaioBus.request(AccountManagerSubjects.credentials.configureFileMode, {
+    const result = await MakaioBus.request(createTestCall(), AccountManagerSubjects.credentials.configureFileMode, {
       clientId: 'claude-code',
     });
     expect(result).toMatchObject({ success: false });
@@ -905,7 +931,9 @@ describe('AccountManager bus handlers', () => {
     await isolatedService.init();
     try {
       await expect(
-        isolatedBus.request(AccountManagerSubjects.credentials.configureFileMode, { clientId: 'claude-code-fm' }),
+        isolatedBus.request(createTestCall(), AccountManagerSubjects.credentials.configureFileMode, {
+          clientId: 'claude-code-fm',
+        }),
       ).resolves.toEqual({ success: true });
       expect(called).toBe(true);
     } finally {

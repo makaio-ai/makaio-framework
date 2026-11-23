@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
-import { MakaioBus } from '@makaio/bus-core';
+import { getFullSubjectForSubjectDefinition, MakaioBus } from '@makaio/bus-core';
+import { createTestCall } from '@makaio/test-utils';
 import { createClientNamespace } from '../create-client-namespace.js';
 import { emitBestEffort, pickNonEmptyString, buildClientSessionBase } from '../client-session-observed-semantics.js';
 import {
@@ -44,13 +45,14 @@ afterEach(() => {
 describe('createClientNamespace', () => {
   it('registers the hook.received subject under client:<clientId>', () => {
     const clientId = nextClientId('codex');
-    const { subjects, namespaceDomain } = createClientNamespace(clientId);
+    const { subjects, namespaceDomain, definition } = createClientNamespace(clientId);
 
     expect(namespaceDomain).toBe(`client:${clientId}`);
     expect(subjects.hook.received.subject).toBe('hook.received');
     expect(subjects.hook.received.$meta.namespace).toBe(`client:${clientId}`);
 
-    // Namespace is registered on the singleton bus
+    expect(MakaioBus.getSchema(subjects.hook.received)).toBeUndefined();
+    MakaioBus.registerNamespaces([definition]);
     const schema = MakaioBus.getSchema(subjects.hook.received);
     expect(schema).toBeDefined();
   });
@@ -162,7 +164,10 @@ describe('createClientNamespace', () => {
 
     expect(first.namespaceDomain).toBe(`client:${clientId}`);
     expect(second.namespaceDomain).toBe(`client:${clientId}`);
-    expect(second.subjects.hook.received).toBe(first.subjects.hook.received);
+    expect(getFullSubjectForSubjectDefinition(first.subjects.hook.received)).toBe(`client:${clientId}.hook.received`);
+    expect(getFullSubjectForSubjectDefinition(second.subjects.hook.received)).toBe(
+      getFullSubjectForSubjectDefinition(first.subjects.hook.received),
+    );
   });
 
   it('rejects whitespace and disallowed symbols inside clientId', () => {
@@ -195,7 +200,7 @@ describe('createClientNamespace', () => {
       received.push(payload);
     });
 
-    await MakaioBus.emit(subjects.hook.received, {
+    await MakaioBus.emit(createTestCall(), subjects.hook.received, {
       eventName: 'UserPromptSubmit',
       receivedAt: 1_713_795_200_000,
       payload: { session_id: 'sess-1', prompt: 'hello' },
@@ -213,7 +218,7 @@ describe('createClientNamespace', () => {
   describe('additionalSchemas', () => {
     it('registers extra subjects alongside hook.received', () => {
       const clientId = nextClientId('with-extras');
-      const { subjects, namespaceDomain } = createClientNamespace(clientId, {
+      const { subjects, namespaceDomain, definition } = createClientNamespace(clientId, {
         'statusline.received': ExtraStatuslineSchema,
       });
 
@@ -223,6 +228,10 @@ describe('createClientNamespace', () => {
       expect(subjects.statusline.received.subject).toBe('statusline.received');
       expect(subjects.statusline.received.$meta.namespace).toBe(`client:${clientId}`);
 
+      expect(MakaioBus.getSchema(subjects.hook.received)).toBeUndefined();
+      expect(MakaioBus.getSchema(subjects.statusline.received)).toBeUndefined();
+      MakaioBus.registerNamespaces([definition]);
+      expect(MakaioBus.getSchema(subjects.hook.received)).toBeDefined();
       const schema = MakaioBus.getSchema(subjects.statusline.received);
       expect(schema).toBeDefined();
     });
@@ -237,7 +246,7 @@ describe('createClientNamespace', () => {
         received.push(payload);
       });
 
-      await MakaioBus.emit(subjects.statusline.received, { status: 'active' });
+      await MakaioBus.emit(createTestCall(), subjects.statusline.received, { status: 'active' });
 
       cleanup();
 
@@ -255,7 +264,7 @@ describe('createClientNamespace', () => {
         received.push(payload);
       });
 
-      await MakaioBus.emit(subjects.hook.received, {
+      await MakaioBus.emit(createTestCall(), subjects.hook.received, {
         eventName: 'Stop',
         receivedAt: 1_713_795_200_000,
         payload: {},
@@ -267,17 +276,17 @@ describe('createClientNamespace', () => {
       expect(received[0]).toMatchObject({ eventName: 'Stop' });
     });
 
-    it('throws when a later call asks for additional subjects missing from the existing namespace', () => {
+    it('defines additional subjects independently of an earlier factory call', () => {
       const clientId = nextClientId('late-extra');
-      createClientNamespace(clientId);
+      const first = createClientNamespace(clientId);
+      const second = createClientNamespace(clientId, { 'statusline.received': ExtraStatuslineSchema });
 
-      expect(() =>
-        createClientNamespace(clientId, {
-          'statusline.received': ExtraStatuslineSchema,
-        }),
-      ).toThrow(
-        `[createClientNamespace] client:${clientId} was already registered without required subjects: statusline.received`,
-      );
+      expect(first.subjects).not.toHaveProperty('statusline');
+      expect(second.namespaceDomain).toBe(first.namespaceDomain);
+      expect(second.subjects.statusline.received.subject).toBe('statusline.received');
+      expect(MakaioBus.getSchema(second.subjects.statusline.received)).toBeUndefined();
+      MakaioBus.registerNamespaces([second.definition]);
+      expect(MakaioBus.getSchema(second.subjects.statusline.received)).toBeDefined();
     });
   });
 
@@ -303,7 +312,7 @@ describe('createClientNamespace', () => {
         received.push(payload);
       });
 
-      await MakaioBus.emit(subject, {
+      await MakaioBus.emit(createTestCall(), subject, {
         eventName: 'Stop',
         receivedAt: 1_713_795_200_000,
         payload: {},

@@ -1,4 +1,5 @@
 import type { IMakaioBus } from '@makaio/bus-core';
+import type { CallContext } from '@makaio/core';
 import { ArtifactSchemas, ArtifactSubjects, WorkflowSubjects } from '@makaio/contracts';
 import type { ArtifactContext, ArtifactPatch, ArtifactUpdater } from '@makaio/contracts';
 import { makeWorkflowActor, type ArtifactBindingState } from './artifact-binding.js';
@@ -224,6 +225,11 @@ async function resolveUpdate<TData extends Record<string, unknown>>(
  * Parameters for {@link createArtifactContext}.
  */
 export interface CreateArtifactContextOptions {
+  /**
+   * Call context of the station execution that owns this artifact context.
+   * Used only by the sends of `updateArtifact` while that station runs; never stored in a field.
+   */
+  readonly call: CallContext;
   /** Execution identifier — used for actor attribution and event correlation. */
   readonly executionId: string;
   /** Frame identifier — used in `workflow.artifact.updated` events. */
@@ -248,7 +254,7 @@ export interface CreateArtifactContextOptions {
 export function createArtifactContext<TData extends Record<string, unknown> = Record<string, unknown>>(
   options: CreateArtifactContextOptions,
 ): ArtifactContext<TData> {
-  const { executionId, frameId, bindingState, bus } = options;
+  const { call, executionId, frameId, bindingState, bus } = options;
   const snapshot = Object.freeze({ ...bindingState.current.data }) as Readonly<TData>;
 
   const updateArtifact = async (update: ArtifactPatch<TData> | ArtifactUpdater<TData>): Promise<string> => {
@@ -266,7 +272,7 @@ export function createArtifactContext<TData extends Record<string, unknown> = Re
       }
 
       // Write new revision via the artifact bus.
-      const reviseResponse = await bus.request(ArtifactSubjects.revise, {
+      const reviseResponse = await bus.request(call, ArtifactSubjects.revise, {
         ...(statusPath !== undefined && { statusPath }),
         previous: {
           refClass: 'artifact',
@@ -292,7 +298,7 @@ export function createArtifactContext<TData extends Record<string, unknown> = Re
       // Emit workflow.artifact.updated event — fire-and-forget so a slow
       // observer cannot stall station execution.
       void bus
-        .emit(WorkflowSubjects.artifact.updated, {
+        .emit(call, WorkflowSubjects.artifact.updated, {
           executionId,
           frameId,
           artifactRef: {

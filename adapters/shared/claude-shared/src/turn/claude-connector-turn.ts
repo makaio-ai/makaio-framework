@@ -1,5 +1,6 @@
 import { BaseConnectorTurn, type PauseResult, MessageHandle } from '@makaio/ai-adapters-core';
 import { DeferredPromise } from '@makaio/utils';
+import type { CallContext } from '@makaio/contracts';
 import type { ClaudeTurnState, IQueryInterruptable } from '@makaio/client-claude-code';
 import type { ClaudeConnectorBus, ClaudeConnectorNamespace, SDKMessage } from '../namespace/index.js';
 
@@ -74,10 +75,15 @@ export class ClaudeConnectorTurn extends BaseConnectorTurn<ClaudeTurnState> {
 
   /**
    * Emit state change using typed namespace subjects.
+   * @param call - Call of the message causing the transition
    * @param oldState - Previous state
    * @param newState - New state
    */
-  protected async emitStateChange(oldState: ClaudeTurnState, newState: ClaudeTurnState): Promise<void> {
+  protected async emitStateChange(
+    call: CallContext,
+    oldState: ClaudeTurnState,
+    newState: ClaudeTurnState,
+  ): Promise<void> {
     const payload = {
       adapterId: this.adapterId,
       agentId: this.agentId,
@@ -87,42 +93,39 @@ export class ClaudeConnectorTurn extends BaseConnectorTurn<ClaudeTurnState> {
     };
 
     // Emit generic state_changed event
-    await this.connectorBus.emit(this.subjects.turn.state_changed, payload);
+    await this.connectorBus.emit(call, this.subjects.turn.state_changed, payload);
 
     // Emit specific state event for easier subscription
-    switch (newState) {
-      case 'turn_started':
-        await this.connectorBus.emit(this.subjects.turn.turn_started, payload);
-        break;
-      case 'step_started':
-        await this.connectorBus.emit(this.subjects.turn.step_started, payload);
-        break;
-      case 'step_finished':
-        await this.connectorBus.emit(this.subjects.turn.step_finished, payload);
-        break;
-      case 'turn_finished':
-        await this.connectorBus.emit(this.subjects.turn.turn_finished, payload);
-        break;
-      case 'paused':
-        await this.connectorBus.emit(this.subjects.turn.paused, payload);
-        break;
-    }
+    const stateSubjects = new Map<
+      ClaudeTurnState,
+      ClaudeConnectorNamespace<string>['subjects']['turn'][Exclude<ClaudeTurnState, 'idle'>]
+    >([
+      ['turn_started', this.subjects.turn.turn_started],
+      ['step_started', this.subjects.turn.step_started],
+      ['step_finished', this.subjects.turn.step_finished],
+      ['turn_finished', this.subjects.turn.turn_finished],
+      ['paused', this.subjects.turn.paused],
+    ]);
+    const subject = stateSubjects.get(newState);
+    if (subject) await this.connectorBus.emit(call, subject, payload);
   }
 
   /**
    * Start the turn - begins tracking SDK events.
+   * @param call - Call of the message driving the turn
    */
-  public async start(): Promise<void> {
-    await this.transitionTo('turn_started');
+  public async start(call: CallContext): Promise<void> {
+    await this.transitionTo(call, 'turn_started');
     // Actual SDK consumption happens in Session
   }
 
   /**
    * Pause at next safe boundary (step_finished).
    * Interrupts SDK query once boundary reached.
+   * @param call - Call of the message driving the turn
    * @returns Pause result indicating whether turn already ended
    */
-  public async pause(): Promise<PauseResult<ClaudeTurnState>> {
+  public async pause(call: CallContext): Promise<PauseResult<ClaudeTurnState>> {
     if (this.state === 'turn_finished') {
       return { stateBeforePause: this.state, turnEnded: true };
     }
@@ -157,16 +160,17 @@ export class ClaudeConnectorTurn extends BaseConnectorTurn<ClaudeTurnState> {
 
     this.isPausedFlag = true;
     const stateBeforePause = this.state;
-    await this.transitionTo('paused');
+    await this.transitionTo(call, 'paused');
 
     return { stateBeforePause, turnEnded: false };
   }
 
   /**
    * Resume the turn (called by Session after injecting new message).
+   * @param call - Call of the message requesting the resume
    * @param _message - Optional message (unused - Session handles injection)
    */
-  public async resume(_message?: unknown): Promise<void> {
+  public async resume(call: CallContext, _message?: unknown): Promise<void> {
     if (!this.isPausedFlag) {
       throw new Error('Cannot resume - turn not paused');
     }
@@ -175,7 +179,7 @@ export class ClaudeConnectorTurn extends BaseConnectorTurn<ClaudeTurnState> {
 
     // Transition back to processing
     // Session handles actual message injection to source
-    await this.transitionTo('step_started');
+    await this.transitionTo(call, 'step_started');
   }
 
   /**
@@ -189,14 +193,15 @@ export class ClaudeConnectorTurn extends BaseConnectorTurn<ClaudeTurnState> {
   /**
    * Handle SDK event and update turn state.
    * Called by Session's consumption loop.
+   * @param call - Call of the message driving the turn
    * @param msg - SDK message from consumption loop
    */
-  public async handleSdkEvent(msg: SDKMessage): Promise<void> {
+  public async handleSdkEvent(call: CallContext, msg: SDKMessage): Promise<void> {
     if (msg.type === 'stream_event') {
       if (msg.event.type === 'content_block_start') {
-        await this.transitionTo('step_started');
+        await this.transitionTo(call, 'step_started');
       } else if (msg.event.type === 'content_block_stop') {
-        await this.transitionTo('step_finished');
+        await this.transitionTo(call, 'step_finished');
         this.pausedDeferred?.resolve(); // Resolve if waiting for step_finished
       }
       // Note: message_delta with stop_reason='end_turn' does NOT trigger turn_finished
@@ -211,7 +216,7 @@ export class ClaudeConnectorTurn extends BaseConnectorTurn<ClaudeTurnState> {
       }
       // Only the result message triggers turn_finished
       // This ensures we have the result before notifying completion
-      await this.transitionTo('turn_finished');
+      await this.transitionTo(call, 'turn_finished');
     }
   }
 
@@ -228,10 +233,11 @@ export class ClaudeConnectorTurn extends BaseConnectorTurn<ClaudeTurnState> {
    *
    * Called by session when the subprocess exits with an error before
    * emitting a `result` message (e.g., process crash or spawn failure).
-   * This ensures the connector state machine reaches `idle` instead of
+   * This ensures the turn state machine reaches `turn_finished` instead of
    * hanging indefinitely.
+   * @param call - Call of the triggering message, or the transport observer origin
    */
-  public async finishOnError(): Promise<void> {
+  public async finishOnError(call: CallContext): Promise<void> {
     // Unblock pending pause() waiters when completing the turn via error path.
     this.pausedDeferred?.resolve();
     this.pausedDeferred = undefined;
@@ -239,7 +245,7 @@ export class ClaudeConnectorTurn extends BaseConnectorTurn<ClaudeTurnState> {
     this.expectingInterruptResult = false;
 
     if (this.state !== 'turn_finished') {
-      await this.transitionTo('turn_finished');
+      await this.transitionTo(call, 'turn_finished');
     }
   }
 

@@ -95,6 +95,7 @@ describe('runHeadlessWorkflowWorker attempt-control — R3: cancel during real w
     // reconcileAttemptCancellation delivers the cancel over the shared bus to
     // the worker's control endpoint and returns after the receipt is stored.
     const reconcileResult = await reconcileAttemptCancellation(
+      authoritySide.bus.own('root'),
       { bus: authoritySide.bus, authority: authoritySide.attempt.authority },
       { executionId, executionAttemptId, timeoutMs: 10_000 },
     );

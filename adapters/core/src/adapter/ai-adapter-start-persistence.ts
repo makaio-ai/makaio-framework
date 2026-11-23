@@ -9,6 +9,7 @@
  * place is what makes that structural rather than a convention.
  */
 import type { IMakaioBus, ScopedBus } from '@makaio/bus-core';
+import type { CallContext } from '@makaio/core';
 import type { AIAgent } from '../agent/ai-agent.js';
 import type { AIAgentConnector } from '../agent/index.js';
 import type { ActiveAgentRegistry } from './agent-registry.js';
@@ -180,6 +181,7 @@ function buildAgentRecord(params: {
  * checked, and all three failure forms — a throw, an unhandled subject and a
  * refusing handler — produce the same answer, because all three mean the row
  * this reservation depends on was not written.
+ * @param call - Call context of the start request this write serves
  * @param record - Whole record to store
  * @param deps - Adapter identity and bus deps
  * @param guarded - Whether a failure fails the start
@@ -187,13 +189,17 @@ function buildAgentRecord(params: {
  *   failure was tolerated
  */
 async function persistAgentRecord(
+  call: CallContext,
   record: MakaioSessionAgent,
   deps: PersistEmitDeps,
   guarded: boolean,
 ): Promise<string | undefined> {
   if (!guarded) {
     try {
-      await deps.globalBus.requestOptional(AgentStorageSubjects.set, { agentId: record.agentId, agent: record });
+      await deps.globalBus.requestOptional(call, AgentStorageSubjects.set, {
+        agentId: record.agentId,
+        agent: record,
+      });
     } catch (error) {
       // Agent storage is best-effort in lightweight hosts; the lifecycle events
       // are the authoritative signal that a live agent exists.
@@ -207,7 +213,7 @@ async function persistAgentRecord(
     return undefined;
   }
   try {
-    const stored = await deps.globalBus.request(AgentStorageSubjects.set, {
+    const stored = await deps.globalBus.request(call, AgentStorageSubjects.set, {
       agentId: record.agentId,
       agent: record,
     });
@@ -231,10 +237,12 @@ async function persistAgentRecord(
  * The creation time is supplied rather than taken here, because the caller has
  * to keep it: the whole-record write that follows the dispatch restates this
  * row, and only a value the caller holds survives that.
+ * @param call - Call context of the start request this write serves
  * @param params - Identity, resume target, creation time and the request the row describes
  * @param deps - Adapter identity and bus deps
  */
 export async function writePreDispatchAgentRow(
+  call: CallContext,
   params: {
     agentId: string;
     sessionId: string;
@@ -250,7 +258,7 @@ export async function writePreDispatchAgentRow(
     resolvedCwd: resolveStartCwd(params.payload, deps),
     deps,
   });
-  await deps.globalBus.request(AgentStorageSubjects.set, { agentId: params.agentId, agent: record });
+  await deps.globalBus.request(call, AgentStorageSubjects.set, { agentId: params.agentId, agent: record });
 }
 
 /**
@@ -263,6 +271,7 @@ export async function writePreDispatchAgentRow(
  * they are what tells the rest of the system a live agent exists. A **guarded**
  * persistence failure stops before them: they would announce an agent whose row
  * does not exist, for a start that is about to be torn down.
+ * @param call - Call context of the start request this persistence and these events serve
  * @param agentId - Agent identifier
  * @param sessionId - Makaio session ID
  * @param adapterSessionId - Provider session ID, or `undefined` for unconfirmed idle fork starts
@@ -273,6 +282,7 @@ export async function writePreDispatchAgentRow(
  * @returns The persistence failure to report, or `undefined` when the start stands
  */
 export async function persistAndEmitAgent(
+  call: CallContext,
   agentId: string,
   sessionId: string,
   adapterSessionId: string | undefined,
@@ -300,7 +310,7 @@ export async function persistAndEmitAgent(
       payload,
       deps,
     });
-    const failure = await persistAgentRecord(record, deps, row.guarded);
+    const failure = await persistAgentRecord(call, record, deps, row.guarded);
     if (failure !== undefined) return failure;
   }
 
@@ -326,7 +336,7 @@ export async function persistAndEmitAgent(
   // exists for is decided by `role` and the session's lead, never by this field.
   const publishedAdapterSessionId = publishedProviderKey(row.publication, adapterSessionId);
   try {
-    await globalBus.emit(SessionSubjects.agent.added, {
+    await globalBus.emit(call, SessionSubjects.agent.added, {
       sessionId,
       agentId,
       adapterId,
@@ -343,7 +353,7 @@ export async function persistAndEmitAgent(
   // Emit provider session tracking event. Fire-and-forget, and through the same
   // gate: a tracking event is still a place the key becomes readable to anyone
   // subscribed, before the caller that settles it has claimed it.
-  void globalBus.emit(AdapterSubjects.session.created, {
+  void globalBus.emit(call, AdapterSubjects.session.created, {
     adapterId,
     adapterName: name,
     ...(publishedAdapterSessionId !== undefined && { adapterSessionId: publishedAdapterSessionId }),
@@ -355,6 +365,7 @@ export async function persistAndEmitAgent(
 
 /**
  * Remove a registered-but-uncommitted agent after start-agent persistence fails.
+ * @param call - Call context of the start request whose persistence failed.
  * @param registry - Active agent registry that owns close and status updates.
  * @param agentId - Agent identifier to remove.
  * @param adapterName - Adapter name for diagnostic context.
@@ -365,13 +376,14 @@ export async function rollbackRegisteredAgent<
   TConnector extends AIAgentConnector<TBus>,
   TAgent extends AIAgent<TBus, TConnector>,
 >(
+  call: CallContext,
   registry: ActiveAgentRegistry<TBus, TConnector, TAgent>,
   agentId: string,
   adapterName: string,
   cause: unknown,
 ): Promise<void> {
   try {
-    await registry.evict(agentId);
+    await registry.evict(call, agentId);
   } catch (evictionError) {
     throw new AggregateError(
       [cause, evictionError],

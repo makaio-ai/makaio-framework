@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
+import { createTestCall } from '@makaio/test-utils';
 import { DEFAULT_CONSTRAINTS, SubagentErrorCode, SubagentSubjects } from '@makaio/contracts';
 import { SubagentManager } from '../manager/index.js';
 import {
@@ -35,7 +36,7 @@ describe('rpc-handlers completeTask/requestInput', () => {
   describe('handleCompleteTaskRpc', () => {
     it('throws when subagent not found', async () => {
       await expect(
-        handleCompleteTaskRpc(ctx, {
+        handleCompleteTaskRpc(createTestCall(), ctx, {
           sessionId: 'missing-session',
           result: 'Done',
         }),
@@ -49,7 +50,8 @@ describe('rpc-handlers completeTask/requestInput', () => {
       const onCompletionCandidate = vi.fn(async () => undefined);
       ctx.onCompletionCandidate = onCompletionCandidate;
 
-      const result = await handleCompleteTaskRpc(ctx, {
+      const call = createTestCall();
+      const result = await handleCompleteTaskRpc(call, ctx, {
         sessionId: 'child-1',
         result: 'Task finished successfully',
       });
@@ -60,7 +62,7 @@ describe('rpc-handlers completeTask/requestInput', () => {
         turnId: 'turn-1',
         result: 'Task finished successfully',
       });
-      expect(onCompletionCandidate).toHaveBeenCalledWith('sub-1');
+      expect(onCompletionCandidate).toHaveBeenCalledWith(call, 'sub-1');
     });
 
     it('rejects completion outside an active child turn', async () => {
@@ -68,7 +70,7 @@ describe('rpc-handlers completeTask/requestInput', () => {
       manager.setChildSessionId('sub-1', 'child-1');
 
       await expect(
-        handleCompleteTaskRpc(ctx, { sessionId: 'child-1', result: 'Attempted completion' }),
+        handleCompleteTaskRpc(createTestCall(), ctx, { sessionId: 'child-1', result: 'Attempted completion' }),
       ).rejects.toThrow('No active turn exists');
     });
 
@@ -78,7 +80,11 @@ describe('rpc-handlers completeTask/requestInput', () => {
       manager.recordTurnStarted('child-1', 'turn-active');
 
       await expect(
-        handleCompleteTaskRpc(ctx, { sessionId: 'child-1', turnId: 'turn-stale', result: 'Attempted completion' }),
+        handleCompleteTaskRpc(createTestCall(), ctx, {
+          sessionId: 'child-1',
+          turnId: 'turn-stale',
+          result: 'Attempted completion',
+        }),
       ).rejects.toThrow('does not match the active child turn');
     });
 
@@ -89,7 +95,7 @@ describe('rpc-handlers completeTask/requestInput', () => {
       manager.markFailed('sub-1', 'Previous error');
 
       await expect(
-        handleCompleteTaskRpc(ctx, {
+        handleCompleteTaskRpc(createTestCall(), ctx, {
           sessionId: 'child-1',
           result: 'Attempted completion',
         }),
@@ -107,7 +113,7 @@ describe('rpc-handlers completeTask/requestInput', () => {
       });
 
       await expect(
-        handleCompleteTaskRpc(ctx, {
+        handleCompleteTaskRpc(createTestCall(), ctx, {
           sessionId: 'child-1',
           turnId: 'turn-1',
           result: 'Attempted completion',
@@ -120,15 +126,15 @@ describe('rpc-handlers completeTask/requestInput', () => {
 
   describe('handleRequestInputRpc', () => {
     it('throws when subagent not found', async () => {
-      await expect(handleRequestInputRpc(ctx, { subagentId: 'nonexistent', question: 'What color?' })).rejects.toThrow(
-        'not found',
-      );
+      await expect(
+        handleRequestInputRpc(createTestCall(), ctx, { subagentId: 'nonexistent', question: 'What color?' }),
+      ).rejects.toThrow('not found');
     });
 
     it('sets pending request and waits for response', async () => {
       manager.track({ subagentId: 'sub-1', parentSessionId: 'parent-1', config: config('Test'), depth: 1 });
 
-      const resultPromise = handleRequestInputRpc(ctx, {
+      const resultPromise = handleRequestInputRpc(createTestCall(), ctx, {
         subagentId: 'sub-1',
         question: 'What color?',
         context: 'Theme selection',
@@ -158,9 +164,9 @@ describe('rpc-handlers completeTask/requestInput', () => {
         toParentEvents.push(busCtx.payload);
       });
 
-      await expect(handleRequestInputRpc(ctx, { subagentId: 'sub-1', question: 'More input?' })).rejects.toThrow(
-        'completion is pending',
-      );
+      await expect(
+        handleRequestInputRpc(createTestCall(), ctx, { subagentId: 'sub-1', question: 'More input?' }),
+      ).rejects.toThrow('completion is pending');
       expect(toParentEvents).toHaveLength(0);
       expect(manager.get('sub-1')?.status).toBe('completing');
     });
@@ -169,9 +175,9 @@ describe('rpc-handlers completeTask/requestInput', () => {
       manager.track({ subagentId: 'sub-1', parentSessionId: 'parent-1', config: config('Test'), depth: 1 });
       manager.setChildSessionId('sub-1', 'child-1');
       let completionError: unknown;
-      MakaioBus.on(SubagentSubjects.toParent, async () => {
+      MakaioBus.on(SubagentSubjects.toParent, async (busCtx) => {
         try {
-          await handleCompleteTaskRpc(ctx, {
+          await handleCompleteTaskRpc(busCtx.call, ctx, {
             sessionId: 'child-1',
             result: 'done',
           });
@@ -180,7 +186,7 @@ describe('rpc-handlers completeTask/requestInput', () => {
         }
       });
 
-      const input = handleRequestInputRpc(ctx, { subagentId: 'sub-1', question: 'More input?' });
+      const input = handleRequestInputRpc(createTestCall(), ctx, { subagentId: 'sub-1', question: 'More input?' });
       await vi.waitFor(() => expect(completionError).toBeDefined());
       expect(completionError).toMatchObject({ code: SubagentErrorCode.INVALID_STATE });
       expect(manager.get('sub-1')?.status).toBe('waiting_input');
@@ -191,7 +197,11 @@ describe('rpc-handlers completeTask/requestInput', () => {
     it('returns timedOut: true when timeout expires', async () => {
       manager.track({ subagentId: 'sub-1', parentSessionId: 'parent-1', config: config('Test'), depth: 1 });
 
-      const result = await handleRequestInputRpc(ctx, { subagentId: 'sub-1', question: 'What color?', timeoutMs: 20 });
+      const result = await handleRequestInputRpc(createTestCall(), ctx, {
+        subagentId: 'sub-1',
+        question: 'What color?',
+        timeoutMs: 20,
+      });
 
       expect(result.responded).toBe(false);
       expect(result.timedOut).toBe(true);
@@ -207,7 +217,7 @@ describe('rpc-handlers completeTask/requestInput', () => {
       MakaioBus.on(SubagentSubjects.toParent, async () => publication);
 
       try {
-        const resultPromise = handleRequestInputRpc(ctx, {
+        const resultPromise = handleRequestInputRpc(createTestCall(), ctx, {
           subagentId: 'sub-1',
           question: 'What color?',
           timeoutMs: 20,
@@ -225,7 +235,11 @@ describe('rpc-handlers completeTask/requestInput', () => {
     it('clears pending request on timeout', async () => {
       manager.track({ subagentId: 'sub-1', parentSessionId: 'parent-1', config: config('Test'), depth: 1 });
 
-      const result = await handleRequestInputRpc(ctx, { subagentId: 'sub-1', question: 'What color?', timeoutMs: 20 });
+      const result = await handleRequestInputRpc(createTestCall(), ctx, {
+        subagentId: 'sub-1',
+        question: 'What color?',
+        timeoutMs: 20,
+      });
       expect(result.timedOut).toBe(true);
 
       // Verify subagent is back to running (pending request cleared by timeout)
@@ -241,7 +255,7 @@ describe('rpc-handlers completeTask/requestInput', () => {
         toParentEvents.push(busCtx.payload);
       });
 
-      const resultPromise = handleRequestInputRpc(ctx, {
+      const resultPromise = handleRequestInputRpc(createTestCall(), ctx, {
         subagentId: 'sub-1',
         question: 'What color?',
         context: 'Theme',
@@ -265,7 +279,7 @@ describe('rpc-handlers completeTask/requestInput', () => {
       manager.track({ subagentId: 'sub-1', parentSessionId: 'parent-1', config: config('Test'), depth: 1 });
 
       // Start first request (don't await - it will block waiting for response)
-      const firstRequestPromise = handleRequestInputRpc(ctx, {
+      const firstRequestPromise = handleRequestInputRpc(createTestCall(), ctx, {
         subagentId: 'sub-1',
         question: 'First question?',
         timeoutMs: 5000,
@@ -278,7 +292,7 @@ describe('rpc-handlers completeTask/requestInput', () => {
 
       // Second request should throw REQUEST_PENDING
       await expect(
-        handleRequestInputRpc(ctx, {
+        handleRequestInputRpc(createTestCall(), ctx, {
           subagentId: 'sub-1',
           question: 'Second question?',
           timeoutMs: 1000,
@@ -297,7 +311,7 @@ describe('rpc-handlers completeTask/requestInput', () => {
     manager.track({ subagentId: 'sub-1', parentSessionId: 'parent-1', config: config('Test'), depth: 1 });
     manager.setChildSessionId('sub-1', 'child-1');
 
-    await expect(handleSendRpc(ctx, { subagentId: 'sub-1', content: 'too early' })).rejects.toThrow(
+    await expect(handleSendRpc(createTestCall(), ctx, { subagentId: 'sub-1', content: 'too early' })).rejects.toThrow(
       'before startup completes',
     );
   });
@@ -309,7 +323,7 @@ describe('rpc-handlers completeTask/requestInput', () => {
     manager.get('sub-1')!.lastActivityAt = 0;
     manager.sweepHung(1);
 
-    await expect(handleSendRpc(ctx, { subagentId: 'sub-1', content: 'more work' })).rejects.toThrow(
+    await expect(handleSendRpc(createTestCall(), ctx, { subagentId: 'sub-1', content: 'more work' })).rejects.toThrow(
       'completion is pending',
     );
     expect(manager.get('sub-1')?.status).toBe('hung');

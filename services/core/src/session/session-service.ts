@@ -1,4 +1,4 @@
-import { MakaioBus, type IMakaioBus } from '@makaio/bus-core';
+import type { IMakaioBus } from '@makaio/bus-core';
 import { SessionSubjects, type OwnershipTopology } from '@makaio/contracts';
 import { KernelSubjects } from '@makaio/kernel';
 import { BaseService } from '@makaio/service-base';
@@ -77,8 +77,9 @@ export interface MakaioSessionServiceOptions {
  * await sessionService.init();
  *
  * // Now clients can interact via bus
- * const { sessionId } = await MakaioBus.request(SessionSubjects.create, {});
- * const { session } = await MakaioBus.request(SessionSubjects.get, { sessionId });
+ * const call = MakaioBus.own('root');
+ * const { sessionId } = await MakaioBus.request(call, SessionSubjects.create, {});
+ * const { session } = await MakaioBus.request(call, SessionSubjects.get, { sessionId });
  *
  * // Cleanup when done
  * await sessionService.destroy();
@@ -110,7 +111,7 @@ export class MakaioSessionService extends BaseService {
    *   identity-dependent ownership ones.
    */
   public constructor(
-    bus: IMakaioBus = MakaioBus,
+    bus: IMakaioBus,
     private readonly options: MakaioSessionServiceOptions = {},
   ) {
     super(bus);
@@ -201,7 +202,7 @@ export class MakaioSessionService extends BaseService {
       unsubscribe();
       ctx.setResult({});
       try {
-        await this.bus.request(SessionSubjects.ownership.reconcile, {});
+        await this.bus.request(ctx.call, SessionSubjects.ownership.reconcile, {});
       } catch (error) {
         console.error('[MakaioSessionService] Ownership reconcile failed:', error);
       }
@@ -221,13 +222,15 @@ export class MakaioSessionService extends BaseService {
    * (e.g., isolated unit tests) are unaffected.
    */
   private async reconcileOrphanedTurns(): Promise<void> {
-    const result = await this.bus.requestOptional(TurnStorageSubjects.listActive, {});
+    // Startup work without a triggering message: the service's own context.
+    const call = this.bus.own('start');
+    const result = await this.bus.requestOptional(call, TurnStorageSubjects.listActive, {});
     if (!result.handled) return;
 
     const { turns } = result.data;
     for (const turn of turns) {
       try {
-        const { transitioned } = await this.bus.request(TurnStorageSubjects.complete, {
+        const { transitioned } = await this.bus.request(call, TurnStorageSubjects.complete, {
           turnId: turn.turnId,
           status: 'error',
           expectedStatus: 'active',
@@ -248,12 +251,12 @@ export class MakaioSessionService extends BaseService {
           };
           // Lifecycle row persists before consumers see the event
           // (persist-before-emit, same discipline as SessionTurnManager).
-          await appendSessionLifecycleEvent(this.bus, {
+          await appendSessionLifecycleEvent(call, this.bus, {
             type: 'turn.completed',
             sessionId: turn.sessionId,
             payload: completedPayload,
           });
-          await this.bus.emit(SessionSubjects.turn.completed, completedPayload);
+          await this.bus.emit(call, SessionSubjects.turn.completed, completedPayload);
         }
       } catch (error) {
         console.error(`[MakaioSessionService] Failed to reconcile orphaned turn ${turn.turnId}:`, error);

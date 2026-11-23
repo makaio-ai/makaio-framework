@@ -5,6 +5,7 @@
 
 import type { IMakaioBus } from '@makaio/bus-core';
 import type { UiContextSnapshot } from '@makaio/contracts';
+import type { CallContext } from '@makaio/core';
 import { isRecord } from '@makaio/utils';
 import type { WidgetScope } from './scope-registry.js';
 import type { ComponentLike } from '../utils/component-types.js';
@@ -87,10 +88,11 @@ export interface WidgetActivation {
    * Receives a {@link WidgetActivationContext} with the bus, widgetId, and
    * instanceId. Runs after `pageId`/`windowId` activation so it can react to
    * the side-effects they produce.
+   * @param call - Activation call to forward on the bus supplied in `ctx`.
    * @param ctx - Activation context with bus access and widget identity.
    * @returns A promise that resolves when the handler is complete.
    */
-  onActivate?: (ctx: WidgetActivationContext) => Promise<void>;
+  onActivate?: (call: CallContext, ctx: WidgetActivationContext) => Promise<void>;
 }
 
 /**

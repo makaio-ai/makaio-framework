@@ -210,6 +210,10 @@ export type { WorkflowProgressUpdate };
  *
  * Extends {@link WorkflowContextBase} with a typed `trigger` field and the
  * `previousSteps` map.
+ *
+ * It carries no call context yet: a code-authored station sends with the
+ * engine's own context, not under the run's principal. The run's call reaches
+ * the handler together with the code step handler context.
  * @typeParam TTrigger - The trigger payload type
  * @typeParam TPreviousSteps - Map of completed predecessor station outputs
  * @typeParam TArtifactData - Artifact data shape; defaults to `Record<string, unknown>`

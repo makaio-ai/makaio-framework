@@ -1,5 +1,6 @@
 import type { IMakaioBus } from '@makaio/bus-core';
 import type { ProviderContext, ResolvedProviderContext } from '@makaio/contracts';
+import type { CallContext } from '@makaio/core';
 import { AdapterSubsystemSubjects } from '../adapter-subsystem/namespace.js';
 import type { AdapterRuntimeSnapshotErrorCode } from '../adapter-subsystem/schemas.js';
 
@@ -30,15 +31,17 @@ export class RuntimeProviderContextResolutionError extends Error {
  * Execution consumers must use this seam instead of the generic safe config
  * read or the provider-only snapshot: it verifies that the selected adapter,
  * provider definition, client, and authentication binding are compatible.
+ * @param call - Call context of the handled message this resolution serves.
  * @param bus - Bus serving the adapter subsystem.
  * @param input - Exact adapter and provider-config selection.
  * @returns Resolved refs-only provider context from the atomic snapshot.
  */
 export async function resolveRuntimeProviderContext(
+  call: CallContext,
   bus: IMakaioBus,
   input: { readonly adapterName: string; readonly providerConfigId: string },
 ): Promise<ResolvedProviderContext> {
-  const resolution = await bus.request(AdapterSubsystemSubjects.resolveAdapterRuntimeSnapshot, input);
+  const resolution = await bus.request(call, AdapterSubsystemSubjects.resolveAdapterRuntimeSnapshot, input);
   if (resolution.status === 'error') {
     throw new RuntimeProviderContextResolutionError(resolution.code, input.adapterName, input.providerConfigId);
   }

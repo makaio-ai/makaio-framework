@@ -1,3 +1,4 @@
+import type { CallContext } from '@makaio/core';
 import { getErrorString } from '@makaio/utils';
 import {
   ExtensionSubjects,
@@ -65,10 +66,11 @@ export interface ToggleHost extends ExtensionContextHost {
    *
    * Called after `runHealthCheck` completes in the enable flow so the newly
    * enabled extension's degraded warnings are surfaced immediately.
+   * @param call - Call responsible for the lifecycle transition.
    * @param name - Extension name used for log prefixes and toast IDs.
    * @param entry - Extension entry whose warnings should be emitted.
    */
-  emitWarningsForEntry(name: string, entry: ExtensionEntry): Promise<void>;
+  emitWarningsForEntry(call: CallContext, name: string, entry: ExtensionEntry): Promise<void>;
 }
 
 /**
@@ -211,7 +213,10 @@ export async function applyExtensionTransition(
   const entry = host.entries.get(name);
   if (!entry) return 'rejected';
 
-  const outcome = enabled ? await enableExtension(host, name, entry) : await disableExtension(host, name, entry);
+  const call = host.bus.own(enabled ? 'start' : 'stop');
+  const outcome = enabled
+    ? await enableExtension(call, host, name, entry)
+    : await disableExtension(call, host, name, entry);
 
   if (outcome === 'rejected') return outcome;
 
@@ -221,7 +226,9 @@ export async function applyExtensionTransition(
   // two channels that already carry it — this function's result and
   // `entry.error` — rather than being expressed by withholding this event and
   // leaving a second window showing a stopped extension as enabled.
-  void host.bus.emit(ExtensionSubjects.enabledChanged, { name, enabled }).catch((err: unknown) => {
+  // The transition is the host's own work, not a relayed caller's: it is the
+  // coordinator-internal restart primitive, never the persist-only RPC.
+  void host.bus.emit(call, ExtensionSubjects.enabledChanged, { name, enabled }).catch((err: unknown) => {
     console.error(`[ExtensionCoordinator] enabledChanged emit failed for "${name}":`, err);
   });
 
@@ -463,16 +470,23 @@ const RETAINED_SERVICE_MESSAGE =
 /**
  * Marks a re-enable attempt as failed: records the reason on the entry, logs
  * it, and transitions the entry to `'failed'`.
+ * @param call - Call responsible for the lifecycle transition.
  * @param host - Coordinator surface providing the bus for the transition.
  * @param entry - Mutable runtime entry for the extension.
  * @param name - Extension name (used for log messages).
  * @param message - Human-readable failure reason stored on the entry.
  * @returns Always `'rejected'`, so callers can return the result directly.
  */
-function failReEnable(host: ToggleHost, entry: ExtensionEntry, name: string, message: string): 'rejected' {
+function failReEnable(
+  call: CallContext,
+  host: ToggleHost,
+  entry: ExtensionEntry,
+  name: string,
+  message: string,
+): 'rejected' {
   entry.error = message;
   console.error(`[ExtensionCoordinator] Cannot re-enable "${name}":`, message);
-  transitionPackageEntry(host.bus, entry, 'failed');
+  transitionPackageEntry(call, host.bus, entry, 'failed');
   return 'rejected';
 }
 
@@ -492,6 +506,7 @@ function failReEnable(host: ToggleHost, entry: ExtensionEntry, name: string, mes
  * the one non-active state that is refused instead, exactly as it is on the
  * disable side, because interrupting an in-flight `create`/`init` is a
  * genuine runtime conflict, not a no-op.
+ * @param call - Call responsible for the lifecycle transition.
  * @param host - Coordinator surface providing shared state.
  * @param name - Extension name (used for log messages).
  * @param entry - Mutable runtime entry for the extension.
@@ -500,6 +515,7 @@ function failReEnable(host: ToggleHost, entry: ExtensionEntry, name: string, mes
  *   below.
  */
 async function enableExtension(
+  call: CallContext,
   host: ToggleHost,
   name: string,
   entry: ExtensionEntry,
@@ -541,6 +557,7 @@ async function enableExtension(
   });
   if (inactiveDeps.length > 0) {
     return failReEnable(
+      call,
       host,
       entry,
       name,
@@ -557,16 +574,16 @@ async function enableExtension(
   // outside per-extension isolation.
   const addressabilityError = checkExtensionNameAddressable(entry.identity.extensionName);
   if (addressabilityError !== undefined) {
-    return failReEnable(host, entry, name, addressabilityError);
+    return failReEnable(call, host, entry, name, addressabilityError);
   }
 
   // A previous instance whose `destroy` failed is still owned by the entry for
   // the shutdown to retry; creating a second one would orphan it.
-  if (entry.pendingService !== undefined) return failReEnable(host, entry, name, RETAINED_SERVICE_MESSAGE);
+  if (entry.pendingService !== undefined) return failReEnable(call, host, entry, name, RETAINED_SERVICE_MESSAGE);
 
   entry.enabled = true;
   entry.error = undefined;
-  transitionPackageEntry(host.bus, entry, 'initializing');
+  transitionPackageEntry(call, host.bus, entry, 'initializing');
 
   // Config resolution fails only when an operator-supplied layer cannot be
   // honoured; loadConfig and stored-config parse failures stay non-throwing and
@@ -577,13 +594,13 @@ async function enableExtension(
   try {
     config = resolveExtensionEntryConfig(host, name, entry, 'activate');
   } catch (err) {
-    return failReEnable(host, entry, name, `Config resolution failed: ${getErrorString(err)}`);
+    return failReEnable(call, host, entry, name, `Config resolution failed: ${getErrorString(err)}`);
   }
 
   if (pkg.storage?.registerHandlers && host.db !== undefined) {
     try {
       const pkgCtx = buildExtensionContext(host, entry, config);
-      const cleanup = pkg.storage.registerHandlers(host.bus, host.db, pkgCtx);
+      const cleanup = pkg.storage.registerHandlers(pkgCtx.bus, host.db, pkgCtx);
       if (typeof cleanup === 'function') {
         storageCleanup = cleanup;
         entry.storageCleanup = cleanup;
@@ -591,12 +608,12 @@ async function enableExtension(
     } catch (err) {
       entry.error = getErrorString(err);
       console.error(`[ExtensionCoordinator] Extension "${name}" storage re-registration failed:`, err);
-      transitionPackageEntry(host.bus, entry, 'failed');
+      transitionPackageEntry(call, host.bus, entry, 'failed');
       return 'rejected';
     }
   }
 
-  if (!(await reinitializeService(host, name, entry, config, storageCleanup))) return 'rejected';
+  if (!(await reinitializeService(call, host, name, entry, config, storageCleanup))) return 'rejected';
 
   // Run contribution processors BEFORE transitioning to active so a hard
   // failure never leaves the extension in the `active` state.
@@ -609,11 +626,11 @@ async function enableExtension(
     await cleanupFailedEnable(name, storageCleanup, entry);
     entry.error = getErrorString(err);
     console.error(`[ExtensionCoordinator] Extension "${name}" contribution processing failed:`, err);
-    transitionPackageEntry(host.bus, entry, 'failed');
+    transitionPackageEntry(call, host.bus, entry, 'failed');
     return 'rejected';
   }
 
-  transitionPackageEntry(host.bus, entry, 'active');
+  transitionPackageEntry(call, host.bus, entry, 'active');
 
   // Bridge a tray manifest into the live tray menu service on every
   // activation, exactly like the normal startup path does right after its own
@@ -622,13 +639,13 @@ async function enableExtension(
   // coordinator-internal restart but stays absent from the running tray until
   // the next process restart.
   try {
-    await registerPackageTrayMenuEntry(host.bus, entry.pkg);
+    await registerPackageTrayMenuEntry(call, host.bus, entry.pkg);
   } catch (err) {
     console.warn(`[ExtensionCoordinator] Failed to register tray entry for ${name}:`, err);
   }
 
   await host.runHealthCheck(name);
-  await host.emitWarningsForEntry(name, entry);
+  await host.emitWarningsForEntry(call, name, entry);
   return 'applied';
 }
 
@@ -639,6 +656,7 @@ async function enableExtension(
  * extension settles as `skipped`, every other failure — including a skip
  * attempted by a `critical: true` extension — settles as `failed`. Both
  * outcomes tear down the service and storage handlers first.
+ * @param call - Call responsible for the lifecycle transition.
  * @param host - Coordinator surface providing shared state.
  * @param name - Extension name (used for log messages).
  * @param entry - Mutable runtime entry for the extension.
@@ -648,6 +666,7 @@ async function enableExtension(
  *   factory, `false` when the entry was transitioned away from `initializing`.
  */
 async function reinitializeService(
+  call: CallContext,
   host: ToggleHost,
   name: string,
   entry: ExtensionEntry,
@@ -668,17 +687,17 @@ async function reinitializeService(
     if (err instanceof ServiceSkipError) {
       if (!entry.pkg.critical) {
         entry.error = err.reason;
-        transitionPackageEntry(host.bus, entry, 'skipped');
+        transitionPackageEntry(call, host.bus, entry, 'skipped');
         return false;
       }
       entry.error = `Critical extension cannot skip startup: ${err.reason}`;
       console.error(`[ExtensionCoordinator] Extension "${name}" failed to re-initialize:`, entry.error);
-      transitionPackageEntry(host.bus, entry, 'failed');
+      transitionPackageEntry(call, host.bus, entry, 'failed');
       return false;
     }
     entry.error = getErrorString(err);
     console.error(`[ExtensionCoordinator] Extension "${name}" failed to re-initialize:`, err);
-    transitionPackageEntry(host.bus, entry, 'failed');
+    transitionPackageEntry(call, host.bus, entry, 'failed');
     return false;
   }
 }
@@ -704,6 +723,7 @@ async function reinitializeService(
  * `false` and no other side effect. `'initializing'` is the one inactive
  * state that is refused instead, because interrupting an in-flight
  * `create`/`init` is a genuine runtime conflict, not a no-op.
+ * @param call - Call responsible for the lifecycle transition.
  * @param host - Coordinator surface providing shared state.
  * @param name - Extension name (used for log messages).
  * @param entry - Mutable runtime entry for the extension.
@@ -713,6 +733,7 @@ async function reinitializeService(
  *   extension is mid-`init` or active dependents still require it.
  */
 async function disableExtension(
+  call: CallContext,
   host: ToggleHost,
   name: string,
   entry: ExtensionEntry,
@@ -789,7 +810,7 @@ async function disableExtension(
   // than being merely logged after the extension already reports itself
   // stopped.
   try {
-    await unregisterPackageTrayMenuEntry(host.bus, entry.pkg);
+    await unregisterPackageTrayMenuEntry(call, host.bus, entry.pkg);
   } catch (err) {
     teardownFailures.push(err);
     console.error(`[ExtensionCoordinator] Failed to unregister tray entry for ${name}:`, err);
@@ -804,14 +825,17 @@ async function disableExtension(
     entry.error = getErrorString(teardownError);
   }
 
-  transitionPackageEntry(host.bus, entry, 'stopped');
+  transitionPackageEntry(call, host.bus, entry, 'stopped');
 
   entry.warnings = [];
 
   // Awaited so a rapid disable→enable cycle cannot reorder this empty
   // snapshot after the re-enable health check's fresh warnings.
   try {
-    await host.bus.emit(ExtensionSubjects.warnings.changed, { extensionName: name, warnings: [] });
+    await host.bus.emit(call, ExtensionSubjects.warnings.changed, {
+      extensionName: name,
+      warnings: [],
+    });
   } catch (err) {
     console.error(`[ExtensionCoordinator] warnings.changed emit failed for "${name}":`, err);
   }

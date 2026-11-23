@@ -1,3 +1,4 @@
+import type { CallContext } from '@makaio/core';
 import type { Turn } from './entities/turn.js';
 
 const turnReservationBrand: unique symbol = Symbol('turnReservation');
@@ -45,10 +46,17 @@ export interface TurnMessageAdmissionLease {
   rollback(): Promise<void>;
 }
 
-/** Admission lease composed with the turn's one-time durable preparation gate. */
-export interface PreparedTurnMessageAdmissionLease extends TurnMessageAdmissionLease {
+/**
+ * Admission lease composed with the turn's one-time durable preparation gate.
+ *
+ * Its `rollback` deliberately widens the base lease's zero-argument signature
+ * with a mandatory leading `call`, because rollback here may finalize the
+ * turn's ledger (a send). `Omit` drops the incompatible base member before
+ * redeclaring it, since a plain `extends` cannot narrow a required parameter.
+ */
+export interface PreparedTurnMessageAdmissionLease extends Omit<TurnMessageAdmissionLease, 'rollback'> {
   readonly isPreparationOwner: boolean;
-  rollback(errorCode?: string): Promise<void>;
+  rollback(call: CallContext, errorCode?: string): Promise<void>;
 }
 
 interface PendingTurnPreparation {

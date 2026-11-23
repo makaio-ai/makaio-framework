@@ -1,3 +1,4 @@
+import type { CallContext } from '@makaio/core';
 import {
   SessionOwnershipStorageSubjects,
   type AdapterSessionClaimRecord,
@@ -27,23 +28,25 @@ import { assessClaimOwner } from './owner-liveness.js';
  *
  * Idempotent by construction — marking an already-`abandoned` claim is a no-op,
  * so a second run changes nothing.
+ * @param call - Call of the handled ownership request.
  * @param context - Composed authority context.
  * @returns Every claim seen with its verdict, or `skipped` without an identity.
  */
 export async function runReconcile(
+  call: CallContext,
   context: OwnershipAuthorityContext,
 ): Promise<SessionOwnershipReconcileServiceResult> {
   const { machineId } = context;
   if (machineId === undefined) return { outcome: 'skipped', reason: 'machine-identity-unavailable' };
 
-  const listed = await context.bus.requestOptional(SessionOwnershipStorageSubjects.listClaims, { machineId });
+  const listed = await context.bus.requestOptional(call, SessionOwnershipStorageSubjects.listClaims, { machineId });
   // No ownership storage is not a failure: a host without it owns no claims, so
   // the honest report is a completed run over an empty claim set.
   if (!listed.handled) return { outcome: 'reconciled', machineId, claims: [] };
 
   const claims: SessionOwnershipReconciledClaim[] = [];
   for (const claim of listed.data.claims) {
-    const reason = await assessClaimOwner(context.bus, context.topology, claim);
+    const reason = await assessClaimOwner(call, context.bus, context.topology, claim);
     if (reason === null) {
       claims.push({ claim, verdict: 'retained' });
       continue;
@@ -51,7 +54,7 @@ export async function runReconcile(
     // Wave-1's single-claim `release` rather than the fan-out: reconcile is
     // acting on a *foreign* agent's claim and may only touch the generation it
     // actually assessed.
-    const marked = await context.bus.request(SessionOwnershipStorageSubjects.release, {
+    const marked = await context.bus.request(call, SessionOwnershipStorageSubjects.release, {
       agentId: claim.agentId,
       claimToken: claim.claimToken,
       disposition: 'abandoned',

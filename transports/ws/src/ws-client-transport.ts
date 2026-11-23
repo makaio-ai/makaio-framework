@@ -18,7 +18,7 @@ import {
   type SubscriptionDeliveryClass,
   toSafeDebugLog,
 } from '@makaio/bus-core';
-import type { PayloadFilter } from '@makaio/core';
+import type { OutboundAttestingConnectionRole, PayloadFilter } from '@makaio/core';
 import { type WebSocketClientTransportReconnectOptions } from './ws-client-reconnect.js';
 import {
   DEFAULT_CODEC,
@@ -72,6 +72,7 @@ export class WebSocketClientTransport implements BusTransport {
 
   private readonly url: string;
   private readonly auth: TransportAuth | undefined;
+  private readonly attestingRole: OutboundAttestingConnectionRole | undefined;
   private readonly codec: ClientTransportCodec;
   private readonly messageTransform: ((message: BusMessage) => Promise<BusMessage>) | undefined;
   private readonly autoReconnectConfig: Required<WebSocketClientTransportReconnectOptions> | false;
@@ -152,10 +153,16 @@ export class WebSocketClientTransport implements BusTransport {
    * Create a new `WebSocketClientTransport`.
    * @param options - Transport configuration
    */
-  public constructor(options: WebSocketClientTransportOptions) {
+  public constructor(
+    options: WebSocketClientTransportOptions & {
+      /** Explicit trust in the core host's principal attestations. */
+      attestingRole?: OutboundAttestingConnectionRole;
+    },
+  ) {
     this.url = options.url;
     this.name = options.name ?? 'ws-client';
     this.auth = options.auth;
+    this.attestingRole = options.attestingRole;
     this.codec = options.codec ?? DEFAULT_CODEC;
     this.messageTransform = options.messageTransform;
     this.debug = options.debug ?? false;
@@ -521,6 +528,7 @@ export class WebSocketClientTransport implements BusTransport {
       debug: this.debug,
       debugLog: this.debugLog,
       auth: this.auth,
+      attestingRole: this.attestingRole,
       codec: this.codec,
       messageTransform: this.messageTransform,
       correlations: this.correlations,

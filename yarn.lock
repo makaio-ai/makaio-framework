@@ -4357,6 +4357,7 @@ __metadata:
   dependencies:
     "@makaio/build-tooling": "workspace:*"
     "@makaio/bus-core": "workspace:*"
+    "@makaio/core": "workspace:*"
     "@makaio/utils": "workspace:*"
     "@types/ws": "npm:^8.5.10"
     tsdown: "npm:0.22.0"
@@ -4490,6 +4491,7 @@ __metadata:
     tsx: "npm:^4.22.3"
     zod: "npm:4.4.3"
   peerDependencies:
+    "@makaio/framework": "workspace:*"
     react: ^18.0.0 || ^19.0.0
   peerDependenciesMeta:
     react:
@@ -4663,6 +4665,7 @@ __metadata:
     zod: "npm:4.4.3"
   peerDependencies:
     "@makaio/bus-core": "*"
+    "@makaio/framework": "workspace:*"
     react: ^19.2.6
     react-dom: ^19.2.6
   languageName: unknown
@@ -4743,6 +4746,8 @@ __metadata:
     typescript: "npm:^6.0.3"
     vitest: "npm:4.1.10"
     zod: "npm:4.4.3"
+  peerDependencies:
+    "@makaio/framework": "workspace:*"
   languageName: unknown
   linkType: soft
 
@@ -4822,6 +4827,8 @@ __metadata:
     typescript: "npm:^6.0.3"
     vitest: "npm:4.1.10"
     zod: "npm:4.4.3"
+  peerDependencies:
+    "@makaio/framework": "workspace:*"
   languageName: unknown
   linkType: soft
 
@@ -4973,6 +4980,8 @@ __metadata:
     typescript: "npm:^6.0.3"
     vitest: "npm:4.1.10"
     zod: "npm:4.4.3"
+  peerDependencies:
+    "@makaio/framework": "workspace:*"
   languageName: unknown
   linkType: soft
 
@@ -4990,6 +4999,8 @@ __metadata:
     typescript: "npm:^6.0.3"
     vitest: "npm:4.1.10"
     zod: "npm:4.4.3"
+  peerDependencies:
+    "@makaio/framework": "workspace:*"
   languageName: unknown
   linkType: soft
 
@@ -5014,6 +5025,8 @@ __metadata:
     typescript: "npm:^6.0.3"
     vitest: "npm:4.1.10"
     zod: "npm:4.4.3"
+  peerDependencies:
+    "@makaio/framework": "workspace:*"
   languageName: unknown
   linkType: soft
 
@@ -5038,6 +5051,8 @@ __metadata:
     typescript: "npm:^6.0.3"
     vitest: "npm:4.1.10"
     zod: "npm:4.4.3"
+  peerDependencies:
+    "@makaio/framework": "workspace:*"
   languageName: unknown
   linkType: soft
 
@@ -5969,6 +5984,7 @@ __metadata:
     "@makaio/build-tooling": "workspace:*"
     "@makaio/bus-core": "workspace:*"
     "@makaio/contracts": "workspace:*"
+    "@makaio/core": "workspace:*"
     "@makaio/storage-drizzle": "workspace:*"
     "@makaio/storage-pg": "workspace:*"
     "@types/node": "npm:^24.3.0"
@@ -5976,6 +5992,7 @@ __metadata:
     tsdown: "npm:0.22.0"
     tsx: "npm:^4.23.1"
     vitest: "npm:4.1.10"
+    zod: "npm:4.4.3"
   languageName: unknown
   linkType: soft
 

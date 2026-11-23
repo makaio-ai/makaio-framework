@@ -1,9 +1,11 @@
+import type { CallContext } from '@makaio/core';
 import type { IAccountCredentialStore, IAccountMetadataStore } from '../interfaces/account-store.js';
 import { getStoredAccount, listStoredAccounts } from '../storage/joined-account-store.js';
 import { isUsageAuthInvalidForFingerprint } from '../utils/usage-auth-state.js';
 
 /**
  * Resolves the account targets a `usage.refresh` request should start for.
+ * @param call - Call context of the `usage.refresh` request
  * @param sources - Registered usage sources keyed by client id
  * @param metadataStore - Public metadata store
  * @param credentialStore - Credential store
@@ -12,6 +14,7 @@ import { isUsageAuthInvalidForFingerprint } from '../utils/usage-auth-state.js';
  * @returns Refresh targets that both exist and are backed by a usage source
  */
 export async function collectUsageRefreshTargets(
+  call: CallContext,
   sources: Map<string, unknown>,
   metadataStore: IAccountMetadataStore,
   credentialStore: IAccountCredentialStore,
@@ -22,7 +25,7 @@ export async function collectUsageRefreshTargets(
     if (!sources.has(clientId)) {
       return [];
     }
-    const account = await getStoredAccount(metadataStore, credentialStore, clientId, accountId);
+    const account = await getStoredAccount(call, metadataStore, credentialStore, clientId, accountId);
     return account !== null && !isUsageAuthInvalidForFingerprint(account.metadata, account.fingerprint)
       ? [{ clientId, accountId }]
       : [];
@@ -32,7 +35,7 @@ export async function collectUsageRefreshTargets(
   const clientIds = clientId !== undefined ? [clientId] : [...sources.keys()];
   for (const id of clientIds) {
     if (!sources.has(id)) continue;
-    for (const account of await listStoredAccounts(metadataStore, credentialStore, id)) {
+    for (const account of await listStoredAccounts(call, metadataStore, credentialStore, id)) {
       if (isUsageAuthInvalidForFingerprint(account.metadata, account.fingerprint)) {
         continue;
       }

@@ -19,14 +19,14 @@ describe('once - Promise overload', () => {
       });
 
       // Emit non-matching events
-      await MakaioBus.emit(EventSubjects.message, {
+      await MakaioBus.emit(MakaioBus.own('root'), EventSubjects.message, {
         content: 'wrong',
         sessionId: 'other',
       });
 
       // Emit matching event before timeout
       setTimeout(() => {
-        void MakaioBus.emit(EventSubjects.message, {
+        void MakaioBus.emit(MakaioBus.own('root'), EventSubjects.message, {
           content: 'correct',
           sessionId: 'target',
         });
@@ -43,7 +43,7 @@ describe('once - Promise overload', () => {
       });
 
       // Emit non-matching events
-      await MakaioBus.emit(EventSubjects.message, {
+      await MakaioBus.emit(MakaioBus.own('root'), EventSubjects.message, {
         content: 'test',
         sessionId: 'other',
       });
@@ -72,7 +72,7 @@ describe('once - Promise overload', () => {
       });
 
       // Emit non-matching events
-      await MakaioBus.emit(EventSubjects.message, {
+      await MakaioBus.emit(MakaioBus.own('root'), EventSubjects.message, {
         content: 'wrong',
         sessionId: 'other',
       });
@@ -92,14 +92,14 @@ describe('once - Promise overload', () => {
       });
 
       // Emit non-matching events
-      await MakaioBus.emit(EventSubjects.message, {
+      await MakaioBus.emit(MakaioBus.own('root'), EventSubjects.message, {
         content: 'wrong',
         sessionId: 'other',
       });
 
       // Emit matching event
       setTimeout(() => {
-        void MakaioBus.emit(EventSubjects.message, {
+        void MakaioBus.emit(MakaioBus.own('root'), EventSubjects.message, {
           content: 'correct',
           sessionId: 'target',
         });

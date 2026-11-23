@@ -7,6 +7,7 @@
   "private": true,
   "exports": {
     ".": "./src/index.ts",
+    "./kernel-api": "./src/kernel-api.ts",
     "./package.json": "./package.json"
   },
   "scripts": {
@@ -30,6 +31,7 @@
   "publishConfig": {
     "exports": {
       ".": "./dist/index.mjs",
+      "./kernel-api": "./dist/kernel-api.mjs",
       "./package.json": "./package.json"
     }
   },

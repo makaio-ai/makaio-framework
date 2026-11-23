@@ -1,3 +1,4 @@
+import type { IMakaioBus } from '@makaio/bus-core';
 import type { LogImportConfig } from '../log-importer/registry-types.js';
 import type { AdapterProviderDefinition } from './provider-definition.js';
 import type { AdapterAuthRuntimePreparer } from '../config/adapter-auth-runtime.js';
@@ -71,4 +72,11 @@ export interface AIAdapterRuntimeInitOptions extends AIAdapterInitOptions {
   machineId: string;
   /** Session-ownership authority incarnation hosting this adapter. */
   ownerInstanceId: string;
+  /**
+   * Bus of the host that loads the adapter.
+   *
+   * The adapter registers its namespace and RPC handlers on this bus and derives its
+   * scoped adapter bus from it. There is no process-bus fallback: the host always passes it.
+   */
+  globalBus: IMakaioBus;
 }

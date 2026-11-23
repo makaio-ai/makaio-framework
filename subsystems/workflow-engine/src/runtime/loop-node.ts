@@ -1,3 +1,4 @@
+import type { CallContext } from '@makaio/core';
 import { evaluateSync } from '@makaio/expression';
 import type {
   JsonValue,
@@ -77,6 +78,7 @@ const ROUND_RESUME_STATUSES = new Set<WorkflowFrameState['status']>(['completed'
  * prior execution), runs the body sequence, and either returns the
  * extracted body output on success or a terminal {@link NodeOutcome} on
  * failure/cancellation/pause.
+ * @param call - Call context of the message that drives this execution run.
  * @param node - The loop node (provides body sequence and node ID).
  * @param round - Zero-based round index for the iteration frame.
  * @param ctx - Runtime context.
@@ -87,6 +89,7 @@ const ROUND_RESUME_STATUSES = new Set<WorkflowFrameState['status']>(['completed'
  * @returns Body result indicating success with output or a terminal outcome.
  */
 async function executeRoundBody(
+  call: CallContext,
   node: WorkflowLoopNode,
   round: number,
   ctx: RuntimeContext,
@@ -112,7 +115,7 @@ async function executeRoundBody(
 
   const frame =
     resumeFrame ??
-    ctx.createFrame({
+    ctx.createFrame(call, {
       nodeId: node.id,
       nodeType: 'loop',
       path: parentPath,
@@ -121,21 +124,21 @@ async function executeRoundBody(
     });
 
   if (ctx.signal.aborted) {
-    await cancelFrame(frame, ctx);
+    await cancelFrame(call, frame, ctx);
     return { terminal: true, outcome: { status: 'cancelled' } };
   }
 
   if (resumeFrame === undefined) {
-    await startFrame(frame, ctx);
+    await startFrame(call, frame, ctx);
   }
 
-  const bodyOutcome = await runBodySequence(node, frame, ctx, expressionCtx, executeSequenceFn);
+  const bodyOutcome = await runBodySequence(call, node, frame, ctx, expressionCtx, executeSequenceFn);
   if (bodyOutcome !== undefined) {
     return { terminal: true, outcome: bodyOutcome };
   }
 
   const bodyOutput = extractLastSequenceOutput(node.body as WorkflowSequenceNode, frame.frameId, ctx) ?? null;
-  await completeFrame(frame, ctx, bodyOutput);
+  await completeFrame(call, frame, ctx, bodyOutput);
   return {
     terminal: false,
     output: bodyOutput,
@@ -205,6 +208,7 @@ function buildLoopGateExpressionContext(
  * Returns `undefined` when the body completed or was skipped (caller
  * should extract body output), or a terminal {@link NodeOutcome} that
  * the loop must propagate immediately.
+ * @param call - Call context of the message that drives this execution run.
  * @param node - Loop node providing the body sequence.
  * @param frame - Started iteration frame.
  * @param ctx - Runtime context.
@@ -213,6 +217,7 @@ function buildLoopGateExpressionContext(
  * @returns Terminal outcome to propagate, or `undefined` on success.
  */
 async function runBodySequence(
+  call: CallContext,
   node: WorkflowLoopNode,
   frame: WorkflowFrameState,
   ctx: RuntimeContext,
@@ -222,6 +227,7 @@ async function runBodySequence(
   let bodyOutcome: NodeOutcome;
   try {
     bodyOutcome = await executeSequenceFn(
+      call,
       node.body as WorkflowSequenceNode,
       ctx,
       expressionCtx,
@@ -230,17 +236,17 @@ async function runBodySequence(
     );
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    await failFrame(frame, ctx, message);
+    await failFrame(call, frame, ctx, message);
     return { status: 'failed', error: message };
   }
 
   switch (bodyOutcome.status) {
     case 'failed': {
-      await failFrame(frame, ctx, bodyOutcome.error);
+      await failFrame(call, frame, ctx, bodyOutcome.error);
       return { status: 'failed', error: bodyOutcome.error };
     }
     case 'cancelled': {
-      await cancelFrame(frame, ctx);
+      await cancelFrame(call, frame, ctx);
       return { status: 'cancelled' };
     }
     case 'paused': {
@@ -332,6 +338,7 @@ function evaluateGate(
  * is resolved), previously completed round frames are reused via
  * {@link findReusableResumeFrame} so body sequences are not re-executed.
  * The escalation gate is resolved from persisted state on re-entry.
+ * @param call - Call context of the message that drives this execution run.
  * @param node - The loop node to execute.
  * @param ctx - Execution-wide runtime context.
  * @param expressionCtx - Current expression evaluation context.
@@ -341,6 +348,7 @@ function evaluateGate(
  * @returns Terminal execution outcome for the loop node.
  */
 export async function executeLoopNode(
+  call: CallContext,
   node: WorkflowLoopNode,
   ctx: RuntimeContext,
   expressionCtx: PrimitiveExpressionContext,
@@ -366,6 +374,7 @@ export async function executeLoopNode(
     if (ctx.signal.aborted) return { status: 'cancelled' };
 
     const bodyResult = await executeRoundBody(
+      call,
       node,
       round,
       ctx,
@@ -386,6 +395,7 @@ export async function executeLoopNode(
       if (node.gate.escalation !== undefined && ctx.suspensionStrategy !== 'wait-in-process') {
         const gateOutcome: LoopGateOutcome = { kind: 'escalate', reason: 'resumed_from_gate' };
         const earlyOutcome = await resolvePersistedEscalationGate(
+          call,
           ctx,
           node,
           parentFrameId,
@@ -409,7 +419,7 @@ export async function executeLoopNode(
     }
     if (gateResult.kind === 'escalate') {
       if (node.gate.escalation !== undefined) {
-        return openEscalationGate(node, ctx, expressionCtx, parentFrameId, gateResult, round + 1, bodyOutputs);
+        return openEscalationGate(call, node, ctx, expressionCtx, parentFrameId, gateResult, round + 1, bodyOutputs);
       }
       return {
         status: 'completed',

@@ -36,6 +36,7 @@ import os from 'node:os';
 import { randomUUID } from 'node:crypto';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
+import { createTestCall } from '@makaio/test-utils';
 import type { SDKMessage } from '@makaio/client-claude-code';
 import { clientDefinition as claudeClientDefinition } from '@makaio/client-claude-code';
 import type { NormalizedMessageInput } from '@makaio/ai-adapters-core';
@@ -269,7 +270,7 @@ function systemInit(sessionId: string): SDKMessage {
     permissionMode: 'default',
     slash_commands: [],
     output_style: 'default',
-  } as unknown as SDKMessage;
+  };
 }
 
 /**
@@ -298,7 +299,7 @@ function successResult(sessionId: string): SDKMessage {
     },
     modelUsage: {},
     permission_denials: [],
-  } as unknown as SDKMessage;
+  };
 }
 
 /**
@@ -313,9 +314,10 @@ const tick = (ms = 0) => new Promise<void>((resolve) => setTimeout(resolve, ms))
  * @returns A connector wired to the scoped connector bus.
  */
 async function makeConnector(): Promise<ClaudeSdkConnector> {
-  const bus = await ClaudeCodeConnectorNamespace.scopedBus();
+  const bus = await ClaudeCodeConnectorNamespace.scopedBus(MakaioBus);
   return new ClaudeSdkConnector({
     bus,
+    globalBus: MakaioBus,
     adapterId: 'adapter-test',
     adapterName: ClaudeCodeAdapterName,
     agentId: 'agent-test',
@@ -342,14 +344,14 @@ describe('ClaudeSdkConnector session-ID rotation deadlock prevention', () => {
 
   afterEach(async () => {
     MakaioBus.__resetHandlers?.();
-    await connector.close().catch(() => undefined);
+    await connector.close(createTestCall()).catch(() => undefined);
   });
 
   it('captured session-ID promise settles when system.init arrives after query rotation (guards FIX 2)', async () => {
     // Phase 1 — establish the initial session (no responseSchema).
     // initialize() eagerly resolves the deferred for non-fork sessions so the
     // caller does not block.  No messages need to be pushed to the initial query.
-    await connector.initialize();
+    await connector.initialize({ call: createTestCall() });
 
     const rotatedSessionId = randomUUID();
 
@@ -365,7 +367,10 @@ describe('ClaudeSdkConnector session-ID rotation deadlock prevention', () => {
     // instance, abandoning the captured promise forever → the turn hung.
     // Post-FIX-2: system.init calls .resolve() on the EXISTING deferred, so
     // the captured promise settles and sendMessage() returns.
-    const sendPromise = connector.sendMessage(TEST_MESSAGE, { responseSchema: ROTATION_SCHEMA });
+    const sendPromise = connector.sendMessage(TEST_MESSAGE, {
+      call: createTestCall(),
+      responseSchema: ROTATION_SCHEMA,
+    });
 
     // Verify sendMessage() has NOT resolved before we emit system.init.
     const resolvedEarly = await Promise.race([sendPromise.then(() => true), tick(30).then(() => false)]);
@@ -393,7 +398,7 @@ describe('ClaudeSdkConnector session-ID rotation deadlock prevention', () => {
     await tick(30);
   }, 5_000);
 
-  it.each([
+  it.each<[string, SDKMessage]>([
     [
       'unmodeled top-level type (command_lifecycle)',
       {
@@ -402,7 +407,7 @@ describe('ClaudeSdkConnector session-ID rotation deadlock prevention', () => {
         command_uuid: randomUUID(),
         uuid: randomUUID(),
         session_id: randomUUID(),
-      } as unknown as SDKMessage,
+      },
     ],
     [
       'unmodeled system subtype (hook_started — empirically observed pre-init traffic from CLI 2.1.x)',
@@ -411,13 +416,13 @@ describe('ClaudeSdkConnector session-ID rotation deadlock prevention', () => {
         subtype: 'hook_started',
         uuid: randomUUID(),
         session_id: randomUUID(),
-      } as unknown as SDKMessage,
+      },
     ],
   ])(
     'unknown SDK message (%s) before system.init does not block the consumption loop (guards FIX 1)',
     async (_label: string, preinitMessage: SDKMessage) => {
       // Phase 1 — establish the initial session (no responseSchema).
-      await connector.initialize();
+      await connector.initialize({ call: createTestCall() });
 
       const rotatedSessionId = randomUUID();
 
@@ -430,7 +435,10 @@ describe('ClaudeSdkConnector session-ID rotation deadlock prevention', () => {
 
       try {
         // Phase 2 — trigger rotation via responseSchema.
-        const sendPromise = connector.sendMessage(TEST_MESSAGE, { responseSchema: ROTATION_SCHEMA });
+        const sendPromise = connector.sendMessage(TEST_MESSAGE, {
+          call: createTestCall(),
+          responseSchema: ROTATION_SCHEMA,
+        });
 
         // Allow rotation to complete and the new consumption loop to start.
         await tick(30);
@@ -478,9 +486,12 @@ describe('ClaudeSdkConnector session-ID rotation deadlock prevention', () => {
   );
 
   it('rejects sendMessage when the rotated query iterator fails before system.init', async () => {
-    await connector.initialize();
+    await connector.initialize({ call: createTestCall() });
 
-    const sendPromise = connector.sendMessage(TEST_MESSAGE, { responseSchema: ROTATION_SCHEMA });
+    const sendPromise = connector.sendMessage(TEST_MESSAGE, {
+      call: createTestCall(),
+      responseSchema: ROTATION_SCHEMA,
+    });
     await tick(30);
 
     queryHarness.failIterator(new Error('SDK transport failed'));
@@ -489,10 +500,13 @@ describe('ClaudeSdkConnector session-ID rotation deadlock prevention', () => {
   }, 5_000);
 
   it('preserves an immediate iterator failure for a later session-ID waiter', async () => {
-    await connector.initialize();
+    await connector.initialize({ call: createTestCall() });
     queryHarness.failNextIterator(new Error('SDK transport failed before session-ID lookup'));
 
-    const sendPromise = connector.sendMessage(TEST_MESSAGE, { responseSchema: ROTATION_SCHEMA });
+    const sendPromise = connector.sendMessage(TEST_MESSAGE, {
+      call: createTestCall(),
+      responseSchema: ROTATION_SCHEMA,
+    });
 
     await expect(Promise.race([sendPromise, timeoutRejecting(2000)])).rejects.toThrow('Session not initialized');
     await expect(Promise.race([connector.getAdapterSessionId(), timeoutRejecting(2000)])).rejects.toThrow(
@@ -501,8 +515,11 @@ describe('ClaudeSdkConnector session-ID rotation deadlock prevention', () => {
   }, 5_000);
 
   it('rejects sendMessage when the rotated query ends before system.init', async () => {
-    await connector.initialize();
-    const sendPromise = connector.sendMessage(TEST_MESSAGE, { responseSchema: ROTATION_SCHEMA });
+    await connector.initialize({ call: createTestCall() });
+    const sendPromise = connector.sendMessage(TEST_MESSAGE, {
+      call: createTestCall(),
+      responseSchema: ROTATION_SCHEMA,
+    });
     await tick(30);
 
     queryHarness.endIterator();
@@ -513,12 +530,12 @@ describe('ClaudeSdkConnector session-ID rotation deadlock prevention', () => {
   }, 5_000);
 
   it('preserves a synchronous query construction error for a later session-ID waiter', async () => {
-    await connector.initialize();
+    await connector.initialize({ call: createTestCall() });
     queryHarness.failNextQuery(new Error('SDK query construction failed'));
 
-    await expect(connector.sendMessage(TEST_MESSAGE, { responseSchema: ROTATION_SCHEMA })).rejects.toThrow(
-      'SDK query construction failed',
-    );
+    await expect(
+      connector.sendMessage(TEST_MESSAGE, { call: createTestCall(), responseSchema: ROTATION_SCHEMA }),
+    ).rejects.toThrow('SDK query construction failed');
     expect(connector.getConfirmedAdapterSessionId()).toBeUndefined();
     await expect(Promise.race([connector.getAdapterSessionId(), timeoutRejecting(2000)])).rejects.toThrow(
       'SDK query construction failed',
@@ -526,34 +543,37 @@ describe('ClaudeSdkConnector session-ID rotation deadlock prevention', () => {
   }, 5_000);
 
   it('preserves a query-options construction error for a later session-ID waiter', async () => {
-    await connector.initialize();
+    await connector.initialize({ call: createTestCall() });
     Object.defineProperty(connector, 'createToolApprovalHandler', {
       value: () => {
         throw new Error('SDK query options construction failed');
       },
     });
 
-    await expect(connector.sendMessage(TEST_MESSAGE, { responseSchema: ROTATION_SCHEMA })).rejects.toThrow(
-      'SDK query options construction failed',
-    );
+    await expect(
+      connector.sendMessage(TEST_MESSAGE, { call: createTestCall(), responseSchema: ROTATION_SCHEMA }),
+    ).rejects.toThrow('SDK query options construction failed');
     await expect(Promise.race([connector.getAdapterSessionId(), timeoutRejecting(2000)])).rejects.toThrow(
       'SDK query options construction failed',
     );
   }, 5_000);
 
   it('retries a failed schema rotation from the provider-confirmed session ID', async () => {
-    await connector.initialize();
+    await connector.initialize({ call: createTestCall() });
     const confirmedSessionId = randomUUID();
     queryHarness.emitMessage(systemInit(confirmedSessionId));
     await tick(10);
 
     queryHarness.failNextQuery(new Error('SDK query construction failed'));
-    await expect(connector.sendMessage(TEST_MESSAGE, { responseSchema: ROTATION_SCHEMA })).rejects.toThrow(
-      'SDK query construction failed',
-    );
+    await expect(
+      connector.sendMessage(TEST_MESSAGE, { call: createTestCall(), responseSchema: ROTATION_SCHEMA }),
+    ).rejects.toThrow('SDK query construction failed');
     expect(connector.getConfirmedAdapterSessionId()).toBe(confirmedSessionId);
 
-    const retryPromise = connector.sendMessage(TEST_MESSAGE, { responseSchema: ROTATION_SCHEMA });
+    const retryPromise = connector.sendMessage(TEST_MESSAGE, {
+      call: createTestCall(),
+      responseSchema: ROTATION_SCHEMA,
+    });
     await tick(10);
 
     expect(queryHarness.queryFn.mock.calls.at(-1)?.[0].options.resume).toBe(confirmedSessionId);
@@ -562,13 +582,16 @@ describe('ClaudeSdkConnector session-ID rotation deadlock prevention', () => {
   }, 5_000);
 
   it('rejects sendMessage when the rotated query closes before system.init', async () => {
-    await connector.initialize();
+    await connector.initialize({ call: createTestCall() });
 
-    const sendPromise = connector.sendMessage(TEST_MESSAGE, { responseSchema: ROTATION_SCHEMA });
+    const sendPromise = connector.sendMessage(TEST_MESSAGE, {
+      call: createTestCall(),
+      responseSchema: ROTATION_SCHEMA,
+    });
     await tick(30);
 
     queryHarness.endIteratorOnNextInterrupt();
-    await connector.close();
+    await connector.close(createTestCall());
 
     await expect(Promise.race([sendPromise, timeoutRejecting(2000)])).rejects.toThrow(
       'Claude query interrupted before terminal result',

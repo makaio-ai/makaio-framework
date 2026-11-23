@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest';
 import {
-  createBusContext,
   createBusInstance,
   type BusBroadcastMessage,
   type BusMessage,
@@ -8,7 +7,7 @@ import {
   type BusRequestMessage,
   type BusTransport,
 } from '@makaio/bus-core';
-import type { TransportReceiveContext } from '@makaio/core';
+import { CorePartyKind, type TransportReceiveContext } from '@makaio/core';
 import {
   createWorkflowDelegateResultFinalizerNamespace,
   WorkflowRunContextSchema,
@@ -208,7 +207,7 @@ const runContext = WorkflowRunContextSchema.parse({
  * @returns Registered test bus.
  */
 function createWorkflowTestBus(): ReturnType<typeof createBusInstance> {
-  const bus = createBusInstance({ context: createBusContext() });
+  const bus = createBusInstance();
   bus.registerNamespace(WorkflowNamespace);
   bus.registerNamespace(WorkflowStorageNamespace);
   return bus;
@@ -234,7 +233,8 @@ describe('workflow.getRunContext authorization', () => {
 
     await transport.requestRunContext(runContext.executionId, {
       transportName: 'remote-workflow',
-      peer: { kind: 'test-identity', id: runContext.executionId, authenticated: true },
+      authenticated: true,
+      caller: { kind: 'test.identity', id: runContext.executionId },
     });
 
     expect(transport.messages.find((message) => message.type === 'response')).toMatchObject({
@@ -245,7 +245,7 @@ describe('workflow.getRunContext authorization', () => {
   });
 
   // Encryption and peer-id equality are not evidence of an Authority dispatch:
-  // no transport mints an `e2e` identity for a workflow execution, and an `e2e`
+  // no transport mints an `makaio.e2e-peer` identity for a workflow execution, and an `makaio.e2e-peer`
   // peer id carries no allowed-subjects fence. Both are denied, including the
   // case where the id literally equals the requested execution.
   it.each([
@@ -260,7 +260,9 @@ describe('workflow.getRunContext authorization', () => {
 
     await transport.requestRunContext(runContext.executionId, {
       transportName: 'remote-workflow',
-      peer: { kind: 'e2e', id: peerId, authenticated: true, encrypted: true },
+      authenticated: true,
+      encrypted: true,
+      caller: { kind: CorePartyKind.e2ePeer, id: peerId },
     });
 
     expect(transport.messages.find((message) => message.type === 'response')).toMatchObject({
@@ -279,10 +281,10 @@ describe('workflow.getRunContext authorization', () => {
 
     await transport.requestRunContext(runContext.executionId, {
       transportName: 'remote-workflow',
-      peer: {
-        kind: 'workflow-execution-attempt',
+      authenticated: true,
+      caller: {
+        kind: CorePartyKind.jobRun,
         id: 'attempt-abc-123',
-        authenticated: true,
         claims: { executionId: runContext.executionId },
       },
     });
@@ -303,10 +305,10 @@ describe('workflow.getRunContext authorization', () => {
 
     await transport.requestRunContext(runContext.executionId, {
       transportName: 'remote-workflow',
-      peer: {
-        kind: 'workflow-execution-attempt',
+      authenticated: true,
+      caller: {
+        kind: CorePartyKind.jobRun,
         id: 'attempt-wrong',
-        authenticated: true,
         claims: { executionId: 'wfx-other' },
       },
     });
@@ -327,7 +329,9 @@ describe('workflow.getRunContext authorization', () => {
 
     await transport.requestRunContext(runContext.executionId, {
       transportName: 'remote-workflow',
-      peer: { kind: 'machine', id: 'machine-1', authenticated: true, encrypted: true },
+      authenticated: true,
+      encrypted: true,
+      caller: { kind: 'test.machine', id: 'machine-1' },
     });
 
     expect(transport.messages.find((message) => message.type === 'response')).toMatchObject({
@@ -346,7 +350,8 @@ describe('workflow.getRunContext authorization', () => {
 
     await transport.requestRunContext(runContext.executionId, {
       transportName: 'remote-workflow',
-      peer: { kind: 'workflow-execution-attempt', id: 'attempt-without-claim', authenticated: true },
+      authenticated: true,
+      caller: { kind: CorePartyKind.jobRun, id: 'attempt-without-claim' },
     });
 
     expect(transport.messages.find((message) => message.type === 'response')).toMatchObject({
@@ -365,10 +370,10 @@ describe('workflow.getRunContext authorization', () => {
 
     await transport.requestStorageRunContext(runContext.executionId, {
       transportName: 'remote-workflow',
-      peer: {
-        kind: 'workflow-execution-attempt',
+      authenticated: true,
+      caller: {
+        kind: CorePartyKind.jobRun,
         id: 'attempt-storage-direct-read',
-        authenticated: true,
         claims: { executionId: runContext.executionId },
       },
     });
@@ -382,8 +387,14 @@ describe('workflow.getRunContext authorization', () => {
 });
 
 describe('workflow.finalizeDelegateResult authority gateway', () => {
+  /**
+   * Request finalization as a transport-verified caller.
+   * @param input - Caller, connection encryption, and requested delegate details.
+   * @returns The remote finalization response.
+   */
   async function requestFinalization(input: {
-    readonly peer: TransportReceiveContext['peer'];
+    readonly caller: TransportReceiveContext['caller'];
+    readonly encrypted?: boolean;
     readonly executionId?: string;
     readonly nodeId?: string;
     readonly nodeType?: 'delegate-agent' | 'delegate-role';
@@ -436,21 +447,25 @@ describe('workflow.finalizeDelegateResult authority gateway', () => {
         toolObservations: [],
       },
       `finalize-${executionId}`,
-      { transportName: 'remote-workflow', peer: input.peer },
+      {
+        transportName: 'remote-workflow',
+        authenticated: true,
+        encrypted: input.encrypted,
+        caller: input.caller,
+      },
     );
     cleanup();
     return transport.messages.find((message) => message.type === 'response');
   }
 
-  const allowedPeer = {
-    kind: 'workflow-execution-attempt' as const,
+  const allowedCaller = {
+    kind: CorePartyKind.jobRun,
     id: 'attempt-gateway',
-    authenticated: true,
     claims: { executionId: runContext.executionId },
   };
 
   it('allows an authenticated attempt for its selected durable delegate finalizer', async () => {
-    await expect(requestFinalization({ peer: allowedPeer })).resolves.toMatchObject({
+    await expect(requestFinalization({ caller: allowedCaller })).resolves.toMatchObject({
       type: 'response',
       result: { output: { finalized: 'raw' } },
     });
@@ -458,15 +473,14 @@ describe('workflow.finalizeDelegateResult authority gateway', () => {
 
   it('rejects a different execution, delegate node, finalizer, or peer', async () => {
     for (const input of [
-      { peer: allowedPeer, executionId: 'wfx-other' },
-      { peer: allowedPeer, nodeId: 'other-node' },
-      { peer: allowedPeer, finalizerId: 'artifact.write-wrap' },
+      { caller: allowedCaller, executionId: 'wfx-other' },
+      { caller: allowedCaller, nodeId: 'other-node' },
+      { caller: allowedCaller, finalizerId: 'artifact.write-wrap' },
       {
-        peer: {
-          kind: 'e2e' as const,
+        encrypted: true,
+        caller: {
+          kind: CorePartyKind.e2ePeer,
           id: runContext.executionId,
-          authenticated: true,
-          encrypted: true,
         },
       },
     ]) {
@@ -524,7 +538,9 @@ describe('workflow.completeExternalExecution authorization', () => {
       bus.registerTransport(transport);
       await transport.requestExternalCompletion(executionId, {
         transportName: 'remote-workflow',
-        peer: { kind: 'e2e', id: executionId, authenticated: true, encrypted: true },
+        authenticated: true,
+        encrypted: true,
+        caller: { kind: CorePartyKind.e2ePeer, id: executionId },
       });
 
       expect(transport.messages.find((message) => message.type === 'response')).toMatchObject({
@@ -557,10 +573,10 @@ describe('workflow.completeExternalExecution authorization', () => {
       bus.registerTransport(transport);
       await transport.requestExternalCompletion(executionId, {
         transportName: 'remote-workflow',
-        peer: {
-          kind: 'workflow-execution-attempt',
+        authenticated: true,
+        caller: {
+          kind: CorePartyKind.jobRun,
           id: 'attempt-external-completion',
-          authenticated: true,
           claims: { executionId: 'wfx-ext-other-execution' },
         },
       });
@@ -619,10 +635,10 @@ describe('workflow state authorization', () => {
       bus.registerTransport(transport);
       const remoteContext: TransportReceiveContext = {
         transportName: 'remote-workflow',
-        peer: {
-          kind: 'workflow-execution-attempt',
+        authenticated: true,
+        caller: {
+          kind: CorePartyKind.jobRun,
           id: 'attempt-state-other',
-          authenticated: true,
           claims: { executionId: 'wfx-other' },
         },
       };
@@ -658,10 +674,10 @@ describe('attempt-scoped raw workflow storage authorization', () => {
   const otherExecutionId = 'wfx-attempt-storage-other';
   const matchingAttemptContext: TransportReceiveContext = {
     transportName: 'remote-workflow',
-    peer: {
-      kind: 'workflow-execution-attempt',
+    authenticated: true,
+    caller: {
+      kind: CorePartyKind.jobRun,
       id: 'attempt-storage',
-      authenticated: true,
       claims: { executionId },
     },
   };
@@ -794,10 +810,10 @@ describe('attempt-scoped authority state bootstrap authorization', () => {
     const executionId = 'wfx-attempt-bootstrap';
     const context: TransportReceiveContext = {
       transportName: 'remote-workflow',
-      peer: {
-        kind: 'workflow-execution-attempt',
+      authenticated: true,
+      caller: {
+        kind: CorePartyKind.jobRun,
         id: 'attempt-bootstrap',
-        authenticated: true,
         claims: { executionId },
       },
     };

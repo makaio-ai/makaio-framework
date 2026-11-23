@@ -40,7 +40,7 @@ export async function connectAndFocus(port: number, health: HealthResult): Promi
         connectTimeoutId = setTimeout(() => reject(new Error('timeout')), CONNECT_TIMEOUT_MS);
       }),
     ]);
-    const result = await bus.request(HostSubjects.app.focus, {});
+    const result = await bus.request(bus.own('root'), HostSubjects.app.focus, {});
     return result.focused;
   } catch {
     // Second-instance handoff is best-effort. Returning false lets callers

@@ -1,10 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
-import { createClaudeConnectorNamespace } from './index.js';
+import { busContextOf } from '@makaio/bus-core/kernel-api';
+import { createTestCall } from '@makaio/test-utils';
+import { createClaudeConnectorNamespace, type SDKMessage } from './index.js';
 
 describe('createClaudeConnectorNamespace', () => {
   beforeEach(() => {
-    MakaioBus.getContext()?.namespaceRegistry.__resetNamespaces?.();
+    busContextOf(MakaioBus).namespaceRegistry.__resetNamespaces?.();
   });
 
   afterEach(() => {
@@ -14,12 +16,13 @@ describe('createClaudeConnectorNamespace', () => {
   it('redacts text fields from lenient schema violation samples', async () => {
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const namespace = createClaudeConnectorNamespace(`adapter:claude-redaction-${crypto.randomUUID()}`);
-    const bus = await namespace.scopedBus();
+    const bus = await namespace.scopedBus(MakaioBus);
 
-    await bus.emit(namespace.subjects.sdk.event, {
+    const payload: unknown = {
       type: 'unexpected',
       content: 'user prompt that should not be persisted in schema violation artifacts',
-    } as never);
+    };
+    await bus.emit(createTestCall(), namespace.subjects.sdk.event, payload as SDKMessage);
 
     const warning = warnSpy.mock.calls.find(([message]) => String(message).startsWith('[BUS:VIOLATION]'))?.[0];
     expect(String(warning)).toContain('"content":"[redacted-text]"');
@@ -31,9 +34,10 @@ describe('createClaudeConnectorNamespace', () => {
     const namespace = createClaudeConnectorNamespace(`adapter:claude-skip-${crypto.randomUUID()}`, {
       busValidationMode: 'skip',
     });
-    const bus = await namespace.scopedBus();
+    const bus = await namespace.scopedBus(MakaioBus);
 
-    await bus.emit(namespace.subjects.sdk.event, { type: 'unexpected' } as never);
+    const payload: unknown = { type: 'unexpected' };
+    await bus.emit(createTestCall(), namespace.subjects.sdk.event, payload as SDKMessage);
 
     expect(warnSpy).not.toHaveBeenCalled();
   });

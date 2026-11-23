@@ -125,7 +125,14 @@ describe('PartyRefSchema and PartySchema', () => {
     const cyclic: Record<string, unknown> = {};
     cyclic.self = cyclic;
     expect(PartySchema.safeParse({ kind: 'acme.user', id: '1', claims: cyclic }).success).toBe(false);
+    expect(PartySchema.safeParse({ kind: 'acme.user', id: '1', claims: [1] }).success).toBe(false);
+    expect(PartySchema.safeParse({ kind: 'acme.user', id: '1', claims: 'e-1' }).success).toBe(false);
     expect(PartySchema.safeParse({ kind: 'acme.user', id: '1', extra: true }).success).toBe(false);
+  });
+
+  it('rejects an own __proto__ claims key instead of dropping it', () => {
+    const party: unknown = JSON.parse('{"kind":"acme.user","id":"1","claims":{"__proto__":"x","exec":"e-1"}}');
+    expect(PartySchema.safeParse(party).success).toBe(false);
   });
 
   it('CallClaimSchema agrees with isCallClaim', () => {
@@ -300,6 +307,48 @@ describe('isCallClaim is independent of the prototype chain', () => {
     }
     expect(getterAccepted).toBe(false);
     expect(plainAccepted).toBe(true);
+  });
+});
+
+describe('isCallClaim stays total for a proxy that throws', () => {
+  it('rejects a revoked proxy instead of throwing', () => {
+    const { proxy, revoke } = Proxy.revocable({}, {});
+    revoke();
+    expect(() => isCallClaim(proxy)).not.toThrow();
+    expect(isCallClaim(proxy)).toBe(false);
+  });
+
+  it('rejects a proxy whose getPrototypeOf trap throws instead of throwing', () => {
+    const proxy = new Proxy(
+      {},
+      {
+        getPrototypeOf() {
+          throw new Error('trap boom');
+        },
+      },
+    );
+    expect(() => isCallClaim(proxy)).not.toThrow();
+    expect(isCallClaim(proxy)).toBe(false);
+  });
+
+  it('rejects a proxy whose ownKeys trap throws instead of throwing', () => {
+    const proxy = new Proxy(
+      {},
+      {
+        ownKeys() {
+          throw new Error('trap boom');
+        },
+      },
+    );
+    expect(() => isCallClaim(proxy)).not.toThrow();
+    expect(isCallClaim(proxy)).toBe(false);
+  });
+
+  it('rejects a revoked proxy through CallClaimSchema.safeParse without throwing', () => {
+    const { proxy, revoke } = Proxy.revocable({}, {});
+    revoke();
+    expect(() => CallClaimSchema.safeParse(proxy)).not.toThrow();
+    expect(CallClaimSchema.safeParse(proxy).success).toBe(false);
   });
 });
 

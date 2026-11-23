@@ -1,6 +1,7 @@
 import * as fs from 'node:fs/promises';
 import path from 'path';
 import type { IMakaioBus } from '@makaio/bus-core';
+import type { CallContext } from '@makaio/core';
 import { launch as realLaunch, launchForOutput, type LaunchFunction } from '@makaio/subprocess';
 import { GitHookSubjects, type GitHookCoveredOperation } from '@makaio/contracts';
 import { GitSubjects } from './namespace.js';
@@ -155,17 +156,17 @@ export class GitWatcher {
     if (this.initialized) return;
 
     this.unsubAddRepo = this.bus.on(GitSubjects.addRepo, async (ctx) => {
-      const result = await this.addRepo(ctx.payload.repoPath);
+      const result = await this.addRepo(ctx.call, ctx.payload.repoPath);
       ctx.setResult(result);
     });
 
     this.unsubRemoveRepo = this.bus.on(GitSubjects.removeRepo, async (ctx) => {
-      const result = await this.removeRepo(ctx.payload.repoPath);
+      const result = await this.removeRepo(ctx.call, ctx.payload.repoPath);
       ctx.setResult(result);
     });
 
     this.unsubFsChanged = this.bus.on(FsSubjects.changed, async (ctx) => {
-      await this.handleFsChange(ctx.payload);
+      await this.handleFsChange(ctx.call, ctx.payload);
     });
 
     this.initialized = true;
@@ -181,16 +182,18 @@ export class GitWatcher {
     this.unsubRemoveRepo = null;
 
     const repoPaths = [...this.watchers.keys()];
-    await Promise.all(repoPaths.map((repoPath) => this.removeRepo(repoPath)));
+    const call = this.bus.own('stop');
+    await Promise.all(repoPaths.map((repoPath) => this.removeRepo(call, repoPath)));
     this.initialized = false;
   }
 
   /**
    * Add a repository to watch.
+   * @param call - Call context of the message that triggered the work.
    * @param repoPath - Absolute path to the repository root.
    * @returns Response indicating success or failure.
    */
-  private async addRepo(repoPath: string): Promise<GitAddRepoResponse> {
+  private async addRepo(call: CallContext, repoPath: string): Promise<GitAddRepoResponse> {
     if (this.watchers.has(repoPath)) {
       return { success: true };
     }
@@ -200,7 +203,7 @@ export class GitWatcher {
     try {
       const gitDir = await this.resolveGitDir(repoPath);
       // Exclude .git from default ignores so we can watch it
-      await this.bus.request(FsSubjects.watch, {
+      await this.bus.request(call, FsSubjects.watch, {
         id: watchId,
         paths: [gitDir],
         excludeFromDefaults: ['**/.git/**'],
@@ -271,17 +274,18 @@ export class GitWatcher {
 
   /**
    * Remove a repository from watching.
+   * @param call - Call context of the message that triggered the work.
    * @param repoPath - Absolute path to the repository root.
    * @returns Response indicating success or failure.
    */
-  private async removeRepo(repoPath: string): Promise<GitRemoveRepoResponse> {
+  private async removeRepo(call: CallContext, repoPath: string): Promise<GitRemoveRepoResponse> {
     const watcher = this.watchers.get(repoPath);
     if (!watcher) {
       return { success: true };
     }
 
     try {
-      await this.bus.request(FsSubjects.unwatch, { id: watcher.watchId });
+      await this.bus.request(call, FsSubjects.unwatch, { id: watcher.watchId });
     } catch {
       // Ignore unwatch errors
     }
@@ -294,9 +298,10 @@ export class GitWatcher {
    * Handle fs.changed event - route to correct repo watcher.
    * Uses path.relative to ensure the change is actually inside gitDir,
    * not just a path that shares the same prefix (e.g., .git-backup).
+   * @param call - Call context of the fs.changed message.
    * @param change - The file change event from FileWatcher.
    */
-  private async handleFsChange(change: FsChanged): Promise<void> {
+  private async handleFsChange(call: CallContext, change: FsChanged): Promise<void> {
     const matches: RepoWatcher[] = [];
     for (const [, watcher] of this.watchers) {
       const relative = path.relative(watcher.gitDir, change.path);
@@ -308,7 +313,7 @@ export class GitWatcher {
     if (matches.length === 0) return;
     matches.sort((a, b) => b.gitDir.length - a.gitDir.length);
     for (const watcher of matches) {
-      const handled = await this.handleRepoChange(watcher, change);
+      const handled = await this.handleRepoChange(call, watcher, change);
       if (handled) return;
     }
   }
@@ -332,18 +337,20 @@ export class GitWatcher {
    * Uses {@link IMakaioBus.requestOptional} so missing coverage providers preserve
    * filesystem-event emission behaviour. Other coverage failures are also treated
    * as uncovered because native hook coverage is an optimization over the fallback path.
+   * @param call - Call context of the fs.changed message being handled.
    * @param watcher - The per-repo watcher state providing the repo root path.
    * @param operation - The git operation GitWatcher is about to emit.
    * @param worktree - Worktree name when the change is worktree-scoped, otherwise `undefined`.
    * @returns `true` only when a coverage handler confirms the hook is installed and verified.
    */
   private async isCoveredByNativeHook(
+    call: CallContext,
     watcher: RepoWatcher,
     operation: GitHookCoveredOperation,
     worktree: string | undefined,
   ): Promise<boolean> {
     try {
-      const result = await this.bus.requestOptional(GitHookSubjects.coverage, {
+      const result = await this.bus.requestOptional(call, GitHookSubjects.coverage, {
         repoPath: watcher.repoRoot,
         operation,
         ...(worktree !== undefined && { worktree }),
@@ -362,16 +369,17 @@ export class GitWatcher {
 
   /**
    * Handle change for a specific repo.
+   * @param call - Call context of the fs.changed message being handled.
    * @param watcher - The repo watcher state.
    * @param change - The file change event.
    * @returns True when the watcher recognized and handled the change.
    */
-  private async handleRepoChange(watcher: RepoWatcher, change: FsChanged): Promise<boolean> {
+  private async handleRepoChange(call: CallContext, watcher: RepoWatcher, change: FsChanged): Promise<boolean> {
     const result = interpretChangeForRepo(watcher.gitDir, change);
     if (!result) return false;
 
     if (this.isSuppressibleOperation(result.type)) {
-      const covered = await this.isCoveredByNativeHook(watcher, result.type, result.worktree);
+      const covered = await this.isCoveredByNativeHook(call, watcher, result.type, result.worktree);
       if (covered) {
         return true;
       }
@@ -379,13 +387,13 @@ export class GitWatcher {
 
     try {
       const emitters: Record<string, (wt: string | undefined) => Promise<void>> = {
-        commit: (wt) => this.emitCommitEvent(watcher, wt),
-        checkout: (wt) => this.emitCheckoutEvent(watcher, wt),
-        staging: (wt) => this.emitStagingEvent(watcher, wt),
-        merge: (wt) => this.emitMergeEvent(watcher, wt),
-        rebase: (wt) => this.emitRebaseEvent(watcher, wt),
-        'worktree-added': (wt) => this.emitWorktreeEvent(watcher, wt!, 'added'),
-        'worktree-removed': (wt) => this.emitWorktreeEvent(watcher, wt!, 'removed'),
+        commit: (wt) => this.emitCommitEvent(call, watcher, wt),
+        checkout: (wt) => this.emitCheckoutEvent(call, watcher, wt),
+        staging: (wt) => this.emitStagingEvent(call, watcher, wt),
+        merge: (wt) => this.emitMergeEvent(call, watcher, wt),
+        rebase: (wt) => this.emitRebaseEvent(call, watcher, wt),
+        'worktree-added': (wt) => this.emitWorktreeEvent(call, watcher, wt!, 'added'),
+        'worktree-removed': (wt) => this.emitWorktreeEvent(call, watcher, wt!, 'removed'),
       };
       await emitters[result.type](result.worktree);
     } catch (error) {
@@ -411,7 +419,7 @@ export class GitWatcher {
     return resolveWorktreePathFromGitDirFile(gitDirFile);
   }
 
-  private async emitCommitEvent(watcher: RepoWatcher, worktree: string | undefined): Promise<void> {
+  private async emitCommitEvent(call: CallContext, watcher: RepoWatcher, worktree: string | undefined): Promise<void> {
     const cwd = await this.getWorkingDir(watcher, worktree);
     const [commitInfo, branch] = await Promise.all([
       git(['log', '-1', '--format=%H%x00%s%x00%an%x00%ae%x00%aI'], cwd),
@@ -428,10 +436,14 @@ export class GitWatcher {
       timestamp,
       worktree,
     };
-    await this.bus.emit(GitSubjects.commit, payload);
+    await this.bus.emit(call, GitSubjects.commit, payload);
   }
 
-  private async emitCheckoutEvent(watcher: RepoWatcher, worktree: string | undefined): Promise<void> {
+  private async emitCheckoutEvent(
+    call: CallContext,
+    watcher: RepoWatcher,
+    worktree: string | undefined,
+  ): Promise<void> {
     const cwd = await this.getWorkingDir(watcher, worktree);
     const currentBranch = await git(['rev-parse', '--abbrev-ref', 'HEAD'], cwd);
     const payload: GitCheckoutEvent = {
@@ -440,10 +452,10 @@ export class GitWatcher {
       timestamp: new Date().toISOString(),
       worktree,
     };
-    await this.bus.emit(GitSubjects.checkout, payload);
+    await this.bus.emit(call, GitSubjects.checkout, payload);
   }
 
-  private async emitStagingEvent(watcher: RepoWatcher, worktree: string | undefined): Promise<void> {
+  private async emitStagingEvent(call: CallContext, watcher: RepoWatcher, worktree: string | undefined): Promise<void> {
     const cwd = await this.getWorkingDir(watcher, worktree);
     const output = await git(['diff', '--cached', '--name-only'], cwd);
     const staged = output.split('\n').filter((f) => f.length > 0);
@@ -453,10 +465,10 @@ export class GitWatcher {
       timestamp: new Date().toISOString(),
       worktree,
     };
-    await this.bus.emit(GitSubjects.staging, payload);
+    await this.bus.emit(call, GitSubjects.staging, payload);
   }
 
-  private async emitMergeEvent(watcher: RepoWatcher, worktree: string | undefined): Promise<void> {
+  private async emitMergeEvent(call: CallContext, watcher: RepoWatcher, worktree: string | undefined): Promise<void> {
     const cwd = await this.getWorkingDir(watcher, worktree);
     const [targetBranch, sourceBranch, mergeCommit] = await Promise.all([
       git(['rev-parse', '--abbrev-ref', 'HEAD'], cwd),
@@ -474,10 +486,10 @@ export class GitWatcher {
       timestamp: new Date().toISOString(),
       worktree,
     };
-    await this.bus.emit(GitSubjects.merge, payload);
+    await this.bus.emit(call, GitSubjects.merge, payload);
   }
 
-  private async emitRebaseEvent(watcher: RepoWatcher, worktree: string | undefined): Promise<void> {
+  private async emitRebaseEvent(call: CallContext, watcher: RepoWatcher, worktree: string | undefined): Promise<void> {
     const cwd = await this.getWorkingDir(watcher, worktree);
     const branch = await git(['rev-parse', '--abbrev-ref', 'HEAD'], cwd);
     let onto = 'unknown';
@@ -494,10 +506,15 @@ export class GitWatcher {
       timestamp: new Date().toISOString(),
       worktree,
     };
-    await this.bus.emit(GitSubjects.rebase, payload);
+    await this.bus.emit(call, GitSubjects.rebase, payload);
   }
 
-  private async emitWorktreeEvent(watcher: RepoWatcher, name: string, event: 'added' | 'removed'): Promise<void> {
+  private async emitWorktreeEvent(
+    call: CallContext,
+    watcher: RepoWatcher,
+    name: string,
+    event: 'added' | 'removed',
+  ): Promise<void> {
     const gitDirFile = path.join(watcher.gitDir, 'worktrees', name, 'gitdir');
     let worktreePath = pathResolveSibling(watcher.repoRoot, name);
     let branch = name;
@@ -517,7 +534,7 @@ export class GitWatcher {
       event,
       timestamp: new Date().toISOString(),
     };
-    await this.bus.emit(GitSubjects.worktree, payload);
+    await this.bus.emit(call, GitSubjects.worktree, payload);
   }
 
   /**

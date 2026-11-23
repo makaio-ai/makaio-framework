@@ -12,6 +12,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { UpdateStatusEntry, UpdateStatusType } from 'electrobun/bun';
 import type { RequestContext } from '@makaio/core';
+import type { CallContext } from '@makaio/contracts';
+import { createTestCall } from '@makaio/test-utils';
 import type {
   VariantRequestUpgradeRequest,
   VariantRequestUpgradeResponse,
@@ -28,7 +30,7 @@ type SetResultMock = ReturnType<typeof vi.fn<(result: VariantRequestUpgradeRespo
 const busMocks = vi.hoisted(() => ({
   MakaioBus: {
     on: vi.fn<(subject: unknown, handler: UpgradeRequestHandler) => () => void>(),
-    emit: vi.fn<(subject: unknown, payload: unknown) => Promise<void>>(),
+    emit: vi.fn<(call: CallContext, subject: unknown, payload: unknown) => Promise<void>>(),
     /**
      * registerNamespace is called as a side effect by \@makaio/contracts/variant
      * when the namespace module loads. The mock must return a plausible subjects
@@ -134,6 +136,7 @@ const SAMPLE_VERSION_JSON = {
 function makeRequestCtx(targetVariant: 'base' | 'cef'): UpgradeRequestContext & { setResult: SetResultMock } {
   const setResult = vi.fn<(result: VariantRequestUpgradeResponse) => void>();
   return {
+    call: createTestCall(),
     isRequest: true as const,
     payload: { targetVariant },
     setResult,
@@ -143,7 +146,6 @@ function makeRequestCtx(targetVariant: 'base' | 'cef'): UpgradeRequestContext & 
     replacePayload: vi.fn<(newPayload: VariantRequestUpgradeRequest) => void>(),
     messageId: 'test-message-id',
     correlationId: undefined,
-    origin: { local: true },
   };
 }
 
@@ -421,7 +423,7 @@ describe('registerVariantUpgradeHandler', () => {
 
       await vi.waitFor(() => expect(busMocks.MakaioBus.emit).toHaveBeenCalled());
 
-      const firstEmitPayload = busMocks.MakaioBus.emit.mock.calls[0]?.[1] as {
+      const firstEmitPayload = busMocks.MakaioBus.emit.mock.calls[0]?.[2] as {
         status: VariantUpgradeStatus;
         percent?: number;
         message?: string;
@@ -433,15 +435,17 @@ describe('registerVariantUpgradeHandler', () => {
 
     it('emits an applying event before applying the update', async () => {
       const { handler } = setupHandler(BASE_VARIANT_CONFIG);
+      const ctx = makeRequestCtx('cef');
 
-      handler(makeRequestCtx('cef'));
+      handler(ctx);
 
       await vi.waitFor(() => expect(updaterMocks.applyUpdate).toHaveBeenCalled());
 
       const allEmittedStatuses = busMocks.MakaioBus.emit.mock.calls.map(
-        (call) => (call[1] as { status: VariantUpgradeStatus }).status,
+        (call) => (call[2] as { status: VariantUpgradeStatus }).status,
       );
       expect(allEmittedStatuses).toContain('applying');
+      for (const [call] of busMocks.MakaioBus.emit.mock.calls) expect(call).toBe(ctx.call);
     });
 
     it('emits a complete event when applyUpdate resolves (defensive path)', async () => {
@@ -452,7 +456,7 @@ describe('registerVariantUpgradeHandler', () => {
       // Use expect inside waitFor so it throws and retries until 'complete' is emitted.
       await vi.waitFor(() => {
         const statuses = busMocks.MakaioBus.emit.mock.calls.map(
-          (call) => (call[1] as { status: VariantUpgradeStatus }).status,
+          (call) => (call[2] as { status: VariantUpgradeStatus }).status,
         );
         expect(statuses).toContain('complete');
       });
@@ -470,7 +474,7 @@ describe('registerVariantUpgradeHandler', () => {
 
       await vi.waitFor(() => {
         const statuses = busMocks.MakaioBus.emit.mock.calls.map(
-          (call) => (call[1] as { status: VariantUpgradeStatus }).status,
+          (call) => (call[2] as { status: VariantUpgradeStatus }).status,
         );
         expect(statuses).toContain('error');
       });
@@ -488,14 +492,14 @@ describe('registerVariantUpgradeHandler', () => {
 
       await vi.waitFor(() => {
         const statuses = busMocks.MakaioBus.emit.mock.calls.map(
-          (call) => (call[1] as { status: VariantUpgradeStatus }).status,
+          (call) => (call[2] as { status: VariantUpgradeStatus }).status,
         );
         expect(statuses).toContain('error');
       });
 
       const errorPayload = busMocks.MakaioBus.emit.mock.calls.find(
-        (call) => (call[1] as { status: VariantUpgradeStatus }).status === 'error',
-      )?.[1] as { status: VariantUpgradeStatus; message?: string };
+        (call) => (call[2] as { status: VariantUpgradeStatus }).status === 'error',
+      )?.[2] as { status: VariantUpgradeStatus; message?: string };
       expect(errorPayload?.message).toContain('No update available on channel');
     });
 
@@ -507,7 +511,7 @@ describe('registerVariantUpgradeHandler', () => {
 
       await vi.waitFor(() => {
         const statuses = busMocks.MakaioBus.emit.mock.calls.map(
-          (call) => (call[1] as { status: VariantUpgradeStatus }).status,
+          (call) => (call[2] as { status: VariantUpgradeStatus }).status,
         );
         expect(statuses).toContain('error');
       });
@@ -527,7 +531,7 @@ describe('registerVariantUpgradeHandler', () => {
       // Wait for the error path to run (error event emitted).
       await vi.waitFor(() => {
         const statuses = busMocks.MakaioBus.emit.mock.calls.map(
-          (call) => (call[1] as { status: VariantUpgradeStatus }).status,
+          (call) => (call[2] as { status: VariantUpgradeStatus }).status,
         );
         expect(statuses).toContain('error');
       });
@@ -550,7 +554,7 @@ describe('registerVariantUpgradeHandler', () => {
 
       await vi.waitFor(() => {
         const statuses = busMocks.MakaioBus.emit.mock.calls.map(
-          (call) => (call[1] as { status: VariantUpgradeStatus }).status,
+          (call) => (call[2] as { status: VariantUpgradeStatus }).status,
         );
         expect(statuses).toContain('error');
       });
@@ -625,7 +629,7 @@ describe('registerVariantUpgradeHandler', () => {
       await vi.waitFor(() => expect(updaterMocks.applyUpdate).toHaveBeenCalled());
 
       const emittedStatuses = busMocks.MakaioBus.emit.mock.calls.map(
-        (call) => (call[1] as { status: VariantUpgradeStatus }).status,
+        (call) => (call[2] as { status: VariantUpgradeStatus }).status,
       );
       expect(emittedStatuses).toContain(expectedBusStatus);
     }
@@ -721,7 +725,7 @@ describe('registerVariantUpgradeHandler', () => {
       await vi.waitFor(() => expect(updaterMocks.applyUpdate).toHaveBeenCalled());
 
       const emittedStatuses = busMocks.MakaioBus.emit.mock.calls.map(
-        (call) => (call[1] as { status: VariantUpgradeStatus }).status,
+        (call) => (call[2] as { status: VariantUpgradeStatus }).status,
       );
 
       // 'idle' must never appear as a bus-level status.

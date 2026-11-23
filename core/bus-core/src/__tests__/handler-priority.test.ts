@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { MakaioBus } from '../bus.js';
+import { busContextOf } from '../kernel-api.js';
 import { z } from 'zod';
 import { createBusNamespace } from '@makaio/core';
 
@@ -33,7 +34,7 @@ describe('Handler Priority', () => {
         await releaseHandler.promise;
       });
 
-      const emitted = MakaioBus.emit(EventSubjects.action, { value: 'test' });
+      const emitted = MakaioBus.emit(MakaioBus.own('root'), EventSubjects.action, { value: 'test' });
 
       expect(invoked).toBe(true);
       releaseHandler.resolve();
@@ -56,7 +57,9 @@ describe('Handler Priority', () => {
       });
 
       try {
-        await expect(MakaioBus.emit(EventSubjects.action, { value: 'test' })).rejects.toBe(firstFailure);
+        await expect(MakaioBus.emit(MakaioBus.own('root'), EventSubjects.action, { value: 'test' })).rejects.toBe(
+          firstFailure,
+        );
         expect(siblingStarted).toBe(true);
       } finally {
         error.mockRestore();
@@ -92,7 +95,7 @@ describe('Handler Priority', () => {
       );
 
       // Note: Events execute in parallel, so we can only verify they all ran
-      await MakaioBus.emit(EventSubjects.action, { value: 'test' });
+      await MakaioBus.emit(MakaioBus.own('root'), EventSubjects.action, { value: 'test' });
 
       // All handlers should have executed
       expect(executionOrder).toHaveLength(3);
@@ -102,7 +105,7 @@ describe('Handler Priority', () => {
     });
 
     it('should use default priority of 0', async () => {
-      const context = MakaioBus.getContext();
+      const context = busContextOf(MakaioBus);
       const fullSubject = 'priorityTest.action';
 
       MakaioBus.on(EventSubjects.action, () => {});
@@ -113,7 +116,7 @@ describe('Handler Priority', () => {
     });
 
     it('should preserve registration order for handlers with equal priority', async () => {
-      const context = MakaioBus.getContext();
+      const context = busContextOf(MakaioBus);
       const fullSubject = 'priorityTest.action';
 
       // Register handlers with same priority
@@ -140,7 +143,7 @@ describe('Handler Priority', () => {
     });
 
     it('should sort handlers by priority with stable ordering', async () => {
-      const context = MakaioBus.getContext();
+      const context = busContextOf(MakaioBus);
       const fullSubject = 'priorityTest.action';
 
       const handlerHigh1 = () => {};
@@ -171,7 +174,7 @@ describe('Handler Priority', () => {
     });
 
     it('should handle negative priorities', async () => {
-      const context = MakaioBus.getContext();
+      const context = busContextOf(MakaioBus);
       const fullSubject = 'priorityTest.action';
 
       const handlerNegative = () => {};
@@ -233,7 +236,7 @@ describe('Handler Priority', () => {
         { priority: 50 },
       );
 
-      const result = await MakaioBus.request(RequestSubjects.process, {
+      const result = await MakaioBus.request(MakaioBus.own('root'), RequestSubjects.process, {
         input: 'test',
       });
 
@@ -249,7 +252,7 @@ describe('Handler Priority', () => {
     });
 
     it('should use default priority of 0 for request handlers', async () => {
-      const context = MakaioBus.getContext();
+      const context = busContextOf(MakaioBus);
       const fullSubject = 'priorityRequestTest.process';
 
       MakaioBus.on(RequestSubjects.process, (ctx) => {
@@ -262,7 +265,7 @@ describe('Handler Priority', () => {
     });
 
     it('should correctly unsubscribe handlers regardless of priority', async () => {
-      const context = MakaioBus.getContext();
+      const context = busContextOf(MakaioBus);
       const fullSubject = 'priorityTest.action';
 
       const handler1 = () => {};
@@ -299,7 +302,7 @@ describe('Handler Priority', () => {
 
   describe('cross-pattern priority merging', () => {
     it('should merge handlers from wildcard and exact patterns by priority', async () => {
-      const context = MakaioBus.getContext();
+      const context = busContextOf(MakaioBus);
 
       // Register a handler for the exact subject
       MakaioBus.on(EventSubjects.action, () => {}, { priority: 50 });
@@ -321,7 +324,7 @@ describe('Handler Priority', () => {
 
   describe('with filters', () => {
     it('should respect priority when combined with filters', async () => {
-      const context = MakaioBus.getContext();
+      const context = busContextOf(MakaioBus);
       const fullSubject = 'priorityTest.action';
 
       const handler1 = () => {};

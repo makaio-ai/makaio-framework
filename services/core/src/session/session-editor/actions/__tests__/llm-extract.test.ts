@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
+import { createTestCall } from '@makaio/test-utils';
 import { AdapterSubjects, AgentResolutionSubjects, defineAdapterProviderAuth } from '@makaio/contracts';
 import { CredentialRefSchema } from '@makaio/contracts/config';
 import { AdapterSubsystemSubjects } from '../../../../adapter-subsystem/namespace.js';
@@ -238,17 +239,17 @@ describe('createLlmExtractAction — no-op paths', () => {
   const action = createLlmExtractAction(MakaioBus);
 
   it('returns pass-through when options is undefined', async () => {
-    const result = await action.execute(messages);
+    const result = await action.execute(createTestCall(), messages);
     expect(result).toEqual({ kind: 'messages', messages });
   });
 
   it('returns pass-through when options has no virtualModelId key', async () => {
-    const result = await action.execute(messages, {});
+    const result = await action.execute(createTestCall(), messages, {});
     expect(result).toEqual({ kind: 'messages', messages });
   });
 
   it('returns pass-through when virtualModelId is not a string', async () => {
-    const result = await action.execute(messages, { virtualModelId: 42 });
+    const result = await action.execute(createTestCall(), messages, { virtualModelId: 42 });
     expect(result).toEqual({ kind: 'messages', messages });
   });
 });
@@ -304,7 +305,7 @@ describe('createLlmExtractAction — success path', () => {
     ];
     const action = createLlmExtractAction(MakaioBus);
 
-    const result = await action.execute(messages, { virtualModelId: 'cheap-extraction' });
+    const result = await action.execute(createTestCall(), messages, { virtualModelId: 'cheap-extraction' });
 
     expect(result.kind).toBe('context');
     if (result.kind !== 'context') return;
@@ -333,7 +334,7 @@ describe('createLlmExtractAction — success path', () => {
     const messages: SessionMessage[] = [makeUserMessage('hello')];
     const action = createLlmExtractAction(MakaioBus);
 
-    const result = await action.execute(messages, { virtualModelId: 'cheap-extraction' });
+    const result = await action.execute(createTestCall(), messages, { virtualModelId: 'cheap-extraction' });
 
     expect(result.kind).toBe('context');
     if (result.kind !== 'context') return;
@@ -359,7 +360,7 @@ describe('createLlmExtractAction — graceful degradation', () => {
     });
     const action = createLlmExtractAction(MakaioBus);
 
-    const result = await action.execute(messages, { virtualModelId: 'unknown' });
+    const result = await action.execute(createTestCall(), messages, { virtualModelId: 'unknown' });
     unsub();
 
     expect(result).toEqual({ kind: 'messages', messages });
@@ -374,7 +375,7 @@ describe('createLlmExtractAction — graceful degradation', () => {
     });
 
     const action = createLlmExtractAction(MakaioBus);
-    const result = await action.execute(messages, { virtualModelId: 'v1' });
+    const result = await action.execute(createTestCall(), messages, { virtualModelId: 'v1' });
 
     unsub1();
     unsub2();
@@ -400,7 +401,7 @@ describe('createLlmExtractAction — graceful degradation', () => {
     });
 
     const action = createLlmExtractAction(MakaioBus);
-    const result = await action.execute(messages, { virtualModelId: 'v1' });
+    const result = await action.execute(createTestCall(), messages, { virtualModelId: 'v1' });
 
     unsub1();
     unsub2();
@@ -433,7 +434,7 @@ describe('createLlmExtractAction — graceful degradation', () => {
     });
 
     const action = createLlmExtractAction(MakaioBus);
-    const result = await action.execute(messages, { virtualModelId: 'v1' });
+    const result = await action.execute(createTestCall(), messages, { virtualModelId: 'v1' });
 
     unsub1();
     unsub2();
@@ -462,7 +463,7 @@ describe('createLlmExtractAction — graceful degradation', () => {
     });
 
     const action = createLlmExtractAction(MakaioBus);
-    const result = await action.execute(messages, { virtualModelId: 'v1' });
+    const result = await action.execute(createTestCall(), messages, { virtualModelId: 'v1' });
 
     unsub1();
     unsub2();
@@ -493,7 +494,7 @@ describe('createLlmExtractAction — graceful degradation', () => {
     });
 
     const action = createLlmExtractAction(MakaioBus);
-    const result = await action.execute(messages, { virtualModelId: 'v1' });
+    const result = await action.execute(createTestCall(), messages, { virtualModelId: 'v1' });
 
     unsub1();
     unsub2();
@@ -550,7 +551,7 @@ describe('integration: pipeline with llm-extract and messages-to-context', () =>
       { actionId: 'messages-to-context' },
     ];
 
-    const result = await executePipeline(messages, pipeline);
+    const result = await executePipeline(createTestCall(), messages, pipeline);
 
     expect(result.contextJson).toBeDefined();
     expect((result.contextJson as typeof MOCK_EXTRACTED_CONTEXT).current_state).toBe(
@@ -582,7 +583,7 @@ describe('integration: pipeline with llm-extract and messages-to-context', () =>
     const messages: SessionMessage[] = [makeUserMessage('hello')];
     const pipeline = [{ actionId: 'llm-extract', options: { virtualModelId: 'cheap-extraction' } }];
 
-    const result = await executePipeline(messages, pipeline, { sessionId: 'session-from-context' });
+    const result = await executePipeline(createTestCall(), messages, pipeline, { sessionId: 'session-from-context' });
 
     expect(result.contextJson).toBeDefined();
     expect(resolvePayload).toMatchObject({
@@ -601,7 +602,7 @@ describe('integration: pipeline with llm-extract and messages-to-context', () =>
       { actionId: 'messages-to-context' },
     ];
 
-    const result = await executePipeline(messages, pipeline);
+    const result = await executePipeline(createTestCall(), messages, pipeline);
 
     expect(result.contextJson).toBeDefined();
     expect(result.contextJson).toHaveProperty('type', 'compressed-messages');
@@ -629,7 +630,7 @@ describe('integration: pipeline with llm-extract and messages-to-context', () =>
       { actionId: 'messages-to-context' },
     ];
 
-    const result = await executePipeline(messages, pipeline);
+    const result = await executePipeline(createTestCall(), messages, pipeline);
 
     expect(result.contextJson).toBeDefined();
     expect(result.contextJson).toHaveProperty('type', 'compressed-messages');

@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createChannelEndpoint, MakaioBus, type ChannelEndpoint } from '@makaio/bus-core';
-import { createMockScopedBus } from '@makaio/test-utils';
+import { createMockScopedBus, createTestCall } from '@makaio/test-utils';
 import {
   AuthCredentialRefSchema,
   ClientSubjects,
@@ -47,7 +47,7 @@ function setupCredentialChannel(values: Readonly<Record<string, string | null>>)
     }),
   );
   const endpoint: ChannelEndpoint = createChannelEndpoint(
-    MakaioBus.getContext(),
+    MakaioBus,
     'credentials',
     (channel) => {
       channel.on(CredentialSubjects.resolve, (ctx) => {
@@ -194,7 +194,7 @@ describe('prepareAdapterAuthRuntime', () => {
     delete config.boundProviderAuth;
     config.env = { PATH: '/base/bin', SESSION_SETTING: 'enabled' };
 
-    const prepared = await prepareAdapterAuthRuntime(config);
+    const prepared = await prepareAdapterAuthRuntime(createTestCall(), config);
 
     expect(prepared.config.env).toEqual({ PATH: '/base/bin', SESSION_SETTING: 'enabled' });
     expect(prepared.config.contextEnv).toEqual({ PATH: '/base/bin', SESSION_SETTING: 'enabled' });
@@ -232,7 +232,7 @@ describe('prepareAdapterAuthRuntime', () => {
       }),
     );
 
-    const prepared = await prepareAdapterAuthRuntime(runtimeConfig(explicitBinding()));
+    const prepared = await prepareAdapterAuthRuntime(createTestCall(), runtimeConfig(explicitBinding()));
 
     expect(prepared.config.env).toEqual({
       PATH: '/managed/bin',
@@ -253,8 +253,8 @@ describe('prepareAdapterAuthRuntime', () => {
     });
     expect(createPayloads[0]).not.toMatchObject({ leaseId: 'session-1' });
 
-    await prepared.lease?.release();
-    await prepared.lease?.release();
+    await prepared.lease?.release(createTestCall());
+    await prepared.lease?.release(createTestCall());
     expect(destroyPayloads).toEqual([{ clientId: 'codex', leaseId: createPayloads[0]?.leaseId }]);
   });
 
@@ -272,7 +272,7 @@ describe('prepareAdapterAuthRuntime', () => {
       }),
     );
 
-    await expect(prepareAdapterAuthRuntime(runtimeConfig(inferredBinding()))).rejects.toMatchObject({
+    await expect(prepareAdapterAuthRuntime(createTestCall(), runtimeConfig(inferredBinding()))).rejects.toMatchObject({
       reason: 'native-auth-unavailable',
     } satisfies Partial<AdapterAuthError>);
     expect(destroyPayloads).toHaveLength(1);
@@ -297,7 +297,7 @@ describe('prepareAdapterAuthRuntime', () => {
       }),
     );
 
-    const prepared = await prepareAdapterAuthRuntime(runtimeConfig(inferredBinding()));
+    const prepared = await prepareAdapterAuthRuntime(createTestCall(), runtimeConfig(inferredBinding()));
 
     expect(tokenRequests).not.toHaveBeenCalled();
     expect(prepared.config.env).toEqual({ PATH: '/base/bin', CODEX_HOME: '/tmp/native-config' });
@@ -307,7 +307,7 @@ describe('prepareAdapterAuthRuntime', () => {
       connectorDeliveries: [],
       configInheritance: 'auth-only',
     });
-    await prepared.lease?.release();
+    await prepared.lease?.release(createTestCall());
   });
 
   it('creates an empty lease for explicit no-auth and forwards no ambient credential', async () => {
@@ -331,7 +331,7 @@ describe('prepareAdapterAuthRuntime', () => {
       }),
     );
 
-    const prepared = await prepareAdapterAuthRuntime(runtimeConfig(noAuthBinding()));
+    const prepared = await prepareAdapterAuthRuntime(createTestCall(), runtimeConfig(noAuthBinding()));
 
     expect(tokenRequests).not.toHaveBeenCalled();
     expect(inheritance).toEqual(['empty']);
@@ -342,7 +342,7 @@ describe('prepareAdapterAuthRuntime', () => {
       connectorDeliveries: [],
       configInheritance: 'empty',
     });
-    await prepared.lease?.release();
+    await prepared.lease?.release(createTestCall());
   });
 
   it('reports unavailable explicit refs as a typed missing-credential failure before leasing', async () => {
@@ -357,7 +357,7 @@ describe('prepareAdapterAuthRuntime', () => {
       }),
     );
 
-    await expect(prepareAdapterAuthRuntime(runtimeConfig(explicitBinding()))).rejects.toMatchObject({
+    await expect(prepareAdapterAuthRuntime(createTestCall(), runtimeConfig(explicitBinding()))).rejects.toMatchObject({
       reason: 'credential-missing',
     } satisfies Partial<AdapterAuthError>);
     expect(createLease).not.toHaveBeenCalled();
@@ -378,11 +378,14 @@ describe('prepareAdapterAuthRuntime', () => {
       }),
     );
 
-    const prepared = await prepareAdapterAuthRuntime(runtimeConfig(explicitBinding({ tenantRequired: false })));
+    const prepared = await prepareAdapterAuthRuntime(
+      createTestCall(),
+      runtimeConfig(explicitBinding({ tenantRequired: false })),
+    );
 
     expect(prepared.config.adapterAuth?.processEnv).toEqual({ CLAUDE_CODE_OAUTH_TOKEN: 'selected-token' });
     expect(prepared.config.env).toEqual({ PATH: '/base/bin', CLAUDE_CODE_OAUTH_TOKEN: 'selected-token' });
-    await prepared.lease?.release();
+    await prepared.lease?.release(createTestCall());
   });
 });
 
@@ -415,7 +418,7 @@ describe('applySuppliedAdapterAuthRuntime', () => {
       OPENAI_API_KEY: 'base-key',
     };
 
-    const resolved = await applySuppliedAdapterAuthRuntime(config, {
+    const resolved = await applySuppliedAdapterAuthRuntime(createTestCall(), config, {
       selectorValidatedAuth,
       scrubEnvVars: ['CODEX_ACCESS_TOKEN', 'OPENAI_API_KEY'],
       sessionEnv: { CODEX_ACCESS_TOKEN: 'session-token', SESSION_ONLY: 'session' },

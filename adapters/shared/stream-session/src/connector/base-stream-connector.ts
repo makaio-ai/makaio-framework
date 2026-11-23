@@ -13,6 +13,7 @@ import {
   rejectQueuedHandles,
 } from '@makaio/ai-adapters-core';
 import type { ScopedBus } from '@makaio/bus-core';
+import type { CallContext } from '@makaio/core';
 import {
   McpSubjects,
   type ConnectorTeardownResult,
@@ -29,10 +30,16 @@ import {
  * a full session swap.
  */
 export interface StreamConnectorSession extends ProceduralConnectorSession {
-  /** Abort the active turn while keeping the session available for later turns. */
-  abort(): Promise<void>;
-  /** Terminally retire the session and prevent later queue processing. */
-  close(): Promise<void>;
+  /**
+   * Abort the active turn while keeping the session available for later turns.
+   * @param call - Call requesting interruption
+   */
+  abort(call: CallContext): Promise<void>;
+  /**
+   * Terminally retire the session and prevent later queue processing.
+   * @param call - Call requesting session closure
+   */
+  close(call: CallContext): Promise<void>;
   /**
    * Update the model used for subsequent API calls.
    * @param model - New model identifier
@@ -174,8 +181,9 @@ export abstract class BaseStreamConnector<
    * Called once before the first session is created. Implementations store
    * the result in their own typed field (e.g. `this.anthropicTools`) which is
    * then passed to `createSession()`.
+   * @param call - Call of the message initializing the session
    */
-  protected abstract fetchTools(): Promise<void>;
+  protected abstract fetchTools(call: CallContext): Promise<void>;
 
   /**
    * Construct and return the concrete session instance.
@@ -225,14 +233,15 @@ export abstract class BaseStreamConnector<
    *
    * No-op if the session already exists (idempotent). Creates and wires the
    * session on first call by delegating to `initializeSession`.
+   * @param call - Call of the message requesting the session
    * @returns The initialised session as `ProceduralConnectorSession`
    */
-  protected async ensureSession(): Promise<ProceduralConnectorSession> {
+  protected async ensureSession(call: CallContext): Promise<ProceduralConnectorSession> {
     if (this.isTurnEventLifecycleClosed) {
       throw new Error(`[${this.config.adapterName}] Cannot initialize a closed connector`);
     }
     if (!this.session) {
-      await this.initializeSession();
+      await this.initializeSession(call);
     }
     if (!this.session) {
       throw new Error(`[${this.config.adapterName}] Cannot initialize a closed connector`);
@@ -262,9 +271,10 @@ export abstract class BaseStreamConnector<
    * MCP direct-inject tools into the session via `updateTools`, then records
    * the initial injection set in the tool ledger at the correct turn number
    * (1 for fresh sessions; the staged canonical turn for connector swaps).
+   * @param call - Call of the message initializing the session
    */
-  private async initializeSession(): Promise<void> {
-    await this.fetchToolsViaBus();
+  private async initializeSession(call: CallContext): Promise<void> {
+    await this.fetchToolsViaBus(call);
     if (this.isTurnEventLifecycleClosed) return;
     this.prepareMcpDirectTools();
 
@@ -317,10 +327,11 @@ export abstract class BaseStreamConnector<
    * Guards with a `this.session` check so tools are only fetched once per
    * connector lifetime. Delegates to the abstract `fetchTools` hook which each
    * adapter implements to populate its own typed tools field.
+   * @param call - Call of the message requesting tools
    */
-  protected async fetchToolsViaBus(): Promise<void> {
+  protected async fetchToolsViaBus(call: CallContext): Promise<void> {
     if (this.session) return;
-    await this.fetchTools();
+    await this.fetchTools(call);
   }
 
   /**
@@ -336,16 +347,17 @@ export abstract class BaseStreamConnector<
    *
    * Subclasses that manage native adapter-format tools (e.g. Anthropic, OpenAI)
    * override this to: (1) re-fetch their native tools, (2) call
-   * `super.refreshTools()` to re-prepare `mcpDirectTools` and arm the ledger
+   * `super.refreshTools(call)` to re-prepare `mcpDirectTools` and arm the ledger
    * flag, then (3) push the updated tool list to the active session via
    * `this.getSession()?.updateTools?.(this.mcpDirectTools)`.
    *
    * Unlike `fetchTools()` which runs once before session creation,
    * `refreshTools()` operates on a live session and may be called multiple
    * times during a connector's lifetime.
+   * @param call - Call of the turn event triggering the refresh
    */
-  protected async refreshTools(): Promise<void> {
-    await this.resolveAndCacheMcpContext();
+  protected async refreshTools(call: CallContext): Promise<void> {
+    await this.resolveAndCacheMcpContext(call);
     this.prepareMcpDirectTools();
     this.hasPendingLedgerInjection = true;
   }
@@ -358,13 +370,14 @@ export abstract class BaseStreamConnector<
    * this and continue to use the existing cache or startup snapshot.
    * On bus failure the warning is logged and the cache is left unchanged so
    * the connector can continue with the last known good tool set.
+   * @param call - Call of the turn event triggering the refresh
    */
-  private async resolveAndCacheMcpContext(): Promise<void> {
+  private async resolveAndCacheMcpContext(call: CallContext): Promise<void> {
     const ctx = this.config.mcpSessionContext;
     if (!ctx || !('sessionId' in ctx)) return;
 
     try {
-      this.mcpSessionContextCache = await this.globalBus.request(McpSubjects.session.resolve, {
+      this.mcpSessionContextCache = await this.globalBus.request(call, McpSubjects.session.resolve, {
         sessionId: ctx.sessionId,
         profileId: ctx.profileId,
         projectId: ctx.projectId,
@@ -389,7 +402,7 @@ export abstract class BaseStreamConnector<
    */
   protected override getWireSessionConfig(): WireSessionConfig {
     return {
-      onTurnStarted: async () => {
+      onTurnStarted: async (call) => {
         this.consumeTurnNumber();
         // Refresh tools before the API call if an MCP update arrived while idle
         // or during the previous turn. This ensures the LLM sees the latest
@@ -397,7 +410,7 @@ export abstract class BaseStreamConnector<
         // updates that arrive mid-turn.
         if (this.hasPendingToolRefresh) {
           try {
-            await this.refreshTools();
+            await this.refreshTools(call);
           } catch (error) {
             console.warn(
               `[${this.config.adapterName}] Tool refresh failed at turn start; continuing with stale tools.`,
@@ -412,10 +425,10 @@ export abstract class BaseStreamConnector<
           this.hasPendingLedgerInjection = false;
         }
       },
-      onTurnFinished: async (drainQueue) => {
+      onTurnFinished: async (call, drainQueue) => {
         if (this.hasPendingToolRefresh) {
           try {
-            await this.refreshTools();
+            await this.refreshTools(call);
           } catch (error) {
             console.warn(`[${this.config.adapterName}] Tool refresh failed; continuing with stale tools.`, error);
           } finally {
@@ -447,15 +460,15 @@ export abstract class BaseStreamConnector<
   /**
    * Send a message to the agent.
    * @param message - The normalised message to send
-   * @param options - Optional send message options
+   * @param options - Send options including the call of the operation that sends the message
    * @returns A handle for tracking the message
    */
   public async sendMessage(
     message: NormalizedMessageInput,
-    options?: ConnectorSendMessageOptions,
+    options: ConnectorSendMessageOptions,
   ): Promise<MessageHandle> {
     const handle = this.createMessageHandle(message, options);
-    await this.processUserMessages([handle]);
+    await this.processUserMessages(options.call, [handle]);
     return handle;
   }
 
@@ -464,9 +477,10 @@ export abstract class BaseStreamConnector<
    *
    * Note: Session-closed event emission is handled by the adapter's AIAgent
    * layer, not by the connector.
+   * @param call - Call requesting interruption
    */
-  public abort(): void {
-    void this.session?.abort();
+  public abort(call: CallContext): void {
+    void this.session?.abort(call);
   }
 
   /**
@@ -479,9 +493,10 @@ export abstract class BaseStreamConnector<
    * in flight when this resolves. There is no process to watch and no
    * acknowledged connection shutdown, so `released` would claim that no callback
    * can arrive afterwards — which is precisely what is not established here.
+   * @param call - Call requesting connector closure
    * @returns `detached`, naming the settlement this close does not wait for.
    */
-  public async close(): Promise<ConnectorTeardownResult> {
+  public async close(call: CallContext): Promise<ConnectorTeardownResult> {
     // A closed connector must stop receiving turn events, whatever class it
     // reports: a live subscription keeps it reachable from the bus, and a later
     // generation on this agent id would drive its state machine. `detached` is a
@@ -495,7 +510,7 @@ export abstract class BaseStreamConnector<
     // `close()` synchronously closes the session's dispatch gate before awaiting
     // the active turn pause. Start it before any close-time drain can yield so a
     // retained session reference cannot dispatch after terminal close begins.
-    const closeSession = session?.close();
+    const closeSession = session?.close(call);
     await turnEventDrain;
     await closeSession;
     return {
@@ -555,9 +570,10 @@ export abstract class BaseStreamConnector<
 
   /**
    * Interrupt the current turn by aborting the active API request.
+   * @param call - Call requesting interruption
    */
-  public async interrupt(): Promise<void> {
-    await this.session?.abort();
+  public async interrupt(call: CallContext): Promise<void> {
+    await this.session?.abort(call);
   }
 
   /**
@@ -565,9 +581,10 @@ export abstract class BaseStreamConnector<
    *
    * Stream-based adapters use a locally-generated UUID (stateless APIs provide
    * no server-side session identity).
+   * @param _call - Call of the message requesting the session ID
    * @returns The local session UUID
    */
-  public async getAdapterSessionId(): Promise<string> {
+  public async getAdapterSessionId(_call: CallContext): Promise<string> {
     if (!this.adapterSessionId) {
       this.initAdapterSessionId();
     }

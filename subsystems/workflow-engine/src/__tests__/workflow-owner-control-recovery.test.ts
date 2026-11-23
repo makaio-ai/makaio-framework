@@ -8,11 +8,13 @@ import {
   WorkflowSubjects,
   WorkflowWorkerConfigSchema,
   WorkflowGateNodeSchema,
+  type CallContext,
   type WorkflowRunResult,
 } from '@makaio/contracts';
 import { getRawSqlExecutor } from '@makaio/storage-drizzle';
 import { readMigrations } from '@makaio/storage-migrations';
 import { applyMigrations } from '@makaio/storage-migrations/apply-migrations';
+import { createTestCall } from '@makaio/test-utils';
 import { createRestartableTempDb } from '@makaio/test-utils/drizzle-harness';
 import { ExecutionAttemptAuthority } from '../execution-attempt-authority.js';
 import { WorkflowExecutor } from '../workflow-executor.js';
@@ -69,11 +71,16 @@ async function connectOwner(store: ReturnType<typeof createRestartableTempDb>) {
 
 /**
  * Seed the same portable owner context used by authority-dispatched workflows.
+ * @param call - Call context of the test's workflow operation.
  * @param owner - Current composition using real owner storage and Authority.
  * @param status - Worker result whose projection must wait for the owner decision.
  * @returns Immutable attempt identity and a genuine workflow result.
  */
-async function seedOwner(owner: Awaited<ReturnType<typeof connectOwner>>, status: 'completed' | 'paused') {
+async function seedOwner(
+  call: CallContext,
+  owner: Awaited<ReturnType<typeof connectOwner>>,
+  status: 'completed' | 'paused',
+) {
   const executionId = 'cancel-gap-owner';
   const workflow = createWorkflowDefinition({
     id: 'cancel-gap-workflow',
@@ -107,7 +114,7 @@ async function seedOwner(owner: Awaited<ReturnType<typeof connectOwner>>, status
     suspensionStrategy: 'wait-in-process' as const,
     terminalAuthority: 'authority' as const,
   };
-  await owner.bus.request(WorkflowStorageSubjects.setExecutionStart, {
+  await owner.bus.request(call, WorkflowStorageSubjects.setExecutionStart, {
     execution: createWorkflowExecution({ id: executionId, workflowId: workflow.id }),
     runContext,
   });
@@ -135,10 +142,11 @@ describe('workflow owner cancellation recovery', () => {
     'paused',
   ] as const)('withholds $0 ACK across restart until the interrupted owner Cancel actually commits', async (status) => {
     const store = createRestartableTempDb('workflow-owner-cancel-gap');
+    const call = createTestCall();
     let owner: Awaited<ReturnType<typeof connectOwner>> | undefined;
     try {
       owner = await connectOwner(store);
-      const submission = await seedOwner(owner, status);
+      const submission = await seedOwner(call, owner, status);
       const { executionId, executionAttemptId } = submission;
       // Fail the actual second durable write, not a mocked acceptance callback.
       await owner.raw.run(
@@ -146,7 +154,7 @@ describe('workflow owner cancellation recovery', () => {
         ON workflow_executions WHEN NEW.status = 'cancelled'
         BEGIN SELECT RAISE(ABORT, 'owner cancel write interrupted'); END`),
       );
-      await expect(owner.bus.request(WorkflowSubjects.cancel, { executionId })).rejects.toThrow();
+      await expect(owner.bus.request(call, WorkflowSubjects.cancel, { executionId })).rejects.toThrow();
       const cancellation = await owner.repository.readCancellation(executionAttemptId);
       expect(cancellation).toMatchObject({ controlRevision: 1 });
       const controlObservation = { controlRevision: 1, cancellation };
@@ -156,7 +164,7 @@ describe('workflow owner cancellation recovery', () => {
       void waiter.then(() => {
         resolved = true;
       });
-      await expect(owner.bus.request(WorkerSubjects.control.outcome.submit, submission)).rejects.toThrow(
+      await expect(owner.bus.request(call, WorkerSubjects.control.outcome.submit, submission)).rejects.toThrow(
         'not durably settled',
       );
       const committed = await owner.repository.readAttemptSettlement({ executionId, executionAttemptId });
@@ -175,23 +183,26 @@ describe('workflow owner cancellation recovery', () => {
       expect(await owner.repository.readAttemptSettlement({ executionId, executionAttemptId })).toEqual(committed);
       // Waiters are process-local; recovery must not need the lost original one.
       expect(owner.authority.waitForOutcome(executionAttemptId)).toBeUndefined();
-      await expect(owner.bus.request(WorkerSubjects.control.outcome.submit, submission)).rejects.toThrow(
+      await expect(owner.bus.request(call, WorkerSubjects.control.outcome.submit, submission)).rejects.toThrow(
         'not durably settled',
       );
       expect(resolved).toBe(false);
-      expect((await owner.bus.request(WorkflowStorageSubjects.getExecution, { executionId })).execution?.status).toBe(
-        'running',
-      );
+      expect(
+        (await owner.bus.request(call, WorkflowStorageSubjects.getExecution, { executionId })).execution?.status,
+      ).toBe('running');
       expect(owner.events).toEqual([]);
 
       await owner.raw.run(sql.raw('DROP TRIGGER reject_owner_cancel'));
-      await expect(owner.bus.request(WorkflowSubjects.cancel, { executionId })).resolves.toEqual({ cancelled: true });
-      await expect(owner.bus.request(WorkerSubjects.control.outcome.submit, submission)).resolves.toEqual({
+      await expect(owner.bus.request(call, WorkflowSubjects.cancel, { executionId })).resolves.toEqual({
+        cancelled: true,
+      });
+      await expect(owner.bus.request(call, WorkerSubjects.control.outcome.submit, submission)).resolves.toEqual({
         decision: 'duplicate',
       });
       if (committed.kind !== 'outcome') throw new Error('Expected a canonical committed outcome');
       await expect(
         owner.executor.acceptAuthorityOutcome({
+          call,
           executionId,
           executionAttemptId,
           outcome: committed.result.outcome,
@@ -199,9 +210,9 @@ describe('workflow owner cancellation recovery', () => {
           decision: 'duplicate',
         }),
       ).resolves.toBe('recorded-only');
-      expect((await owner.bus.request(WorkflowStorageSubjects.getExecution, { executionId })).execution?.status).toBe(
-        'cancelled',
-      );
+      expect(
+        (await owner.bus.request(call, WorkflowStorageSubjects.getExecution, { executionId })).execution?.status,
+      ).toBe('cancelled');
       expect(owner.events).toEqual(['cancelled']);
       expect(await owner.repository.readAttemptSettlement({ executionId, executionAttemptId })).toEqual(committed);
     } finally {

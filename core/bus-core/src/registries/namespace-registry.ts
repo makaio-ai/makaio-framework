@@ -1,4 +1,3 @@
-import type { MakaioBusContext } from '../types/index.js';
 import { z } from 'zod';
 import { getFullSubjectForSubjectDefinition } from '../utils/subject-transformation.js';
 
@@ -24,7 +23,6 @@ import type {
   RegistrableBusNamespaceDefinition,
   SchemaViolationReport,
   SubjectDefinition,
-  SubjectRecord,
   SubjectRecordFromSchemaRecord,
   SubjectSchema,
   SubjectSchemaInspection,
@@ -164,26 +162,6 @@ export interface RegisteredSubjectSchema {
   /** Journal declaration of a `journalSubject()`-wrapped subject, if any. */
   journal?: JournalOptions;
 }
-
-const getScopedBus = async <
-  Namespace extends string,
-  Subjects extends SubjectRecord = SubjectRecord,
-  FilterPayload = unknown,
->(
-  namespace: Namespace,
-  context?: MakaioBusContext,
-) => {
-  if (!namespace) throw new Error('Namespace not initialized yet');
-  const { MakaioBus } = await import('../bus.js');
-  const { createScopedBus } = await import('../scoped-bus.js');
-
-  const contextToUse = context ?? MakaioBus.getContext();
-
-  if (!contextToUse)
-    throw new Error('No MakaioBus context available. Please provide a context when calling scopedBus().');
-
-  return createScopedBus<Namespace, Subjects, FilterPayload>(contextToUse, namespace);
-};
 
 /**
  * Warn if namespace was already registered with different schemas.
@@ -438,10 +416,7 @@ export const createNamespaceRegistry = () => {
       const namespace: NamespaceType = {
         name: domain,
         subjects: definition.subjects as NamespaceType['subjects'],
-        scopedBus: (context) =>
-          getScopedBus<Domain, Subjects, FilterPayload>(domain, context) as Promise<
-            ScopedBus<Domain, Subjects, FilterPayload>
-          >,
+        scopedBus: (bus) => Promise.resolve(bus.scoped(namespace) as ScopedBus<Domain, Subjects, FilterPayload>),
       };
 
       namespaceRegistry.set(domain, namespace);

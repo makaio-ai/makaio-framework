@@ -94,13 +94,12 @@ export interface ProtocolExportAuditReport {
 /** Checks whether a manifest subject can be represented as generated Rust structs. */
 export type RustModelRepresentabilityChecker = (subject: MakaioProtocolSubject) => ProtocolExportAuditCheckResult;
 
-/** Options for protocol manifest export and audit. */
+/**
+ * Options for protocol manifest export and audit.
+ *
+ * The namespace catalog is not an option: it is part of the source the export takes as input.
+ */
 export interface ProtocolExportOptions {
-  /**
-   * Optional explicit catalog. When omitted, auto-discovers all registered subjects
-   * and silently skips those that cannot be exported (non-blocking mode).
-   */
-  catalog?: ProtocolNamespaceCatalog;
   /** Optional override for the built-in Rust model representability checker. */
   rustModelChecker?: RustModelRepresentabilityChecker;
 }

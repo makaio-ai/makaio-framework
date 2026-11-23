@@ -2,6 +2,7 @@ import * as path from 'node:path';
 import * as fs from 'node:fs/promises';
 import { describe, expect, it } from 'vitest';
 import { createMakaioContext } from '@makaio/core';
+import { createTestCall } from '@makaio/test-utils';
 import { FILE_ACCESS_RULES_KEY } from '../../types.js';
 import { globFilesTool } from '../glob-files.js';
 import { useTempDir } from './test-helpers.js';
@@ -15,7 +16,7 @@ describe('glob_files tool', () => {
     await fs.writeFile(path.join(dir, 'b.ts'), '');
     await fs.writeFile(path.join(dir, 'c.json'), '');
 
-    const context = createMakaioContext({ cwd: dir });
+    const context = { ...createMakaioContext({ cwd: dir }), call: createTestCall() };
     const result = await globFilesTool.execute({ pattern: '*.ts' }, context);
 
     expect(result.success).toBe(true);
@@ -31,7 +32,7 @@ describe('glob_files tool', () => {
     await fs.writeFile(path.join(dir, 'top.ts'), '');
     await fs.writeFile(path.join(dir, 'sub', 'deep.ts'), '');
 
-    const context = createMakaioContext({ cwd: dir });
+    const context = { ...createMakaioContext({ cwd: dir }), call: createTestCall() };
     const result = await globFilesTool.execute({ pattern: '**/*.ts' }, context);
 
     expect(result.success).toBe(true);
@@ -46,7 +47,7 @@ describe('glob_files tool', () => {
       await fs.writeFile(path.join(dir, `file${String(i).padStart(2, '0')}.txt`), '');
     }
 
-    const context = createMakaioContext({ cwd: dir });
+    const context = { ...createMakaioContext({ cwd: dir }), call: createTestCall() };
     const result = await globFilesTool.execute({ pattern: '*.txt', limit: 3, offset: 2 }, context);
 
     expect(result.success).toBe(true);
@@ -60,7 +61,7 @@ describe('glob_files tool', () => {
   it('returns empty for no matches', async () => {
     const dir = await createTempDir();
 
-    const context = createMakaioContext({ cwd: dir });
+    const context = { ...createMakaioContext({ cwd: dir }), call: createTestCall() };
     const result = await globFilesTool.execute({ pattern: '*.xyz' }, context);
 
     expect(result.success).toBe(true);
@@ -75,7 +76,7 @@ describe('glob_files tool', () => {
     const dir = await createTempDir();
     await fs.writeFile(path.join(dir, 'outside.txt'), '');
 
-    const context = createMakaioContext({ cwd: dir });
+    const context = { ...createMakaioContext({ cwd: dir }), call: createTestCall() };
     const result = await globFilesTool.execute({ pattern: path.join(dir, '*.txt') }, context);
 
     expect(result.success).toBe(false);
@@ -88,7 +89,7 @@ describe('glob_files tool', () => {
   it('rejects parent directory traversal in patterns', async () => {
     const dir = await createTempDir();
 
-    const context = createMakaioContext({ cwd: dir });
+    const context = { ...createMakaioContext({ cwd: dir }), call: createTestCall() };
     const result = await globFilesTool.execute({ pattern: '../*.txt' }, context);
 
     expect(result.success).toBe(false);
@@ -101,7 +102,7 @@ describe('glob_files tool', () => {
   it('rejects parent directory traversal inside brace patterns', async () => {
     const dir = await createTempDir();
 
-    const context = createMakaioContext({ cwd: dir });
+    const context = { ...createMakaioContext({ cwd: dir }), call: createTestCall() };
     const result = await globFilesTool.execute({ pattern: '{../*.txt,*.md}' }, context);
 
     expect(result.success).toBe(false);
@@ -121,10 +122,13 @@ describe('glob_files tool', () => {
     await fs.writeFile(insidePath, 'inside');
     await fs.writeFile(outsidePath, 'outside secret');
     await fs.symlink(outsidePath, escapedPath);
-    const context = createMakaioContext({
-      cwd: allowedDir,
-      constraints: { [FILE_ACCESS_RULES_KEY]: { allowedDirectories: [allowedDir], isDenied: () => false } },
-    });
+    const context = {
+      ...createMakaioContext({
+        cwd: allowedDir,
+        constraints: { [FILE_ACCESS_RULES_KEY]: { allowedDirectories: [allowedDir], isDenied: () => false } },
+      }),
+      call: createTestCall(),
+    };
 
     const result = await globFilesTool.execute({ pattern: '*.txt' }, context);
 

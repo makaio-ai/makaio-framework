@@ -23,7 +23,8 @@
 import { describe, it, expect } from 'vitest';
 import { z } from 'zod';
 import { createBusNamespace } from '@makaio/core';
-import { createBusInstance, createBusContext, type BusRequestMessage, RequestError, NoHandlerError } from '../index.js';
+import { createBusInstance, type BusRequestMessage, RequestError, NoHandlerError } from '../index.js';
+import { busContextOf, createBusContext } from '../kernel-api.js';
 import { createBidirectionalTransportPair } from './helpers/transport-fixtures.js';
 
 // ---------------------------------------------------------------------------
@@ -112,12 +113,12 @@ describe('Test A: cursor in outbound request equals preceding local handler prio
     busB.registerTransport(sideB);
 
     // Seed remoteRequestHandlers manually (subscribe propagation is no-op for this pair)
-    busA
-      .getContext()
-      .remoteRequestHandlers.set('cursorE2e.compute', [{ transport: 'in-process-side-a', priority: 300 }]);
+    busContextOf(busA).remoteRequestHandlers.set('cursorE2e.compute', [
+      { transport: 'in-process-side-a', priority: 300 },
+    ]);
 
     try {
-      const result = await busA.request(CursorSubjects.compute, { value: 1 });
+      const result = await busA.request(busA.own('root'), CursorSubjects.compute, { value: 1 });
 
       // busB's handler at 300 should handle the request
       expect(result.handledBy).toBe('busB-300');
@@ -263,17 +264,17 @@ describe('Test C: full interleaved three-hop chain busA:400 → busB:300 → bus
     busB.registerTransport(sideB);
 
     // busA knows that busB handles cursorE2e.compute at priority 300
-    busA
-      .getContext()
-      .remoteRequestHandlers.set('cursorE2e.compute', [{ transport: 'in-process-side-a', priority: 300 }]);
+    busContextOf(busA).remoteRequestHandlers.set('cursorE2e.compute', [
+      { transport: 'in-process-side-a', priority: 300 },
+    ]);
 
     // busB knows that busA handles cursorE2e.compute at priority 100
-    busB
-      .getContext()
-      .remoteRequestHandlers.set('cursorE2e.compute', [{ transport: 'in-process-side-b', priority: 100 }]);
+    busContextOf(busB).remoteRequestHandlers.set('cursorE2e.compute', [
+      { transport: 'in-process-side-b', priority: 100 },
+    ]);
 
     try {
-      const result = await busA.request(CursorSubjects.compute, { value: 7 });
+      const result = await busA.request(busA.own('root'), CursorSubjects.compute, { value: 7 });
 
       // Execution must follow descending priority order across transport boundaries
       expect(executionOrder).toEqual(['busA-400', 'busB-300', 'busA-100']);
@@ -316,7 +317,7 @@ describe('Test D: same-priority remote-to-remote entries get correct cursor', ()
 
     // busA has two remote entries at priority 300: one on B, one on C
     // They are sorted by insertion order — B first, then C
-    busA.getContext().remoteRequestHandlers.set('cursorE2e.compute', [
+    busContextOf(busA).remoteRequestHandlers.set('cursorE2e.compute', [
       { transport: pairAB.sideA.name, priority: 300 },
       { transport: pairAC.sideA.name, priority: 300 },
     ]);
@@ -340,7 +341,7 @@ describe('Test D: same-priority remote-to-remote entries get correct cursor', ()
     );
 
     try {
-      const result = await busA.request(CursorSubjects.compute, { value: 42 });
+      const result = await busA.request(busA.own('root'), CursorSubjects.compute, { value: 42 });
 
       // busC's handler at priority 300 must run (not be skipped by cursor)
       expect(result.handledBy).toBe('busC-300');
@@ -385,7 +386,7 @@ describe('Test E: fire-and-forget ctx.next() propagates downstream result', () =
     );
 
     try {
-      const result = await bus.request(CursorSubjects.compute, { value: 1 });
+      const result = await bus.request(bus.own('root'), CursorSubjects.compute, { value: 1 });
 
       expect(result.result).toBe(42);
       expect(result.handledBy).toBe('B');
@@ -427,7 +428,7 @@ describe('Test F: fire-and-forget ctx.next() propagates downstream errors', () =
     );
 
     try {
-      await expect(bus.request(CursorSubjects.compute, { value: 1 })).rejects.toSatisfy(
+      await expect(bus.request(bus.own('root'), CursorSubjects.compute, { value: 1 })).rejects.toSatisfy(
         (err: unknown) =>
           err instanceof RequestError && err.cause instanceof Error && err.cause.message === 'downstream',
       );
@@ -508,10 +509,10 @@ describe('Test G: remote NoHandlerError falls through to lower-priority local ha
 
     // busA knows about busB's handler at priority 300.
     // sideA is the transport registered on busA; its name matches the key.
-    busA.getContext().remoteRequestHandlers.set('cursorE2e.compute', [{ transport: sideA.name, priority: 300 }]);
+    busContextOf(busA).remoteRequestHandlers.set('cursorE2e.compute', [{ transport: sideA.name, priority: 300 }]);
 
     try {
-      const result = await busA.request(CursorSubjects.compute, { value: 5 });
+      const result = await busA.request(busA.own('root'), CursorSubjects.compute, { value: 5 });
 
       // NoHandlerError from the remote registry must fall through to local:100.
       expect(executionOrder).toEqual(['busA-400', 'busB-300', 'busA-100']);
@@ -546,11 +547,13 @@ describe('Test G: remote NoHandlerError falls through to lower-priority local ha
     busA.registerTransport(sideA);
     busB.registerTransport(sideB);
 
-    busA.getContext().remoteRequestHandlers.set('cursorE2e.compute', [{ transport: sideA.name, priority: 300 }]);
+    busContextOf(busA).remoteRequestHandlers.set('cursorE2e.compute', [{ transport: sideA.name, priority: 300 }]);
 
     try {
       // No local fallback on busA — must throw NoHandlerError
-      await expect(busA.request(CursorSubjects.compute, { value: 5 })).rejects.toBeInstanceOf(NoHandlerError);
+      await expect(busA.request(busA.own('root'), CursorSubjects.compute, { value: 5 })).rejects.toBeInstanceOf(
+        NoHandlerError,
+      );
     } finally {
       busA.disconnect();
       busB.disconnect();
@@ -614,7 +617,7 @@ describe('Test H: a peer with several advertised priorities is hopped once per c
     busB.registerTransport(sideB);
 
     // The priority set busB advertises for its two handlers.
-    busA.getContext().remoteRequestHandlers.set('cursorE2e.compute', [
+    busContextOf(busA).remoteRequestHandlers.set('cursorE2e.compute', [
       { transport: sideA.name, priority: 300 },
       { transport: sideA.name, priority: 200 },
     ]);
@@ -644,7 +647,7 @@ describe('Test H: a peer with several advertised priorities is hopped once per c
     );
 
     try {
-      const result = await busA.request(CursorSubjects.compute, { value: 1 });
+      const result = await busA.request(busA.own('root'), CursorSubjects.compute, { value: 1 });
 
       expect(executionOrder).toEqual(['busB-300', 'busB-200', 'busA-100']);
       expect(result.handledBy).toBe('busA-100');
@@ -660,7 +663,9 @@ describe('Test H: a peer with several advertised priorities is hopped once per c
     const { busA, requestsToB, cleanup } = setupPeerWithTwoTiers('h-nofallback', executionOrder);
 
     try {
-      await expect(busA.request(CursorSubjects.compute, { value: 1 })).rejects.toBeInstanceOf(NoHandlerError);
+      await expect(busA.request(busA.own('root'), CursorSubjects.compute, { value: 1 })).rejects.toBeInstanceOf(
+        NoHandlerError,
+      );
 
       expect(executionOrder).toEqual(['busB-300', 'busB-200']);
       expect(requestsToB).toHaveLength(1);
@@ -678,7 +683,7 @@ describe('Test H: a peer with several advertised priorities is hopped once per c
     try {
       // Whether a failed remote hop falls through to other handlers is a separate
       // contract; this test pins only that the peer is not asked a second time.
-      await busA.request(CursorSubjects.compute, { value: 1 }).catch(() => undefined);
+      await busA.request(busA.own('root'), CursorSubjects.compute, { value: 1 }).catch(() => undefined);
 
       expect(executionOrder).toEqual(['busB-300']);
       expect(requestsToB).toHaveLength(1);
@@ -749,14 +754,14 @@ describe('Test I: a covered entry bounds the cursor of the next transport', () =
       ),
     ];
 
-    busX.getContext().remoteRequestHandlers.set('cursorE2e.compute', [
+    busContextOf(busX).remoteRequestHandlers.set('cursorE2e.compute', [
       { transport: pairXA.sideA.name, priority: 300 },
       { transport: pairXA.sideA.name, priority: 200 },
       { transport: pairXC.sideA.name, priority: 200 },
     ]);
 
     try {
-      const result = await busX.request(CursorSubjects.compute, { value: 1 });
+      const result = await busX.request(busX.own('root'), CursorSubjects.compute, { value: 1 });
 
       expect(result.handledBy).toBe('busC-200');
       expect(executionOrder).toEqual(['busA-300', 'busA-200', 'busC-200']);
@@ -834,15 +839,20 @@ describe('Test J: a relaying node forwards at most its incoming cursor', () => {
       ),
     ];
 
-    busU.getContext().remoteRequestHandlers.set('cursorE2e.compute', [{ transport: pairUN.sideA.name, priority: 200 }]);
-    busN.getContext().remoteRequestHandlers.set('cursorE2e.compute', [{ transport: pairNC.sideA.name, priority: 200 }]);
+    busContextOf(busU).remoteRequestHandlers.set('cursorE2e.compute', [
+      { transport: pairUN.sideA.name, priority: 200 },
+    ]);
+    busContextOf(busN).remoteRequestHandlers.set('cursorE2e.compute', [
+      { transport: pairNC.sideA.name, priority: 200 },
+    ]);
     // busN dispatches an inbound request with first-hop-only routes excluded; busC's route is relayable.
-    busN
-      .getContext()
-      .remoteSubscriptionDeliveryClasses.set('cursorE2e.compute', new Map([[pairNC.sideA.name, 'relayable']]));
+    busContextOf(busN).remoteSubscriptionDeliveryClasses.set(
+      'cursorE2e.compute',
+      new Map([[pairNC.sideA.name, 'relayable']]),
+    );
 
     try {
-      const result = await busU.request(CursorSubjects.compute, { value: 1 });
+      const result = await busU.request(busU.own('root'), CursorSubjects.compute, { value: 1 });
 
       expect(result.handledBy).toBe('busC-200');
       expect(executionOrder).toEqual(['busU-300', 'busC-200']);
@@ -892,7 +902,7 @@ describe('Test K: covered entries are walked past without per-entry stack growth
     busA.registerTransport(sideA);
     busB.registerTransport(sideB);
 
-    busA.getContext().remoteRequestHandlers.set(
+    busContextOf(busA).remoteRequestHandlers.set(
       'cursorE2e.compute',
       Array.from({ length: advertisedTiers }, (_, tier) => ({
         transport: sideA.name,
@@ -901,7 +911,7 @@ describe('Test K: covered entries are walked past without per-entry stack growth
     );
 
     try {
-      const result = await busA.request(CursorSubjects.compute, { value: 1 });
+      const result = await busA.request(busA.own('root'), CursorSubjects.compute, { value: 1 });
 
       expect(result.handledBy).toBe('busA-0');
       expect(requestsToB).toHaveLength(1);

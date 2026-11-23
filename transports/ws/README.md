@@ -191,7 +191,9 @@ transports/ws/
 This package augments `@makaio/bus-core` to provide type-safe transport access:
 
 ```typescript
-const registry = bus.getContext().transportRegistry;
+import { busContextOf } from '@makaio/bus-core/kernel-api';
+
+const registry = busContextOf(bus).transportRegistry;
 const transport = registry.getTransport('websocket'); // typed
 ```
 

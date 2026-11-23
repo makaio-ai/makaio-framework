@@ -69,10 +69,14 @@ export async function getCursorWithMigration(
   event: LogFileChangeEvent,
   scheduleRetry: (event: LogFileChangeEvent) => void,
 ): Promise<ImportCursorPosition | null | 'retry'> {
-  const { cursor } = await MakaioBus.request(ImportCursorStorageSubjects.get, { filePath });
+  // ORIGIN: The file watcher triggered a lookup of the file's import cursor.
+  const { cursor } = await MakaioBus.request(MakaioBus.own('observer'), ImportCursorStorageSubjects.get, { filePath });
   // Old JSONL cursor without context needs migration — delete and re-read from start
   if (cursor && cursor.bytesRead > 0 && !cursor.sessionContext && !isJsonFormat) {
-    await MakaioBus.request(ImportCursorStorageSubjects.delete, { filePath }).catch(() => {});
+    // ORIGIN: The watcher-triggered import found a legacy cursor that requires a fresh read.
+    await MakaioBus.request(MakaioBus.own('observer'), ImportCursorStorageSubjects.delete, { filePath }).catch(
+      () => {},
+    );
     scheduleRetry(event);
     return 'retry';
   }

@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { WorkflowRunContextSchema, type WorkflowRunnerCompletion } from '@makaio/contracts';
+import { createTestCall } from '@makaio/test-utils';
 import { buildExecutionTask, buildFileExecutionTask, type RunnerTaskDeps } from '../workflow-runner-tasks.js';
 import { registerExecutionTask } from '../workflow-execution-task-registration.js';
 import { toCommittedWorkflowRunnerCompletion } from '../workflow-attempt-outcome.js';
@@ -68,8 +69,13 @@ function createTaskFixture(kind: 'file' | 'definition') {
     };
     const task =
       kind === 'definition'
-        ? buildExecutionTask(deps, { ...common, workflow, source: runContext.source, terminalAuthority: 'authority' })
-        : buildFileExecutionTask(deps, {
+        ? buildExecutionTask(createTestCall(), deps, {
+            ...common,
+            workflow,
+            source: runContext.source,
+            terminalAuthority: 'authority',
+          })
+        : buildFileExecutionTask(createTestCall(), deps, {
             ...common,
             filePath: 'workflow.ts',
             triggerMode: 'immediate',

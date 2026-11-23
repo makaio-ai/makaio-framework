@@ -11,7 +11,7 @@ import {
   type WireSessionSubjects,
   type MessageResult,
 } from '@makaio/ai-adapters-core';
-import type { ConnectorTeardownResult } from '@makaio/contracts';
+import type { CallContext, ConnectorTeardownResult } from '@makaio/contracts';
 import { CursorSdkAdapterName } from './constants.js';
 import type { CursorSdkBus } from './namespaces/index.js';
 import { CursorSdkSubjects } from './namespaces/index.js';
@@ -73,10 +73,11 @@ export class CursorSdkConnector extends ProceduralAgentConnector<CursorSdkBus, C
    *
    * Coalesces concurrent callers via `sessionInitPromise`. Cleared on failure
    * so callers can retry after a transient error.
+   * @param call - Call of the message initializing the session.
    * @returns The initialized session.
    * @throws Error when called after `close()`.
    */
-  protected async ensureSession(): Promise<ProceduralConnectorSession> {
+  protected async ensureSession(call: CallContext): Promise<ProceduralConnectorSession> {
     if (this.closed) {
       throw new Error('[CursorSdkConnector] Cannot initialize a closed connector');
     }
@@ -86,7 +87,7 @@ export class CursorSdkConnector extends ProceduralAgentConnector<CursorSdkBus, C
       // safe: it constructs the session (callbacks are not invoked) and enters
       // `session.initialize()`, whose first statement is an await. A re-entrant
       // call would find `this.session` already set and never start a second one.
-      this.sessionInitPromise = this.initializeSession().catch((err: unknown) => {
+      this.sessionInitPromise = this.initializeSession(call).catch((err: unknown) => {
         this.sessionInitPromise = undefined;
         throw err;
       });
@@ -119,8 +120,9 @@ export class CursorSdkConnector extends ProceduralAgentConnector<CursorSdkBus, C
    *
    * Creates the `CursorSdkSession` with the centrally selected API key and
    * wires turn lifecycle events. Called once via `ensureSession()`.
+   * @param call - Call of the message initializing the session.
    */
-  private async initializeSession(): Promise<void> {
+  private async initializeSession(call: CallContext): Promise<void> {
     const resolvedSystemPrompt =
       this.systemPrompt == null
         ? undefined
@@ -151,7 +153,7 @@ export class CursorSdkConnector extends ProceduralAgentConnector<CursorSdkBus, C
 
     this.session = session;
     try {
-      await session.initialize();
+      await session.initialize(call);
     } catch (err) {
       if (this.session === session) this.session = undefined;
       throw err;
@@ -165,28 +167,28 @@ export class CursorSdkConnector extends ProceduralAgentConnector<CursorSdkBus, C
    *
    * Called by `createAgent` for idle agent setup. Idempotent — no-op if the
    * session is already initialized.
-   * @param options - Optional start options (e.g., `systemPrompt`).
+   * @param options - Start options carrying the initializing message call and system prompt.
    */
-  public override async initialize(options?: ConnectorStartOptions): Promise<void> {
+  public override async initialize(options: ConnectorStartOptions): Promise<void> {
     if (this.session) return;
-    this.captureSystemPrompt(options?.systemPrompt);
-    await this.ensureSession();
+    this.captureSystemPrompt(options.systemPrompt);
+    await this.ensureSession(options.call);
   }
 
   /**
    * Start the connector with an initial user message.
    * @param message - The initial user message.
-   * @param options - Optional start options including system prompt.
+   * @param options - Start options carrying the call of the handled message, including system prompt.
    * @returns Session ID, agent ID, and message handle.
    */
   public override async start(
     message: NormalizedMessageInput,
-    options?: ConnectorStartOptions,
+    options: ConnectorStartOptions,
   ): Promise<AgentStartResult> {
-    this.captureSystemPrompt(options?.systemPrompt);
+    this.captureSystemPrompt(options.systemPrompt);
     const messageHandle = await this.sendMessage(message, options);
     return {
-      adapterSessionId: await this.getAdapterSessionId(),
+      adapterSessionId: await this.getAdapterSessionId(options.call),
       messageHandle,
       agentId: this.agentId,
     };
@@ -198,25 +200,26 @@ export class CursorSdkConnector extends ProceduralAgentConnector<CursorSdkBus, C
    * Initializes the session on first call (so `adapterSessionId` is set before
    * `onMessageSent` fires), enqueues the message, and processes the queue.
    * @param message - The user message to send.
-   * @param options - Optional delivery mode options.
+   * @param options - Delivery options carrying the call of the handled message.
    * @returns Message handle for tracking acknowledgment and completion.
    */
   public async sendMessage(
     message: NormalizedMessageInput,
-    options?: ConnectorSendMessageOptions,
+    options: ConnectorSendMessageOptions,
   ): Promise<MessageHandle> {
-    await this.ensureSession();
+    await this.ensureSession(options.call);
     const handle = this.createMessageHandle(message, options);
-    await this.processUserMessages([handle]);
+    await this.processUserMessages(options.call, [handle]);
     return handle;
   }
 
   /**
    * Get the Cursor Agent ID, ensuring session is initialized first.
+   * @param call - Call of the message requesting the session ID.
    * @returns The adapter session ID.
    */
-  public async getAdapterSessionId(): Promise<string> {
-    await this.ensureSession();
+  public async getAdapterSessionId(call: CallContext): Promise<string> {
+    await this.ensureSession(call);
     return this.adapterSessionId as string;
   }
 
@@ -280,7 +283,7 @@ export class CursorSdkConnector extends ProceduralAgentConnector<CursorSdkBus, C
     const session = this.session;
     try {
       // No session means nothing was created, so nothing can still be running.
-      return session === undefined ? { evidence: 'released' } : await session.close();
+      return session === undefined ? { evidence: 'released' } : await session.close(this.globalBus.own('stop'));
     } finally {
       this.session = undefined;
       this.sessionInitPromise = undefined;

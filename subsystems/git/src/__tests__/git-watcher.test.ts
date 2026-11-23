@@ -3,7 +3,8 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest';
 import { createBusInstance, type IMakaioBus } from '@makaio/bus-core';
-import { GitHookSubjects } from '@makaio/contracts';
+import { GitHookSubjects, type CallContext } from '@makaio/contracts';
+import { createTestCall } from '@makaio/test-utils';
 import { GitSubjects } from '../namespace.js';
 import { FsSubjects } from '@makaio/services-core/filesystem/namespace';
 import { GitWatcher } from '../git-watcher.js';
@@ -35,7 +36,7 @@ describe('GitWatcher', { timeout: 30_000 }, () => {
     const repo = await createTestRepoWithCommit('git-watcher-message-test-');
     let unsubscribe: (() => void) | null = null;
     try {
-      await bus.request(GitSubjects.addRepo, { repoPath: repo.repoPath });
+      await bus.request(createTestCall(), GitSubjects.addRepo, { repoPath: repo.repoPath });
 
       const commitEvents: Array<{ message: string }> = [];
       unsubscribe = bus.on(GitSubjects.commit, (ctx) => {
@@ -47,7 +48,7 @@ describe('GitWatcher', { timeout: 30_000 }, () => {
       await repo.git.commit('feat: subject with | delimiter');
       const branch = (await repo.git.branchLocal()).current;
 
-      await bus.emit(FsSubjects.changed, {
+      await bus.emit(createTestCall(), FsSubjects.changed, {
         path: path.join(repo.repoPath, '.git', 'refs', 'heads', branch),
         kind: 'change',
       });
@@ -65,7 +66,7 @@ describe('GitWatcher', { timeout: 30_000 }, () => {
     const repo = await createTestRepoWithCommit('git-watcher-nul-line-test-');
     let unsubscribe: (() => void) | null = null;
     try {
-      await bus.request(GitSubjects.addRepo, { repoPath: repo.repoPath });
+      await bus.request(createTestCall(), GitSubjects.addRepo, { repoPath: repo.repoPath });
 
       const commitEvents: Array<{ hash: string; message: string; author: string; email: string; timestamp: string }> =
         [];
@@ -80,7 +81,7 @@ describe('GitWatcher', { timeout: 30_000 }, () => {
       const head = (await repo.git.log({ maxCount: 1 })).latest!.hash;
       const branch = (await repo.git.branchLocal()).current;
 
-      await bus.emit(FsSubjects.changed, {
+      await bus.emit(createTestCall(), FsSubjects.changed, {
         path: path.join(repo.repoPath, '.git', 'refs', 'heads', branch),
         kind: 'change',
       });
@@ -104,7 +105,7 @@ describe('GitWatcher', { timeout: 30_000 }, () => {
     const repo = await createTestRepoWithCommit('git-watcher-metachar-test-');
     let unsubscribe: (() => void) | null = null;
     try {
-      await bus.request(GitSubjects.addRepo, { repoPath: repo.repoPath });
+      await bus.request(createTestCall(), GitSubjects.addRepo, { repoPath: repo.repoPath });
 
       const checkoutEvents: Array<{ currentBranch: string }> = [];
       unsubscribe = bus.on(GitSubjects.checkout, (ctx) => {
@@ -115,7 +116,7 @@ describe('GitWatcher', { timeout: 30_000 }, () => {
       const branchName = 'pwn;touch${IFS}executed;$(touch${IFS}executed)`touch${IFS}executed`&|\'"';
       await repo.git.raw(['checkout', '-b', branchName]);
 
-      await bus.emit(FsSubjects.changed, {
+      await bus.emit(createTestCall(), FsSubjects.changed, {
         path: path.join(repo.repoPath, '.git', 'HEAD'),
         kind: 'change',
       });
@@ -137,15 +138,15 @@ describe('GitWatcher', { timeout: 30_000 }, () => {
     let unsubscribe: (() => void) | null = null;
     try {
       await repo.git.raw(['worktree', 'add', worktreePath, '-b', 'wt-routing-test']);
-      await bus.request(GitSubjects.addRepo, { repoPath: repo.repoPath });
-      await bus.request(GitSubjects.addRepo, { repoPath: worktreePath });
+      await bus.request(createTestCall(), GitSubjects.addRepo, { repoPath: repo.repoPath });
+      await bus.request(createTestCall(), GitSubjects.addRepo, { repoPath: worktreePath });
 
       const worktreeEvents: Array<{ name: string; event: string }> = [];
       unsubscribe = bus.on(GitSubjects.worktree, (ctx) => {
         worktreeEvents.push({ name: ctx.payload.name, event: ctx.payload.event });
       });
 
-      await bus.emit(FsSubjects.changed, {
+      await bus.emit(createTestCall(), FsSubjects.changed, {
         path: path.join(repo.repoPath, '.git', 'worktrees', worktreeName),
         kind: 'delete',
       });
@@ -168,7 +169,7 @@ describe('GitWatcher', { timeout: 30_000 }, () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'git-watcher-invalid-gitdir-'));
     try {
       await fs.writeFile(path.join(tempDir, '.git'), 'gitdir: ./missing-git-dir\n');
-      const response = await bus.request(GitSubjects.addRepo, { repoPath: tempDir });
+      const response = await bus.request(createTestCall(), GitSubjects.addRepo, { repoPath: tempDir });
 
       expect(response.success).toBe(false);
       expect(response.error).toContain('path does not exist');
@@ -209,7 +210,7 @@ describe('GitWatcher', { timeout: 30_000 }, () => {
     await localWatcher.init();
 
     try {
-      await localBus.request(GitSubjects.addRepo, { repoPath: repo.repoPath });
+      await localBus.request(createTestCall(), GitSubjects.addRepo, { repoPath: repo.repoPath });
 
       const destroyPromise = localWatcher.destroy();
       await Promise.resolve();
@@ -237,7 +238,7 @@ describe('GitWatcher', { timeout: 30_000 }, () => {
     let unsubscribe: (() => void) | null = null;
     let unsubCoverage: (() => void) | null = null;
     try {
-      await bus.request(GitSubjects.addRepo, { repoPath: repo.repoPath });
+      await bus.request(createTestCall(), GitSubjects.addRepo, { repoPath: repo.repoPath });
 
       // Register a coverage handler that reports the commit operation as covered.
       // Track calls with a counter so we can wait for the suppression path to complete.
@@ -253,7 +254,7 @@ describe('GitWatcher', { timeout: 30_000 }, () => {
       });
 
       const branch = (await repo.git.branchLocal()).current;
-      await bus.emit(FsSubjects.changed, {
+      await bus.emit(createTestCall(), FsSubjects.changed, {
         path: path.join(repo.repoPath, '.git', 'refs', 'heads', branch),
         kind: 'change',
       });
@@ -275,7 +276,7 @@ describe('GitWatcher', { timeout: 30_000 }, () => {
     let unsubscribe: (() => void) | null = null;
     let unsubCoverage: (() => void) | null = null;
     try {
-      await bus.request(GitSubjects.addRepo, { repoPath: repo.repoPath });
+      await bus.request(createTestCall(), GitSubjects.addRepo, { repoPath: repo.repoPath });
 
       let coverageCallCount = 0;
       unsubCoverage = bus.on(GitHookSubjects.coverage, (ctx) => {
@@ -288,7 +289,7 @@ describe('GitWatcher', { timeout: 30_000 }, () => {
         checkoutEvents.push(ctx.payload);
       });
 
-      await bus.emit(FsSubjects.changed, {
+      await bus.emit(createTestCall(), FsSubjects.changed, {
         path: path.join(repo.repoPath, '.git', 'HEAD'),
         kind: 'change',
       });
@@ -307,7 +308,7 @@ describe('GitWatcher', { timeout: 30_000 }, () => {
     const repo = await createTestRepoWithCommit('git-watcher-coverage-passthrough-');
     let unsubscribe: (() => void) | null = null;
     try {
-      await bus.request(GitSubjects.addRepo, { repoPath: repo.repoPath });
+      await bus.request(createTestCall(), GitSubjects.addRepo, { repoPath: repo.repoPath });
 
       // No coverage handler registered — requestOptional returns handled:false (fail-open).
       const commitEvents: unknown[] = [];
@@ -316,7 +317,7 @@ describe('GitWatcher', { timeout: 30_000 }, () => {
       });
 
       const branch = (await repo.git.branchLocal()).current;
-      await bus.emit(FsSubjects.changed, {
+      await bus.emit(createTestCall(), FsSubjects.changed, {
         path: path.join(repo.repoPath, '.git', 'refs', 'heads', branch),
         kind: 'change',
       });
@@ -335,7 +336,7 @@ describe('GitWatcher', { timeout: 30_000 }, () => {
     let unsubscribe: (() => void) | null = null;
     let unsubCoverage: (() => void) | null = null;
     try {
-      await bus.request(GitSubjects.addRepo, { repoPath: repo.repoPath });
+      await bus.request(createTestCall(), GitSubjects.addRepo, { repoPath: repo.repoPath });
 
       unsubCoverage = bus.on(GitHookSubjects.coverage, (ctx) => {
         ctx.setResult({ covered: false, reason: 'hook-missing', coveredOperations: [] });
@@ -347,7 +348,7 @@ describe('GitWatcher', { timeout: 30_000 }, () => {
       });
 
       const branch = (await repo.git.branchLocal()).current;
-      await bus.emit(FsSubjects.changed, {
+      await bus.emit(createTestCall(), FsSubjects.changed, {
         path: path.join(repo.repoPath, '.git', 'refs', 'heads', branch),
         kind: 'change',
       });
@@ -367,7 +368,7 @@ describe('GitWatcher', { timeout: 30_000 }, () => {
     let unsubscribe: (() => void) | null = null;
     let unsubCoverage: (() => void) | null = null;
     try {
-      await bus.request(GitSubjects.addRepo, { repoPath: repo.repoPath });
+      await bus.request(createTestCall(), GitSubjects.addRepo, { repoPath: repo.repoPath });
 
       let coverageCallCount = 0;
       unsubCoverage = bus.on(GitHookSubjects.coverage, async () => {
@@ -381,7 +382,7 @@ describe('GitWatcher', { timeout: 30_000 }, () => {
       });
 
       const branch = (await repo.git.branchLocal()).current;
-      await bus.emit(FsSubjects.changed, {
+      await bus.emit(createTestCall(), FsSubjects.changed, {
         path: path.join(repo.repoPath, '.git', 'refs', 'heads', branch),
         kind: 'change',
       });
@@ -400,29 +401,36 @@ describe('GitWatcher', { timeout: 30_000 }, () => {
   it('keeps fs checkout emission when git hook coverage is unavailable', async () => {
     const repo = await createTestRepoWithCommit('git-watcher-checkout-coverage-passthrough-');
     let unsubscribe: (() => void) | null = null;
+    const call = createTestCall();
+    const receivedCalls: CallContext[] = [];
+    const unsubscribeChanged = bus.on(FsSubjects.changed, (ctx) => {
+      receivedCalls.push(ctx.call);
+    });
     const requestOptionalSpy = vi.spyOn(bus, 'requestOptional');
     try {
-      await bus.request(GitSubjects.addRepo, { repoPath: repo.repoPath });
+      await bus.request(createTestCall(), GitSubjects.addRepo, { repoPath: repo.repoPath });
 
       const checkoutEvents: unknown[] = [];
       unsubscribe = bus.on(GitSubjects.checkout, (ctx) => {
         checkoutEvents.push(ctx.payload);
       });
 
-      await bus.emit(FsSubjects.changed, {
+      await bus.emit(call, FsSubjects.changed, {
         path: path.join(repo.repoPath, '.git', 'HEAD'),
         kind: 'change',
       });
 
       await vi.waitUntil(() => checkoutEvents.length > 0, { timeout: 5000, interval: 50 });
 
-      expect(requestOptionalSpy).toHaveBeenCalledWith(GitHookSubjects.coverage, {
+      expect(receivedCalls[0]?.principal).toEqual(call.principal);
+      expect(requestOptionalSpy).toHaveBeenCalledWith(receivedCalls[0], GitHookSubjects.coverage, {
         repoPath: repo.repoPath,
         operation: 'checkout',
       });
       expect(checkoutEvents).toHaveLength(1);
     } finally {
       unsubscribe?.();
+      unsubscribeChanged();
       requestOptionalSpy.mockRestore();
       await repo.cleanup();
     }
@@ -435,7 +443,7 @@ describe('GitWatcher', { timeout: 30_000 }, () => {
     let unsubCoverage: (() => void) | null = null;
     try {
       await repo.git.raw(['worktree', 'add', worktreePath, '-b', 'wt-coverage-test']);
-      await bus.request(GitSubjects.addRepo, { repoPath: repo.repoPath });
+      await bus.request(createTestCall(), GitSubjects.addRepo, { repoPath: repo.repoPath });
 
       const coverageRequests: Array<{ repoPath: string; operation: string; worktree?: string }> = [];
       unsubCoverage = bus.on(GitHookSubjects.coverage, (ctx) => {
@@ -443,7 +451,7 @@ describe('GitWatcher', { timeout: 30_000 }, () => {
         ctx.setResult({ covered: true, reason: 'covered', coveredOperations: ['checkout'] });
       });
 
-      await bus.emit(FsSubjects.changed, {
+      await bus.emit(createTestCall(), FsSubjects.changed, {
         path: path.join(repo.repoPath, '.git', 'worktrees', worktreeName, 'HEAD'),
         kind: 'change',
       });
@@ -471,7 +479,7 @@ describe('GitWatcher', { timeout: 30_000 }, () => {
     let unsubscribe: (() => void) | null = null;
     let unsubCoverage: (() => void) | null = null;
     try {
-      await bus.request(GitSubjects.addRepo, { repoPath: repo.repoPath });
+      await bus.request(createTestCall(), GitSubjects.addRepo, { repoPath: repo.repoPath });
 
       let coverageCallCount = 0;
       unsubCoverage = bus.on(GitHookSubjects.coverage, (ctx) => {
@@ -490,7 +498,7 @@ describe('GitWatcher', { timeout: 30_000 }, () => {
 
       await fs.writeFile(path.join(repo.repoPath, 'staged.txt'), 'staged\n');
       await repo.git.add('staged.txt');
-      await bus.emit(FsSubjects.changed, {
+      await bus.emit(createTestCall(), FsSubjects.changed, {
         path: path.join(repo.repoPath, '.git', 'index'),
         kind: 'change',
       });
@@ -511,7 +519,7 @@ describe('GitWatcher', { timeout: 30_000 }, () => {
     let unsubscribe: (() => void) | null = null;
     let unsubCoverage: (() => void) | null = null;
     try {
-      await bus.request(GitSubjects.addRepo, { repoPath: repo.repoPath });
+      await bus.request(createTestCall(), GitSubjects.addRepo, { repoPath: repo.repoPath });
 
       let coverageCallCount = 0;
       unsubCoverage = bus.on(GitHookSubjects.coverage, (ctx) => {
@@ -528,7 +536,7 @@ describe('GitWatcher', { timeout: 30_000 }, () => {
         mergeEvents.push(ctx.payload);
       });
 
-      await bus.emit(FsSubjects.changed, {
+      await bus.emit(createTestCall(), FsSubjects.changed, {
         path: path.join(repo.repoPath, '.git', 'MERGE_HEAD'),
         kind: 'create',
       });
@@ -549,7 +557,7 @@ describe('GitWatcher', { timeout: 30_000 }, () => {
     let unsubscribe: (() => void) | null = null;
     let unsubCoverage: (() => void) | null = null;
     try {
-      await bus.request(GitSubjects.addRepo, { repoPath: repo.repoPath });
+      await bus.request(createTestCall(), GitSubjects.addRepo, { repoPath: repo.repoPath });
 
       let coverageCallCount = 0;
       unsubCoverage = bus.on(GitHookSubjects.coverage, (ctx) => {
@@ -566,7 +574,7 @@ describe('GitWatcher', { timeout: 30_000 }, () => {
         rebaseEvents.push(ctx.payload);
       });
 
-      await bus.emit(FsSubjects.changed, {
+      await bus.emit(createTestCall(), FsSubjects.changed, {
         path: path.join(repo.repoPath, '.git', 'REBASE_HEAD'),
         kind: 'create',
       });

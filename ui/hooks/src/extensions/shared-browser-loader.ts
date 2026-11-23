@@ -176,7 +176,8 @@ async function resolveBrowserExtensions<
     return { kind: 'aborted' };
   }
 
-  const { extensions } = await bus.request(ExtensionSubjects.list, {});
+  // ORIGIN: Renderer startup discovers browser extensions once the runtime is ready.
+  const { extensions } = await bus.request(bus.own('start'), ExtensionSubjects.list, {});
   const browserExtensions = filterBrowserExtensions(extensions);
 
   if (browserExtensions.length === 0) {

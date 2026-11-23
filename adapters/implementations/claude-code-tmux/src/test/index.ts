@@ -248,7 +248,7 @@ export const createTestConfig = async (
   options?: CreateConformanceTestConfigOptions,
 ): Promise<ConformanceTestConfig<ClaudeCodeTmuxConnectorBus, ClaudeCodeTmuxConnector, ClaudeCodeTmuxAgent>> => {
   const { scopedBus } = ClaudeCodeTmuxConnectorNamespace;
-  const bus = await scopedBus();
+  const bus = await scopedBus(MakaioBus);
   ensureTestTmuxServerPrepared();
 
   const testPreset = resolveConformanceTestPreset({

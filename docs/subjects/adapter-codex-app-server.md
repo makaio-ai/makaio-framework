@@ -449,8 +449,8 @@ Type: Event
 |-------|------|----------|
 | `adapterId` | `string` | yes |
 | `agentId` | `string` | yes |
-| `newState` | `"idle" \| "active" \| "turn_started" \| "step_started" \| "step_finished" \| "turn_finished" \| "processing_started" \| "interrupted"` | yes |
-| `oldState` | `"idle" \| "active" \| "turn_started" \| "step_started" \| "step_finished" \| "turn_finished" \| "processing_started" \| "interrupted"` | yes |
+| `newState` | `"idle" \| "active" \| "processing_started" \| "turn_started" \| "step_started" \| "step_finished" \| "turn_finished" \| "interrupted"` | yes |
+| `oldState` | `"idle" \| "active" \| "processing_started" \| "turn_started" \| "step_started" \| "step_finished" \| "turn_finished" \| "interrupted"` | yes |
 | `timestamp` | `number` | yes |
 
 ### <a id="adapter:codex-app-server.turn_step_finished"></a>`adapter:codex-app-server.turn_step_finished` (event)

@@ -1,8 +1,18 @@
 import type { MakaioBusContext } from './types/index.js';
-import { createBusInstance } from './bus.js';
+import type { OnceOptions } from './methods/once.js';
+import * as methods from './methods/index.js';
+import { validateMessage } from './utils/message-safeguards.js';
 import { createFilteredBus, type IFilteredBus } from './filtered-bus.js';
 import type { IScopedBusBase } from './scoped-bus-base.js';
-import type { PayloadFilter, SubjectRecord, TypedPayloadFilter } from '@makaio/core';
+import { createSendSurface } from './send-surface.js';
+import type {
+  HandlerForSubjectDefinition,
+  PartyRef,
+  PayloadFilter,
+  SubjectDefinition,
+  SubjectRecord,
+  TypedPayloadFilter,
+} from '@makaio/core';
 
 /**
  * Scoped bus with namespace isolation and type-safe filtering.
@@ -38,46 +48,66 @@ export type ScopedBus<
    * ```
    */
   withFilter(filter: TypedPayloadFilter<FilterPayload>): IFilteredBus<Namespace, Subjects, FilterPayload>;
-
-  /**
-   * Get the bus context for advanced use cases.
-   */
-  getContext(): MakaioBusContext;
 };
 
 /**
- * Creates a scoped bus from a namespace object or namespace key.
+ * Creates a scoped bus for a namespace on a shared bus context.
  *
- * Accepts either a namespace object directly, a registered namespace key to look up,
- * or a string domain name. Returns a scoped bus that automatically prefixes all
- * subjects with the domain.
- * @param context - Makaio bus context
- * @param input - Namespace object, registered namespace key, or domain string
- * @returns Scoped bus instance for the specified namespace or domain
+ * The view shares the parent's context, and with it the parent's transport state; it
+ * creates no lifecycle emitter and no transport state of its own. It keeps the parent's
+ * carrier: the carrier owns the handlers registered through the view and is the caller of
+ * everything sent through it. Its three send operations come from `createSendSurface`, which
+ * resolves both call forms and enters `methods/` with the carrier.
+ * @param context - Shared bus context of the parent bus
+ * @param input - Namespace domain string; subjects of other namespaces are rejected
+ * @param carrier - The carrier of the parent bus
+ * @returns Scoped bus for the namespace
  */
 export function createScopedBus<
   Namespace extends string,
   Subjects extends SubjectRecord = SubjectRecord,
   FilterPayload = unknown,
->(context: MakaioBusContext, input: Namespace): ScopedBus<Namespace, Subjects, FilterPayload> {
+>(context: MakaioBusContext, input: Namespace, carrier: PartyRef): ScopedBus<Namespace, Subjects, FilterPayload> {
   const namespace = input;
+  const sends = createSendSurface(context, carrier, namespace);
 
-  const bus = createBusInstance({ context, namespace });
+  const view: IScopedBusBase<Namespace> = {
+    namespace,
+
+    on(subject, handler, options) {
+      validateMessage('on', subject, namespace);
+      return methods.on(context, carrier, subject, handler, options);
+    },
+
+    intercept(subject, handler, options) {
+      validateMessage('intercept', subject, namespace);
+      return methods.intercept(context, carrier, subject, handler, options);
+    },
+
+    once: ((subject: SubjectDefinition, handlerOrOptions?: unknown) => {
+      validateMessage('once', subject, namespace);
+
+      // Callback version
+      if (typeof handlerOrOptions === 'function') {
+        return methods.once(context, carrier, subject, handlerOrOptions as HandlerForSubjectDefinition<typeof subject>);
+      }
+
+      // Promise version
+      return methods.once(context, carrier, subject, handlerOrOptions as OnceOptions<typeof subject> | undefined);
+    }) as IScopedBusBase<Namespace>['once'],
+
+    emit: sends.emit as IScopedBusBase<Namespace>['emit'],
+    request: sends.request as IScopedBusBase<Namespace>['request'],
+    requestOptional: sends.requestOptional as IScopedBusBase<Namespace>['requestOptional'],
+  };
 
   return {
-    namespace,
-    emit: bus.emit,
-    on: bus.on,
-    intercept: bus.intercept,
-    once: bus.once,
-    request: bus.request,
-    requestOptional: bus.requestOptional,
+    ...view,
     withFilter: (<_Payload>(filter: PayloadFilter) =>
-      createFilteredBus<Namespace, Subjects, FilterPayload>(context, namespace, filter)) as ScopedBus<
+      createFilteredBus<Namespace, Subjects, FilterPayload>(context, namespace, filter, carrier)) as ScopedBus<
       Namespace,
       Subjects,
       FilterPayload
     >['withFilter'],
-    getContext: () => context,
-  } as ScopedBus<Namespace, Subjects, FilterPayload>;
+  };
 }

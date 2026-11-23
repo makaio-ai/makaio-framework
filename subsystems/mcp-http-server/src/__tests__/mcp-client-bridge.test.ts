@@ -21,6 +21,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createBusInstance } from '@makaio/bus-core';
 import { ToolSubjects } from '@makaio/contracts';
+import { createTestCall } from '@makaio/test-utils';
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import { startMcpClientBridge, type McpClientBridgeHandle } from '../mcp-client-bridge.js';
 
@@ -62,7 +63,7 @@ const MCP_FIXTURE_TIMEOUT_MS = 15_000;
 async function startFixtureBridge(
   onToolsChanged?: (tools: { name: string }[]) => void,
 ): Promise<McpClientBridgeHandle> {
-  return startMcpClientBridge({
+  return startMcpClientBridge(createTestCall(), {
     command: TSX_BIN,
     args: [FIXTURE_PATH],
     extensionName: 'test-extension',
@@ -124,7 +125,7 @@ describe('startMcpClientBridge', { timeout: MCP_FIXTURE_TIMEOUT_MS }, () => {
 
   afterEach(async () => {
     if (handle) {
-      await handle.close().catch(() => {
+      await handle.close(createTestCall()).catch(() => {
         // Ignore close errors in afterEach; the process may already be gone.
       });
       handle = undefined;
@@ -198,20 +199,20 @@ describe('startMcpClientBridge', { timeout: MCP_FIXTURE_TIMEOUT_MS }, () => {
 
   it('close resolves without error', async () => {
     handle = await startFixtureBridge();
-    await expect(handle.close()).resolves.toBeUndefined();
+    await expect(handle.close(createTestCall())).resolves.toBeUndefined();
     handle = undefined; // already closed — prevent afterEach double-close
   });
 
   it('close is idempotent — second call resolves without error', async () => {
     handle = await startFixtureBridge();
-    await handle.close();
-    await expect(handle.close()).resolves.toBeUndefined();
+    await handle.close(createTestCall());
+    await expect(handle.close(createTestCall())).resolves.toBeUndefined();
     handle = undefined; // already closed — prevent afterEach double-close
   });
 
   it('callTool throws after close', async () => {
     handle = await startFixtureBridge();
-    await handle.close();
+    await handle.close(createTestCall());
     await expect(handle.callTool('echo', { message: 'hi' })).rejects.toThrow('MCP bridge is closed');
     handle = undefined; // already closed — prevent afterEach double-close
   });
@@ -261,17 +262,18 @@ describe('startMcpClientBridge', { timeout: MCP_FIXTURE_TIMEOUT_MS }, () => {
   // Bus integration
   // =========================================================================
 
-  it('registers MCP tools on the bus and executes them through ToolSubjects', async () => {
+  it('registers MCP tools on the bus and executes them through ToolSubjects', async ({ onTestFinished }) => {
     const bus = createBusInstance();
-    handle = await startMcpClientBridge({
+    const bridge = await startMcpClientBridge(bus.own('start'), {
       command: TSX_BIN,
       args: [FIXTURE_PATH],
       extensionName: 'test-extension',
       env: process.env as Record<string, string>,
       bus,
     });
+    onTestFinished(() => bridge.close(bus.own('stop')));
 
-    const listed = await bus.request(ToolSubjects.list, {});
+    const listed = await bus.request(bus.own('root'), ToolSubjects.list, {});
     expect(listed.toolsets).toContainEqual(
       expect.objectContaining({
         name: 'test-extension',
@@ -288,7 +290,7 @@ describe('startMcpClientBridge', { timeout: MCP_FIXTURE_TIMEOUT_MS }, () => {
       }),
     );
 
-    const result = await bus.request(ToolSubjects.execute, {
+    const result = await bus.request(bus.own('root'), ToolSubjects.execute, {
       toolName: 'echo',
       input: { message: 'hello bus' },
     });
@@ -365,7 +367,7 @@ describe('startMcpClientBridge start cancellation', { timeout: MCP_FIXTURE_TIMEO
    * @returns The pending start.
    */
   function startSilentBridge(file: string, signal: AbortSignal): Promise<McpClientBridgeHandle> {
-    return startMcpClientBridge({
+    return startMcpClientBridge(createTestCall(), {
       command: process.execPath,
       args: ['-e', SILENT_SERVER_SCRIPT],
       extensionName: 'silent-extension',

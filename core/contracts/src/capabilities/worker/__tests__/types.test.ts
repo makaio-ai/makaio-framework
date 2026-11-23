@@ -1,3 +1,5 @@
+import type { CallContext } from '@makaio/core';
+import { createTestCall } from '@makaio/test-utils';
 import { z } from 'zod';
 import { describe, expect, expectTypeOf, it } from 'vitest';
 import {
@@ -214,14 +216,14 @@ describe('WorkerHandle is allocation-only', () => {
 });
 
 describe('IWorkerProvider provision contract', () => {
-  it('requires AbortSignal as second argument to provision', () => {
+  it('requires call first and AbortSignal as third argument to provision', () => {
     const provider: IWorkerProvider = {
       id: 'test.provider',
       displayName: 'Test Provider',
       environment: 'test',
       allocationLifetime: 'provider-managed',
       baseCapabilities: WorkerCapabilitiesSchema.parse({ persistentStorage: false }),
-      provision: async (_request, _signal) => ({
+      provision: async (_call, _request, _signal) => ({
         kind: 'allocated' as const,
         allocationRef: {
           version: PROVIDER_ALLOCATION_REF_VERSION,
@@ -237,7 +239,7 @@ describe('IWorkerProvider provision contract', () => {
       }),
     };
 
-    expectTypeOf(provider.provision).parameters.toEqualTypeOf<[WorkerProvisionRequest, AbortSignal]>();
+    expectTypeOf(provider.provision).parameters.toEqualTypeOf<[CallContext, WorkerProvisionRequest, AbortSignal]>();
   });
 
   it('returns allocationRef and handle from provision', async () => {
@@ -264,6 +266,7 @@ describe('IWorkerProvider provision contract', () => {
     };
 
     const result = await provider.provision(
+      createTestCall(),
       {
         executionId: 'exec-1',
         executionAttemptId: 'attempt-1',
@@ -1056,9 +1059,9 @@ describe('IWorkerRecoveryCapability', () => {
     >().not.toMatchTypeOf<IWorkerRecoveryCapability>();
   });
 
-  it('discoverProvisioning takes provider context without a bootstrap deadline and a signal', () => {
+  it('discoverProvisioning takes call, provider context without a bootstrap deadline, and a signal', () => {
     expectTypeOf<IWorkerRecoveryCapability['discoverProvisioning']>().parameters.toEqualTypeOf<
-      [WorkerProviderContext, AbortSignal]
+      [CallContext, WorkerProviderContext, AbortSignal]
     >();
   });
 
@@ -1080,34 +1083,34 @@ describe('IWorkerRecoveryCapability', () => {
     expectTypeOf<Awaited<ReturnType<IWorkerRecoveryCapability['terminateAllocation']>>>().toEqualTypeOf<void>();
   });
 
-  it('attach takes allocationRef, request, and signal', () => {
+  it('attach takes call, allocationRef, request, and signal', () => {
     expectTypeOf<IWorkerRecoveryCapability['attach']>().parameters.toEqualTypeOf<
-      [ProviderAllocationRef, WorkerProviderContext, AbortSignal]
+      [CallContext, ProviderAllocationRef, WorkerProviderContext, AbortSignal]
     >();
   });
 
-  it('inspect takes allocationRef, request, and signal', () => {
+  it('inspect takes call, allocationRef, request, and signal', () => {
     expectTypeOf<IWorkerRecoveryCapability['inspect']>().parameters.toEqualTypeOf<
-      [ProviderAllocationRef, WorkerProviderContext, AbortSignal]
+      [CallContext, ProviderAllocationRef, WorkerProviderContext, AbortSignal]
     >();
   });
 
-  it('terminateAllocation takes ref, request, and signal', () => {
+  it('terminateAllocation takes call, ref, request, and signal', () => {
     expectTypeOf<IWorkerRecoveryCapability['terminateAllocation']>().parameters.toEqualTypeOf<
-      [ProviderAllocationRef, WorkerProviderContext, AbortSignal]
+      [CallContext, ProviderAllocationRef, WorkerProviderContext, AbortSignal]
     >();
   });
 
   it('can be implemented as a concrete object', () => {
     const recovery: IWorkerRecoveryCapability = {
-      discoverProvisioning: async (_request, _signal) => ({ kind: 'unknown' as const, evidence: EVIDENCE }),
-      attach: async (_ref, _request, _signal) => ({
+      discoverProvisioning: async (_call, _request, _signal) => ({ kind: 'unknown' as const, evidence: EVIDENCE }),
+      attach: async (_call, _ref, _request, _signal) => ({
         executionAttemptId: 'attempt-1',
         cancel: async () => {},
         terminate: async () => {},
         release: async () => {},
       }),
-      inspect: async (_ref, _request, _signal) => ({
+      inspect: async (_call, _ref, _request, _signal) => ({
         state: 'running' as const,
         allocationRef: {
           version: PROVIDER_ALLOCATION_REF_VERSION,
@@ -1115,7 +1118,7 @@ describe('IWorkerRecoveryCapability', () => {
           providerData: { machineId: 'm-1' },
         },
       }),
-      terminateAllocation: async (_ref, _request, _signal) => {},
+      terminateAllocation: async (_call, _ref, _request, _signal) => {},
     };
 
     expect(recovery.discoverProvisioning).toBeDefined();
@@ -1151,14 +1154,14 @@ describe('IRecoverableWorkerProvider', () => {
         },
       }),
       recovery: {
-        discoverProvisioning: async (_request, _signal) => ({ kind: 'unknown' as const, evidence: EVIDENCE }),
-        attach: async (_ref, _request, _signal) => ({
+        discoverProvisioning: async (_call, _request, _signal) => ({ kind: 'unknown' as const, evidence: EVIDENCE }),
+        attach: async (_call, _ref, _request, _signal) => ({
           executionAttemptId: 'attempt-1',
           cancel: async () => {},
           terminate: async () => {},
           release: async () => {},
         }),
-        inspect: async (_ref, _request, _signal) => ({
+        inspect: async (_call, _ref, _request, _signal) => ({
           state: 'running' as const,
           allocationRef: {
             version: PROVIDER_ALLOCATION_REF_VERSION,
@@ -1166,7 +1169,7 @@ describe('IRecoverableWorkerProvider', () => {
             providerData: { machineId: 'm-1' },
           },
         }),
-        terminateAllocation: async (_ref, _request, _signal) => {},
+        terminateAllocation: async (_call, _ref, _request, _signal) => {},
       },
     };
 

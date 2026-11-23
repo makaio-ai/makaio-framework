@@ -10,42 +10,31 @@
  * @packageDocumentation
  */
 
-import { MakaioBus, type IMakaioBus } from '@makaio/bus-core';
+import type { IMakaioBus } from '@makaio/bus-core';
+import type { CallContext } from '@makaio/core';
 import {
   CapabilitySubjects,
   ClientSubjects,
   FORK_SESSION_LINEAGE_KIND,
   MessageStorageSubjects,
   ROOT_SESSION_LINEAGE_KIND,
-  SessionRecordMetadataSchema,
   SessionSubjects,
+  SessionRecordMetadataSchema,
+  type IMakaioSession,
+  type SessionRecordMetadata,
   type ClientRuntimeStarted,
   type ClientSessionStarted,
   type ClientSessionTurnCompleted,
-  type IMakaioSession,
-  type SessionRecordMetadata,
 } from '@makaio/contracts';
 import { LogImportTriggerSubjects } from './log-import-trigger-subjects.js';
 import { advanceManagedGeneration, advanceObservedGeneration } from './observed-session-generation.js';
 import { SessionStorageSubjects } from './storage/namespace.js';
 import {
   OBSERVED_SESSION_INGESTION_POLICY_CAPABILITY_ID,
-  type IObservedSessionIngestionPolicyProvider,
   type ObservedSessionIngestionPolicyImportStatus,
+  type IObservedSessionIngestionPolicyProvider,
   type ObservedSessionIngestionPolicyInput,
 } from './observed-session-ingestion-policy.js';
-
-/**
- * Maximum number of adapter session IDs retained in the managed-session gate.
- *
- * Intentionally replicated from the client services (see the identical gate
- * in the Claude Code client service): the gate is fed exclusively by the
- * existing `client.runtime.started` subject — introducing a dedicated
- * "managed session" subject to share the value would violate the
- * no-new-subjects principle of the ingestion design. When the set reaches
- * this cap, the oldest entry is evicted FIFO before a new ID is inserted.
- */
-export const MANAGED_SESSION_CAP = 10_000;
 
 /**
  * Log a debug-level diagnostic when `MAKAIO_DEBUG` is enabled.
@@ -62,9 +51,7 @@ function debugLog(message: string, details?: Record<string, unknown>): void {
  * @param provider - Runtime provider payload
  * @returns True when the payload exposes the policy decision method
  */
-function isObservedSessionIngestionPolicyProvider(
-  provider: unknown,
-): provider is IObservedSessionIngestionPolicyProvider {
+function isIngestionPolicyProvider(provider: unknown): provider is IObservedSessionIngestionPolicyProvider {
   if (!provider || typeof provider !== 'object') return false;
   const candidate = provider as Partial<IObservedSessionIngestionPolicyProvider>;
   return (
@@ -108,6 +95,33 @@ export function isPolicyDiscoveredObservedSession(session: Pick<IMakaioSession, 
 export function isTrackingStub(session: Pick<IMakaioSession, 'isImported' | 'importStatus' | 'clientId'>): boolean {
   return session.isImported === true && session.importStatus === 'tracking' && session.clientId !== undefined;
 }
+
+/**
+ * Validate hook pass-through metadata against the session metadata contract.
+ *
+ * Hook metadata is arbitrary pass-through from the client adapter; only
+ * JSON-safe records are preserved as session metadata (AC14). Invalid
+ * payloads are dropped — registration proceeds without metadata.
+ * @param metadata - Raw metadata record from the observed event payload
+ * @returns Validated metadata, or `undefined` when absent or not JSON-safe
+ */
+function parseSessionMetadata(metadata: Record<string, unknown> | undefined): SessionRecordMetadata | undefined {
+  if (metadata === undefined) return undefined;
+  const parsed = SessionRecordMetadataSchema.safeParse(metadata);
+  return parsed.success ? parsed.data : undefined;
+}
+
+/**
+ * Maximum number of adapter session IDs retained in the managed-session gate.
+ *
+ * Intentionally replicated from the client services (see the identical gate
+ * in the Claude Code client service): the gate is fed exclusively by the
+ * existing `client.runtime.started` subject — introducing a dedicated
+ * "managed session" subject to share the value would violate the
+ * no-new-subjects principle of the ingestion design. When the set reaches
+ * this cap, the oldest entry is evicted FIFO before a new ID is inserted.
+ */
+export const MANAGED_SESSION_CAP = 10_000;
 
 /**
  * Bridges observed client sessions into the canonical session model.
@@ -178,13 +192,13 @@ export class ObservedSessionIngestionService {
 
   /**
    * Create the service and subscribe to the observed-session subjects.
-   * @param bus - Application bus instance
+   * @param bus - Bus of the carrier this service runs on
    */
-  public constructor(private readonly bus: IMakaioBus = MakaioBus) {
+  public constructor(private readonly bus: IMakaioBus) {
     this.cleanups.push(
       this.bus.on(ClientSubjects.runtime.started, async (ctx) => {
         try {
-          await this.handleRuntimeStarted(ctx.payload);
+          await this.handleRuntimeStarted(ctx.call, ctx.payload);
         } catch (error) {
           console.warn('[ObservedSessionIngestion] Failed to handle runtime started', {
             clientId: ctx.payload.clientId,
@@ -195,7 +209,7 @@ export class ObservedSessionIngestionService {
       }),
       this.bus.on(ClientSubjects.session.started, async (ctx) => {
         try {
-          await this.handleSessionStarted(ctx.payload);
+          await this.handleSessionStarted(ctx.call, ctx.payload);
         } catch (error) {
           console.warn('[ObservedSessionIngestion] Failed to register observed session', {
             clientId: ctx.payload.clientId,
@@ -209,7 +223,7 @@ export class ObservedSessionIngestionService {
       // not exist yet at that point, so an import trigger would be a no-op.
       this.bus.on(ClientSubjects.session.turn.completed, async (ctx) => {
         try {
-          await this.handleTurnCompleted(ctx.payload);
+          await this.handleTurnCompleted(ctx.call, ctx.payload);
         } catch (error) {
           console.warn('[ObservedSessionIngestion] Failed to trigger import for observed turn', {
             clientId: ctx.payload.clientId,
@@ -222,7 +236,7 @@ export class ObservedSessionIngestionService {
         CapabilitySubjects.register,
         (ctx) => {
           const { provider } = ctx.payload;
-          if (isObservedSessionIngestionPolicyProvider(provider)) {
+          if (isIngestionPolicyProvider(provider)) {
             this.policyProviders.set(provider.id, provider);
           }
         },
@@ -273,9 +287,10 @@ export class ObservedSessionIngestionService {
    * preceding them. Therefore `client.runtime.started` itself is the
    * discriminator: if we receive it for an adapterSessionId, the session is
    * adapter-managed and any tracking stub is a racy artifact.
+   * @param call - Call context of the handled `client.runtime.started` message
    * @param payload - `client.runtime.started` payload
    */
-  private async handleRuntimeStarted(payload: ClientRuntimeStarted): Promise<void> {
+  private async handleRuntimeStarted(call: CallContext, payload: ClientRuntimeStarted): Promise<void> {
     if (payload.source.layer !== 'adapter' || payload.adapterSessionId === undefined) {
       return;
     }
@@ -305,7 +320,7 @@ export class ObservedSessionIngestionService {
     // defense-in-depth so both sides catch any interleaving order.
     // Reconciliation is idempotent and cheap on the repeat path (one
     // indexed lookup that misses).
-    await this.reconcileTrackingStub(payload.clientId, payload.adapterSessionId);
+    await this.reconcileTrackingStub(call, payload.clientId, payload.adapterSessionId);
   }
 
   /**
@@ -321,14 +336,15 @@ export class ObservedSessionIngestionService {
    * - `handleRuntimeStarted`: runtime side adds to gate, then reconciles.
    * - `handleSessionStarted`: hook side writes storage, then reconciles
    *   (post-upsert double-check when the gate was populated concurrently).
+   * @param call - Call context of the message whose handling triggers the reconciliation
    * @param clientId - Client identity for importer resolution
    * @param adapterSessionId - External adapter session ID to reconcile
    */
-  private async reconcileTrackingStub(clientId: string, adapterSessionId: string): Promise<void> {
+  private async reconcileTrackingStub(call: CallContext, clientId: string, adapterSessionId: string): Promise<void> {
     const importer = await this.resolveImporter(clientId);
     if (importer === null) return;
 
-    const stubLookup = await this.bus.requestOptional(SessionStorageSubjects.getByAdapterSessionId, {
+    const stubLookup = await this.bus.requestOptional(call, SessionStorageSubjects.getByAdapterSessionId, {
       adapterSessionId,
       source: importer.adapterName,
     });
@@ -349,7 +365,7 @@ export class ObservedSessionIngestionService {
     // queries the runtime registry and skips sessions that are
     // adapter-managed, so the presence of this preserved row does not cause
     // double-ingestion.
-    const messageLookup = await this.bus.requestOptional(MessageStorageSubjects.getBySession, {
+    const messageLookup = await this.bus.requestOptional(call, MessageStorageSubjects.getBySession, {
       sessionId: stub.sessionId,
       limit: 1,
     });
@@ -390,7 +406,9 @@ export class ObservedSessionIngestionService {
     // Takeover × mid-flight collision (same-ID native resume of a
     // just-observed session whose transcript import is in flight) remains
     // deliberately unspecified until a takeover feature exists.
-    const deleteResult = await this.bus.requestOptional(SessionStorageSubjects.delete, { sessionId: stub.sessionId });
+    const deleteResult = await this.bus.requestOptional(call, SessionStorageSubjects.delete, {
+      sessionId: stub.sessionId,
+    });
     if (deleteResult.handled) {
       debugLog('Reconciled hook-first tracking stub', {
         adapterSessionId,
@@ -411,6 +429,10 @@ export class ObservedSessionIngestionService {
    * Graceful absence: `null` means framework-only mode (no log-import
    * service, or no importer registered for this client) — callers skip
    * silently. At most one debug log is emitted per unresolved client id.
+   *
+   * The lookup fills a cache that serves every later observation, so it is
+   * shared work and runs under the carrier's own `shared-work` context rather
+   * than the context of whichever message happened to miss the cache first.
    * @param clientId - Stable client id from the observed event payload
    * @returns Importer adapter name, or `null` when no importer is registered
    */
@@ -419,7 +441,8 @@ export class ObservedSessionIngestionService {
     if (cached !== undefined) {
       return cached === null ? null : { adapterName: cached };
     }
-    const result = await this.bus.requestOptional(LogImportTriggerSubjects.listImporters, {});
+    const call = this.bus.own('shared-work');
+    const result = await this.bus.requestOptional(call, LogImportTriggerSubjects.listImporters, {});
     if (!result.handled) {
       this.debugUnresolved(clientId, 'no log-import service registered');
       return null;
@@ -461,9 +484,10 @@ export class ObservedSessionIngestionService {
    * Skipped for managed sessions and when no importer is resolvable — a
    * session that can never receive imported content must not create a
    * dangling stub.
+   * @param call - Call context of the handled `client.session.started` message
    * @param payload - `client.session.started` payload
    */
-  private async handleSessionStarted(payload: ClientSessionStarted): Promise<void> {
+  private async handleSessionStarted(call: CallContext, payload: ClientSessionStarted): Promise<void> {
     const adapterSessionId = payload.adapterSessionId;
     if (adapterSessionId === undefined || adapterSessionId.length === 0) return;
     if (this.managedAdapterSessionIds.has(adapterSessionId)) {
@@ -475,7 +499,8 @@ export class ObservedSessionIngestionService {
       // for managed sessions. So the ordinal alone is let through, addressed by
       // `sessionId` and touching nothing the gate protects.
       if (payload.startMode === 'compact') {
-        await advanceManagedGeneration(this.bus, adapterSessionId, this.managedAdapterSessionIds.get(adapterSessionId));
+        const sessionId = this.managedAdapterSessionIds.get(adapterSessionId);
+        await advanceManagedGeneration(call, this.bus, adapterSessionId, sessionId);
       }
       return;
     }
@@ -487,8 +512,8 @@ export class ObservedSessionIngestionService {
       payload.startMode === 'resume' || payload.startMode === 'compact' ? payload.startMode : undefined;
     const written =
       continuationMode !== undefined
-        ? await this.rebindObservedSession(payload, adapterSessionId, importer.adapterName, continuationMode)
-        : await this.registerObservedSession(payload, adapterSessionId, importer.adapterName);
+        ? await this.rebindObservedSession(call, payload, adapterSessionId, importer.adapterName, continuationMode)
+        : await this.registerObservedSession(call, payload, adapterSessionId, importer.adapterName);
     // Post-write double-check: the gate-check above (managedAdapterSessionIds)
     // and the storage write are not atomic — runtime.started may have populated
     // the gate between the two. Both sides now reconcile: the runtime side adds
@@ -506,13 +531,14 @@ export class ObservedSessionIngestionService {
     if (!this.managedAdapterSessionIds.has(adapterSessionId)) return;
 
     if (payload.startMode === 'compact') {
-      await advanceManagedGeneration(this.bus, adapterSessionId, this.managedAdapterSessionIds.get(adapterSessionId));
+      const sessionId = this.managedAdapterSessionIds.get(adapterSessionId);
+      await advanceManagedGeneration(call, this.bus, adapterSessionId, sessionId);
     }
     // Reconciliation stays tied to a write: with nothing written there is no
     // stub this call could have created, and the runtime side already
     // reconciles whatever it finds.
     if (written) {
-      await this.reconcileTrackingStub(payload.clientId, adapterSessionId);
+      await this.reconcileTrackingStub(call, payload.clientId, adapterSessionId);
     }
   }
 
@@ -555,6 +581,7 @@ export class ObservedSessionIngestionService {
    * which row: a compaction's lineage root, never a synthesized child).
    * Reporting is this side's whole duty, and it never changes the rebind's own
    * result.
+   * @param call - Call context of the handled `client.session.started` message
    * @param payload - `client.session.started` payload
    * @param adapterSessionId - External session id of the continued session
    * @param source - Importer adapter name (import identity of the session)
@@ -562,12 +589,13 @@ export class ObservedSessionIngestionService {
    * @returns True when a stored session was rebound
    */
   private async rebindObservedSession(
+    call: CallContext,
     payload: ClientSessionStarted,
     adapterSessionId: string,
     source: string,
     startMode: 'resume' | 'compact',
   ): Promise<boolean> {
-    const result = await this.bus.requestOptional(SessionStorageSubjects.rebindObserved, {
+    const result = await this.bus.requestOptional(call, SessionStorageSubjects.rebindObserved, {
       externalSessionId: adapterSessionId,
       source,
       startMode,
@@ -580,12 +608,12 @@ export class ObservedSessionIngestionService {
       return false;
     }
     if (result.data.outcome === 'not-found') {
-      const importStatus = await this.decideImportStatus(this.policyInput(payload, adapterSessionId, source));
+      const importStatus = await this.decideImportStatus(call, this.policyInput(payload, adapterSessionId, source));
       if (importStatus === 'discovered') {
         // Metadata-only policy: no transcript import will ever create the row.
         // The decision is handed on so registration does not re-evaluate the
         // policy providers for the same observation.
-        const registered = await this.registerObservedSession(payload, adapterSessionId, source, importStatus);
+        const registered = await this.registerObservedSession(call, payload, adapterSessionId, source, importStatus);
         // The registration seam knows no start mode, so it creates the row at
         // generation 0. Advancing right after the create is what keeps the very
         // first compaction of a session from being the one nobody counts.
@@ -593,7 +621,7 @@ export class ObservedSessionIngestionService {
         // through the import upsert: a failure here leaves 0, which is exactly
         // where the row would have been anyway, and the ordinal never regresses.
         if (registered && startMode === 'compact') {
-          await advanceObservedGeneration(this.bus, adapterSessionId, source);
+          await advanceObservedGeneration(call, this.bus, adapterSessionId, source);
         }
         return registered;
       }
@@ -620,7 +648,7 @@ export class ObservedSessionIngestionService {
     // that follows this call — a swallowed reopen is a stale status, a
     // propagated one is a lost session.
     try {
-      await this.bus.requestOptional(SessionSubjects.ownership.continuation, {
+      await this.bus.requestOptional(call, SessionSubjects.ownership.continuation, {
         sessionId: result.data.sessionId,
         startMode,
       });
@@ -663,6 +691,7 @@ export class ObservedSessionIngestionService {
    * client id: the `(source, adapterSessionId)` upsert key must match what the
    * import path writes, otherwise hook-first registration would fork the
    * session identity and every import would create a duplicate session.
+   * @param call - Call context of the handled `client.session.started` message
    * @param payload - `client.session.started` payload
    * @param adapterSessionId - External session id of the started session
    * @param source - Importer adapter name (import identity of the session)
@@ -671,6 +700,7 @@ export class ObservedSessionIngestionService {
    * @returns True when the registration reached storage
    */
   private async registerObservedSession(
+    call: CallContext,
     payload: ClientSessionStarted,
     adapterSessionId: string,
     source: string,
@@ -678,7 +708,7 @@ export class ObservedSessionIngestionService {
   ): Promise<boolean> {
     const metadata = parseSessionMetadata(payload.metadata);
     const importStatus =
-      decidedImportStatus ?? (await this.decideImportStatus(this.policyInput(payload, adapterSessionId, source)));
+      decidedImportStatus ?? (await this.decideImportStatus(call, this.policyInput(payload, adapterSessionId, source)));
 
     // Derive lineage discriminant from the optional fork signal. When the
     // emitter reports startMode === 'fork' with a parent adapter session id,
@@ -693,18 +723,10 @@ export class ObservedSessionIngestionService {
 
     const lineage =
       forkParent !== undefined
-        ? {
-            kind: FORK_SESSION_LINEAGE_KIND,
-            parentAdapterSessionId: forkParent,
-            forkPointMessageId: null,
-          }
-        : {
-            kind: ROOT_SESSION_LINEAGE_KIND,
-            parentAdapterSessionId: null,
-            forkPointMessageId: null,
-          };
+        ? { kind: FORK_SESSION_LINEAGE_KIND, parentAdapterSessionId: forkParent, forkPointMessageId: null }
+        : { kind: ROOT_SESSION_LINEAGE_KIND, parentAdapterSessionId: null, forkPointMessageId: null };
 
-    const result = await this.bus.requestOptional(SessionStorageSubjects.importUpsert, {
+    const result = await this.bus.requestOptional(call, SessionStorageSubjects.importUpsert, {
       ...lineage,
       externalSessionId: adapterSessionId,
       source,
@@ -737,9 +759,10 @@ export class ObservedSessionIngestionService {
    * pass either way. If hook payloads prove to lack the transcript path at
    * fire time in practice, resolving the path from the statusline cache is
    * the candidate follow-up seam.
+   * @param call - Call context of the handled `client.session.turn.completed` message
    * @param payload - `client.session.turn.completed` payload
    */
-  private async handleTurnCompleted(payload: ClientSessionTurnCompleted): Promise<void> {
+  private async handleTurnCompleted(call: CallContext, payload: ClientSessionTurnCompleted): Promise<void> {
     const adapterSessionId = payload.adapterSessionId;
     if (adapterSessionId === undefined || adapterSessionId.length === 0) return;
     if (this.managedAdapterSessionIds.has(adapterSessionId)) return;
@@ -748,7 +771,7 @@ export class ObservedSessionIngestionService {
     if (importer === null) return;
 
     if (
-      !(await this.shouldImportObservedContent({
+      !(await this.shouldImportContent(call, {
         clientId: payload.clientId,
         source: payload.source,
         adapterSessionId,
@@ -760,7 +783,7 @@ export class ObservedSessionIngestionService {
     }
 
     if (payload.transcriptPath !== undefined) {
-      const result = await this.bus.requestOptional(LogImportTriggerSubjects.importFile, {
+      const result = await this.bus.requestOptional(call, LogImportTriggerSubjects.importFile, {
         filePath: payload.transcriptPath,
         adapterName: importer.adapterName,
         ingestionMarker: 'live',
@@ -774,7 +797,7 @@ export class ObservedSessionIngestionService {
     }
 
     try {
-      await this.bus.requestOptional(LogImportTriggerSubjects.importSession, {
+      await this.bus.requestOptional(call, LogImportTriggerSubjects.importSession, {
         adapterSessionId,
         adapterName: importer.adapterName,
         ingestionMarker: 'live',
@@ -793,14 +816,16 @@ export class ObservedSessionIngestionService {
    * No provider means the current default: content tracking. When multiple
    * providers are present, `discovered` wins so independent policy modules can
    * only restrict content import, not override each other's deny decisions.
+   * @param call - Call context of the handled observation
    * @param input - Observed session identity and importer context
    * @returns Import status for the registration
    */
   private async decideImportStatus(
+    call: CallContext,
     input: ObservedSessionIngestionPolicyInput,
   ): Promise<ObservedSessionIngestionPolicyImportStatus> {
     for (const provider of this.policyProviders.values()) {
-      const decision = await provider.decideObservedSessionIngestion(input);
+      const decision = await provider.decideObservedSessionIngestion(call, input);
       if (decision.importStatus === 'discovered') {
         return 'discovered';
       }
@@ -810,11 +835,12 @@ export class ObservedSessionIngestionService {
 
   /**
    * Determine whether a completed observed turn may trigger content import.
+   * @param call - Call context of the handled `client.session.turn.completed` message
    * @param input - Observed turn identity and importer context
    * @returns True when content import should run
    */
-  private async shouldImportObservedContent(input: ObservedSessionIngestionPolicyInput): Promise<boolean> {
-    const stored = await this.bus.requestOptional(SessionStorageSubjects.getByAdapterSessionId, {
+  private async shouldImportContent(call: CallContext, input: ObservedSessionIngestionPolicyInput): Promise<boolean> {
+    const stored = await this.bus.requestOptional(call, SessionStorageSubjects.getByAdapterSessionId, {
       adapterSessionId: input.adapterSessionId,
       source: input.adapterName,
     });
@@ -827,21 +853,6 @@ export class ObservedSessionIngestionService {
       }
     }
 
-    return (await this.decideImportStatus(input)) === 'tracking';
+    return (await this.decideImportStatus(call, input)) === 'tracking';
   }
-}
-
-/**
- * Validate hook pass-through metadata against the session metadata contract.
- *
- * Hook metadata is arbitrary pass-through from the client adapter; only
- * JSON-safe records are preserved as session metadata (AC14). Invalid
- * payloads are dropped — registration proceeds without metadata.
- * @param metadata - Raw metadata record from the observed event payload
- * @returns Validated metadata, or `undefined` when absent or not JSON-safe
- */
-function parseSessionMetadata(metadata: Record<string, unknown> | undefined): SessionRecordMetadata | undefined {
-  if (metadata === undefined) return undefined;
-  const parsed = SessionRecordMetadataSchema.safeParse(metadata);
-  return parsed.success ? parsed.data : undefined;
 }

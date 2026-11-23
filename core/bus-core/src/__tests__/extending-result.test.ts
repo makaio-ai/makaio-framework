@@ -31,7 +31,7 @@ describe('RequestContext.extendResult()', () => {
       { priority: 0 },
     );
 
-    const result = await MakaioBus.request(TestSubjects.query, { id: '1' });
+    const result = await MakaioBus.request(MakaioBus.own('root'), TestSubjects.query, { id: '1' });
     expect(result).toEqual({ name: 'alice', score: 42 });
   });
 
@@ -45,7 +45,7 @@ describe('RequestContext.extendResult()', () => {
       { priority: 0 },
     );
 
-    const result = await MakaioBus.request(TestSubjects.query, { id: '1' });
+    const result = await MakaioBus.request(MakaioBus.own('root'), TestSubjects.query, { id: '1' });
     expect(result).toEqual({ name: 'alice', score: 99 });
   });
 
@@ -67,7 +67,7 @@ describe('RequestContext.extendResult()', () => {
       { priority: 0 },
     );
 
-    const result = await MakaioBus.request(TestSubjects.query, { id: '1' });
+    const result = await MakaioBus.request(MakaioBus.own('root'), TestSubjects.query, { id: '1' });
     expect(result).toEqual({ name: 'bob', score: 7, tags: ['enriched'] });
   });
 
@@ -82,7 +82,7 @@ describe('RequestContext.extendResult()', () => {
       { priority: 0 },
     );
 
-    const result = await MakaioBus.request(TestSubjects.query, { id: '1' });
+    const result = await MakaioBus.request(MakaioBus.own('root'), TestSubjects.query, { id: '1' });
     expect(result).toEqual({ name: 'start', score: 1, tags: ['a', 'b'] });
   });
 
@@ -99,7 +99,7 @@ describe('RequestContext.extendResult()', () => {
       { priority: 0 },
     );
 
-    await MakaioBus.request(TestSubjects.query, { id: '1' });
+    await MakaioBus.request(MakaioBus.own('root'), TestSubjects.query, { id: '1' });
     expect(observed).toEqual({ name: 'check', score: 5 });
   });
 
@@ -130,7 +130,7 @@ describe('RequestContext.extendResult()', () => {
       { priority: 0 },
     );
 
-    const result = await MakaioBus.request(TestSubjects.query, { id: '1' });
+    const result = await MakaioBus.request(MakaioBus.own('root'), TestSubjects.query, { id: '1' });
     expect(result).toEqual({ name: 'base', score: 99, tags: ['outer'] });
   });
 });
@@ -148,7 +148,7 @@ describe('broadcast extendResult()', () => {
       ctx.extendResult({ tags: ['a'] });
     });
 
-    const results = await MakaioBus.broadcast(TestSubjects.query, { id: '1' });
+    const results = await MakaioBus.broadcast(MakaioBus.own('root'), TestSubjects.query, { id: '1' });
     expect(results).toHaveLength(1);
     expect(results[0]).toEqual({ nodeId: 'node-a', payload: { name: 'alice', score: 42, tags: ['a'] } });
   });
@@ -161,7 +161,7 @@ describe('broadcast extendResult()', () => {
       ctx.extendResult({ tags: ['enriched'] });
     });
 
-    const results = await MakaioBus.broadcast(TestSubjects.query, { id: '1' });
+    const results = await MakaioBus.broadcast(MakaioBus.own('root'), TestSubjects.query, { id: '1' });
     expect(results).toHaveLength(1);
     expect(results[0]).toEqual({ nodeId: 'node-b', payload: { name: 'bob', score: 77, tags: ['enriched'] } });
   });
@@ -179,7 +179,7 @@ describe('broadcast extendResult()', () => {
       ctx.extendResult({ score: 2 });
     });
 
-    const results = await MakaioBus.broadcast(TestSubjects.query, { id: '1' });
+    const results = await MakaioBus.broadcast(MakaioBus.own('root'), TestSubjects.query, { id: '1' });
     expect(results).toHaveLength(2);
 
     const byNode = Object.fromEntries(results.map((r) => [r.nodeId, r.payload]));

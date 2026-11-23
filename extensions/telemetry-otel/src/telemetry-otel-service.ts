@@ -108,9 +108,12 @@ export class TelemetryOtelService extends BaseService implements TelemetryOtelPr
       orphanTimeoutMs: options.config.orphanTimeoutMs,
       maxOpenExecutions: options.config.maxOpenExecutions,
       emit: async (drafts) => {
+        // Export runs from collector callbacks, not from a received message, so
+        // the enrichment requests carry the service's own observer context.
+        const call = options.bus.own('observer');
         // Enrichment is fail-closed within telemetry: a broken enricher should
         // reach service error handling instead of exporting incomplete spans.
-        const enriched = await Promise.all(drafts.map((d) => this.pipeline.enrich(d)));
+        const enriched = await Promise.all(drafts.map((d) => this.pipeline.enrich(d, call)));
         await this.emitter.emit(enriched);
       },
     });

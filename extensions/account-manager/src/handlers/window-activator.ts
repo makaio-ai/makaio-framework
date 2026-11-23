@@ -1,4 +1,5 @@
 import type { IMakaioBus } from '@makaio/bus-core';
+import type { CallContext } from '@makaio/core';
 import { AdapterSubjects, type ResolvedProviderContext } from '@makaio/contracts';
 import { AdapterSubsystemSubjects } from '@makaio/services-core/adapter-subsystem';
 import { AdapterRuntimeSubjects } from '@makaio/services-core/adapter-runtime';
@@ -81,10 +82,10 @@ export class WindowActivator {
     this.cleanups.push(
       this.bus.on(AccountManagerSubjects.usage.windowResetAvailable, (ctx) => {
         const { clientId, accountId, windowId, expiredAt } = ctx.payload;
-        void this.activate(clientId, accountId, windowId, expiredAt, generation);
+        void this.activate(ctx.call, clientId, accountId, windowId, expiredAt, generation);
       }),
     );
-    void this.backfillPendingResets(generation).catch(() => {
+    void this.backfillPendingResets(this.bus.own('start'), generation).catch(() => {
       console.warn('[WindowActivator] Pending reset backfill failed.');
     });
   }
@@ -107,6 +108,7 @@ export class WindowActivator {
    * Returns silently when auto-activation is disabled for the client, or when
    * an identical activation is already in-flight. Cleans up the in-flight entry
    * once the pipeline completes (success or failure).
+   * @param call - Call context of the triggering reset event or backfill
    * @param clientId - Account-manager source identifier
    * @param accountId - Stable account identifier
    * @param windowId - Usage window slug (e.g. `"5h"`)
@@ -114,6 +116,7 @@ export class WindowActivator {
    * @param generation - Lifecycle generation that owns this activation
    */
   private async activate(
+    call: CallContext,
     clientId: string,
     accountId: string,
     windowId: string,
@@ -135,7 +138,7 @@ export class WindowActivator {
     this.inFlight.add(dedupeKey);
 
     try {
-      await this.runActivationPipeline(clientId, accountId, windowId, generation);
+      await this.runActivationPipeline(call, clientId, accountId, windowId, generation);
     } catch {
       console.warn('[WindowActivator] Activation pipeline failed:', {
         clientId,
@@ -153,29 +156,31 @@ export class WindowActivator {
    * Resolves the full adapter-layer target first; returns early without error
    * when any resolution step fails (graceful degradation). On success, emits
    * `usage.windowActivated` and triggers a best-effort usage refresh.
+   * @param call - Call context of the triggering reset event or backfill
    * @param clientId - Account-manager source identifier
    * @param accountId - Stable account identifier
    * @param windowId - Usage window slug (e.g. `"5h"`)
    * @param generation - Lifecycle generation that owns this activation
    */
   private async runActivationPipeline(
+    call: CallContext,
     clientId: string,
     accountId: string,
     windowId: string,
     generation: number,
   ): Promise<void> {
-    const target = await this.resolveActivationTarget(clientId, accountId);
+    const target = await this.resolveActivationTarget(call, clientId, accountId);
     if (!target || !this.isCurrentGeneration(generation)) {
       return;
     }
     const { adapterId, model, providerContext } = target;
 
-    await activateProviderContext(this.bus, providerContext);
+    await activateProviderContext(call, this.bus, providerContext);
     if (!this.isCurrentGeneration(generation)) {
       return;
     }
 
-    const startResult = await this.bus.requestOptional(AdapterSubjects.startAgent, {
+    const startResult = await this.bus.requestOptional(call, AdapterSubjects.startAgent, {
       adapterId,
       role: 'lead' as const,
       ephemeral: true,
@@ -207,7 +212,7 @@ export class WindowActivator {
       return;
     }
 
-    await this.bus.emit(AccountManagerSubjects.usage.windowActivated, {
+    await this.bus.emit(call, AccountManagerSubjects.usage.windowActivated, {
       clientId,
       accountId,
       windowId,
@@ -217,7 +222,7 @@ export class WindowActivator {
     // Best-effort usage refresh is fire-and-forget so activation deduplication
     // is released promptly; failures are logged for observability.
     void this.bus
-      .requestOptional(AccountManagerSubjects.usage.refresh, {
+      .requestOptional(call, AccountManagerSubjects.usage.refresh, {
         clientId,
         accountId,
       })
@@ -236,24 +241,29 @@ export class WindowActivator {
    * Walks steps 1–4 of the resolution chain — candidate provider config,
    * binding-qualified runtime context, live adapter ID, and fast model — returning
    * `null` with a warning log at any step that cannot be resolved.
+   * @param call - Call context of the triggering reset event or backfill
    * @param clientId - Account-manager source identifier
    * @param accountId - Stable account identifier
    * @returns Resolved target, or `null` when any step fails
    */
-  private async resolveActivationTarget(clientId: string, accountId: string): Promise<ActivationTarget | null> {
+  private async resolveActivationTarget(
+    call: CallContext,
+    clientId: string,
+    accountId: string,
+  ): Promise<ActivationTarget | null> {
     // Step 1: Resolve candidate provider configs for this account.
-    const providerConfigs = await resolveProviderConfigsForAccount(this.bus, clientId, accountId);
+    const providerConfigs = await resolveProviderConfigsForAccount(call, this.bus, clientId, accountId);
     if (providerConfigs.length === 0) {
       console.warn('[WindowActivator] No provider config found for account:', { clientId, accountId });
       return null;
     }
 
-    const selected = await this.selectProviderContext(providerConfigs, clientId, accountId);
+    const selected = await this.selectProviderContext(call, providerConfigs, clientId, accountId);
     if (selected === null) return null;
     const { adapterName, providerContext } = selected;
 
     // Step 3: Resolve live adapter instance ID from the selected binding.
-    const resolveIdResult = await this.bus.requestOptional(AdapterRuntimeSubjects.resolveId, {
+    const resolveIdResult = await this.bus.requestOptional(call, AdapterRuntimeSubjects.resolveId, {
       adapterName,
     });
     if (!resolveIdResult.handled) {
@@ -267,7 +277,7 @@ export class WindowActivator {
 
     // Step 4: Fetch the provider definition from the same atomic context.
     const { definitionId } = providerContext;
-    const providerResult = await this.bus.requestOptional(ProviderStorageSubjects.get, { id: definitionId });
+    const providerResult = await this.bus.requestOptional(call, ProviderStorageSubjects.get, { id: definitionId });
     if (!providerResult.handled || !providerResult.data.provider) {
       console.warn('[WindowActivator] Provider definition not found:', { clientId, accountId, definitionId });
       return null;
@@ -283,12 +293,14 @@ export class WindowActivator {
 
   /**
    * Select the first bound runtime context that pins the reset event's account.
+   * @param call - Call context of the triggering reset event or backfill
    * @param providerConfigs - Candidate inferred configs for the client.
    * @param clientId - Client that owns the reset account.
    * @param accountId - Exact reset account identifier.
    * @returns Adapter-qualified account selection, or null with a diagnostic warning.
    */
   private async selectProviderContext(
+    call: CallContext,
     providerConfigs: readonly ResolvedProviderConfig[],
     clientId: string,
     accountId: string,
@@ -296,7 +308,7 @@ export class WindowActivator {
     let foundBinding = false;
     let resolvedContext = false;
     for (const config of providerConfigs) {
-      const bindingsResult = await this.bus.requestOptional(AdapterSubsystemSubjects.listBindingsByConfig, {
+      const bindingsResult = await this.bus.requestOptional(call, AdapterSubsystemSubjects.listBindingsByConfig, {
         providerConfigId: config.providerConfigId,
       });
       if (!bindingsResult.handled) {
@@ -314,7 +326,7 @@ export class WindowActivator {
 
       let candidate: ResolvedProviderContext;
       try {
-        candidate = await resolveRuntimeProviderContext(this.bus, {
+        candidate = await resolveRuntimeProviderContext(call, this.bus, {
           adapterName: defaultBinding.adapterName,
           providerConfigId: config.providerConfigId,
         });
@@ -342,16 +354,17 @@ export class WindowActivator {
 
   /**
    * Activates reset windows that were already cached before this handler started.
+   * @param call - Call context owning this startup backfill pass
    * @param generation - Lifecycle generation that owns the backfill pass
    * @returns Nothing
    */
-  private async backfillPendingResets(generation: number): Promise<void> {
-    const pendingResult = await this.bus.requestOptional(AccountManagerSubjects.usage.getPendingResets, {});
+  private async backfillPendingResets(call: CallContext, generation: number): Promise<void> {
+    const pendingResult = await this.bus.requestOptional(call, AccountManagerSubjects.usage.getPendingResets, {});
     if (!pendingResult.handled || !this.isCurrentGeneration(generation)) {
       return;
     }
     for (const reset of pendingResult.data.pending) {
-      await this.activate(reset.clientId, reset.accountId, reset.windowId, reset.expiredAt, generation);
+      await this.activate(call, reset.clientId, reset.accountId, reset.windowId, reset.expiredAt, generation);
     }
   }
 

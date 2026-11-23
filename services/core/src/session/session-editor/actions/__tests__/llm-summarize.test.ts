@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { SessionMessage } from '@makaio/contracts';
+import { createTestCall } from '@makaio/test-utils';
 import { llmSummarizeAction } from '../llm-summarize.js';
 
 describe('llmSummarizeAction', () => {
@@ -16,7 +17,7 @@ describe('llmSummarizeAction', () => {
       },
     ];
 
-    const result = await llmSummarizeAction.execute(messages);
+    const result = await llmSummarizeAction.execute(createTestCall(), messages);
 
     expect(result).toEqual({ kind: 'messages', messages });
   });

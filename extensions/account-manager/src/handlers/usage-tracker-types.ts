@@ -1,4 +1,5 @@
 import type { IMakaioBus } from '@makaio/bus-core';
+import type { CallContext } from '@makaio/core';
 import type { IUsageProvider } from '../interfaces/usage-provider.js';
 import type {
   IAccountCredentialStore,
@@ -124,9 +125,10 @@ export interface UsageTrackerDeps {
    * credential. The callback may adopt fresher native credentials, refresh an
    * expired token, or report a durable auth-invalid result for the current
    * stored account credential.
+   * @param call - Call context of the work that needs the credential
    * @param clientId - The client identifier to read credentials for
    * @param accountId - The account the credential must still belong to
    * @returns Prepared credential outcome, or null when unavailable
    */
-  readCredential?: (clientId: string, accountId: string) => Promise<UsagePreparedCredential | null>;
+  readCredential?: (call: CallContext, clientId: string, accountId: string) => Promise<UsagePreparedCredential | null>;
 }

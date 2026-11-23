@@ -1,14 +1,16 @@
 import type { MessageHandle, MessageResult } from '../message-handle/index.js';
-import type { SubjectDefinition, ExtractSubjectPayload } from '@makaio/core';
+import type { EmitSubject } from '@makaio/bus-core';
+import type { CallContext, SubjectDefinition, ExtractSubjectPayload } from '@makaio/core';
 import { AgentSubjects, type StructuredOutputValidation } from '@makaio/contracts';
 import type { AgentContext } from './types.js';
 
 /**
  * Emit function type for global bus emissions.
- * Matches the signature of AIAgent.emitGlobal.
+ * Matches the signature of AIAgent.emitGlobal; each emission forwards the call of the handle it describes.
  */
 type EmitGlobalFn = <S extends SubjectDefinition>(
-  subject: S,
+  call: CallContext,
+  subject: EmitSubject<S>,
   payload: Omit<ExtractSubjectPayload<S>, keyof AgentContext> & { turnId?: string },
 ) => Promise<void>;
 
@@ -208,14 +210,14 @@ export class MessageLifecycleTracker {
     }
 
     // Emit user_message.acknowledged
-    void this.emitGlobal(AgentSubjects.user_message.acknowledged, {
+    void this.emitGlobal(handle.call, AgentSubjects.user_message.acknowledged, {
       messageId,
       mergedFrom,
       ...(turnId !== undefined && { turnId }),
     });
 
     // Emit agent.turn.started (higher-level abstraction).
-    void this.emitGlobal(AgentSubjects.turn.started, {
+    void this.emitGlobal(handle.call, AgentSubjects.turn.started, {
       messageId,
       content: message,
       mergedFrom,
@@ -261,7 +263,7 @@ export class MessageLifecycleTracker {
     // false, so emitting turn.completed would produce an unpaired event that
     // breaks lifecycle consumers counting active turns.
     if (handle.wasDelivered) {
-      void this.emitGlobal(AgentSubjects.turn.completed, {
+      void this.emitGlobal(handle.call, AgentSubjects.turn.completed, {
         messageId,
         message: result.result?.message,
         outcome: result.outcome,
@@ -280,7 +282,7 @@ export class MessageLifecycleTracker {
 
     // Emit user_message.completed (always, with outcome details — message-level
     // lifecycle fires regardless of whether a provider turn started)
-    void this.emitGlobal(AgentSubjects.user_message.completed, {
+    void this.emitGlobal(handle.call, AgentSubjects.user_message.completed, {
       messageId,
       outcome: result.outcome,
       supersededBy: result.supersededBy,

@@ -10,6 +10,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { createTestCall } from '@makaio/test-utils';
 
 import { requestedShutdownError } from '../connector/connector-shutdown.js';
 import {
@@ -29,11 +30,14 @@ async function startPendingTurn(context: ConnectorTestContext): Promise<{
   readonly state: string;
   waitForCompletion(): Promise<unknown>;
 }> {
-  const handle = await context.connector.sendMessage({
-    role: 'user',
-    message: 'in flight when the shutdown was requested',
-    blocks: [{ type: 'text', content: 'in flight when the shutdown was requested' }],
-  });
+  const handle = await context.connector.sendMessage(
+    {
+      role: 'user',
+      message: 'in flight when the shutdown was requested',
+      blocks: [{ type: 'text', content: 'in flight when the shutdown was requested' }],
+    },
+    { call: createTestCall() },
+  );
   await context.mockJsonRpcClient.receiveNotification('turn/started', {
     threadId: 'thread-123',
     turn: { id: 'turn-shutdown', status: 'inProgress' },

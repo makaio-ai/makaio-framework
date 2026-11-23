@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { MakaioBus } from '../bus.js';
+import { busContextOf } from '../kernel-api.js';
 import { oncePromiseTestSetup } from './once.promise.setup.js';
 
 const setup = oncePromiseTestSetup();
@@ -12,13 +13,13 @@ describe('once - Promise overload', () => {
 
   describe('memory cleanup verification', () => {
     it('should remove handler after successful resolution', async () => {
-      const context = MakaioBus.getContext();
+      const context = busContextOf(MakaioBus);
       const promise = MakaioBus.once(EventSubjects.message);
 
       const fullSubject = 'oncePromise:events.message';
       expect(context.eventHandlers.has(fullSubject)).toBe(true);
 
-      await MakaioBus.emit(EventSubjects.message, {
+      await MakaioBus.emit(MakaioBus.own('root'), EventSubjects.message, {
         content: 'test',
         sessionId: 'session-1',
       });
@@ -29,7 +30,7 @@ describe('once - Promise overload', () => {
     });
 
     it('should not leak handlers with multiple promise instances', async () => {
-      const context = MakaioBus.getContext();
+      const context = busContextOf(MakaioBus);
 
       // Create multiple promises
       const promise1 = MakaioBus.once(EventSubjects.message, {
@@ -46,7 +47,7 @@ describe('once - Promise overload', () => {
       expect(context.eventHandlers.get(fullSubject)?.length).toBe(3);
 
       // Resolve first promise
-      await MakaioBus.emit(EventSubjects.message, {
+      await MakaioBus.emit(MakaioBus.own('root'), EventSubjects.message, {
         content: 'msg1',
         sessionId: 'session-1',
       });
@@ -54,7 +55,7 @@ describe('once - Promise overload', () => {
       expect(context.eventHandlers.get(fullSubject)?.length).toBe(2);
 
       // Resolve second promise
-      await MakaioBus.emit(EventSubjects.message, {
+      await MakaioBus.emit(MakaioBus.own('root'), EventSubjects.message, {
         content: 'msg2',
         sessionId: 'session-2',
       });
@@ -62,7 +63,7 @@ describe('once - Promise overload', () => {
       expect(context.eventHandlers.get(fullSubject)?.length).toBe(1);
 
       // Resolve third promise
-      await MakaioBus.emit(EventSubjects.message, {
+      await MakaioBus.emit(MakaioBus.own('root'), EventSubjects.message, {
         content: 'msg3',
         sessionId: 'session-3',
       });

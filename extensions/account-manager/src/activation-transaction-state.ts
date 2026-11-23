@@ -1,5 +1,15 @@
+import type { CallContext } from '@makaio/core';
+
 /** Terminal action for a prepared account activation. */
 export type ActivationTransactionDecision = 'commit' | 'rollback';
+
+/** Terminal decision together with the call of the request that finalizes the activation. */
+export interface ActivationTransactionFinalization {
+  /** Claimed terminal action. */
+  readonly action: ActivationTransactionDecision;
+  /** Call of the finalizing request, used for the storage and timeline writes of that step. */
+  readonly call: CallContext;
+}
 
 /** Stable result of committing a prepared activation. */
 export type ActivationCommitResult =
@@ -23,7 +33,7 @@ export interface DeferredValue<T> {
 
 /** Prepared activation state retained until one terminal decision. */
 export interface PendingActivationTransaction {
-  readonly decision: DeferredValue<ActivationTransactionDecision>;
+  readonly decision: DeferredValue<ActivationTransactionFinalization>;
   readonly completion: Promise<void>;
   /** Claimed terminal action retained until its completion settles. */
   finalization?: {

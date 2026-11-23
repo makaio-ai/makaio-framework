@@ -1,3 +1,4 @@
+import type { CallContext } from '@makaio/core';
 import {
   normalizeSessionOwnershipReserveStartServiceRequest,
   SessionOwnershipStorageSubjects,
@@ -74,11 +75,13 @@ function toClaimRequest(
  * composed without a machine identity could not start a fresh lead agent at
  * all, which is not an ownership decision — it is a start being refused for
  * lacking something it never uses.
+ * @param call - Handled message the reservation is performed for.
  * @param context - Composed authority context.
  * @param untrustedRequest - The reservation the caller wants.
  * @returns The reservation, or the reason it was refused.
  */
 export async function runReserveStart(
+  call: CallContext,
   context: OwnershipAuthorityContext,
   untrustedRequest: SessionOwnershipReserveStartServiceRequest,
 ): Promise<SessionOwnershipReserveStartServiceResult> {
@@ -97,7 +100,7 @@ export async function runReserveStart(
 
   const claimRequest = toClaimRequest(context, request, claimMachineId, keyless);
 
-  const result = await context.bus.request(SessionOwnershipStorageSubjects.claim, claimRequest);
+  const result = await context.bus.request(call, SessionOwnershipStorageSubjects.claim, claimRequest);
   switch (result.outcome) {
     case 'claimed':
     case 'idempotent': {

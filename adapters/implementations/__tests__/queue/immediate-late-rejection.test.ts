@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeAll, vi } from 'vitest';
 import { type AIAgentConnector, normalizeMessageInput } from '@makaio/ai-adapters-core';
+import { createTestCall } from '@makaio/test-utils';
 import { type AgentTestContext, getAdapterUnderTest, getAgentTestContext, updateMeta } from '../shared.js';
 
 const adapterName = getAdapterUnderTest();
@@ -37,7 +38,7 @@ describe('Immediate Mode: Late Rejection', { timeout: 60_000 }, async () => {
       // (Simple math prompt is fast, so immediate arrives "too late")
       const immediateHandle = await agent.sendMessage(
         normalizeMessageInput('STOP. Additional context: the answer should be in binary.'),
-        { deliveryMode: 'immediate', messageId: '22222222-2222-2222-2222-222222222222' },
+        { call: createTestCall(), deliveryMode: 'immediate', messageId: '22222222-2222-2222-2222-222222222222' },
       );
       updateMeta({ task }, 'adapterSessionId', immediateHandle.adapterSessionId!);
 
@@ -84,11 +85,13 @@ describe('Immediate Mode: Late Rejection', { timeout: 60_000 }, async () => {
 
       // Send two immediate messages (both will arrive too late)
       const immediate1 = await freshAgent.sendMessage(normalizeMessageInput('Context 1'), {
+        call: createTestCall(),
         deliveryMode: 'immediate',
       });
       updateMeta({ task }, 'adapterSessionId', immediate1.adapterSessionId!);
 
       const immediate2 = await freshAgent.sendMessage(normalizeMessageInput('Context 2'), {
+        call: createTestCall(),
         deliveryMode: 'immediate',
       });
       updateMeta({ task }, 'adapterSessionId', immediate2.adapterSessionId!);

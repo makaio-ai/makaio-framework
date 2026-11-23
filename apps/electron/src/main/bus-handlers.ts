@@ -11,6 +11,7 @@
  */
 
 import { MakaioBus } from '@makaio/bus-core';
+import type { CallContext } from '@makaio/contracts';
 import type { MakaioRuntime } from '@makaio/runtime-node';
 import { HostSubjects, registerHostNavigationHandler } from '@makaio/host-shared';
 import { UiNamespace, UiSubjects } from '@makaio/ui-kernel';
@@ -38,10 +39,11 @@ export interface BusHandlersDeps {
   cleanups: Array<() => void>;
   /**
    * Creates an Electron window and emits bus lifecycle events.
+   * @param call - Call of the message requesting the window.
    * @param options - Window creation options forwarded to WindowManager.
    * @returns Electron `BrowserWindow.id` of the created or reused window.
    */
-  createWindow: (options: CreateWindowOptions) => number;
+  createWindow: (call: CallContext, options: CreateWindowOptions) => number;
   /** Qualified registration ID for the dashboard window opened by tray/UI affordances. */
   dashboardRegistrationId: string;
   /**
@@ -114,7 +116,7 @@ export function registerAllBusHandlers(deps: BusHandlersDeps): void {
 
   cleanups.push(
     MakaioBus.on(HostSubjects.window.create, (ctx) => {
-      const windowId = createWindow(ctx.payload);
+      const windowId = createWindow(ctx.call, ctx.payload);
       ctx.setResult({ windowId });
     }),
   );
@@ -176,18 +178,18 @@ export function registerAllBusHandlers(deps: BusHandlersDeps): void {
 
   cleanups.push(
     registerWindowsBusHandlers(MakaioBus, {
-      createWindow: (id) => createWindow({ registrationId: id }),
+      createWindow: (call: CallContext, id: string) => createWindow(call, { registrationId: id }),
       dashboardRegistrationId,
       findWindow: (id) => getWindowManager().findWindowByRegistrationId(id),
       focusWindow: (id) => getWindowManager().focusWindow(id),
       focusAnyWindow: () => getWindowManager().focusMostRecentWindow(),
-      openDefaultWindow: () => createWindow({ registrationId: dashboardRegistrationId }),
+      openDefaultWindow: (call: CallContext) => createWindow(call, { registrationId: dashboardRegistrationId }),
       onRestoreFromBackground,
     }),
   );
 
   const unregisterNavigation = registerHostNavigationHandler(MakaioBus, {
-    createWindow: (opts) => createWindow(opts),
+    createWindow,
     windowManager: getWindowManager(),
     windowRegistry: runtime.windowRegistry,
   });

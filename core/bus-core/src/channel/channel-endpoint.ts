@@ -1,6 +1,6 @@
 import { createBusNamespace } from '@makaio/core';
 import type { IDirectChannel, ChannelEndpoint, ChannelEndpointOptions } from './types.js';
-import type { MakaioBusContext } from '../types/bus.js';
+import type { IMakaioBus, MakaioBusContext } from '../types/bus.js';
 import type { RequestMessagePayload, SubjectDefinition } from '@makaio/core';
 import type { BusTransportKeys } from '../registries/transport-registry.js';
 import { generateKeyPair, exportPublicKey, importPublicKey, deriveSharedKey } from './crypto.js';
@@ -8,7 +8,11 @@ import { ChannelAuthError } from '../errors/channel-auth-error.js';
 import { SystemChannelSchemas, type ChannelOpenRequest, type ChannelOpenResponse } from './system-namespace.js';
 import { DirectChannel } from './direct-channel.js';
 import { on as internalOn } from '../methods/on.js';
-import { request as internalRequest } from '../methods/request.js';
+import { requestWithMintedCall } from '../methods/request.js';
+import { own as ownContextOf } from '../call-context/carrier.js';
+import { enterSend } from '../call-context/send-entry.js';
+import { busCarrierOf, busContextOf } from '../bus-instance.js';
+import { getFullSubjectForSubjectDefinition } from '../utils/subject-transformation.js';
 
 /**
  * The domain under which the system channel subjects are registered.
@@ -55,8 +59,9 @@ function ensureSystemNamespace(context: MakaioBusContext): ChannelOpenSubjectDef
  * 4. Returns the channel ID and the endpoint public key to the client.
  *
  * Multiple endpoints can coexist on the same bus context; each handles only
- * requests whose `payload.endpoint` matches its own name.
- * @param context - Bus context to register the endpoint handler on
+ * requests whose `payload.endpoint` matches its own name. The endpoint handler and
+ * every channel created for it are owned by the carrier of `bus`.
+ * @param bus - Bus instance to register the endpoint handler on
  * @param endpointName - Logical name for this endpoint (e.g., 'credentials')
  * @param callback - Called with the new {@link IDirectChannel} once the handshake
  *   is complete; use this to register channel handlers before the client receives
@@ -65,14 +70,16 @@ function ensureSystemNamespace(context: MakaioBusContext): ChannelOpenSubjectDef
  * @returns A {@link ChannelEndpoint} handle whose `close()` unregisters the endpoint
  */
 export function createChannelEndpoint(
-  context: MakaioBusContext,
+  bus: IMakaioBus,
   endpointName: string,
   callback: (channel: IDirectChannel) => void,
   options: ChannelEndpointOptions,
 ): ChannelEndpoint {
+  const context = busContextOf(bus);
+  const carrier = busCarrierOf(bus);
   const channelOpenSubject = ensureSystemNamespace(context);
 
-  const unsub = internalOn(context, channelOpenSubject, async (ctx) => {
+  const unsub = internalOn(context, carrier, channelOpenSubject, async (ctx) => {
     // Let other registered endpoints handle requests not addressed to us.
     if (ctx.payload.endpoint !== endpointName) {
       await ctx.next();
@@ -93,7 +100,7 @@ export function createChannelEndpoint(
     // unknown or stale transport names from reaching the DirectChannel.
     const knownTransports = new Set(context.transportRegistry.names());
     const validTransports = (ctx.payload.transports ?? []).filter((t) => knownTransports.has(t as BusTransportKeys));
-    const channel = new DirectChannel(channelId, sharedKey, context, validTransports as BusTransportKeys[]);
+    const channel = new DirectChannel(channelId, sharedKey, context, carrier, validTransports as BusTransportKeys[]);
     try {
       callback(channel);
 
@@ -135,8 +142,9 @@ export function createChannelEndpoint(
  * endpoint can reside in a different process. Pass `transports: []` to restrict
  * the handshake (and the resulting channel) to the local process only — this is
  * the correct choice whenever both sides are guaranteed to share the same bus
- * context (e.g., credential service and its same-process callers).
- * @param context - Bus context to use for the handshake request
+ * context (e.g., credential service and its same-process callers). The channel
+ * belongs to the carrier of `bus`.
+ * @param bus - Bus instance to open the channel on
  * @param endpointName - Logical name of the endpoint to connect to
  * @param options - Connection options including the shared capability token and
  *   an optional transport allowlist (`transports: []` for local-only)
@@ -146,10 +154,12 @@ export function createChannelEndpoint(
  * @throws \{NoHandlerError\} If no endpoint with the given name is registered
  */
 export async function openChannel(
-  context: MakaioBusContext,
+  bus: IMakaioBus,
   endpointName: string,
   options: { token: string; transports?: ReadonlyArray<BusTransportKeys> },
 ): Promise<IDirectChannel> {
+  const context = busContextOf(bus);
+  const carrier = busCarrierOf(bus);
   const channelOpenSubject = ensureSystemNamespace(context);
 
   const { publicKey, privateKey } = await generateKeyPair();
@@ -175,8 +185,17 @@ export async function openChannel(
   // than probing every registered transport with the capability token.
   const requestOptions = hasExplicitTransports ? { transports: effectiveTransports } : undefined;
 
-  const response = await internalRequest(
+  // The key exchange is protocol traffic of the channel, sent by its carrier: the
+  // carrier's own `observer` context enters like any other send.
+  const handshake = enterSend(
+    ownContextOf(context, carrier, 'observer'),
     context,
+    carrier,
+    getFullSubjectForSubjectDefinition(channelOpenSubject),
+  );
+  const response = await requestWithMintedCall(
+    context,
+    handshake,
     channelOpenSubject,
     // effectiveTransports is cast to string[] to satisfy the wire schema; the endpoint
     // side casts it back to BusTransportKeys[] after the handshake.
@@ -186,5 +205,5 @@ export async function openChannel(
 
   const peerKey = await importPublicKey(response.endpointPubKey);
   const sharedKey = await deriveSharedKey(privateKey, peerKey);
-  return new DirectChannel(response.channelId, sharedKey, context, effectiveTransports);
+  return new DirectChannel(response.channelId, sharedKey, context, carrier, effectiveTransports);
 }

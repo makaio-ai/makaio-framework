@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import type { CallContext } from '@makaio/core';
 import { WorkflowDefinitionSchema, WorkflowExecutionScopeSchema } from './schemas.js';
 import { JsonObjectContractSchema, JsonValueSchema } from '../shared/json-value.js';
 import { WorkflowArtifactRefSchema } from './artifact-ref.js';
@@ -461,6 +462,7 @@ export interface IWorkflowRunner {
    * into the runner at construction time, enabling per-call contribution
    * sets (e.g. when the Worker pool dispatches with a request-specific
    * manifest). Callers that do not need per-call control may omit it.
+   * @param call - Call context of the execution that starts the run; runners that hand work to another host forward it to every send.
    * @param config - Full workflow worker configuration including source, inputs, and bus info.
    * @param signal - AbortSignal for cooperative cancellation.
    * @param manifest - Optional per-call contribution manifest. Overrides the runner's default.
@@ -468,6 +470,7 @@ export interface IWorkflowRunner {
    * @returns Completion envelope indicating whether the result needs host finalization.
    */
   run(
+    call: CallContext,
     config: WorkflowWorkerConfig,
     signal: AbortSignal,
     manifest?: WorkerContributionManifest,

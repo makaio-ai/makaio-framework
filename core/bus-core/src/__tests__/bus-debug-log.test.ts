@@ -5,7 +5,8 @@
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { SubjectDefinition } from '@makaio/core';
-import { createBusContext, createBusInstance } from '../bus.js';
+import { createBusInstance } from '../bus.js';
+import { busContextOf, createBusContext } from '../kernel-api.js';
 import { dispatch } from '../methods/request/dispatch.js';
 import type { BusMessage, BusTransport, BusTransportKeys } from '../index.js';
 
@@ -45,9 +46,10 @@ describe('createBusInstance debugLog option', () => {
     const consoleSpy = vi.spyOn(console, 'debug').mockImplementation(() => undefined);
     const sink = vi.fn();
     const bus = createBusInstance({ debugLog: sink });
-    const registration = bus
-      .getContext()
-      .transportRegistry.registerTransport('failing' as BusTransportKeys, createFailingHandshakeTransport('failing'));
+    const registration = busContextOf(bus).transportRegistry.registerTransport(
+      'failing' as BusTransportKeys,
+      createFailingHandshakeTransport('failing'),
+    );
     try {
       await settle();
       expect(sink).toHaveBeenCalledTimes(1);
@@ -70,17 +72,18 @@ describe('createBusInstance debugLog option', () => {
       ...createFailingHandshakeTransport('pending'),
       ready: new Promise<void>(() => {}), // never settles
     };
-    const registration = bus.getContext().transportRegistry.registerTransport('pending' as BusTransportKeys, pending);
+    const registration = busContextOf(bus).transportRegistry.registerTransport('pending' as BusTransportKeys, pending);
     const definition: SubjectDefinition = {
       subject: 'debugLogBudget',
       $meta: { namespace: 'debuglog', isRequest: true, payload: {} as never, local: false, channel: false },
     };
     try {
       await dispatch(
-        bus.getContext(),
+        busContextOf(bus),
         definition,
         {},
         {
+          call: bus.own('root'),
           correlationId: 'c',
           messageId: 'm',
           timeout: 5_000,
@@ -103,9 +106,10 @@ describe('createBusInstance debugLog option', () => {
     const optionSink = vi.fn();
     const context = createBusContext(contextSink);
     const bus = createBusInstance({ context, debugLog: optionSink });
-    const registration = bus
-      .getContext()
-      .transportRegistry.registerTransport('failing' as BusTransportKeys, createFailingHandshakeTransport('failing'));
+    const registration = busContextOf(bus).transportRegistry.registerTransport(
+      'failing' as BusTransportKeys,
+      createFailingHandshakeTransport('failing'),
+    );
     try {
       await settle();
       expect(optionSink).toHaveBeenCalledTimes(1);
@@ -119,9 +123,10 @@ describe('createBusInstance debugLog option', () => {
   it('keeps the context sink when no option is given', async () => {
     const contextSink = vi.fn();
     const bus = createBusInstance({ context: createBusContext(contextSink) });
-    const registration = bus
-      .getContext()
-      .transportRegistry.registerTransport('failing' as BusTransportKeys, createFailingHandshakeTransport('failing'));
+    const registration = busContextOf(bus).transportRegistry.registerTransport(
+      'failing' as BusTransportKeys,
+      createFailingHandshakeTransport('failing'),
+    );
     try {
       await settle();
       expect(contextSink).toHaveBeenCalledTimes(1);
@@ -144,7 +149,10 @@ describe('createBusInstance debugLog option', () => {
     };
     const sink = vi.fn();
     const bus = createBusInstance({ debugLog: sink });
-    const registration = bus.getContext().transportRegistry.registerTransport('hostile' as BusTransportKeys, transport);
+    const registration = busContextOf(bus).transportRegistry.registerTransport(
+      'hostile' as BusTransportKeys,
+      transport,
+    );
     try {
       await settle();
       expect(sink).toHaveBeenCalledTimes(1);

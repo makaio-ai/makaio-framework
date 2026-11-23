@@ -14,6 +14,7 @@ import { appendFile, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
 import { MakaioBus } from '@makaio/bus-core';
+import { createTestCall } from '@makaio/test-utils';
 import {
   ImportCursorStorageSubjects,
   type ProcessLogFileResult,
@@ -216,6 +217,7 @@ describe('importFromFileContent (integration)', () => {
     const { importUpserts, messageUpserts, importStatusUpdates, sessionUpdates } = registerStorageHandlers();
 
     const result = await importFromFileContent({
+      call: createTestCall(),
       bus: MakaioBus,
       importer: fixture.importer,
       content: fixture.sessionContent,
@@ -277,6 +279,7 @@ describe('importFromFileContent (integration)', () => {
     const { messageUpserts, importStatusUpdates } = registerStorageHandlers();
 
     const result = await importFromFileContent({
+      call: createTestCall(),
       bus: MakaioBus,
       importer: fixture.importer,
       content: fixture.sessionContent,
@@ -305,6 +308,7 @@ describe('importFromFileContent (integration)', () => {
     const { importUpserts } = registerStorageHandlers();
 
     await importFromFileContent({
+      call: createTestCall(),
       bus: MakaioBus,
       importer: fixture.importer,
       content: fixture.sessionContent,
@@ -334,6 +338,7 @@ describe('importFromFileContent (integration)', () => {
     const { cursorSets } = registerStorageHandlers();
 
     await importFromFileContent({
+      call: createTestCall(),
       bus: MakaioBus,
       importer: fixture.importer,
       content: fixture.sessionContent,
@@ -413,6 +418,7 @@ describe('importFromFileContent (integration)', () => {
     const { cursorSets } = registerStorageHandlers();
 
     await importFromFileContent({
+      call: createTestCall(),
       bus: MakaioBus,
       importer,
       content,
@@ -441,6 +447,7 @@ describe('importFromFileContent (integration)', () => {
     await appendFile(fixture.sessionFilePath, '\n{"unparsed":"growth"}');
 
     await importFromFileContent({
+      call: createTestCall(),
       bus: MakaioBus,
       importer: fixture.importer,
       content: fixture.sessionContent,
@@ -471,6 +478,7 @@ describe('importFromFileContent (integration)', () => {
     const relativeLogPath = basename(fixture.sessionFilePath);
 
     await importFromFileContent({
+      call: createTestCall(),
       bus: MakaioBus,
       importer: fixture.importer,
       content: fixture.sessionContent,
@@ -497,6 +505,7 @@ describe('importFromFileContent (integration)', () => {
     const { cursorSets, importUpserts } = registerStorageHandlers();
 
     await importFromFileContent({
+      call: createTestCall(),
       bus: MakaioBus,
       importer: fixture.importer,
       content: fixture.sessionContent,
@@ -642,6 +651,7 @@ describe('importFromFileContent (integration)', () => {
       .join('\n');
 
     const firstImport = await importFromFileContent({
+      call: createTestCall(),
       bus: MakaioBus,
       importer,
       content,
@@ -651,6 +661,7 @@ describe('importFromFileContent (integration)', () => {
     });
 
     const secondImport = await importFromFileContent({
+      call: createTestCall(),
       bus: MakaioBus,
       importer,
       content,
@@ -712,7 +723,7 @@ describe('importFromFileContent (integration)', () => {
       ],
     };
 
-    await importSegmentTree(MakaioBus, segment, {
+    await importSegmentTree(createTestCall(), MakaioBus, segment, {
       adapterId: 'adapter-startedat-test',
       adapterName: ADAPTER_NAME,
       model: null,
@@ -733,6 +744,7 @@ describe('importFromFileContent (integration)', () => {
     const { importUpserts } = registerStorageHandlers();
 
     await importFromFileContent({
+      call: createTestCall(),
       bus: MakaioBus,
       importer: fixture.importer,
       content: fixture.sessionContent,
@@ -758,6 +770,7 @@ describe('importFromFileContent (integration)', () => {
     const { importUpserts } = registerStorageHandlers();
 
     await importFromFileContent({
+      call: createTestCall(),
       bus: MakaioBus,
       importer: fixture.importer,
       content: fixture.sessionContent,
@@ -796,7 +809,7 @@ describe('importFromFileContent (integration)', () => {
       ],
     };
 
-    await importSegmentTree(MakaioBus, segment, {
+    await importSegmentTree(createTestCall(), MakaioBus, segment, {
       adapterId: 'adapter-machineid-test',
       adapterName: ADAPTER_NAME,
       model: null,

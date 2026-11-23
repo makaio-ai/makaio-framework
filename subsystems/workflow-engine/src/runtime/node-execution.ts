@@ -1,3 +1,4 @@
+import type { CallContext } from '@makaio/core';
 import { evaluateSync } from '@makaio/expression';
 import type {
   JsonValue,
@@ -58,51 +59,64 @@ export type NodeOutcome =
  *
  * Must be called after the abort-signal check and condition evaluation
  * so that frames are only emitted for nodes that actually execute.
+ * @param call - Call context of the message that drives this execution run.
  * @param frame - The frame to start (mutated in place).
  * @param ctx - Runtime context used for event emission.
  */
-export async function startFrame(frame: WorkflowFrameState, ctx: RuntimeContext): Promise<void> {
+export async function startFrame(call: CallContext, frame: WorkflowFrameState, ctx: RuntimeContext): Promise<void> {
   // Direct mutations are sufficient — frame is the same reference stored in frameRegistry.
   frame.status = 'running';
   frame.startedAt = Date.now();
-  await ctx.persistFrame(frame);
-  await ctx.emitFrameStarted(frame);
+  await ctx.persistFrame(call, frame);
+  await ctx.emitFrameStarted(call, frame);
 }
 
 /**
  * Transition a frame to `completed`, persist the output and timestamps,
  * and emit the `frame.completed` bus event.
+ * @param call - Call context of the message that drives this execution run.
  * @param frame - The frame to complete (mutated in place).
  * @param ctx - Runtime context used for event emission.
  * @param output - JSON-serializable output produced by the node.
  */
-export async function completeFrame(frame: WorkflowFrameState, ctx: RuntimeContext, output?: JsonValue): Promise<void> {
+export async function completeFrame(
+  call: CallContext,
+  frame: WorkflowFrameState,
+  ctx: RuntimeContext,
+  output?: JsonValue,
+): Promise<void> {
   const completedAt = Date.now();
   const durationMs = frame.startedAt !== undefined ? Math.max(0, completedAt - frame.startedAt) : undefined;
   // Direct mutations are sufficient — frame is the same reference stored in frameRegistry.
   frame.status = 'completed';
   frame.output = output;
   frame.completedAt = completedAt;
-  await ctx.persistFrame(frame);
-  await ctx.emitFrameCompleted(frame, durationMs);
+  await ctx.persistFrame(call, frame);
+  await ctx.emitFrameCompleted(call, frame, durationMs);
 }
 
 /**
  * Transition a frame to `failed`, persist the error and timestamps,
  * and emit the `frame.failed` bus event.
+ * @param call - Call context of the message that drives this execution run.
  * @param frame - The frame to fail (mutated in place).
  * @param ctx - Runtime context used for event emission.
  * @param error - Human-readable failure reason.
  */
-export async function failFrame(frame: WorkflowFrameState, ctx: RuntimeContext, error: string): Promise<void> {
+export async function failFrame(
+  call: CallContext,
+  frame: WorkflowFrameState,
+  ctx: RuntimeContext,
+  error: string,
+): Promise<void> {
   const completedAt = Date.now();
   const durationMs = frame.startedAt !== undefined ? Math.max(0, completedAt - frame.startedAt) : undefined;
   // Direct mutations are sufficient — frame is the same reference stored in frameRegistry.
   frame.status = 'failed';
   frame.error = error;
   frame.completedAt = completedAt;
-  await ctx.persistFrame(frame);
-  await ctx.emitFrameFailed(frame, error, durationMs);
+  await ctx.persistFrame(call, frame);
+  await ctx.emitFrameFailed(call, frame, error, durationMs);
 }
 
 /**
@@ -110,14 +124,15 @@ export async function failFrame(frame: WorkflowFrameState, ctx: RuntimeContext, 
  *
  * Skipped frames do not emit `frame.started` because the node never ran.
  * No bus event is emitted — the status is visible only via the frame registry.
+ * @param call - Call context of the message that drives this execution run.
  * @param frame - The frame to skip (mutated in place).
  * @param ctx - Runtime context used for frame persistence.
  */
-export async function skipFrame(frame: WorkflowFrameState, ctx: RuntimeContext): Promise<void> {
+export async function skipFrame(call: CallContext, frame: WorkflowFrameState, ctx: RuntimeContext): Promise<void> {
   // Direct mutations are sufficient — frame is the same reference stored in frameRegistry.
   frame.status = 'skipped';
   frame.completedAt = Date.now();
-  await ctx.persistFrame(frame);
+  await ctx.persistFrame(call, frame);
 }
 
 /**
@@ -125,14 +140,15 @@ export async function skipFrame(frame: WorkflowFrameState, ctx: RuntimeContext):
  *
  * Cancelled frames do not emit `frame.started` because the node never ran.
  * No bus event is emitted — the status is visible only via the frame registry.
+ * @param call - Call context of the message that drives this execution run.
  * @param frame - The frame to cancel (mutated in place).
  * @param ctx - Runtime context used for frame persistence.
  */
-export async function cancelFrame(frame: WorkflowFrameState, ctx: RuntimeContext): Promise<void> {
+export async function cancelFrame(call: CallContext, frame: WorkflowFrameState, ctx: RuntimeContext): Promise<void> {
   // Direct mutations are sufficient — frame is the same reference stored in frameRegistry.
   frame.status = 'cancelled';
   frame.completedAt = Date.now();
-  await ctx.persistFrame(frame);
+  await ctx.persistFrame(call, frame);
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -166,6 +182,7 @@ export function evaluateNodeCondition(expression: string, expressionCtx: Primiti
  * dependency.
  */
 export type ExecuteSequenceFn = (
+  call: CallContext,
   node: WorkflowSequenceNode,
   ctx: RuntimeContext,
   expressionCtx: PrimitiveExpressionContext,
@@ -188,6 +205,7 @@ export type ExecuteSequenceFn = (
  * avoid a circular module-level import between this file and
  * `primitive-runtime.ts`. Both files depend on each other at the function
  * level; injecting the dependency at the call-site breaks the cycle cleanly.
+ * @param call - Call context of the message that drives this execution run.
  * @param node - The workflow node to execute.
  * @param ctx - Execution-wide runtime context.
  * @param expressionCtx - Current expression evaluation context.
@@ -199,6 +217,7 @@ export type ExecuteSequenceFn = (
  * @returns Terminal execution outcome for this node.
  */
 export async function executeNode(
+  call: CallContext,
   node: WorkflowNode,
   ctx: RuntimeContext,
   expressionCtx: PrimitiveExpressionContext,
@@ -215,22 +234,23 @@ export async function executeNode(
 
   switch (node.type) {
     case 'sequence':
-      return executeSequenceFn(node as WorkflowSequenceNode, ctx, expressionCtx, currentFrameId, parentPath);
+      return executeSequenceFn(call, node as WorkflowSequenceNode, ctx, expressionCtx, currentFrameId, parentPath);
 
     case 'station':
-      return executeStationNode(node as WorkflowStationNode, ctx, expressionCtx, currentFrameId);
+      return executeStationNode(call, node as WorkflowStationNode, ctx, expressionCtx, currentFrameId);
 
     case 'delegate-agent':
-      return executeDelegateAgentNode(node as WorkflowDelegateAgentNode, ctx, expressionCtx, currentFrameId);
+      return executeDelegateAgentNode(call, node as WorkflowDelegateAgentNode, ctx, expressionCtx, currentFrameId);
 
     case 'delegate-role':
-      return executeDelegateRoleNode(node as WorkflowDelegateRoleNode, ctx, expressionCtx, currentFrameId);
+      return executeDelegateRoleNode(call, node as WorkflowDelegateRoleNode, ctx, expressionCtx, currentFrameId);
 
     case 'parallel':
       // The parallel node's own frame is created by the sequence loop in
       // primitive-runtime.ts before executeNode is called. The current frame
       // ID and path are forwarded as parentFrameId/parentPath for branch frames.
       return executeParallelNode(
+        call,
         node as WorkflowParallelNode,
         ctx,
         expressionCtx,
@@ -245,10 +265,11 @@ export async function executeNode(
       // primitive-runtime.ts before executeNode is called. The current frame
       // ID is forwarded so the gate executor can update frame
       // state while suspended.
-      return executeGateNode(node as WorkflowGateNode, ctx, expressionCtx, currentFrameId ?? '');
+      return executeGateNode(call, node as WorkflowGateNode, ctx, expressionCtx, currentFrameId ?? '');
 
     case 'iterate':
       return executeIterateNode(
+        call,
         node as WorkflowIterateNode,
         ctx,
         expressionCtx,
@@ -259,6 +280,7 @@ export async function executeNode(
 
     case 'iterate-chain':
       return executeIterateChainNode(
+        call,
         node as WorkflowIterateChainNode,
         ctx,
         expressionCtx,
@@ -269,6 +291,7 @@ export async function executeNode(
 
     case 'loop':
       return executeLoopNode(
+        call,
         node as WorkflowLoopNode,
         ctx,
         expressionCtx,

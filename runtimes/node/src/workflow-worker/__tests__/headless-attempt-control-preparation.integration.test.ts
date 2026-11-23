@@ -101,6 +101,7 @@ describe('runHeadlessWorkflowWorker attempt-control — R1: cancel before first 
 
     // ── Assert 3: reconcile has no registered runtime to deliver to ────────
     const reconcileResult = await reconcileAttemptCancellation(
+      authoritySide.bus.own('schedule'),
       { bus: authoritySide.bus, authority: authoritySide.attempt.authority },
       { executionId, executionAttemptId, timeoutMs: 5_000 },
     );
@@ -167,6 +168,7 @@ describe('runHeadlessWorkflowWorker attempt-control — R1: cancel before first 
       requestKey: 'r1b-cancel',
     });
     const reconcileResult = await reconcileAttemptCancellation(
+      authoritySide.bus.own('schedule'),
       { bus: authoritySide.bus, authority },
       { executionId, executionAttemptId, timeoutMs: 10_000 },
     );
@@ -291,6 +293,7 @@ describe('runHeadlessWorkflowWorker attempt-control — R1c: admission refused b
       requestKey: 'r1c-cancel',
     });
     const reconcileResult = await reconcileAttemptCancellation(
+      authoritySide.bus.own('schedule'),
       { bus: authoritySide.bus, authority },
       { executionId, executionAttemptId, timeoutMs: 10_000 },
     );
@@ -421,6 +424,7 @@ describe('runHeadlessWorkflowWorker attempt-control — R2: cancel during pendin
       requestKey: 'r2-cancel',
     });
     const reconcileResult = await reconcileAttemptCancellation(
+      authoritySide.bus.own('schedule'),
       { bus: authoritySide.bus, authority },
       { executionId, executionAttemptId, timeoutMs: 10_000 },
     );
@@ -574,6 +578,7 @@ describe('runHeadlessWorkflowWorker attempt-control — R5: setup exits naturall
       requestKey: 'r5-cancel',
     });
     const reconcileResult = await reconcileAttemptCancellation(
+      authoritySide.bus.own('schedule'),
       { bus: authoritySide.bus, authority: authoritySide.attempt.authority },
       { executionId, executionAttemptId, timeoutMs: 10_000 },
     );
@@ -673,6 +678,7 @@ describe('runHeadlessWorkflowWorker attempt-control — R6: report.operationId c
       requestKey: 'r6-cancel',
     });
     const reconcileResult = await reconcileAttemptCancellation(
+      authoritySide.bus.own('schedule'),
       { bus: authoritySide.bus, authority: authoritySide.attempt.authority },
       { executionId, executionAttemptId, timeoutMs: 10_000 },
     );
@@ -781,6 +787,7 @@ describe('runHeadlessWorkflowWorker attempt-control — R7: prepared-workspace r
       requestKey: 'r7-cancel',
     });
     const reconcileResult = await reconcileAttemptCancellation(
+      authoritySide.bus.own('schedule'),
       { bus: authoritySide.bus, authority },
       { executionId, executionAttemptId, timeoutMs: 10_000 },
     );
@@ -887,6 +894,7 @@ describe('runHeadlessWorkflowWorker attempt-control — R8: empty setup recipe',
       requestKey: 'r8-cancel',
     });
     const reconcileResult = await reconcileAttemptCancellation(
+      authoritySide.bus.own('schedule'),
       { bus: authoritySide.bus, authority },
       { executionId, executionAttemptId, timeoutMs: 10_000 },
     );

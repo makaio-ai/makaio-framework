@@ -1,12 +1,13 @@
 /**
  * Tests for registerHostNavigationHandler.
  *
- * Uses an isolated bus instance (createBusInstance + createBusContext) so
+ * Uses an isolated bus instance (createBusInstance) so
  * tests are independent of the global MakaioBus singleton state.
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { createBusContext, createBusInstance, type IMakaioBus } from '@makaio/bus-core';
+import { createBusInstance, type IMakaioBus } from '@makaio/bus-core';
+import { createTestCall } from '@makaio/test-utils';
 import { UiSubjects } from '@makaio/ui-kernel';
 import type { WindowManagerState } from '../src/window-session.js';
 import type { WindowRegistry } from '@makaio/kernel';
@@ -35,7 +36,7 @@ describe('registerHostNavigationHandler', () => {
   let cleanup: () => void;
 
   beforeEach(() => {
-    bus = createBusInstance({ context: createBusContext() });
+    bus = createBusInstance();
     windowRegistry = buildTestRegistry();
   });
 
@@ -44,24 +45,29 @@ describe('registerHostNavigationHandler', () => {
   });
 
   it('creates a new window for a recognised URL with an empty window list', async () => {
+    const call = createTestCall();
     const createWindow = vi.fn(() => 1);
     const windowManager = createWindowManagerStub();
 
     cleanup = registerHostNavigationHandler(bus, { createWindow, windowManager, windowRegistry });
 
-    const result = await bus.request(UiSubjects.navigate, {
+    const result = await bus.request(call, UiSubjects.navigate, {
       url: '/apps/test-app.editor/main?projectId=abc-123',
     });
 
     expect(createWindow).toHaveBeenCalledOnce();
-    expect(createWindow).toHaveBeenCalledWith({
-      registrationId: 'test-app.editor:main',
-      params: { projectId: 'abc-123' },
-    });
+    expect(createWindow).toHaveBeenCalledWith(
+      { ...call, caller: bus.own('observer').caller },
+      {
+        registrationId: 'test-app.editor:main',
+        params: { projectId: 'abc-123' },
+      },
+    );
     expect(result).toEqual({ action: 'opened' });
   });
 
   it('focuses an existing window when a matching window is already open', async () => {
+    const call = createTestCall();
     const createWindow = vi.fn(() => 42);
     const existingWindow: WindowManagerState = {
       windowId: 42,
@@ -74,7 +80,7 @@ describe('registerHostNavigationHandler', () => {
 
     cleanup = registerHostNavigationHandler(bus, { createWindow, windowManager, windowRegistry });
 
-    const result = await bus.request(UiSubjects.navigate, {
+    const result = await bus.request(call, UiSubjects.navigate, {
       url: '/apps/test-app.editor/main?projectId=abc-123',
     });
 
@@ -85,6 +91,7 @@ describe('registerHostNavigationHandler', () => {
   });
 
   it('focuses an existing singleton window for a singleton registration', async () => {
+    const call = createTestCall();
     const createWindow = vi.fn(() => 7);
     const existingWindow: WindowManagerState = {
       windowId: 7,
@@ -96,7 +103,7 @@ describe('registerHostNavigationHandler', () => {
 
     cleanup = registerHostNavigationHandler(bus, { createWindow, windowManager, windowRegistry });
 
-    const result = await bus.request(UiSubjects.navigate, { url: '/apps/test-app.monitor/main' });
+    const result = await bus.request(call, UiSubjects.navigate, { url: '/apps/test-app.monitor/main' });
 
     expect(windowManager.focusWindow).toHaveBeenCalledOnce();
     expect(windowManager.focusWindow).toHaveBeenCalledWith(7);
@@ -107,6 +114,7 @@ describe('registerHostNavigationHandler', () => {
   it('opens a new window when only a session-bound window of the same type is open', async () => {
     // Regression test: a request for a window with no params must NOT focus a
     // session-bound window of the same type — it must open a fresh paramless window.
+    const call = createTestCall();
     const createWindow = vi.fn(() => 99);
     const sessionBoundWindow: WindowManagerState = {
       windowId: 5,
@@ -119,18 +127,22 @@ describe('registerHostNavigationHandler', () => {
 
     cleanup = registerHostNavigationHandler(bus, { createWindow, windowManager, windowRegistry });
 
-    const result = await bus.request(UiSubjects.navigate, { url: '/apps/test-app.editor/main' });
+    const result = await bus.request(call, UiSubjects.navigate, { url: '/apps/test-app.editor/main' });
 
     expect(createWindow).toHaveBeenCalledOnce();
-    expect(createWindow).toHaveBeenCalledWith({
-      registrationId: 'test-app.editor:main',
-      params: undefined,
-    });
+    expect(createWindow).toHaveBeenCalledWith(
+      { ...call, caller: bus.own('observer').caller },
+      {
+        registrationId: 'test-app.editor:main',
+        params: undefined,
+      },
+    );
     expect(windowManager.focusWindow).not.toHaveBeenCalled();
     expect(result).toEqual({ action: 'opened' });
   });
 
   it('focuses a window with the matching sessionId', async () => {
+    const call = createTestCall();
     const createWindow = vi.fn(() => 55);
     const matchingWindow: WindowManagerState = {
       windowId: 55,
@@ -143,7 +155,7 @@ describe('registerHostNavigationHandler', () => {
 
     cleanup = registerHostNavigationHandler(bus, { createWindow, windowManager, windowRegistry });
 
-    const result = await bus.request(UiSubjects.navigate, {
+    const result = await bus.request(call, UiSubjects.navigate, {
       url: '/apps/test-app.editor/main?sessionId=session-456',
     });
 
@@ -154,19 +166,24 @@ describe('registerHostNavigationHandler', () => {
   });
 
   it('resolves /apps/:packageName/:windowId routes via registry', async () => {
+    const call = createTestCall();
     const createWindow = vi.fn(() => 1);
     const windowManager = createWindowManagerStub();
 
     cleanup = registerHostNavigationHandler(bus, { createWindow, windowManager, windowRegistry });
 
-    const result = await bus.request(UiSubjects.navigate, { url: '/apps/test-app.dashboard/main' });
+    const result = await bus.request(call, UiSubjects.navigate, { url: '/apps/test-app.dashboard/main' });
 
     expect(createWindow).toHaveBeenCalledOnce();
-    expect(createWindow).toHaveBeenCalledWith(expect.objectContaining({ registrationId: 'test-app.dashboard:main' }));
+    expect(createWindow).toHaveBeenCalledWith(
+      { ...call, caller: bus.own('observer').caller },
+      expect.objectContaining({ registrationId: 'test-app.dashboard:main' }),
+    );
     expect(result).toEqual({ action: 'opened' });
   });
 
   it('falls through for ambiguous /apps/:packageName routes without an explicit window id', async () => {
+    const call = createTestCall();
     const createWindow = vi.fn(() => 1);
     const windowManager = createWindowManagerStub();
 
@@ -181,7 +198,7 @@ describe('registerHostNavigationHandler', () => {
     );
 
     try {
-      const result = await bus.request(UiSubjects.navigate, { url: '/apps/unknown-package' });
+      const result = await bus.request(call, UiSubjects.navigate, { url: '/apps/unknown-package' });
 
       expect(createWindow).not.toHaveBeenCalled();
       expect(windowManager.focusWindow).not.toHaveBeenCalled();
@@ -192,6 +209,7 @@ describe('registerHostNavigationHandler', () => {
   });
 
   it('falls through to lower-priority handlers for unrecognised URLs', async () => {
+    const call = createTestCall();
     const createWindow = vi.fn(() => 1);
     const windowManager = createWindowManagerStub();
 
@@ -207,7 +225,7 @@ describe('registerHostNavigationHandler', () => {
     );
 
     try {
-      const result = await bus.request(UiSubjects.navigate, { url: '/unknown' });
+      const result = await bus.request(call, UiSubjects.navigate, { url: '/unknown' });
 
       expect(createWindow).not.toHaveBeenCalled();
       expect(windowManager.focusWindow).not.toHaveBeenCalled();

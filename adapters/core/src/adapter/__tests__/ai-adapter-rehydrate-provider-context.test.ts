@@ -14,6 +14,7 @@ import {
 } from '@makaio/services-core/adapter-subsystem';
 import { buildStoredCredentialRef } from '@makaio/contracts/config';
 import { AgentStorageSubjects } from '@makaio/services-core/session';
+import { createTestCall } from '@makaio/test-utils';
 import {
   MockConnector,
   TestAdapter,
@@ -130,6 +131,7 @@ function createManagedRehydrateAdapter(events: string[], connectors: RehydrateLi
   return createTestAdapterShared('test-adapter-managed-rehydrate', {
     configFactory: async (input) => ({
       bus: input.bus,
+      globalBus: input.globalBus,
       agentId: input.agentId,
       adapterId: input.adapterId,
       adapterName: input.adapterName,
@@ -143,7 +145,7 @@ function createManagedRehydrateAdapter(events: string[], connectors: RehydrateLi
       connectors.push(connector);
       return connector;
     },
-    prepareAuthRuntime: async (config) => {
+    prepareAuthRuntime: async (_call, config) => {
       events.push('materialize');
       const { boundProviderAuth: _boundProviderAuth, ...runtimeConfig } = config;
       return { config: { ...runtimeConfig, contextEnv: Object.freeze({}) } };
@@ -234,6 +236,7 @@ describe('AIAdapter.handleRehydrateAgent provider context', () => {
         capturedProviderContext = input.providerContext;
         return {
           bus: input.bus,
+          globalBus: input.globalBus,
           agentId: input.agentId,
           adapterId: input.adapterId,
           adapterName: input.adapterName,
@@ -361,7 +364,7 @@ describe('AIAdapter.handleRehydrateAgent provider context', () => {
       });
     });
 
-    await MakaioBus.request(AdapterSubjects.rehydrateAgent, {
+    await MakaioBus.request(createTestCall(), AdapterSubjects.rehydrateAgent, {
       adapterId: adapter.adapterId,
       agentId: 'persisted-agent-provider-context',
       cwd: os.tmpdir(),
@@ -387,7 +390,7 @@ describe('AIAdapter.handleRehydrateAgent provider context', () => {
     });
 
     try {
-      await MakaioBus.request(AdapterSubjects.rehydrateAgent, {
+      await MakaioBus.request(createTestCall(), AdapterSubjects.rehydrateAgent, {
         adapterId: adapter.adapterId,
         agentId: 'managed-rehydrate-agent',
         resumeAdapterSessionId: 'managed-native-session',
@@ -416,7 +419,7 @@ describe('AIAdapter.handleRehydrateAgent provider context', () => {
       // its provider-session key straight back instead of retiring it over an
       // unavailable credential store.
       await expect(
-        MakaioBus.request(AdapterSubjects.rehydrateAgent, {
+        MakaioBus.request(createTestCall(), AdapterSubjects.rehydrateAgent, {
           adapterId: adapter.adapterId,
           agentId: 'missing-manager-rehydrate-agent',
           resumeAdapterSessionId: 'managed-native-session',
@@ -442,7 +445,7 @@ describe('AIAdapter.handleRehydrateAgent provider context', () => {
 
     try {
       await expect(
-        MakaioBus.request(AdapterSubjects.rehydrateAgent, {
+        MakaioBus.request(createTestCall(), AdapterSubjects.rehydrateAgent, {
           adapterId: adapter.adapterId,
           agentId: 'failed-commit-rehydrate-agent',
           resumeAdapterSessionId: 'managed-native-session',
@@ -452,7 +455,7 @@ describe('AIAdapter.handleRehydrateAgent provider context', () => {
       expect(adapter.getAgent('failed-commit-rehydrate-agent')).toBeUndefined();
 
       await expect(
-        MakaioBus.request(AdapterSubjects.rehydrateAgent, {
+        MakaioBus.request(createTestCall(), AdapterSubjects.rehydrateAgent, {
           adapterId: adapter.adapterId,
           agentId: 'retry-commit-rehydrate-agent',
           resumeAdapterSessionId: 'managed-native-session',

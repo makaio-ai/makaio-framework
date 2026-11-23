@@ -1,3 +1,4 @@
+import { createTestCall } from '@makaio/test-utils';
 import { describe, expect, it } from 'vitest';
 import { ExecutionAttemptAuthority } from '../execution-attempt-authority.js';
 import { RuntimeOutcomeFenceMismatchError, type RuntimeOutcomeFence } from '../execution-attempt-repository.js';
@@ -58,7 +59,7 @@ describe('runtime outcome commit fence', () => {
           },
         },
       },
-      { ...identity, outcome: 1, runtimeFence },
+      { call: createTestCall(), ...identity, outcome: 1, runtimeFence },
     );
     await entered.promise;
     expect(await authority.registerRuntime({ ...identity, runtimeIncarnationId: 'replacement' })).toEqual({
@@ -76,6 +77,7 @@ describe('runtime outcome commit fence', () => {
       await submitAttemptOutcome(
         { authority, convergence },
         {
+          call: createTestCall(),
           ...identity,
           outcome: 2,
           runtimeFence: { runtimeGeneration: 2, operationId: null },
@@ -111,7 +113,12 @@ describe('runtime outcome commit fence', () => {
           },
         },
       },
-      { ...identity, outcome: 1, runtimeFence: { runtimeGeneration: 1, operationId: admission.operationId } },
+      {
+        call: createTestCall(),
+        ...identity,
+        outcome: 1,
+        runtimeFence: { runtimeGeneration: 1, operationId: admission.operationId },
+      },
     );
     await entered.promise;
     expect(
@@ -149,7 +156,7 @@ describe('runtime outcome commit fence', () => {
             },
           },
         },
-        { ...identity, outcome: 1, runtimeFence: { runtimeGeneration: 1, operationId: null } },
+        { call: createTestCall(), ...identity, outcome: 1, runtimeFence: { runtimeGeneration: 1, operationId: null } },
       ),
     ).rejects.toThrow('owner temporarily unavailable');
     // Canonical acceptance has already won. A duplicate still converges that stored
@@ -158,6 +165,7 @@ describe('runtime outcome commit fence', () => {
       await submitAttemptOutcome(
         { authority, convergence },
         {
+          call: createTestCall(),
           ...identity,
           outcome: 1,
           runtimeFence: { runtimeGeneration: 99, operationId: 'obsolete' },
@@ -186,7 +194,7 @@ describe('runtime outcome commit fence', () => {
           },
         },
       },
-      { ...identity, outcome: 1, runtimeFence },
+      { call: createTestCall(), ...identity, outcome: 1, runtimeFence },
     );
     await expect(submission).rejects.toBeInstanceOf(RuntimeOutcomeFenceMismatchError);
   });

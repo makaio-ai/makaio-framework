@@ -1,4 +1,5 @@
 import type { IMakaioBus, ScopedBus } from '@makaio/bus-core';
+import type { CallContext } from '@makaio/core';
 import {
   AgentSubjects,
   AdapterSubjects,
@@ -79,26 +80,26 @@ export function createAgentEventBridge(config: {
   getUsageModel: () => string | undefined;
 }): AgentEventBridge {
   return new AgentEventBridge({
-    emitUsage: async (payload) => {
-      await config.emitGlobal(AgentSubjects.usage, payload);
+    emitUsage: async (call, payload) => {
+      await config.emitGlobal(call, AgentSubjects.usage, payload);
     },
-    emitContextWindowUpdated: async (payload) => {
-      await config.emitGlobal(AgentSubjects.contextWindow.updated, payload);
+    emitContextWindowUpdated: async (call, payload) => {
+      await config.emitGlobal(call, AgentSubjects.contextWindow.updated, payload);
     },
-    emitToolUse: async (payload) => {
-      await config.emitGlobal(AgentSubjects.tool.use, payload);
+    emitToolUse: async (call, payload) => {
+      await config.emitGlobal(call, AgentSubjects.tool.use, payload);
     },
-    emitToolOutput: async (payload) => {
-      await config.emitGlobal(AgentSubjects.tool.output, payload);
+    emitToolOutput: async (call, payload) => {
+      await config.emitGlobal(call, AgentSubjects.tool.output, payload);
     },
-    emitAdapterLog: async (payload) => {
-      await config.emitGlobal(AdapterSubjects.log, payload, { includeEventMetadata: false });
+    emitAdapterLog: async (call, payload) => {
+      await config.emitGlobal(call, AdapterSubjects.log, payload, { includeEventMetadata: false });
     },
-    emitStepStarted: async (payload) => {
-      await config.emitGlobal(AgentSubjects.step.started, payload);
+    emitStepStarted: async (call, payload) => {
+      await config.emitGlobal(call, AgentSubjects.step.started, payload);
     },
-    emitStepFinished: async (payload) => {
-      await config.emitGlobal(AgentSubjects.step.finished, payload);
+    emitStepFinished: async (call, payload) => {
+      await config.emitGlobal(call, AgentSubjects.step.finished, payload);
     },
     toolCallTracker: config.toolCallTracker,
     getBlockIndex: config.getBlockIndex,
@@ -130,14 +131,14 @@ export function createAgentLifecycleEmitter(config: CreateLifecycleEmitterInput)
   return new AgentLifecycleEmitter({
     agentId: config.agentId,
     globalBus: config.globalBus,
-    emitStarted: async (payload) => {
-      await config.emitGlobal(AgentSubjects.started, payload);
+    emitStarted: async (call, payload) => {
+      await config.emitGlobal(call, AgentSubjects.started, payload);
     },
-    emitComplete: async (payload) => {
-      await config.emitGlobal(AgentSubjects.complete, payload);
+    emitComplete: async (call, payload) => {
+      await config.emitGlobal(call, AgentSubjects.complete, payload);
     },
-    emitSessionClosed: async (payload) => {
-      await config.emitGlobal(AgentSubjects.session.closed, payload);
+    emitSessionClosed: async (call, payload) => {
+      await config.emitGlobal(call, AgentSubjects.session.closed, payload);
     },
     onBeforeEmitCompletion: config.onBeforeEmitCompletion,
     clearMessageToolCalls: config.clearMessageToolCalls,
@@ -167,12 +168,13 @@ export function createAgentTurnExecutor(config: {
   setPendingStartMode: (mode: StartMode) => void;
   /**
    * Report a pre-confirmation provider-session movement for this dispatch.
+   * @param call - Call of the message that triggers the dispatch
    * @see AgentTurnExecutorConfig.onNativeResumeSuppressed
    */
-  onNativeResumeSuppressed?: () => void | Promise<void>;
+  onNativeResumeSuppressed?: (call: CallContext) => void | Promise<void>;
   onMessageHandle: (messageHandle: MessageHandle, turnId: string | undefined) => Promise<void>;
   onBeforeDispatch?: () => void | Promise<void>;
-  runDispatch?: <T>(dispatch: () => Promise<T>) => Promise<T>;
+  runDispatch?: <T>(call: CallContext, dispatch: () => Promise<T>) => Promise<T>;
   ephemeral?: boolean;
 }): AgentTurnExecutor {
   return new AgentTurnExecutor(config);
@@ -190,6 +192,7 @@ export function createAgentRuntimeMutationManager(config: {
   getConnector: () => AIAgentConnector;
   runExclusive: <T>(action: () => Promise<T>) => Promise<T>;
   swapConnectorUnlocked: (
+    call: CallContext,
     configOverrides?: AgentConnectorConfigOverrides,
     beforeCommit?: ConnectorSwapCommitGuard,
   ) => Promise<void>;
@@ -209,11 +212,11 @@ export function createAgentRuntimeMutationManager(config: {
     getConnector: config.getConnector,
     runExclusive: config.runExclusive,
     swapConnectorUnlocked: config.swapConnectorUnlocked,
-    emitCwdChanged: async (payload) => {
-      await config.emitGlobal(AgentSubjects.cwd.changed, payload);
+    emitCwdChanged: async (call, payload) => {
+      await config.emitGlobal(call, AgentSubjects.cwd.changed, payload);
     },
-    emitModelChanged: async (payload) => {
-      await config.emitGlobal(AgentSubjects.model.changed, payload);
+    emitModelChanged: async (call, payload) => {
+      await config.emitGlobal(call, AgentSubjects.model.changed, payload);
     },
     getProviderContext: config.getProviderContext,
     setProviderContext: config.setProviderContext,
@@ -233,6 +236,7 @@ export function createAgentConnectorLifecycleManager<
   TConnector extends AIAgentConnector<TBus>,
 >(config: {
   agentId: string;
+  globalBus: IMakaioBus;
   buildConfigInput: (overrides?: AgentConnectorConfigOverrides) => ConfigFactoryInput<TBus>;
   configFactory: (input: ConfigFactoryInput<TBus>) => Promise<BaseAgentConnectorConfig<TBus> & { adapterId: string }>;
   connectorFactory: (
@@ -246,7 +250,11 @@ export function createAgentConnectorLifecycleManager<
   setConnectorRuntime: (runtime: ConnectorRuntimeHandle<TConnector>) => void;
   getRuntimeSystemPrompt: () => SystemPrompt | undefined;
   setLastKnownAdapterSessionId: AdapterSessionPublicationSink;
-  announceAdapterSessionMoved: () => Promise<void>;
+  /**
+   * Announce a connector-owned provider-session rotation.
+   * @param call - Call of the message that caused the rotation
+   */
+  announceAdapterSessionMoved: (call: CallContext) => Promise<void>;
 }): AgentConnectorLifecycleManager<TBus, TConnector> {
   return new AgentConnectorLifecycleManager<TBus, TConnector>({
     agentId: config.agentId,
@@ -256,8 +264,9 @@ export function createAgentConnectorLifecycleManager<
     prepareAuthRuntime: config.prepareAuthRuntime,
     createOnMessageSent: config.createOnMessageSent,
     wireEvents: config.wireEvents,
+    // Idle and cleanup diagnostics observe connector state with no triggering message: own context.
     emitIdle: async () => {
-      await config.emitGlobal(AgentSubjects.idle, {});
+      await config.emitGlobal(config.globalBus.own('observer'), AgentSubjects.idle, {});
     },
     getConnectorRuntime: config.getConnectorRuntime,
     setConnectorRuntime: config.setConnectorRuntime,
@@ -266,6 +275,7 @@ export function createAgentConnectorLifecycleManager<
     announceAdapterSessionMoved: config.announceAdapterSessionMoved,
     reportCleanupFailure: (diagnostic) =>
       config.emitGlobal(
+        config.globalBus.own('observer'),
         AdapterSubjects.log,
         {
           message: `${diagnostic.code}:${diagnostic.stage}`,

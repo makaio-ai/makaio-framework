@@ -7,6 +7,11 @@ import type {
 } from '../types/index.js';
 import { nanoid } from 'nanoid';
 
+import { hostPartyOf } from '../call-context/carrier.js';
+import { trackOpenHandlerCall } from '../call-context/own-work.js';
+import { enterSend } from '../call-context/send-entry.js';
+import { wireMetadataOf } from '../call-context/wire.js';
+
 import { matchesSubscription } from '../utils/subscription-matching.js';
 import { isExplicitLocalOnlyTransportSpec, normalizeTransportTargets } from './request/normalizeTransportTargets.js';
 import { resolveEffectiveTransports } from './resolve-effective-transports.js';
@@ -15,12 +20,16 @@ import { invokeAnyHandlers } from '../utils/invoke-any-handlers.js';
 import { notifyMessageObservers } from '../observability/subject-telemetry-projector.js';
 import { validateEventPayload } from '../utils/validate-event-payload.js';
 import { mergeSortedHandlerArrays } from '../utils/handler-merging.js';
-import { LOCAL_ORIGIN, REMOTE_ORIGIN } from '../utils/transport-helpers.js';
 import { executeInterceptors } from './intercept/index.js';
 import { warnIfUnregistered } from '../utils/warn-unregistered.js';
-import type { EventHandler, SubjectDefinition, TransportReceiveContext } from '@makaio/core';
+import type { CallContext, EventHandler, PartyRef, SubjectDefinition, TransportReceiveContext } from '@makaio/core';
 
-type InternalEmitOptions = EmitOptions & WithReceiveContext;
+/**
+ * Emit options plus the trusted receive context. The call is never an option:
+ * a send passes it as a parameter, a received message enters through
+ * {@link emitReceived}.
+ */
+type InternalEmitOptions = EmitOptions & Omit<WithReceiveContext, 'call'>;
 
 /**
  * Get all handlers that match the given subject.
@@ -30,9 +39,9 @@ type InternalEmitOptions = EmitOptions & WithReceiveContext;
  * Returns handlers sorted by priority (highest first).
  * @param context - Makaio bus context
  * @param subject - Subject to match against
- * @returns Array of all matching handlers sorted by priority
+ * @returns Array of all matching handler entries sorted by priority
  */
-function getMatchingHandlers(context: MakaioBusContext, subject: string): Array<EventHandler<unknown>> {
+function getMatchingHandlers(context: MakaioBusContext, subject: string): Array<HandlerEntry<EventHandler<unknown>>> {
   const { eventHandlers } = context;
   const matchingArrays: Array<Array<HandlerEntry<EventHandler<unknown>>>> = [];
 
@@ -42,7 +51,19 @@ function getMatchingHandlers(context: MakaioBusContext, subject: string): Array<
     }
   }
 
-  return mergeSortedHandlerArrays(matchingArrays).map((entry) => entry.handler);
+  return mergeSortedHandlerArrays(matchingArrays);
+}
+
+/**
+ * The `metadata` field of an outbound message for `call`, or nothing when the
+ * principal is this host itself.
+ * @param context - Makaio bus context (names the own host)
+ * @param call - Call context the message carries
+ * @returns An object to spread into the wire message
+ */
+function wireMetadataField(context: MakaioBusContext, call: CallContext): Pick<BusEventMessage, 'metadata'> {
+  const metadata = wireMetadataOf(call, hostPartyOf(context));
+  return metadata === undefined ? {} : { metadata };
 }
 
 interface EventContext {
@@ -51,31 +72,35 @@ interface EventContext {
   correlationId: string | undefined;
   subject: string;
   isRequest: false;
+  call: CallContext;
   transport?: TransportReceiveContext;
-  origin: { readonly local: boolean };
 }
 
 /**
  * Execute event handlers in parallel.
- * @param handlers - Array of handlers to execute
+ *
+ * Each handler gets its own context object and runs inside
+ * {@link trackOpenHandlerCall} for the carrier that registered it (the entry's
+ * owner), not the carrier of the sender.
+ * @param handlers - Array of handler entries to execute
  * @param eventContext - Context to pass to each handler
  * @param fullSubjectKey - Full subject key for error logging
  */
 async function executeHandlers(
-  handlers: Array<EventHandler<unknown>>,
+  handlers: Array<HandlerEntry<EventHandler<unknown>>>,
   eventContext: EventContext,
   fullSubjectKey: string,
 ): Promise<void> {
   const { correlationId, messageId } = eventContext;
   const promises: Promise<unknown>[] = [];
 
-  for (const handler of handlers) {
+  for (const { handler, owner } of handlers) {
     let handlerResult: void | Promise<void>;
     try {
       // Start each handler before emit yields so it can synchronously install a
       // dependent subscription. Its asynchronous completion remains parallel
       // with every sibling and is awaited below.
-      handlerResult = handler(eventContext);
+      handlerResult = trackOpenHandlerCall(owner, () => handler({ ...eventContext }));
     } catch (error) {
       handlerResult = Promise.reject(error);
     }
@@ -92,7 +117,13 @@ async function executeHandlers(
 }
 
 /**
- * Emit an event to all registered handlers.
+ * Emit an event from a bus instance (the entry for SENDS).
+ *
+ * Enters through {@link enterSend}, which derives the context the event carries
+ * from the sending instance's carrier and the passed `call` (caller is the
+ * carrier, principal and attestation come from `call`) and reports a send of an
+ * own context, and delivers through {@link emitReceived}. Public send surfaces pass the carrier
+ * and `call` through; none derives or checks the call itself.
  *
  * Local handlers are invoked synchronously after a fully synchronous
  * interceptor chain completes, then execute in parallel and are awaited before
@@ -102,14 +133,44 @@ async function executeHandlers(
  * errors are logged and never stop sibling handlers, but they reject the
  * returned promise.
  * @param context - Makaio bus context
+ * @param carrier - Carrier of the sending bus instance
+ * @param call - Call context the sender passed
  * @param subjectDefinition - Concrete event subject (wildcards not allowed)
  * @param payload - Event payload
  * @param options - Emit options (messageId, correlationId, transports)
+ * @throws InvalidCallContextError When `call` was not minted by the core.
+ * @throws ForeignOwnContextError When `call` belongs to another carrier or bus context.
  * @see {@link IMakaioBus.emit} for full documentation and examples.
  */
-// eslint-disable-next-line max-lines-per-function -- effectiveTransports resolution, message construction for canSend-aware routing, and transport dispatch are one routing decision; splitting would fragment it
 export async function emit<T extends SubjectDefinition>(
   context: MakaioBusContext,
+  carrier: PartyRef,
+  call: CallContext,
+  subjectDefinition: T,
+  payload: T['$meta']['payload'],
+  options?: InternalEmitOptions,
+): Promise<void> {
+  const sent = enterSend(call, context, carrier, getFullSubjectForSubjectDefinition(subjectDefinition));
+  await emitReceived(context, sent, subjectDefinition, payload, options);
+}
+
+/**
+ * Deliver an event whose call context already stands (the entry for contexts
+ * that are ALREADY MINTED, i.e. received messages).
+ *
+ * The transport receive path builds the context with `callFromReceive` and
+ * enters here; nothing is derived or checked again. `emit` enters here after
+ * {@link enterSend}.
+ * @param context - Makaio bus context
+ * @param call - The finished call context the handlers and interceptors see
+ * @param subjectDefinition - Concrete event subject (wildcards not allowed)
+ * @param payload - Event payload
+ * @param options - Emit options (messageId, correlationId, transports)
+ */
+// eslint-disable-next-line max-lines-per-function -- effectiveTransports resolution, message construction for canSend-aware routing, and transport dispatch are one routing decision; splitting would fragment it
+export async function emitReceived<T extends SubjectDefinition>(
+  context: MakaioBusContext,
+  call: CallContext,
   subjectDefinition: T,
   payload: T['$meta']['payload'],
   options?: InternalEmitOptions,
@@ -140,7 +201,14 @@ export async function emit<T extends SubjectDefinition>(
   // Run interceptors BEFORE handlers (may transform payload or stop propagation)
   // Note: executeInterceptors returns synchronously if no interceptors are registered
   // to preserve timing semantics. Only await if we get a promise back.
-  const interceptorResultOrPromise = executeInterceptors(context, fullSubjectKey, payload, messageId, correlationId);
+  const interceptorResultOrPromise = executeInterceptors(
+    call,
+    context,
+    fullSubjectKey,
+    payload,
+    messageId,
+    correlationId,
+  );
   const interceptorResult =
     interceptorResultOrPromise instanceof Promise ? await interceptorResultOrPromise : interceptorResultOrPromise;
 
@@ -175,6 +243,8 @@ export async function emit<T extends SubjectDefinition>(
     messageId,
     correlationId,
     transport: options?.transport,
+    caller: { kind: call.caller.kind, id: call.caller.id },
+    principal: { kind: call.principal.kind, id: call.principal.id },
     localOnly,
   });
 
@@ -186,8 +256,8 @@ export async function emit<T extends SubjectDefinition>(
       correlationId,
       subject: fullSubjectKey,
       isRequest: false,
+      call,
       transport: options?.transport,
-      origin: options?.transport ? REMOTE_ORIGIN : LOCAL_ORIGIN,
     };
     await executeHandlers(handlers, eventContext, fullSubjectKey);
   }
@@ -202,6 +272,7 @@ export async function emit<T extends SubjectDefinition>(
     payload: finalPayload,
     messageId,
     correlationId,
+    ...wireMetadataField(context, call),
   };
 
   // effectiveTransports was resolved above alongside localOnly.

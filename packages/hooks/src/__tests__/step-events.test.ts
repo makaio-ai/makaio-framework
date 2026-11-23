@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
+import { createTestCall } from '@makaio/test-utils';
 import { AgentSubjects, type StepStarted, type StepFinished, type SessionMessageBlock } from '@makaio/contracts';
 import { createHook } from '../create-hook.js';
 import type { PostStepContext } from '../types/hook-context.js';
@@ -59,10 +60,15 @@ describe('Step Events', () => {
       });
 
       // Emit step.started for text block 0
-      await MakaioBus.emit(AgentSubjects.step.started, createStepStartedPayload({ stepType: 'text', blockIndex: 0 }));
+      await MakaioBus.emit(
+        createTestCall(),
+        AgentSubjects.step.started,
+        createStepStartedPayload({ stepType: 'text', blockIndex: 0 }),
+      );
 
       // Emit step.finished for text block 0
       await MakaioBus.emit(
+        createTestCall(),
         AgentSubjects.step.finished,
         createStepFinishedPayload({
           stepType: 'text',
@@ -100,6 +106,7 @@ describe('Step Events', () => {
       for (let i = 0; i < toolCalls.length; i++) {
         const call = toolCalls[i];
         await MakaioBus.emit(
+          createTestCall(),
           AgentSubjects.step.started,
           createStepStartedPayload({
             stepType: 'tool_use',
@@ -119,6 +126,7 @@ describe('Step Events', () => {
 
       for (const result of results) {
         await MakaioBus.emit(
+          createTestCall(),
           AgentSubjects.step.finished,
           createStepFinishedPayload({
             stepType: 'tool_use',
@@ -161,12 +169,17 @@ describe('Step Events', () => {
 
       // Turn 1: emit blocks 0, 1, 2
       for (let i = 0; i < 3; i++) {
-        await MakaioBus.emit(AgentSubjects.step.started, createStepStartedPayload({ stepType: 'text', blockIndex: i }));
+        await MakaioBus.emit(
+          createTestCall(),
+          AgentSubjects.step.started,
+          createStepStartedPayload({ stepType: 'text', blockIndex: i }),
+        );
       }
 
       // Turn 2: should start at blockIndex 0 again
       // This simulates adapter calling emitStart() which resets currentBlockIndex
       await MakaioBus.emit(
+        createTestCall(),
         AgentSubjects.step.started,
         createStepStartedPayload({ stepType: 'reasoning', blockIndex: 0 }),
       );
@@ -195,6 +208,7 @@ describe('Step Events', () => {
       };
 
       await MakaioBus.emit(
+        createTestCall(),
         AgentSubjects.step.started,
         createStepStartedPayload({
           stepType: 'tool_use',
@@ -223,6 +237,7 @@ describe('Step Events', () => {
       };
 
       await MakaioBus.emit(
+        createTestCall(),
         AgentSubjects.step.finished,
         createStepFinishedPayload({
           stepType: 'tool_use',
@@ -244,6 +259,7 @@ describe('Step Events', () => {
       });
 
       await MakaioBus.emit(
+        createTestCall(),
         AgentSubjects.step.finished,
         createStepFinishedPayload({
           stepType: 'tool_use',
@@ -266,11 +282,12 @@ describe('Step Events', () => {
   describe('PostStep hook receives content from payload', () => {
     it('receives text content directly without fetch', async () => {
       const handler = vi.fn();
-      const { unsubscribe } = createHook('PostStep', { handler, stepTypes: ['text'] });
+      const { unsubscribe } = createHook('PostStep', { bus: MakaioBus, handler, stepTypes: ['text'] });
 
       const textContent: SessionMessageBlock = { type: 'text', content: 'Hello from the agent' };
 
       await MakaioBus.emit(
+        createTestCall(),
         AgentSubjects.step.finished,
         createStepFinishedPayload({
           stepType: 'text',
@@ -287,11 +304,12 @@ describe('Step Events', () => {
 
     it('receives reasoning content directly without fetch', async () => {
       const handler = vi.fn();
-      const { unsubscribe } = createHook('PostStep', { handler, stepTypes: ['reasoning'] });
+      const { unsubscribe } = createHook('PostStep', { bus: MakaioBus, handler, stepTypes: ['reasoning'] });
 
       const reasoningContent: SessionMessageBlock = { type: 'reasoning', content: 'Let me think about this...' };
 
       await MakaioBus.emit(
+        createTestCall(),
         AgentSubjects.step.finished,
         createStepFinishedPayload({
           stepType: 'reasoning',
@@ -308,7 +326,7 @@ describe('Step Events', () => {
 
     it('receives tool_output content directly without fetch', async () => {
       const handler = vi.fn();
-      const { unsubscribe } = createHook('PostStep', { handler, stepTypes: ['tool_use'] });
+      const { unsubscribe } = createHook('PostStep', { bus: MakaioBus, handler, stepTypes: ['tool_use'] });
 
       const toolOutput: SessionMessageBlock = {
         type: 'tool_output',
@@ -318,6 +336,7 @@ describe('Step Events', () => {
       };
 
       await MakaioBus.emit(
+        createTestCall(),
         AgentSubjects.step.finished,
         createStepFinishedPayload({
           stepType: 'tool_use',
@@ -350,8 +369,16 @@ describe('Step Events', () => {
 
       for (let i = 0; i < stepTypes.length; i++) {
         const stepType = stepTypes[i];
-        await MakaioBus.emit(AgentSubjects.step.started, createStepStartedPayload({ stepType, blockIndex: i }));
-        await MakaioBus.emit(AgentSubjects.step.finished, createStepFinishedPayload({ stepType, blockIndex: i }));
+        await MakaioBus.emit(
+          createTestCall(),
+          AgentSubjects.step.started,
+          createStepStartedPayload({ stepType, blockIndex: i }),
+        );
+        await MakaioBus.emit(
+          createTestCall(),
+          AgentSubjects.step.finished,
+          createStepFinishedPayload({ stepType, blockIndex: i }),
+        );
       }
 
       expect(startedEvents).toHaveLength(3);

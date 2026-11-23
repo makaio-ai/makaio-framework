@@ -203,7 +203,8 @@ function createRelayCodec(
     decode: async (message: unknown): Promise<BusMessage> => {
       const sessionKey = e2eAuth.getSessionKey();
       if (isRelayControlEnvelopeMessage(message)) {
-        const payload = message.payload;
+        // The relay is not trusted for identity.
+        const { metadata: _metadata, ...payload } = message.payload;
         if (log) {
           log(
             `[E2ERelayTransport] Decoded relay control envelope: ${payload.type} ${payload.namespace} ${payload.subject}`,
@@ -317,6 +318,7 @@ export function createE2ERelayClientTransport(options: E2ERelayClientTransportOp
   // factory is responsible for a single caller-owned socket.
   const innerTransport = new WebSocketClientTransport({
     ...rest,
+    attestingRole: undefined,
     url: '<pre-connected>',
     createWebSocket: () => ws,
     auth: e2eAuth,

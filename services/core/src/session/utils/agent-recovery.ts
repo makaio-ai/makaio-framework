@@ -7,6 +7,7 @@ import {
   type MakaioSessionAgent,
   type SessionContext,
 } from '@makaio/contracts';
+import type { CallContext } from '@makaio/core';
 import type { PipelineStep } from '../../session-editor/types.js';
 import { resolveRuntimeProviderContext } from '../../provider-context/index.js';
 import { resolveOwnedAdapterInstance, toMachineScopedAdapterInstance } from './resolution.js';
@@ -71,6 +72,7 @@ export interface RecoveryConfig {
 /**
  * Ensure agent cwd matches desired cwd, swapping connector if needed.
  * Must be called while agent is idle (before message routing).
+ * @param call - Call context of the operation applying the working directory
  * @param bus - Bus instance
  * @param agent - Agent to validate/swap
  * @param desiredCwd - Target working directory
@@ -78,6 +80,7 @@ export interface RecoveryConfig {
  * @returns Swap result with previous cwd when a swap occurred
  */
 export async function ensureAgentCwd(
+  call: CallContext,
   bus: IMakaioBus,
   agent: MakaioSessionAgent,
   desiredCwd: string,
@@ -87,7 +90,7 @@ export async function ensureAgentCwd(
     return { swapped: false };
   }
 
-  const result = await bus.request(AgentSubjects.cwd.change, {
+  const result = await bus.request(call, AgentSubjects.cwd.change, {
     agentId: agent.agentId,
     adapterId: agent.adapterId,
     adapterName: agent.adapterName,
@@ -118,6 +121,7 @@ export async function ensureAgentCwd(
  * Mirrors the `ensureAgentCwd()` pattern. At least one of `desiredModel`,
  * `options.reasoningEffort`, or `options.providerConfigId` must be defined for a
  * change to occur.
+ * @param call - Call context of the operation that applies the model change
  * @param bus - The bus instance for RPC
  * @param agent - The agent to change (mutated in-place on success)
  * @param desiredModel - The model identifier to switch to, or undefined to keep current model
@@ -127,6 +131,7 @@ export async function ensureAgentCwd(
  * @returns Discriminated union: no change, or changed with swap info
  */
 export async function ensureAgentModel(
+  call: CallContext,
   bus: IMakaioBus,
   agent: MakaioSessionAgent,
   desiredModel: string | undefined,
@@ -141,13 +146,13 @@ export async function ensureAgentModel(
   }
 
   const providerContext = options?.providerConfigId
-    ? await resolveRuntimeProviderContext(bus, {
+    ? await resolveRuntimeProviderContext(call, bus, {
         adapterName: agent.adapterName,
         providerConfigId: options.providerConfigId,
       })
     : undefined;
 
-  const result = await bus.request(AgentSubjects.model.change, {
+  const result = await bus.request(call, AgentSubjects.model.change, {
     agentId: agent.agentId,
     adapterId: agent.adapterId,
     adapterName: agent.adapterName,
@@ -205,12 +210,14 @@ export interface VerifiedAgents {
  * Resolving per agent is what keeps each rehydrate addressed to the live
  * instance that actually owns that agent's adapter, and keeps a single
  * unresolvable adapter from deciding the batch.
+ * @param call - Call context of the operation verifying and recovering these agents
  * @param bus - Bus instance
  * @param agents - Agents to verify
  * @param recoveryConfig - Configuration for recovering dead agents, including the shared recovery plan
  * @returns Usable agents, the ones recovered here, and the ones this runtime may not drive
  */
 export async function verifyAndRecoverAgents(
+  call: CallContext,
   bus: IMakaioBus,
   agents: MakaioSessionAgent[],
   recoveryConfig: RecoveryConfig,
@@ -227,7 +234,7 @@ export async function verifyAndRecoverAgents(
       deferredAgentIds.add(agent.agentId);
       continue;
     }
-    const result = await bus.requestOptional(AdapterSubjects.getAgent, {
+    const result = await bus.requestOptional(call, AdapterSubjects.getAgent, {
       adapterId: agent.adapterId,
       ownerInstanceId: agent.runtimeOwner.instanceId,
       agentId: agent.agentId,
@@ -239,7 +246,7 @@ export async function verifyAndRecoverAgents(
       // agent whose connector answers is the residue of a recovery claim
       // somebody else's probe vetoed, and nothing else lifts it: the per-turn
       // activity stamp moves a row only between `idle` and `active`.
-      if (agent.status === 'dead') await restoreProbedLiveAgent(bus, agent.agentId);
+      if (agent.status === 'dead') await restoreProbedLiveAgent(call, bus, agent.agentId);
       usable.push(agent);
       continue;
     }
@@ -250,7 +257,7 @@ export async function verifyAndRecoverAgents(
     // supplies the announced adapter instance; runtimeOwner.instanceId remains
     // reserved for owner-specific routing. Without an owner, the resolver derives
     // a currently addressable instance for the requested host.
-    const recovered = await recoverAgent(bus, agent, recoveryConfig);
+    const recovered = await recoverAgent(call, bus, agent, recoveryConfig);
     if (recovered.kind === 'deferred') {
       deferredAgentIds.add(agent.agentId);
       continue;
@@ -267,20 +274,24 @@ export { buildRecoveryContext, buildPlannedRecoveryContext } from './recovery-co
 
 /**
  * Build recovery context and apply optional additional transforms.
+ * @param call - Call context of the operation building this recovery context
  * @param bus - Bus instance
  * @param session - Session to build context for
  * @param options - Optional transform pipeline to run before conversion
  * @returns SessionContext with transformed messageHistory and fresh-mode signal
  */
 export async function buildRecoveryContextWithPipeline(
+  call: CallContext,
   bus: IMakaioBus,
   session: IMakaioSession,
   options?: { pipeline?: PipelineStep[] },
 ): Promise<SessionContext> {
-  const contextResult = await getFullConversation(bus, session.sessionId);
+  const contextResult = await getFullConversation(call, bus, session.sessionId);
   const pipeline = options?.pipeline ?? [];
   const transformedMessages =
-    pipeline.length > 0 ? (await executePipeline(contextResult.messages, pipeline)).messages : contextResult.messages;
+    pipeline.length > 0
+      ? (await executePipeline(call, contextResult.messages, pipeline)).messages
+      : contextResult.messages;
 
   return {
     messageHistory: transformedMessages.map(convertSessionMessage),
@@ -316,6 +327,7 @@ export type AgentRecoveryOutcome =
  * starting a second lifecycle for the same identity — and consumes that join
  * through the shared seam, which classifies the row the attempt left behind
  * rather than reading its own success into the absence of a rejection.
+ * @param call - Call context of the operation recovering this agent
  * @param bus - Bus instance
  * @param deadAgent - The dead agent to recover; its `adapterId` is re-stamped to the instance the
  *   attempt actually used
@@ -324,13 +336,14 @@ export type AgentRecoveryOutcome =
  * @throws Whatever {@link failedRehydrateError} raises when the recovery failed rather than deferred
  */
 export async function recoverAgent(
+  call: CallContext,
   bus: IMakaioBus,
   deadAgent: MakaioSessionAgent,
   recoveryConfig: RecoveryConfig,
 ): Promise<AgentRecoveryOutcome> {
   for (let replan = 0; replan <= MAX_RECOVERY_REPLANS; replan += 1) {
-    const outcome = await runOrJoinReservedRehydrate(bus, deadAgent, () =>
-      planRecoveryAttempt(bus, deadAgent, recoveryConfig),
+    const outcome = await runOrJoinReservedRehydrate(call, bus, deadAgent, () =>
+      planRecoveryAttempt(call, bus, deadAgent, recoveryConfig),
     );
     if (outcome?.kind === 'stale-plan' && replan < MAX_RECOVERY_REPLANS) continue;
     return classifyRecoveredAgent(deadAgent, outcome);
@@ -341,24 +354,26 @@ export async function recoverAgent(
 
 /**
  * Plan the recovery request for the exclusive callback that won its agent.
+ * @param call - Call context of the operation recovering this agent.
  * @param bus - Bus carrying the canonical reads and adapter lookup.
  * @param deadAgent - Caller-owned agent object, refreshed only from the canonical snapshot.
  * @param recoveryConfig - Stable recovery intent supplied by the caller.
  * @returns A request whose row, binding, holder guard, and instance were read for this invocation.
  */
 async function planRecoveryAttempt(
+  call: CallContext,
   bus: IMakaioBus,
   deadAgent: MakaioSessionAgent,
   recoveryConfig: RecoveryConfig,
 ): ReturnType<ReservedRehydrateAttemptFactory> {
-  const snapshot = await readRecoveryPlanningSnapshot(bus, deadAgent.agentId);
+  const snapshot = await readRecoveryPlanningSnapshot(call, bus, deadAgent.agentId);
   if (snapshot === null || !recoverySnapshotIsClaimable(snapshot)) return { kind: 'lost' };
   const resumeIntent = recoveryPlanResumeTarget(recoveryConfig.plan);
   const resumeProviderSessionId = resumeIntent === undefined ? null : recoveryProviderSessionId(snapshot);
   if (resumeProviderSessionId === null && resumeIntent !== undefined) return { kind: 'stale-plan' };
   Object.assign(deadAgent, snapshot.agent);
   const instance = toMachineScopedAdapterInstance(
-    await resolveOwnedAdapterInstance(bus, {
+    await resolveOwnedAdapterInstance(call, bus, {
       adapterName: deadAgent.adapterName,
       ...(deadAgent.runtimeOwner === undefined
         ? {
@@ -374,7 +389,7 @@ async function planRecoveryAttempt(
     sessionId: deadAgent.sessionId,
     instance,
     resumeProviderSessionId,
-    recoveryGuard: await buildRecoveryReservationGuard(bus, snapshot, instance, resumeProviderSessionId),
+    recoveryGuard: await buildRecoveryReservationGuard(call, bus, snapshot, instance, resumeProviderSessionId),
     ...(recoveryConfig.cwd !== undefined && { cwd: recoveryConfig.cwd }),
     ...((recoveryConfig.model ?? deadAgent.model) !== undefined && { model: recoveryConfig.model ?? deadAgent.model }),
   };

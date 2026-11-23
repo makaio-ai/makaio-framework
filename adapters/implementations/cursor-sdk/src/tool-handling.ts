@@ -28,7 +28,12 @@ import {
   type ToolApprovalContext,
 } from '@makaio/ai-adapters-core';
 import type { IMakaioBus } from '@makaio/bus-core';
-import { AgentSubjects, type AgentToolApproveRequest, type AgentToolApproveResponse } from '@makaio/contracts';
+import {
+  AgentSubjects,
+  type AgentToolApproveRequest,
+  type AgentToolApproveResponse,
+  type CallContext,
+} from '@makaio/contracts';
 import { createRawClientHookHandleSubject } from '@makaio/subsystem-client/hook-subjects';
 import type { ClientHookHandleResponse, RawClientHookPayload } from '@makaio/subsystem-client/hook-subjects';
 import path from 'node:path';
@@ -141,7 +146,7 @@ function buildDenyResponse(message: string): ClientHookHandleResponse {
  * For all other hook event names: returns a no-op allow response (exit 0).
  * @param globalBus - Bus that owns client hook and AgentSubjects.toolApprove handlers.
  * @param connector - Connector identity fields used to route hook ownership.
- * @param contextProvider - Callback that resolves agent identity for the
+ * @param contextProvider - Callback that receives the handled call and resolves agent identity for the
  *   approval request. Called lazily per-request to avoid race conditions with
  *   adapterSessionId resolution.
  * @returns Cleanup function that unsubscribes from the global bus.
@@ -149,7 +154,7 @@ function buildDenyResponse(message: string): ClientHookHandleResponse {
 function registerHookHandleApproval(
   globalBus: IMakaioBus,
   connector: Pick<AIAgentConnector, 'cwd' | 'adapterSessionId'>,
-  contextProvider: () => Promise<ToolApprovalContext>,
+  contextProvider: (call: CallContext) => Promise<ToolApprovalContext>,
 ): () => void {
   const hookHandleSubject = createRawClientHookHandleSubject('cursor');
 
@@ -171,7 +176,7 @@ function registerHookHandleApproval(
 
     let context: ToolApprovalContext;
     try {
-      context = await contextProvider();
+      context = await contextProvider(ctx.call);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       console.warn('[registerHookHandleApproval] Failed to resolve context:', message);
@@ -204,7 +209,7 @@ function registerHookHandleApproval(
     };
 
     try {
-      const response = await globalBus.request(AgentSubjects.toolApprove, approvalRequest);
+      const response = await globalBus.request(ctx.call, AgentSubjects.toolApprove, approvalRequest);
       if (response.action === 'allow') {
         ctx.setResult(HOOK_NOOP_RESPONSE);
       } else {
@@ -235,19 +240,18 @@ function registerHookHandleApproval(
  * - `CursorSdkAgent.wireToolApprovalRpc` in production
  * - Conformance test harness via `testConfig.registerToolApprovalHandler`
  * @param connector - The connector (or any object with a scoped `on` method).
- * @param context - Agent identity context or lazy provider callback.
+ * @param context - Agent identity context or lazy provider callback receiving the handled call.
  * @param globalBus - Bus that owns scoped approval, hook, and AgentSubjects.toolApprove handlers.
  * @returns Cleanup function that unsubscribes from both bus handlers.
  */
 export function registerToolApprovalHandler(
   connector: Pick<AIAgentConnector, 'on' | 'cwd' | 'adapterSessionId'>,
-  context: ToolApprovalContext | (() => Promise<ToolApprovalContext>),
+  context: ToolApprovalContext | ((call: CallContext) => Promise<ToolApprovalContext>),
   globalBus: IMakaioBus,
 ): () => void {
   const unsubScoped = registerScopedToolApprovalHandler(connector, context, globalBus);
 
-  const contextProvider =
-    typeof context === 'function' ? (context as () => Promise<ToolApprovalContext>) : () => Promise.resolve(context);
+  const contextProvider = typeof context === 'function' ? context : () => Promise.resolve(context);
   const unsubHook = registerHookHandleApproval(globalBus, connector, contextProvider);
 
   return () => {

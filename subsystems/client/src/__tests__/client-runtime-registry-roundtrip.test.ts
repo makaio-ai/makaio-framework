@@ -21,6 +21,7 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { createBusInstance, type IMakaioBus } from '@makaio/bus-core';
 import { ClientSubjects } from '@makaio/contracts/client';
+import { createTestCall } from '@makaio/test-utils';
 import { createPluginTestDb, type PluginTestDbContext } from '@makaio/test-utils/drizzle-harness';
 import { ClientRuntimeRegistry } from '../client-runtime-registry.js';
 import { ClientRuntimeService } from '../client-runtime-service.js';
@@ -93,7 +94,7 @@ afterEach(async () => {
 describe('basic round-trip: observe → persist → restart → re-observe matches', () => {
   it('returns created=false and the same clientRuntimeId after a service restart', async () => {
     // Phase 1: observe a new runtime — this persists the record to Drizzle.
-    const firstResult = await bus.request(ClientSubjects.runtime.observe, {
+    const firstResult = await bus.request(createTestCall(), ClientSubjects.runtime.observe, {
       clientId: 'claude-code',
       source: { layer: 'supervisor', producer: 'test-supervisor' },
       observedAt: 1_700_000_000_000,
@@ -119,7 +120,7 @@ describe('basic round-trip: observe → persist → restart → re-observe match
 
     // Phase 4: re-observe with the same supervisorSessionId — must match the
     // hydrated record, not create a new one.
-    const secondResult = await freshBus.request(ClientSubjects.runtime.observe, {
+    const secondResult = await freshBus.request(createTestCall(), ClientSubjects.runtime.observe, {
       clientId: 'claude-code',
       source: { layer: 'supervisor', producer: 'test-supervisor' },
       observedAt: 1_700_000_001_000,
@@ -169,7 +170,7 @@ describe('stale-pid hydration suppression: outdated records do not index pid', (
     // Because the record is stale (>24 h), its pid index was skipped during
     // hydration. The new supervisorSessionId does not match either. So a NEW
     // record must be created.
-    const result = await freshBus.request(ClientSubjects.runtime.observe, {
+    const result = await freshBus.request(createTestCall(), ClientSubjects.runtime.observe, {
       clientId: 'claude-code',
       source: { layer: 'supervisor', producer: 'test-supervisor' },
       observedAt: Date.now(),
@@ -212,7 +213,7 @@ describe('fresh-record hydration: recent records do index pid', () => {
     await bootService(freshBus);
 
     // Observe with the same pid — must hit the hydrated record.
-    const result = await freshBus.request(ClientSubjects.runtime.observe, {
+    const result = await freshBus.request(createTestCall(), ClientSubjects.runtime.observe, {
       clientId: 'claude-code',
       source: { layer: 'statusline', producer: 'test-statusline' },
       observedAt: Date.now(),
@@ -246,7 +247,7 @@ describe('RO-6: ClientRuntimeRegistry — Drizzle persistence + loadFromStorage 
     const registry = new ClientRuntimeRegistry(ro6Bus);
     const observedAt = Date.now();
 
-    const result = await registry.upsertRuntime({
+    const result = await registry.upsertRuntime(createTestCall(), {
       clientId: 'claude-code',
       source: { layer: 'supervisor', producer: 'ro6-test' },
       observedAt,
@@ -276,7 +277,7 @@ describe('RO-6: ClientRuntimeRegistry — Drizzle persistence + loadFromStorage 
     const firstRegistry = new ClientRuntimeRegistry(ro6Bus);
     const observedAt = Date.now();
 
-    const { clientRuntimeId } = await firstRegistry.upsertRuntime({
+    const { clientRuntimeId } = await firstRegistry.upsertRuntime(createTestCall(), {
       clientId: 'claude-code',
       source: { layer: 'supervisor', producer: 'ro6-test' },
       observedAt,
@@ -286,7 +287,7 @@ describe('RO-6: ClientRuntimeRegistry — Drizzle persistence + loadFromStorage 
 
     // Phase 2: create a second registry wired to the same DB bus and hydrate it.
     const secondRegistry = new ClientRuntimeRegistry(ro6Bus);
-    await secondRegistry.loadFromStorage();
+    await secondRegistry.loadFromStorage(createTestCall());
 
     const hydrated = secondRegistry.getRuntime(clientRuntimeId);
 
@@ -303,7 +304,7 @@ describe('RO-6: ClientRuntimeRegistry — Drizzle persistence + loadFromStorage 
     const registry = new ClientRuntimeRegistry(ro6Bus);
     const observedAt = Date.now();
 
-    const { clientRuntimeId } = await registry.upsertRuntime({
+    const { clientRuntimeId } = await registry.upsertRuntime(createTestCall(), {
       clientId: 'claude-code',
       source: { layer: 'statusline', producer: 'ro6-test' },
       observedAt,
@@ -315,7 +316,7 @@ describe('RO-6: ClientRuntimeRegistry — Drizzle persistence + loadFromStorage 
     expect(initialRow?.status).toBe('observed');
 
     // Phase 2: enrich with supervisorSessionId — promotes 'observed' → 'started'.
-    await registry.upsertRuntime({
+    await registry.upsertRuntime(createTestCall(), {
       clientId: 'claude-code',
       source: { layer: 'supervisor', producer: 'ro6-test' },
       observedAt: observedAt + 1_000,
@@ -331,7 +332,7 @@ describe('RO-6: ClientRuntimeRegistry — Drizzle persistence + loadFromStorage 
 
     // Phase 3: hydrate a fresh registry and verify it sees the promoted record.
     const freshRegistry = new ClientRuntimeRegistry(ro6Bus);
-    await freshRegistry.loadFromStorage();
+    await freshRegistry.loadFromStorage(createTestCall());
 
     const hydrated = freshRegistry.getRuntime(clientRuntimeId);
     expect(hydrated?.status).toBe('started');

@@ -83,6 +83,9 @@ const CASES = loadCases();
 const MESSAGES = loadMessages();
 const CONFORMANCE_CASE_DECISIONS = {
   'auth-challenge-response': 'covered',
+  'request-with-principal-metadata': 'covered',
+  'request-unknown-envelope-field-ignored': 'covered',
+  'request-without-metadata-is-connector-call': 'covered',
   'event-delivery-agent-complete': 'covered',
   'request-response-correlation-approval-request': 'covered',
   'no-handler-response-tool-execute': 'covered',
@@ -417,7 +420,11 @@ describe('BusClient public facade', () => {
     fake = new FakeWebSocket();
     client = new BusClient('ws://test-host/bus');
 
-    const connectPromise = client.connect({ auth: false, createWebSocket: () => fake });
+    const connectPromise = client.connect({
+      auth: false,
+      attestingRole: 'core-uplink',
+      createWebSocket: () => fake,
+    });
     await waitFor(() => fake.hasListener('message'), 2000, 'client did not attach a message listener');
     fake.receiveMessage({ type: 'subscribe-sync-complete' });
     await connectPromise;
@@ -474,6 +481,39 @@ describe('BusClient public facade', () => {
         action: 'allow',
       },
     });
+  });
+
+  it.each([
+    ['request-with-principal-metadata', 'request.approval.request.with-principal'],
+    ['request-unknown-envelope-field-ignored', 'request.approval.request.unknown-envelope-field'],
+    ['request-without-metadata-is-connector-call', 'request.approval.request'],
+  ] as const)('handles conformance case %s', async (id, ref) => {
+    const fixture = msg(ref);
+    let handled = false;
+    client.onRequest(ApprovalSubjects.request, (ctx) => {
+      expect(ctx.payload).toEqual(fixture.payload);
+      expect(ctx).not.toHaveProperty('futureEnvelopeField');
+      expect(ctx.call).not.toHaveProperty('futureEnvelopeField');
+      if (id === 'request-with-principal-metadata') {
+        // The SDK opened an outbound core connection, which can attest in-process principals.
+        expect(ctx.call.principal).toEqual({ kind: 'makaio.extension', id: 'fixture-extension' });
+        expect(ctx.call.attestedBy).toEqual(ctx.call.caller);
+      } else {
+        expect(ctx.call.principal).toEqual(ctx.call.caller);
+        expect(ctx.call.attestedBy).toBeUndefined();
+      }
+      handled = true;
+      return { action: 'allow' };
+    });
+    await fake.waitSent(1);
+    fake.receiveMessage(fixture);
+    const response = await fake.waitSent(2);
+    expect(response).toEqual({
+      type: 'response',
+      correlationId: fixture.correlationId,
+      result: { action: 'allow' },
+    });
+    expect(handled).toBe(true);
   });
 
   it('uses default local-first dispatch for matching local request handlers without sending a wire request', async () => {

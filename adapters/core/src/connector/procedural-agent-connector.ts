@@ -1,9 +1,9 @@
 import { AIAgentConnector, type BaseAgentConnectorConfig } from './agent-connector.js';
 import type { ScopedBus } from '@makaio/bus-core';
-import type { HandlerForSubjectDefinition, ScopedSubjectDefinition } from '@makaio/core';
+import type { CallContext, HandlerForSubjectDefinition, ScopedSubjectDefinition } from '@makaio/core';
 import type { MessageHandle, MessageResult } from '../message-handle/index.js';
 import type { NormalizedMessageInput } from '../utils/normalizeMessageInput.js';
-import type { AgentStartResult, ConnectorSendMessageOptions, ConnectorStartOptions } from '../agent/types.js';
+import type { AgentStartResult, ConnectorStartOptions } from '../agent/types.js';
 import { rejectQueuedHandles, SESSION_CLOSED_QUEUE_ERROR, type QueueableTurn } from '../session/process-queue.js';
 import type { UserMessageQueue } from '../session/user-message-queue.js';
 
@@ -52,17 +52,19 @@ export interface WireSessionConfig {
    * MCP tool refresh via the bus — can complete before the API call is made.
    * In-memory operations (recordInjection, consumeTurnNumber) are not affected
    * by the async signature.
+   * @param call - Call of the handled turn-start event
    */
-  onTurnStarted?: () => Promise<void> | void;
+  onTurnStarted?: (call: CallContext) => Promise<void> | void;
   /**
    * Custom handler for turn_finished events.
    *
    * When provided, replaces the default turn_finished behavior entirely.
    * The handler receives a callback to process the queue, which it should
    * call when the message is considered complete and the queue should drain.
+   * @param call - Call of the handled turn-finish event
    * @param drainQueue - Callback that processes the queue or goes idle
    */
-  onTurnFinished?: (drainQueue: () => Promise<void>) => Promise<void>;
+  onTurnFinished?: (call: CallContext, drainQueue: () => Promise<void>) => Promise<void>;
 }
 
 /**
@@ -113,6 +115,25 @@ export abstract class ProceduralAgentConnector<
   private activeTurnEventHandlers = new Set<Promise<void>>();
 
   /**
+   * Abort the agent and clean up resources.
+   * @param call - Call of the operation requesting abort
+   */
+  public abstract abort(call: CallContext): void;
+
+  /**
+   * Interrupt the current message processing.
+   * @param call - Call of the operation requesting interruption
+   */
+  public abstract interrupt(call: CallContext): Promise<void>;
+
+  /**
+   * Get the provider session ID, initializing the session when required.
+   * @param call - Call of the message requesting the session ID
+   * @returns The adapter session ID
+   */
+  public abstract getAdapterSessionId(call: CallContext): Promise<string>;
+
+  /**
    * Get the adapter's session instance (may be undefined if not yet initialized).
    * @returns The session or undefined
    */
@@ -121,9 +142,10 @@ export abstract class ProceduralAgentConnector<
   /**
    * Initialize and return the adapter's session.
    * Must be idempotent (no-op if already initialized).
+   * @param call - Call of the message requesting the session
    * @returns The initialized session
    */
-  protected abstract ensureSession(): Promise<ProceduralConnectorSession>;
+  protected abstract ensureSession(call: CallContext): Promise<ProceduralConnectorSession>;
 
   /**
    * Get the adapter's UserMessageQueue instance.
@@ -167,8 +189,8 @@ export abstract class ProceduralAgentConnector<
     const subjects = this.getTurnSubjects();
     const wireConfig = this.getWireSessionConfig();
 
-    // Type helper: turn subjects are event subjects whose handlers ignore the context
-    // parameter. Since ScopedSubjectDefinition<TBus['namespace']> is abstract at the
+    // Type helper: turn subjects are event subjects whose handlers use the context's
+    // call. Since ScopedSubjectDefinition<TBus['namespace']> is abstract at the
     // generic level, HandlerForSubjectDefinition resolves to `never`. We narrow via
     // a safe cast — all turn subjects use TurnStateChangedSchema (event, not request).
     type TurnHandler = HandlerForSubjectDefinition<(typeof subjects)['turn_started']>;
@@ -182,13 +204,18 @@ export abstract class ProceduralAgentConnector<
      * @param subject - Turn subject to subscribe to
      * @param handler - What to run when it fires
      */
-    const subscribe = (subject: ScopedSubjectDefinition<TBus['namespace']>, handler: () => Promise<void>): void => {
-      this.turnEventCleanups.push(this.on(subject, (() => this.dispatchTurnEvent(handler)) as TurnHandler));
+    const subscribe = (
+      subject: ScopedSubjectDefinition<TBus['namespace']>,
+      handler: (call: CallContext) => Promise<void>,
+    ): void => {
+      this.turnEventCleanups.push(
+        this.on(subject, ((ctx: { call: CallContext }) => this.dispatchTurnEvent(ctx.call, handler)) as TurnHandler),
+      );
     };
 
-    subscribe(subjects.turn_started, async () => {
+    subscribe(subjects.turn_started, async (call) => {
       try {
-        await wireConfig?.onTurnStarted?.();
+        await wireConfig?.onTurnStarted?.(call);
       } catch (error) {
         // Hook failure must not block the state machine — log and continue
         console.error('[ProceduralAgentConnector] onTurnStarted hook failed:', error);
@@ -213,7 +240,7 @@ export abstract class ProceduralAgentConnector<
       }
     });
 
-    subscribe(subjects.turn_finished, async () => {
+    subscribe(subjects.turn_finished, async (call) => {
       await this.updateProcessingState('turn_finished');
 
       const drainQueue = async () => {
@@ -230,7 +257,7 @@ export abstract class ProceduralAgentConnector<
       };
 
       if (wireConfig?.onTurnFinished) {
-        await wireConfig.onTurnFinished(drainQueue);
+        await wireConfig.onTurnFinished(call, drainQueue);
       } else {
         await drainQueue();
       }
@@ -244,12 +271,13 @@ export abstract class ProceduralAgentConnector<
    * alone cannot stop a snapshotted callback. This second terminal check rejects
    * that callback when it eventually starts, while the active set lets close
    * wait for callbacks that started before the terminal latch.
+   * @param call - Call of the handled turn event
    * @param handler - Turn callback registered with the scoped bus
    */
-  private async dispatchTurnEvent(handler: () => Promise<void>): Promise<void> {
+  private async dispatchTurnEvent(call: CallContext, handler: (call: CallContext) => Promise<void>): Promise<void> {
     if (this.turnEventLifecycleClosed) return;
 
-    const activeHandler = handler();
+    const activeHandler = handler(call);
     this.activeTurnEventHandlers.add(activeHandler);
     try {
       await activeHandler;
@@ -309,15 +337,16 @@ export abstract class ProceduralAgentConnector<
    * 3. Set adapterSessionId on handle
    * 4. Transition to active if currently idle/paused
    * 5. Process queue via session
+   * @param call - Call of the message requesting processing
    * @param messageHandles - Array of message handles to process
    * @returns Set of message handles that were processed
    */
-  protected async processUserMessages(messageHandles: MessageHandle[]): Promise<Set<MessageHandle>> {
+  protected async processUserMessages(call: CallContext, messageHandles: MessageHandle[]): Promise<Set<MessageHandle>> {
     const [first] = messageHandles;
 
     let session: ProceduralConnectorSession;
     try {
-      session = await this.ensureSession();
+      session = await this.ensureSession(call);
     } catch (error) {
       const sessionError = error instanceof Error ? error : new Error(String(error));
       if (!first.isProcessed) {
@@ -354,28 +383,25 @@ export abstract class ProceduralAgentConnector<
    * Must set adapterSessionId before returning.
    * Called by createAgent for idle agent setup.
    * Implementations MUST be idempotent (no-op if already initialized).
-   * @param options - Optional start options (e.g., systemPrompt)
+   * @param options - Start options including the call of the operation initializing the session
    */
-  public async initialize(options?: ConnectorStartOptions): Promise<void> {
+  public async initialize(options: ConnectorStartOptions): Promise<void> {
     if (this.getSession()) return; // Idempotent
-    this.captureSystemPrompt(options?.systemPrompt);
-    await this.ensureSession();
+    this.captureSystemPrompt(options.systemPrompt);
+    await this.ensureSession(options.call);
   }
 
   /**
    * Start session with initial message.
    * @param message - The initial message to send
-   * @param options - Optional send message options
+   * @param options - Start options, including the call of the operation that starts the session
    * @returns The agent start result with session ID and message handle
    */
-  public async start(
-    message: NormalizedMessageInput,
-    options?: ConnectorSendMessageOptions,
-  ): Promise<AgentStartResult> {
-    this.captureSystemPrompt(options?.systemPrompt);
+  public async start(message: NormalizedMessageInput, options: ConnectorStartOptions): Promise<AgentStartResult> {
+    this.captureSystemPrompt(options.systemPrompt);
     const messageHandle = await this.sendMessage(message, options);
     return {
-      adapterSessionId: await this.getAdapterSessionId(),
+      adapterSessionId: await this.getAdapterSessionId(options.call),
       messageHandle,
       agentId: this.agentId,
     };

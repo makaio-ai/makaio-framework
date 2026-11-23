@@ -5,7 +5,7 @@ import {
   type OutcomeAckDecision,
   type OutcomeAcceptance,
 } from '@makaio/contracts';
-import type { BaseMessageContext } from '@makaio/core';
+import { isInProcessCaller, type BaseMessageContext } from '@makaio/core';
 import { resolveExecutionAttemptPeer, type ExecutionAttemptPeerIdentity } from './execution-bound-access.js';
 import type { ExecutionAttemptAuthority } from './execution-attempt-authority.js';
 import { submitAttemptOutcome, type OutcomeConvergence, type OutcomeConvergenceInput } from './outcome-convergence.js';
@@ -19,11 +19,11 @@ import { decodeWorkflowAttemptOutcome, type WorkflowAttemptOutcome } from './wor
 /**
  * Resolve authenticated attempt identity from bus message context.
  *
- * Remote callers are resolved through the subsystem's shared attempt-peer
- * derivation, so the identity comes from the authenticated peer rather than
+ * Other callers are resolved through the subsystem's shared attempt-peer
+ * derivation, so the identity comes from the caller of the call context rather than
  * the payload and a worker cannot impersonate another attempt.
  *
- * Local callers (the Authority process itself) are trusted and fall back
+ * In-process callers (the Authority process itself) are trusted and fall back
  * to the payload identity. This path exists because the executor may accept
  * outcomes through in-process composition seams.
  * @param ctx - Incoming bus message context.
@@ -34,8 +34,8 @@ function resolveAttemptIdentity(
   ctx: BaseMessageContext,
   payload: { executionAttemptId: string; executionId: string },
 ): ExecutionAttemptPeerIdentity | null {
-  // Local callers (Authority process) are implicitly trusted.
-  if (ctx.origin.local) {
+  // In-process callers (Authority process) are implicitly trusted.
+  if (isInProcessCaller(ctx.call)) {
     return {
       executionAttemptId: payload.executionAttemptId,
       executionId: payload.executionId,
@@ -118,8 +118,8 @@ export function createWorkflowOutcomeSubmissionDeps(
  * paths share the same instruction-bound decoder and canonical convergence.
  *
  * The handler:
- * 1. Derives attempt identity from the authenticated peer context.
- * 2. Validates the payload matches the peer identity.
+ * 1. Derives attempt identity from the caller of the call context.
+ * 2. Validates the payload matches the caller identity.
  * 3. Commits the outcome through the Authority (durable repository decision).
  * 4. For `accepted` or `duplicate` terminal outcomes, converges workflow state
  *    through the executor's idempotent acceptance path.
@@ -137,15 +137,15 @@ export function registerOutcomeSubmissionHandler(bus: IMakaioBus, deps: OutcomeS
   const cleanupWorkflow = bus.on(WorkerSubjects.control.outcome.submit, async (ctx) => {
     const identity = resolveAttemptIdentity(ctx, ctx.payload);
     if (identity === null) {
-      throw new Error('Outcome submission requires an authenticated ' + 'workflow-execution-attempt peer');
+      throw new Error('Outcome submission requires an authenticated ' + 'workflow-execution-attempt caller');
     }
 
     const { result } = ctx.payload;
 
-    // For remote callers, validate that payload identity matches the
-    // authenticated peer. Local callers have identity derived from the
+    // For non-in-process callers, validate that payload identity matches the
+    // caller's identity. In-process callers have identity derived from the
     // payload itself, so the check is skipped.
-    if (!ctx.origin.local) {
+    if (!isInProcessCaller(ctx.call)) {
       if (ctx.payload.executionId !== identity.executionId) {
         throw new Error(
           `Outcome payload executionId '${ctx.payload.executionId}' ` +
@@ -192,6 +192,7 @@ export function registerOutcomeSubmissionHandler(bus: IMakaioBus, deps: OutcomeS
     // retry yields `duplicate` and converges again; the error propagates so
     // the RPC errors and the worker retries.
     const decision = await submitAttemptOutcome(submission, {
+      call: ctx.call,
       executionId: identity.executionId,
       executionAttemptId: identity.executionAttemptId,
       outcome,

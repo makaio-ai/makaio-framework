@@ -13,7 +13,7 @@ type SessionTurnCompleted = ExtractSubjectPayload<typeof SessionSubjects.turn.co
  * Extracts turn completion data and provides a clean API for hooks.
  * Enriches with session, recentHistory, and project when available.
  * @param rawCtx - Interceptor context from turn.completed event
- * @param bus - Bus instance for making requests
+ * @param bus - Bus of the registering extension; the enrichment requests and `ctx.bus` use this instance, with `rawCtx.call` as call context
  * @returns PostTurnContext for hook handlers
  */
 export async function buildPostTurnContext(
@@ -23,7 +23,7 @@ export async function buildPostTurnContext(
   const payload = rawCtx.payload;
 
   // Enrich with session data (uses sessionId from turn.completed payload)
-  const enriched = await fetchSessionEnrichment(bus, payload.sessionId);
+  const enriched = await fetchSessionEnrichment(bus, rawCtx.call, payload.sessionId);
 
   return {
     ...enriched.contextExtensions,
@@ -43,6 +43,7 @@ export async function buildPostTurnContext(
     recentHistory: enriched.recentHistory,
     contextExtensions: enriched.contextExtensions,
     bus,
+    call: rawCtx.call,
     // Interceptor controls
     async next() {
       await rawCtx.next();

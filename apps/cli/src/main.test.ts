@@ -400,7 +400,7 @@ describe('main — remote manifest behavior', () => {
     vi.mocked(busClientMocks.probeHealth).mockResolvedValue({ auth: false });
     vi.mocked(busClientMocks.resolveClientAuth).mockReturnValue(undefined);
     vi.mocked(busClientMocks.connectBusClient).mockResolvedValue(bus);
-    vi.mocked(bus.request).mockImplementation(async (subject) => {
+    vi.mocked(bus.request).mockImplementation(async (_call, subject) => {
       if (subject === CliRpcSubjects.listContributions) {
         return { contributions: [manifest] };
       }
@@ -430,7 +430,7 @@ describe('main — remote manifest behavior', () => {
     vi.mocked(busClientMocks.probeHealth).mockResolvedValue({ auth: false });
     vi.mocked(busClientMocks.resolveClientAuth).mockReturnValue(undefined);
     vi.mocked(busClientMocks.connectBusClient).mockResolvedValue(bus);
-    vi.mocked(bus.request).mockImplementation(async (subject) => {
+    vi.mocked(bus.request).mockImplementation(async (_call, subject) => {
       if (subject === CliRpcSubjects.listContributions) {
         return { contributions: [manifest] };
       }

@@ -1,4 +1,4 @@
-import { MakaioBus } from '@makaio/bus-core';
+import type { RegisteredSubjectSchema } from '@makaio/bus-core';
 import { inspectSubjectSchema, isRequestSchema } from '@makaio/core';
 import type {
   MakaioProtocolEventSubject,
@@ -28,9 +28,14 @@ export { defaultRustModelChecker };
 
 const MANIFEST_VERSION = 2;
 
-type RegisteredSubjectSchema = ReturnType<
-  ReturnType<typeof MakaioBus.getContext>['namespaceRegistry']['listRegisteredSubjects']
->[number];
+/**
+ * Input of a protocol export: either an explicit publication catalog (catalog mode) or the list of
+ * subjects registered on a runtime bus (auto-discovery mode). The caller obtains the list at a place
+ * that may read the namespace registry; the export itself never reads a bus.
+ */
+export type ProtocolExportSource =
+  | { readonly catalog: ProtocolNamespaceCatalog }
+  | { readonly registeredSubjects: readonly RegisteredSubjectSchema[] };
 
 /**
  * Internal protocol export collection used to share one catalog pass between audit and manifest generation.
@@ -136,22 +141,17 @@ function checkRustModelRepresentability(
 }
 
 /**
- * Discover all subjects currently registered on the singleton Makaio bus.
- * @returns Registered subject schema metadata sorted by fully-qualified subject key
- */
-export function discoverRegisteredProtocolSubjects(): RegisteredSubjectSchema[] {
-  return MakaioBus.getContext().namespaceRegistry.listRegisteredSubjects();
-}
-
-/**
  * Run an audit in auto-discovery mode: iterate all registered subjects, silently skip
  * those that fail JSON Schema export or Rust representability, and return a non-blocking
  * report (the `issues` array is always empty in this mode).
- * @param options - Protocol export options (no catalog)
+ * @param allSubjects - Registered subjects to inspect
+ * @param options - Protocol export options
  * @returns Audit report with all subjects recorded and an empty issues array
  */
-function auditAutoDiscovery(options: ProtocolExportOptions): ProtocolExportAuditReport {
-  const allSubjects = discoverRegisteredProtocolSubjects();
+function auditAutoDiscovery(
+  allSubjects: readonly RegisteredSubjectSchema[],
+  options: ProtocolExportOptions,
+): ProtocolExportAuditReport {
   const subjects: ProtocolExportSubjectAudit[] = [];
 
   for (const registered of allSubjects) {
@@ -248,41 +248,49 @@ function collectCatalogExport(
 /**
  * Audit the protocol export pipeline before publishing a manifest.
  *
- * When `options.catalog` is provided the audit runs in **catalog mode**: every selected
+ * When `source` carries a `catalog` the audit runs in **catalog mode**: every selected
  * subject must export cleanly, and failures are recorded as blocking issues.
  *
- * When `options.catalog` is omitted the audit runs in **auto-discovery mode**: all
- * subjects registered on the singleton bus are inspected, subjects that cannot be
- * exported are silently skipped, and the returned `issues` array is always empty.
- * @param options - Optional catalog and representability check hooks
+ * When `source` carries `registeredSubjects` the audit runs in **auto-discovery mode**: all
+ * listed subjects are inspected, subjects that cannot be exported are silently skipped, and
+ * the returned `issues` array is always empty.
+ * @param source - Catalog or registered subjects to audit
+ * @param options - Optional representability check hooks
  * @returns Structured audit report with per-subject results and (catalog mode only) blocking issues
  */
-export function auditProtocolExport(options: ProtocolExportOptions = {}): ProtocolExportAuditReport {
-  if (options.catalog !== undefined) {
-    return collectCatalogExport(options.catalog, options).audit;
+export function auditProtocolExport(
+  source: ProtocolExportSource,
+  options: ProtocolExportOptions = {},
+): ProtocolExportAuditReport {
+  if ('catalog' in source) {
+    return collectCatalogExport(source.catalog, options).audit;
   }
 
-  return auditAutoDiscovery(options);
+  return auditAutoDiscovery(source.registeredSubjects, options);
 }
 
 /**
  * Export a deterministic protocol manifest.
  *
- * When `options.catalog` is provided the export runs in **catalog mode**: all selected
+ * When `source` carries a `catalog` the export runs in **catalog mode**: all selected
  * subjects must export without error; any blocking issue throws immediately.
  *
- * When `options.catalog` is omitted the export runs in **auto-discovery mode**: all
- * subjects registered on the singleton bus are inspected, and only those that pass both
- * JSON Schema export and Rust representability checks are included in the manifest.
- * @param options - Optional catalog and representability check hooks
+ * When `source` carries `registeredSubjects` the export runs in **auto-discovery mode**: all
+ * listed subjects are inspected, and only those that pass both JSON Schema export and Rust
+ * representability checks are included in the manifest.
+ * @param source - Catalog or registered subjects to export
+ * @param options - Optional representability check hooks
  * @returns Serializable Makaio protocol manifest sorted by fully-qualified subject key
  */
-export function exportProtocolManifest(options: ProtocolExportOptions = {}): MakaioProtocolManifest {
-  if (options.catalog !== undefined) {
-    return exportCatalogManifest(options.catalog, options);
+export function exportProtocolManifest(
+  source: ProtocolExportSource,
+  options: ProtocolExportOptions = {},
+): MakaioProtocolManifest {
+  if ('catalog' in source) {
+    return exportCatalogManifest(source.catalog, options);
   }
 
-  return exportAutoDiscoveryManifest(options);
+  return exportAutoDiscoveryManifest(source.registeredSubjects, options);
 }
 
 /**
@@ -307,11 +315,14 @@ function exportCatalogManifest(
 
 /**
  * Export a manifest from all registered subjects, silently skipping those that fail.
- * @param options - Protocol export options (no catalog)
+ * @param allSubjects - Registered subjects to export
+ * @param options - Protocol export options
  * @returns Serializable Makaio protocol manifest containing only successfully exported subjects
  */
-function exportAutoDiscoveryManifest(options: ProtocolExportOptions): MakaioProtocolManifest {
-  const allSubjects = discoverRegisteredProtocolSubjects();
+function exportAutoDiscoveryManifest(
+  allSubjects: readonly RegisteredSubjectSchema[],
+  options: ProtocolExportOptions,
+): MakaioProtocolManifest {
   const subjects: MakaioProtocolSubject[] = [];
 
   for (const registered of allSubjects) {

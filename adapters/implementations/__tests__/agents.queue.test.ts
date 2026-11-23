@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeAll, vi } from 'vitest';
+import { createTestCall } from '@makaio/test-utils';
 import { AIAgentConnector, AgentStartResult, normalizeMessageInput } from '@makaio/ai-adapters-core';
 import { type AgentTestContext, getAdapterUnderTest, getAgentTestContext, updateMeta } from './shared.js';
 
@@ -88,6 +89,7 @@ describe.sequential('Queue & State Transitions', async () => {
       it('processes enqueued message after initial completes', async ({ task }) => {
         // Agent is already started and idle from previous test
         const handle = await agent.sendMessage(normalizeMessageInput('Say the single word: HELLO'), {
+          call: createTestCall(),
           deliveryMode: 'enqueue',
         });
         expect(handle.adapterSessionId).toBeDefined();
@@ -123,6 +125,7 @@ describe.sequential('Queue & State Transitions', async () => {
 
         // Start agent and wait for it to be processing
         const startResult = await agent.start(normalizeMessageInput('Say "Sheep sleep deep" three times fast!'), {
+          call: createTestCall(),
           systemPrompt: context.conformanceSystemPrompt,
         });
         updateMeta({ task }, 'agentId', startResult.agentId);
@@ -132,6 +135,7 @@ describe.sequential('Queue & State Transitions', async () => {
 
         // Queue messages while agent is busy - they won't be acknowledged yet
         const handle1 = await agent.sendMessage(normalizeMessageInput('Say the single word: HI'), {
+          call: createTestCall(),
           deliveryMode: 'enqueue',
         });
 
@@ -139,12 +143,14 @@ describe.sequential('Queue & State Transitions', async () => {
         updateMeta({ task }, 'adapterSessionId', handle1.adapterSessionId!);
 
         const handle2 = await agent.sendMessage(normalizeMessageInput('Say the single word: HELLO'), {
+          call: createTestCall(),
           deliveryMode: 'enqueue',
         });
         expect(handle2.adapterSessionId).toBeDefined();
         updateMeta({ task }, 'adapterSessionId', handle2.adapterSessionId!);
 
         const replaceHandle = await agent.sendMessage(normalizeMessageInput('Say the single word: OK'), {
+          call: createTestCall(),
           deliveryMode: 'replace',
         });
         expect(replaceHandle.adapterSessionId).toBeDefined();
@@ -188,17 +194,20 @@ describe.sequential('Queue & State Transitions', async () => {
         await agent.complete();
 
         const handle1 = await agent.sendMessage(normalizeMessageInput('Say the single word: HI'), {
+          call: createTestCall(),
           deliveryMode: 'enqueue',
         });
         await handle1.waitForAcknowledgment();
         updateMeta({ task }, 'adapterSessionId', handle1.adapterSessionId!);
 
         const handle2 = await agent.sendMessage(normalizeMessageInput('Say the single word: HELLO'), {
+          call: createTestCall(),
           deliveryMode: 'enqueue',
         });
         updateMeta({ task }, 'adapterSessionId', handle2.adapterSessionId!);
 
         const replaceHandle = await agent.sendMessage(normalizeMessageInput('Say the single word: OK'), {
+          call: createTestCall(),
           deliveryMode: 'replace',
         });
         updateMeta({ task }, 'adapterSessionId', replaceHandle.adapterSessionId!);

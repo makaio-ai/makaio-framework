@@ -1,8 +1,8 @@
 /* eslint max-lines: ["error", { "max": 490, "skipBlankLines": true, "skipComments": true }] */
 import type { IMakaioBus } from '@makaio/bus-core';
+import type { CallContext } from '@makaio/core';
 import type { ExtensionOperatorConfigSource, ExtensionService, ExtensionToken, TrayManifest } from '@makaio/contracts';
 import type { ExtensionWarningAction } from '@makaio/contracts/extension';
-import type { CliContribution } from '../cli/types.js';
 import { createOpenContributionProcessor, OpenContributionIndex } from './open-contribution-index.js';
 import { BootProgressObserver } from './boot-progress-observer.js';
 import { registerWarningActionHandler } from './warning-action-dispatcher.js';
@@ -41,6 +41,7 @@ import type {
 import type { ExtensionInfo } from '../observability/shared-schemas.js';
 import {
   buildExtensionContext,
+  createExtensionCarrierBus,
   type ExtensionContextHost,
   resolveExtensionEntryConfig,
   resolveExtensionEntryConfigOutcome,
@@ -49,7 +50,11 @@ import type { ExtensionConfigResolution } from './resolve-config.js';
 import { closeEnabledExtensionEntries } from './extension-entry-closure.js';
 import { runExtensionMigrations, type ExtensionMigrationRunner } from './extension-migration-runner.js';
 import { runExtensionHealthCheck, type ExtensionHealthHost } from './extension-health-runner.js';
-import { collectExtensionSurfaces, extensionsWithHttp } from './extension-surface-collector.js';
+import {
+  collectExtensionSurfaces,
+  extensionsWithHttp,
+  type OwnedCliContribution,
+} from './extension-surface-collector.js';
 import {
   resolveDefaultStopBudgetMs,
   shutdownExtensions,
@@ -155,7 +160,7 @@ export class ExtensionCoordinator {
   public readonly windowRegistry: WindowRegistry = new WindowRegistry();
 
   private readonly _trayEntries: Array<TrayManifest & { readonly packageName: string }> = [];
-  private readonly _cliContributions: CliContribution[] = [];
+  private readonly _cliContributions: OwnedCliContribution[] = [];
 
   private readonly persistEnabled: ((name: string, enabled: boolean) => Promise<void>) | undefined;
   private readonly loadEnabled: ((name: string) => boolean | undefined) | undefined;
@@ -205,9 +210,9 @@ export class ExtensionCoordinator {
 
   /**
    * CLI contributions collected from packages during {@link load}.
-   * @returns Immutable snapshot of all collected CLI contributions.
+   * @returns Immutable snapshot of all collected CLI contributions, each with its contributing extension.
    */
-  public get cliContributions(): ReadonlyArray<CliContribution> {
+  public get cliContributions(): ReadonlyArray<OwnedCliContribution> {
     return this._cliContributions;
   }
 
@@ -392,6 +397,10 @@ export class ExtensionCoordinator {
         bus: this.bus,
         entries: this.entries,
         cliContributions: this._cliContributions,
+        carrierBusOf: (name) => {
+          const entry = this.entries.get(name);
+          return entry ? createExtensionCarrierBus(this.bus, entry.identity) : undefined;
+        },
         list: () => this.list(),
         getInfo: (name) => this.getInfo(name),
         handleSetEnabled: (name, enabled) => this.handleSetEnabled(name, enabled),
@@ -440,6 +449,7 @@ export class ExtensionCoordinator {
    * @param bootSignal - Cancels the start, between two packages and inside a service's `init()`; the coordinator's shutdown cancels it too.
    */
   private async startAllInLifecycleLane(bootSignal: AbortSignal | undefined): Promise<void> {
+    const call = this.bus.own('start');
     // A start ends with whichever comes first: the boot's own cancellation or
     // the coordinator's shutdown.
     const signal =
@@ -483,7 +493,7 @@ export class ExtensionCoordinator {
         }),
       );
 
-      await emitWarnings({ bus: this.bus, entries: this.entries, warningActionMap: this.warningActionMap });
+      await emitWarnings(call, { bus: this.bus, entries: this.entries, warningActionMap: this.warningActionMap });
 
       // Health warnings belong to an extension entry; an unclaimed kind has no owner entry to attach to.
       const activeNames = [...this.entries].filter(([, entry]) => entry.state === 'active').map(([name]) => name);
@@ -883,9 +893,10 @@ export class ExtensionCoordinator {
       entries: this.entries,
       persistEnabled: this.persistEnabled,
       contributionProcessors: this.contributionProcessors,
-      runHealthCheck: (n) => runExtensionHealthCheck(this.createExtensionHealthHost(), n),
-      emitWarningsForEntry: (n, entry) =>
+      runHealthCheck: (n: string) => runExtensionHealthCheck(this.createExtensionHealthHost(), n),
+      emitWarningsForEntry: (call: CallContext, n: string, entry: ExtensionEntry) =>
         emitWarningsForEntry(
+          call,
           { bus: this.bus, entries: this.entries, warningActionMap: this.warningActionMap },
           n,
           entry,

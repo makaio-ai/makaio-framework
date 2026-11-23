@@ -9,12 +9,19 @@
 
 import { describe, it, expect } from 'vitest';
 import type { SubjectDefinition } from '@makaio/core';
-import { createBusInstance, createBusContext } from '../bus.js';
+import { createBusInstance } from '../bus.js';
+import { busContextOf, createBusContext, mintCallContext } from '../kernel-api.js';
 import { TimeoutError } from '../errors/index.js';
 import { dispatch, type DispatchOptions } from '../methods/request/dispatch.js';
 import { resolveReadinessBudget } from '../methods/request/readiness-gate.js';
 import { anchorRequestDeadline } from '../registries/transport-registry.js';
 import type { BusMessage, BusTransport, BusTransportKeys } from '../index.js';
+
+/** Call context of the budget fixtures; the resolver never reads it, the type requires one. */
+const BUDGET_CALL = mintCallContext({
+  caller: { kind: 'test.budget', id: 'budget' },
+  principal: { kind: 'test.budget', id: 'budget' },
+});
 
 /**
  * Build dispatch options carrying only what the budget resolver reads.
@@ -23,6 +30,7 @@ import type { BusMessage, BusTransport, BusTransportKeys } from '../index.js';
  */
 function budgetOptions(readinessTimeout?: number): DispatchOptions {
   return {
+    call: BUDGET_CALL,
     correlationId: 'budget-correlation',
     messageId: 'budget-message',
     timeout: 60_000,
@@ -77,9 +85,10 @@ describe('dispatch with an already-expired deadline', () => {
       subscribe: async () => undefined,
       unsubscribe: async () => undefined,
     };
-    const registration = bus
-      .getContext()
-      .transportRegistry.registerTransport('expired-deadline' as BusTransportKeys, transport);
+    const registration = busContextOf(bus).transportRegistry.registerTransport(
+      'expired-deadline' as BusTransportKeys,
+      transport,
+    );
 
     const definition: SubjectDefinition = {
       subject: 'expiredDeadline',
@@ -93,10 +102,11 @@ describe('dispatch with an already-expired deadline', () => {
       // and the caller is told the request timed out rather than that it had no handler.
       await expect(
         dispatch(
-          bus.getContext(),
+          busContextOf(bus),
           definition,
           {},
           {
+            call: bus.own('root'),
             correlationId: 'expired-correlation',
             messageId: 'expired-message',
             // `timeout: 0` would disable the caller's cap entirely; only the already-past
@@ -144,12 +154,12 @@ describe('deadline expiry precedence over a provisional transport error', () => 
       unsubscribe: async () => undefined,
     };
 
-    const registry = bus.getContext().transportRegistry;
+    const registry = busContextOf(bus).transportRegistry;
     const a = registry.registerTransport('deadline-failing' as BusTransportKeys, failing);
     const b = registry.registerTransport('deadline-pending' as BusTransportKeys, stillPending);
-    bus
-      .getContext()
-      .remoteRequestHandlers.set('budget.deadlinePrecedence', [{ transport: 'deadline-failing', priority: 0 }]);
+    busContextOf(bus).remoteRequestHandlers.set('budget.deadlinePrecedence', [
+      { transport: 'deadline-failing', priority: 0 },
+    ]);
 
     const definition: SubjectDefinition = {
       subject: 'deadlinePrecedence',
@@ -161,10 +171,11 @@ describe('deadline expiry precedence over a provisional transport error', () => 
       // failure must not be reported in its place.
       await expect(
         dispatch(
-          bus.getContext(),
+          busContextOf(bus),
           definition,
           {},
           {
+            call: bus.own('root'),
             correlationId: 'precedence-correlation',
             messageId: 'precedence-message',
             timeout: 0,
@@ -209,10 +220,11 @@ describe('anchorRequestDeadline', () => {
       expect(anchored).toBeDefined();
       // Dispatching with that anchor runs normally rather than expiring on entry.
       const outcome = await dispatch(
-        bus.getContext(),
+        busContextOf(bus),
         definition,
         {},
         {
+          call: bus.own('root'),
           correlationId: 'skew-correlation',
           messageId: 'skew-message',
           timeout: 5_000,

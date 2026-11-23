@@ -6,7 +6,7 @@
  */
 
 import type { IMakaioBus } from '@makaio/bus-core';
-import { HostSubjects } from '@makaio/contracts';
+import { type CallContext, HostSubjects } from '@makaio/contracts';
 import type { WindowState } from '@makaio/host-shared';
 
 /**
@@ -30,10 +30,11 @@ export interface WindowsBusHandlerDeps {
    * Throws when the registration ID is not found in the window registry or
    * when the underlying `BrowserWindow` cannot be created. The handler catches
    * all throws and replies with `{ windowId: null }`.
+   * @param call - Call context of the handled window request.
    * @param registrationId - Qualified window registration ID to open.
    * @returns Electron `BrowserWindow.id` of the newly created window.
    */
-  createWindow: (registrationId: string) => number;
+  createWindow: (call: CallContext, registrationId: string) => number;
   /**
    * Returns the {@link WindowState} of the currently open window with the
    * given registration ID, or `undefined` when no such window is open.
@@ -52,8 +53,11 @@ export interface WindowsBusHandlerDeps {
   focusWindow: (windowId: number) => boolean;
   /** Focus the most recently active window. Returns the focused window ID, or null if no windows exist. */
   focusAnyWindow: () => number | null;
-  /** Open the default shell window. Returns the window ID. */
-  openDefaultWindow: () => number;
+  /**
+   * Open the default shell window. Returns the window ID.
+   * @param call - Call context of the handled focus request.
+   */
+  openDefaultWindow: (call: CallContext) => number;
   /**
    * Called once before the first window is created when upgrading from
    * background-only mode to regular (visible) mode.
@@ -95,7 +99,7 @@ export function registerWindowsBusHandlers(bus: IMakaioBus, deps: WindowsBusHand
         return;
       }
 
-      const windowId = deps.createWindow(deps.dashboardRegistrationId);
+      const windowId = deps.createWindow(ctx.call, deps.dashboardRegistrationId);
       ctx.setResult({ windowId });
     } catch (error) {
       console.error(
@@ -116,7 +120,7 @@ export function registerWindowsBusHandlers(bus: IMakaioBus, deps: WindowsBusHand
         ctx.setResult({ focused: true, windowId: focusedId });
         return;
       }
-      const windowId = deps.openDefaultWindow();
+      const windowId = deps.openDefaultWindow(ctx.call);
       ctx.setResult({ focused: true, windowId });
     } catch (error) {
       console.error(

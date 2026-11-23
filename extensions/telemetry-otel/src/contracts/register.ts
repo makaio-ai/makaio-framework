@@ -7,20 +7,26 @@
  */
 
 import type { IMakaioBus } from '@makaio/bus-core';
+import type { CallContext } from '@makaio/contracts';
 import { TelemetryOtelSubjects } from './namespace.js';
 import type { SpanEnricherRule } from './types.js';
 
 /**
  * Emit a `registerEnricherRule` event on the bus and return an async
  * unregister callback.
+ * @param call - Call context for the registration.
  * @param bus - The application bus instance.
  * @param rule - Fully-formed enricher rule to register.
- * @returns Async cleanup function that emits `unregisterEnricherRule` for the
- *   registered rule id.
+ * @returns Async cleanup function that accepts its own call context and emits
+ *   `unregisterEnricherRule` for the registered rule id.
  */
-export async function registerSpanEnricherRule(bus: IMakaioBus, rule: SpanEnricherRule): Promise<() => Promise<void>> {
-  await bus.emit(TelemetryOtelSubjects.registerEnricherRule, rule);
-  return async () => {
-    await bus.emit(TelemetryOtelSubjects.unregisterEnricherRule, { ruleId: rule.id });
+export async function registerSpanEnricherRule(
+  call: CallContext,
+  bus: IMakaioBus,
+  rule: SpanEnricherRule,
+): Promise<(call: CallContext) => Promise<void>> {
+  await bus.emit(call, TelemetryOtelSubjects.registerEnricherRule, rule);
+  return async (call) => {
+    await bus.emit(call, TelemetryOtelSubjects.unregisterEnricherRule, { ruleId: rule.id });
   };
 }

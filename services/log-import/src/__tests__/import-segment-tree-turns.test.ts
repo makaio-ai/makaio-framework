@@ -12,6 +12,7 @@
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
+import { createTestCall } from '@makaio/test-utils';
 import { SessionSubjects } from '@makaio/contracts';
 import type { ImportSegment, StorageMessagePayload } from '@makaio/ai-adapters-core';
 import {
@@ -119,7 +120,9 @@ describe('importSegmentTree (turn-aware)', () => {
     // must already be queryable when the event fires (four-point contract).
     cleanups.push(
       MakaioBus.on(SessionSubjects.turn.started, async (ctx) => {
-        const { messages } = await MakaioBus.request(MessageStorageSubjects.getByTurn, { turnId: ctx.payload.turnId });
+        const { messages } = await MakaioBus.request(ctx.call, MessageStorageSubjects.getByTurn, {
+          turnId: ctx.payload.turnId,
+        });
         turnEvents.push({
           type: 'started',
           turnId: ctx.payload.turnId,
@@ -129,7 +132,9 @@ describe('importSegmentTree (turn-aware)', () => {
         });
       }),
       MakaioBus.on(SessionSubjects.turn.completed, async (ctx) => {
-        const { messages } = await MakaioBus.request(MessageStorageSubjects.getByTurn, { turnId: ctx.payload.turnId });
+        const { messages } = await MakaioBus.request(ctx.call, MessageStorageSubjects.getByTurn, {
+          turnId: ctx.payload.turnId,
+        });
         turnEvents.push({
           type: 'completed',
           turnId: ctx.payload.turnId,
@@ -150,7 +155,7 @@ describe('importSegmentTree (turn-aware)', () => {
   it('links turn members to real turnIds and emits per-turn events after messages are queryable', async () => {
     const segment = buildTurnSegment('session-turn-aware');
 
-    const result = await importSegmentTree(MakaioBus, segment, buildCtx({ ingestionMarker: 'live' }));
+    const result = await importSegmentTree(createTestCall(), MakaioBus, segment, buildCtx({ ingestionMarker: 'live' }));
 
     expect(result.messageCount).toBe(5);
     expect(result.turnCount).toBe(2);
@@ -184,7 +189,7 @@ describe('importSegmentTree (turn-aware)', () => {
   it('defaults the ingestion marker to backfill when the context omits it', async () => {
     const segment = buildTurnSegment('session-default-marker');
 
-    await importSegmentTree(MakaioBus, segment, buildCtx());
+    await importSegmentTree(createTestCall(), MakaioBus, segment, buildCtx());
 
     expect(turnEvents.length).toBeGreaterThan(0);
     expect(turnEvents.every((e) => e.ingestionMarker === 'backfill')).toBe(true);
@@ -196,7 +201,7 @@ describe('importSegmentTree (turn-aware)', () => {
       turns: undefined,
     };
 
-    const result = await importSegmentTree(MakaioBus, segment, buildCtx({ ingestionMarker: 'live' }));
+    const result = await importSegmentTree(createTestCall(), MakaioBus, segment, buildCtx({ ingestionMarker: 'live' }));
 
     expect(result.turnCount).toBe(0);
     expect(turnEvents).toHaveLength(0);
@@ -213,14 +218,14 @@ describe('importSegmentTree (turn-aware)', () => {
     const segment = buildTurnSegment('session-idempotent');
     const ctx = buildCtx({ ingestionMarker: 'backfill' });
 
-    const first = await importSegmentTree(MakaioBus, segment, ctx);
+    const first = await importSegmentTree(createTestCall(), MakaioBus, segment, ctx);
     const { turns: firstTurns } = await MakaioBus.request(TurnStorageSubjects.getBySession, {
       sessionId: first.sessionId,
     });
     const eventCountAfterFirst = turnEvents.length;
     expect(eventCountAfterFirst).toBe(4);
 
-    const second = await importSegmentTree(MakaioBus, segment, ctx);
+    const second = await importSegmentTree(createTestCall(), MakaioBus, segment, ctx);
 
     expect(second.sessionId).toBe(first.sessionId);
     expect(second.turnCount).toBe(0);
@@ -240,7 +245,7 @@ describe('importSegmentTree (turn-aware)', () => {
       { turnAnchorId: 'u1', adapterMessageIds: ['u1', 'ghost-id', 'a1'], startedAt: 1_000, completedAt: 2_500 },
     ];
 
-    const result = await importSegmentTree(MakaioBus, segment, buildCtx());
+    const result = await importSegmentTree(createTestCall(), MakaioBus, segment, buildCtx());
 
     expect(result.turnCount).toBe(1);
     const { turns } = await MakaioBus.request(TurnStorageSubjects.getBySession, { sessionId: result.sessionId });
@@ -255,7 +260,7 @@ describe('importSegmentTree (turn-aware)', () => {
       { turnAnchorId: 'ghost-anchor', adapterMessageIds: ['ghost-anchor', 'a1'], startedAt: 1_000, completedAt: 2_500 },
     ];
 
-    const result = await importSegmentTree(MakaioBus, segment, buildCtx());
+    const result = await importSegmentTree(createTestCall(), MakaioBus, segment, buildCtx());
 
     expect(result.turnCount).toBe(0);
     const { turns } = await MakaioBus.request(TurnStorageSubjects.getBySession, { sessionId: result.sessionId });
@@ -270,7 +275,7 @@ describe('importSegmentTree (turn-aware)', () => {
       isSidechain: true,
     };
 
-    const result = await importSegmentTree(MakaioBus, segment, buildCtx());
+    const result = await importSegmentTree(createTestCall(), MakaioBus, segment, buildCtx());
 
     const { session } = await MakaioBus.request(SessionStorageSubjects.get, { sessionId: result.sessionId });
     expect(session?.isSidechain).toBe(true);

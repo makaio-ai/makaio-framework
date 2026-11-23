@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { createBusInstance, type IMakaioBus } from '@makaio/bus-core';
+import { busContextOf } from '@makaio/bus-core/kernel-api';
 import {
   ExecutionAttemptNamespace,
   ExecutionAttemptSubjects,
@@ -139,7 +140,7 @@ describe('installOperationDeliveryEndpoint', () => {
         controller.signal,
       ),
     ).rejects.toThrow('cancelled');
-    expect(bus.getContext().requestHandlers.get('execution-attempt.operation.deliver') ?? []).toHaveLength(0);
+    expect(busContextOf(bus).requestHandlers.get('execution-attempt.operation.deliver') ?? []).toHaveLength(0);
   });
 
   it('removes an installed endpoint if cancellation arrives before installation transfers ownership', async () => {
@@ -153,7 +154,7 @@ describe('installOperationDeliveryEndpoint', () => {
     );
     controller.abort(new Error('cancelled'));
     await expect(installing).rejects.toThrow('cancelled');
-    expect(bus.getContext().requestHandlers.get('execution-attempt.operation.deliver') ?? []).toHaveLength(0);
+    expect(busContextOf(bus).requestHandlers.get('execution-attempt.operation.deliver') ?? []).toHaveLength(0);
   });
 
   it('answers the bounded runtime probe with a completed receipt before it knows its generation', async () => {

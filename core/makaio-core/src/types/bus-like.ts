@@ -1,3 +1,4 @@
+import type { CallContext, OwnWorkPurpose } from './call-context.js';
 import type { RequestMessagePayload } from './message.js';
 import type { SubjectDefinition } from './subjects.js';
 
@@ -48,16 +49,32 @@ export interface BusLikeEmitOptions {
  * event/request calls that contract helper APIs make without importing bus-core.
  */
 export interface MakaioBusLike {
-  /** Emit an event. */
+  /** Emit an event on behalf of a handled message (call form): principal comes from `call`. */
+  emit<Subject extends EventSubjectLike>(
+    call: CallContext,
+    subject: Subject,
+    payload: Subject['$meta']['payload'],
+    options?: BusLikeEmitOptions,
+  ): Promise<void>;
+  /** Emit an event on behalf of the carrier itself (own form): caller and principal are the carrier. */
   emit<Subject extends EventSubjectLike>(
     subject: Subject,
     payload: Subject['$meta']['payload'],
     options?: BusLikeEmitOptions,
   ): Promise<void>;
 
-  /** Send a request and await a response. */
+  /** Send a request on behalf of a handled message (call form) and await a response. */
+  request<Subject extends RequestSubjectLike>(
+    call: CallContext,
+    subject: Subject,
+    payload: Subject['$meta']['payload']['request'],
+  ): Promise<Subject['$meta']['payload']['response']>;
+  /** Send a request on behalf of the carrier itself (own form) and await a response. */
   request<Subject extends RequestSubjectLike>(
     subject: Subject,
     payload: Subject['$meta']['payload']['request'],
   ): Promise<Subject['$meta']['payload']['response']>;
+
+  /** Acquire the context for work this instance's owner starts itself. */
+  own(purpose: OwnWorkPurpose): CallContext;
 }

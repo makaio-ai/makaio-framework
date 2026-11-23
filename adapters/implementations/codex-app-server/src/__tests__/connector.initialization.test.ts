@@ -8,7 +8,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { CodexAppServerConnector } from '../connector.js';
+import { createTestCall } from '@makaio/test-utils';
 import { CodexConnectorCloseError } from '../connector/connector-shutdown.js';
 import {
   createConnectorTestContext,
@@ -94,7 +94,7 @@ describe('CodexAppServerConnector - Initialization', () => {
     cleanupConnectorTestContext(ctx);
     ctx = await createConnectorTestContext({ adapterAuth: createApiKeyAdapterAuth('private-api-key') });
 
-    await ctx.connector.initialize();
+    await ctx.connector.initialize({ call: createTestCall() });
 
     expect(ctx.mockJsonRpcClient.operations.slice(0, 4)).toEqual([
       { kind: 'request', method: 'initialize', params: expect.any(Object) },
@@ -112,8 +112,8 @@ describe('CodexAppServerConnector - Initialization', () => {
     cleanupConnectorTestContext(ctx);
     ctx = await createConnectorTestContext({ adapterAuth: createApiKeyAdapterAuth() });
 
-    await ctx.connector.initialize();
-    await ctx.connector.initialize();
+    await ctx.connector.initialize({ call: createTestCall() });
+    await ctx.connector.initialize({ call: createTestCall() });
 
     expect(ctx.mockJsonRpcClient.sentRequests.filter(({ method }) => method === 'account/login/start')).toHaveLength(1);
     expect(ctx.mockJsonRpcClient.sentRequests.filter(({ method }) => method.startsWith('thread/'))).toHaveLength(1);
@@ -132,8 +132,8 @@ describe('CodexAppServerConnector - Initialization', () => {
     });
 
     try {
-      await native.connector.initialize();
-      await accessToken.connector.initialize();
+      await native.connector.initialize({ call: createTestCall() });
+      await accessToken.connector.initialize({ call: createTestCall() });
       expect(native.mockJsonRpcClient.sentRequests.some(({ method }) => method === 'account/login/start')).toBe(false);
       expect(accessToken.mockJsonRpcClient.sentRequests.some(({ method }) => method === 'account/login/start')).toBe(
         false,
@@ -170,7 +170,7 @@ describe('CodexAppServerConnector - Initialization', () => {
 
     let loginError: unknown;
     try {
-      await ctx.connector.initialize();
+      await ctx.connector.initialize({ call: createTestCall() });
     } catch (error) {
       loginError = error;
     }
@@ -179,7 +179,7 @@ describe('CodexAppServerConnector - Initialization', () => {
     expect((loginError as Error).message).not.toContain('private-api-key');
     expect(client.sentRequests.some(({ method }) => method.startsWith('thread/'))).toBe(false);
 
-    await ctx.connector.initialize();
+    await ctx.connector.initialize({ call: createTestCall() });
 
     expect(client.sentRequests.filter(({ method }) => method === 'initialize')).toHaveLength(2);
     expect(client.sentRequests.filter(({ method }) => method === 'account/login/start')).toHaveLength(2);
@@ -189,7 +189,7 @@ describe('CodexAppServerConnector - Initialization', () => {
   it('discards private API-key login material when the connector closes', async () => {
     cleanupConnectorTestContext(ctx);
     ctx = await createConnectorTestContext({ adapterAuth: createApiKeyAdapterAuth('private-api-key') });
-    await ctx.connector.initialize();
+    await ctx.connector.initialize({ call: createTestCall() });
 
     expect(Reflect.get(ctx.connector, 'accountLogin')).toMatchObject({ type: 'apiKey' });
 
@@ -219,7 +219,7 @@ describe('CodexAppServerConnector - Initialization', () => {
       adapterAuth: createApiKeyAdapterAuth('private-api-key'),
       jsonRpcClient: client,
     });
-    await ctx.connector.initialize();
+    await ctx.connector.initialize({ call: createTestCall() });
 
     let closeError: unknown;
     try {
@@ -286,20 +286,9 @@ describe('CodexAppServerConnector - Initialization', () => {
     });
 
     cleanupConnectorTestContext(ctx);
-    ctx = await createConnectorTestContext();
-    ctx.mockJsonRpcClient = failingClient;
-    ctx.connector = new CodexAppServerConnector({
-      bus: ctx.mockBus,
-      adapterId: 'test-adapter',
-      adapterName: 'codex-app-server',
-      agentId: 'test-agent',
-      model: 'claude-3-5-sonnet-20241022',
-      cwd: ctx.tempCwd,
-      env: {},
-      jsonRpcClient: failingClient,
-    });
+    ctx = await createConnectorTestContext({ jsonRpcClient: failingClient });
 
-    await expect(ctx.connector.initialize()).rejects.toThrow('initialize failed');
+    await expect(ctx.connector.initialize({ call: createTestCall() })).rejects.toThrow('initialize failed');
     expect(failingClient.sentNotifications).toHaveLength(0);
 
     await startConnectorAndEmitThreadStarted(ctx.connector, failingClient, 'Hello after retry');

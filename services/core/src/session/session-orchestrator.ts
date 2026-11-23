@@ -1,4 +1,5 @@
-import { MakaioBus, type IMakaioBus } from '@makaio/bus-core';
+import type { IMakaioBus } from '@makaio/bus-core';
+import type { CallContext } from '@makaio/core';
 import {
   SessionContextSchema,
   SessionSubjects,
@@ -63,10 +64,7 @@ export class SessionOrchestrator implements ISessionOrchestrator {
    *   instance resolution).
    */
   public constructor(
-    // Defaulted `bus` before required `machineId` looks inverted, but every
-    // call site passes both explicitly; TypeScript still enforces machineId.
-    // Reordering would churn all construction sites for no behavioral gain.
-    private readonly bus: IMakaioBus = MakaioBus,
+    private readonly bus: IMakaioBus,
     machineId: string,
   ) {
     this.machineId = machineId;
@@ -101,6 +99,7 @@ export class SessionOrchestrator implements ISessionOrchestrator {
 
         // 1. Get or create session
         const { sessionId: resolvedSessionId, session } = await getOrCreateSession(
+          ctx.call,
           this.bus,
           sessionId,
           sessionContext,
@@ -110,7 +109,7 @@ export class SessionOrchestrator implements ISessionOrchestrator {
 
         // 2. Resolve every start this session has in flight, before anything
         //    probes an agent or decides the session has none (§4.5).
-        const inFlight = await resolveInFlightStarts(this.bus, session);
+        const inFlight = await resolveInFlightStarts(ctx.call, this.bus, session);
 
         // 2b. A send that stated its targets — named ids or `'all'` — against a
         //     session that has none is already decided, so it is answered before
@@ -132,6 +131,7 @@ export class SessionOrchestrator implements ISessionOrchestrator {
         const initialDeferred = new Set(inFlight.deferredAgentIds);
         if (session.agents.length === 0) {
           const adopted = await this.startLeadAgent(
+            ctx.call,
             session,
             resolvedSessionId,
             agentSelection,
@@ -157,11 +157,14 @@ export class SessionOrchestrator implements ISessionOrchestrator {
           deferredAgentIds: deferred,
           recoveryContext,
         } = await convergeDeferrals(
+          ctx.call,
           {
             bus: this.bus,
             machineId: this.machineId,
             startReplacementLeadAgent: (selection) =>
-              this.startLeadAgent(session, resolvedSessionId, selection, message, sessionContext, { kind: 'replace' }),
+              this.startLeadAgent(ctx.call, session, resolvedSessionId, selection, message, sessionContext, {
+                kind: 'replace',
+              }),
           },
           { session, sessionId: resolvedSessionId, targetSpec, agentSelection, message, sessionContext },
           initialTargets,
@@ -182,6 +185,7 @@ export class SessionOrchestrator implements ISessionOrchestrator {
 
         const normalizedBlocks = normalizeToBlocks(message);
         const admission = await this.turnManager.acquireMessageAdmission(
+          ctx.call,
           resolvedSessionId,
           targetAgents.map((agent) => agent.agentId),
           messageId,
@@ -190,7 +194,7 @@ export class SessionOrchestrator implements ISessionOrchestrator {
         );
         const turn = admission.turn;
         try {
-          const appendResult = await this.bus.requestOptional(MessageStorageSubjects.append, {
+          const appendResult = await this.bus.requestOptional(ctx.call, MessageStorageSubjects.append, {
             message: {
               messageId,
               turnId: turn.turnId,
@@ -204,7 +208,7 @@ export class SessionOrchestrator implements ISessionOrchestrator {
           });
           if (!appendResult.handled) throw new Error('Message storage append handler is not registered');
           if (admission.isPreparationOwner) {
-            await emitSessionTurnStarted(this.bus, {
+            await emitSessionTurnStarted(ctx.call, this.bus, {
               sessionId: resolvedSessionId,
               turnId: turn.turnId,
               turnNumber: turn.turnNumber,
@@ -214,7 +218,7 @@ export class SessionOrchestrator implements ISessionOrchestrator {
               ingestionMarker: 'live',
             });
           }
-          await emitSessionUserMessageSent(this.bus, {
+          await emitSessionUserMessageSent(ctx.call, this.bus, {
             sessionId: resolvedSessionId,
             turnId: turn.turnId,
             turnNumber: turn.turnNumber,
@@ -227,7 +231,7 @@ export class SessionOrchestrator implements ISessionOrchestrator {
           admission.commit();
         } catch (error: unknown) {
           try {
-            await admission.rollback(USER_MESSAGE_PERSISTENCE_FAILED_TURN_ERROR);
+            await admission.rollback(ctx.call, USER_MESSAGE_PERSISTENCE_FAILED_TURN_ERROR);
           } catch (cleanupError) {
             console.error('[SessionOrchestrator] Failed to finalize rejected message setup:', cleanupError);
           }
@@ -236,7 +240,7 @@ export class SessionOrchestrator implements ISessionOrchestrator {
 
         for (const agent of targetAgents) {
           void this.bus
-            .requestOptional(MessageRoutingSubjects.record, {
+            .requestOptional(ctx.call, MessageRoutingSubjects.record, {
               messageId,
               agentId: agent.agentId,
               status: 'sent',
@@ -257,6 +261,7 @@ export class SessionOrchestrator implements ISessionOrchestrator {
         // context so that turnContext and other session context fields are preserved.
         const routingContext = recoveryContext ? { ...sessionContext, ...recoveryContext } : sessionContext;
         await routeToAgentsCore(
+          ctx.call,
           this.bus,
           session,
           targetAgents,
@@ -294,6 +299,7 @@ export class SessionOrchestrator implements ISessionOrchestrator {
    * A lost designation race is not an error: the session now has the winner's
    * agent, and this send continues against it. Only a session that *still* has
    * no agents after the re-read has nothing to send to.
+   * @param call - Call context of the `session.sendMessage` request being served.
    * @param session - Session being sent to; its agents and lead are updated in place.
    * @param sessionId - Resolved session identity.
    * @param agentSelection - Public agent selection from the request.
@@ -303,6 +309,7 @@ export class SessionOrchestrator implements ISessionOrchestrator {
    * @returns What the adopted agents need, empty unless a race was lost.
    */
   private async startLeadAgent(
+    call: CallContext,
     session: IMakaioSession,
     sessionId: string,
     agentSelection: AgentSelectionBase | undefined,
@@ -311,6 +318,7 @@ export class SessionOrchestrator implements ISessionOrchestrator {
     leadTransition: LeadTransition,
   ): Promise<InFlightStartResolution> {
     const selection = await resolveInitialAdapterSelection(
+      call,
       this.bus,
       agentSelection,
       sessionId,
@@ -318,12 +326,13 @@ export class SessionOrchestrator implements ISessionOrchestrator {
       sessionContext,
     );
     const { adapterName, instance, providerContext, providerConfigId } = await resolveFreshStartTarget(
+      call,
       this.bus,
       selection,
       { sessionId, machineId: this.machineId, registry: this.adapterRegistry },
     );
 
-    const result = await startLeadAgent(this.bus, {
+    const result = await startLeadAgent(call, this.bus, {
       sessionId,
       instance,
       adapterName,
@@ -351,7 +360,7 @@ export class SessionOrchestrator implements ISessionOrchestrator {
       };
     }
 
-    const { session: reread } = await this.bus.request(SessionSubjects.get, { sessionId });
+    const { session: reread } = await this.bus.request(call, SessionSubjects.get, { sessionId });
     if (!reread || reread.agents.length === 0) {
       throw new SessionStartError(
         'lead-conflict',
@@ -367,7 +376,7 @@ export class SessionOrchestrator implements ISessionOrchestrator {
     // no connector, reads that as dead, and opens a second lifecycle against a
     // start that is still running — in another process, where this runtime's
     // registry cannot see it and only the status compare-and-swap can arbitrate.
-    const adopted = await resolveInFlightStarts(this.bus, session);
+    const adopted = await resolveInFlightStarts(call, this.bus, session);
     if (session.agents.length === 0) {
       throw new SessionStartError(
         'lead-conflict',
@@ -382,11 +391,12 @@ export class SessionOrchestrator implements ISessionOrchestrator {
    *
    * Called by `routeToAgentsCore` error handling and by the turn manager's
    * own `agent.complete` listener (registered via `registerCompletionHandlers`).
+   * @param call - Call context of the handled message whose completion closes this turn's ledger.
    * @param turn - The turn to complete
    * @param result - Turn result (success status and error messages)
    */
-  private async completeTurn(turn: Turn, result: TurnCompletionResult): Promise<void> {
-    await this.turnManager.completeTurn(turn, result);
+  private async completeTurn(call: CallContext, turn: Turn, result: TurnCompletionResult): Promise<void> {
+    await this.turnManager.completeTurn(call, turn, result);
   }
 
   /**

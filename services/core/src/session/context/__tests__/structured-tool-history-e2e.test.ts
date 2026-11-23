@@ -9,6 +9,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
 import type { SessionMessage, MessageBlock } from '@makaio/contracts';
+import { createTestCall } from '@makaio/test-utils';
 import { getFullConversation } from '../get-full-conversation.js';
 import { convertSessionMessage } from '../convert-session-message.js';
 import {
@@ -101,7 +102,7 @@ describe('structured tool history E2E', () => {
       mockGetMessage(cleanup, 'msg-3', toolResultMessage);
 
       // Step 1: Get full conversation
-      const conversation = await getFullConversation(MakaioBus, 'session-1');
+      const conversation = await getFullConversation(createTestCall(), MakaioBus, 'session-1');
 
       expect(conversation.messages).toHaveLength(3);
       expect(conversation.sessionChain).toEqual(['session-1']);
@@ -160,7 +161,7 @@ describe('structured tool history E2E', () => {
       mockGetEvents(cleanup, 'session-1', [messageEvent('msg-1', 1000, { role: 'assistant' })]);
       mockGetMessage(cleanup, 'msg-1', errorMessage);
 
-      const conversation = await getFullConversation(MakaioBus, 'session-1');
+      const conversation = await getFullConversation(createTestCall(), MakaioBus, 'session-1');
       const converted = convertSessionMessage(conversation.messages[0]);
       const blocks = toBlockArray(converted.blocks);
 
@@ -254,7 +255,7 @@ describe('structured tool history E2E', () => {
       mockGetMessage(cleanup, 'child-msg-1', childMsg);
 
       // Get full conversation for child
-      const conversation = await getFullConversation(MakaioBus, 'child-session');
+      const conversation = await getFullConversation(createTestCall(), MakaioBus, 'child-session');
 
       expect(conversation.messages).toHaveLength(4);
       expect(conversation.sessionChain).toEqual(['parent-session', 'child-session']);
@@ -341,7 +342,7 @@ describe('structured tool history E2E', () => {
       ]);
       mockGetMessage(cleanup, 'child-msg-1', childMsg);
 
-      const conversation = await getFullConversation(MakaioBus, 'child-session');
+      const conversation = await getFullConversation(createTestCall(), MakaioBus, 'child-session');
       const converted = conversation.messages.map((msg) => convertSessionMessage(msg));
 
       const blocks = toBlockArray(converted[0].blocks);

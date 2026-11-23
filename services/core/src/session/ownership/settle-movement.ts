@@ -1,3 +1,4 @@
+import type { CallContext } from '@makaio/core';
 import {
   SessionOwnershipStorageSubjects,
   type OwnershipMovement,
@@ -52,11 +53,13 @@ function toDurableMovement(movement: SessionOwnershipServiceMovement, claimToken
  * carries the token and the token uniqueness constraint cannot fire; and a
  * repeat that follows a committed settlement finds the agent already holding
  * the target key, discards the token unused and reports `idempotent`.
+ * @param call - Handled message the movement is settled for.
  * @param context - Composed authority context.
  * @param request - The movement, and the principal that observed it.
  * @returns The durable outcome, or `machine-identity-unavailable`.
  */
 export async function runSettleMovement(
+  call: CallContext,
   context: OwnershipAuthorityContext,
   request: SessionOwnershipSettleMovementServiceRequest,
 ): Promise<SessionOwnershipSettleMovementServiceResult> {
@@ -68,14 +71,14 @@ export async function runSettleMovement(
   const claimToken = request.claimToken ?? mintClaimToken();
 
   for (let attempt = 0; ; attempt += 1) {
-    const { ownership } = await context.bus.request(SessionOwnershipStorageSubjects.read, {
+    const { ownership } = await context.bus.request(call, SessionOwnershipStorageSubjects.read, {
       agentId: request.agentId,
     });
     // No ownership row means no agent row: the movement names an agent that is
     // not there, which the durable operation would report the same way.
     if (ownership === null) return { outcome: 'not-found' };
 
-    const result = await context.bus.request(SessionOwnershipStorageSubjects.settleMovement, {
+    const result = await context.bus.request(call, SessionOwnershipStorageSubjects.settleMovement, {
       machineId,
       adapterId: request.adapterId,
       adapterName: request.adapterName,

@@ -1,4 +1,5 @@
 import type { IMakaioBus } from '@makaio/bus-core';
+import type { CallContext } from '@makaio/core';
 import { AdapterSubsystemSubjects } from '@makaio/services-core/adapter-subsystem';
 
 import { ACCOUNT_MANAGER_ID } from './account-manager-id.js';
@@ -64,17 +65,19 @@ export interface ResolvedProviderConfig {
  * native account and therefore rebuild on every switch for that client.
  * Account-pinned configs rebuild only for their exact manager/account pair.
  * Lifecycle ownership (`managedBy`) is deliberately irrelevant to auth.
+ * @param call - Call context of the handled message this resolution serves.
  * @param bus - Bus used for credential-free provider-config reads.
  * @param clientId - Client whose native account changed.
  * @param accountId - Account that is now active.
  * @returns Matching provider config identities.
  */
 export async function resolveProviderConfigsForAccount(
+  call: CallContext,
   bus: IMakaioBus,
   clientId: string,
   accountId: string,
 ): Promise<ResolvedProviderConfig[]> {
-  const configListResult = await bus.requestOptional(AdapterSubsystemSubjects.listProviderConfigs, {});
+  const configListResult = await bus.requestOptional(call, AdapterSubsystemSubjects.listProviderConfigs, {});
   if (!configListResult.handled) {
     return [];
   }

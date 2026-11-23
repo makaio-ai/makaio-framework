@@ -1,3 +1,4 @@
+import { createTestBusInstance, createTestCall } from '@makaio/test-utils';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createDeltaHandler, createStepHandler, createTurnEventState } from '../event-routing.js';
 import { CursorSdkNamespace, CursorSdkSubjects } from '../namespaces/index.js';
@@ -31,7 +32,7 @@ describe('cursor SDK event routing', () => {
   });
 
   it('routes non-JSON shell output through the real scoped bus', async () => {
-    const bus = await CursorSdkNamespace.scopedBus();
+    const bus = await CursorSdkNamespace.scopedBus(createTestBusInstance());
     const routedPayloads: Array<{ delta: string }> = [];
     const unsubscribe = bus.on(CursorSdkSubjects.shell_output_delta, ({ payload }) => {
       routedPayloads.push(payload);
@@ -39,6 +40,7 @@ describe('cursor SDK event routing', () => {
     const turn = new RoutingTurnHarness();
     const state = createTurnEventState();
     const handler = createDeltaHandler(
+      createTestCall(),
       {
         bus,
         agentId: 'agent-1',
@@ -62,7 +64,7 @@ describe('cursor SDK event routing', () => {
   });
 
   it('derives tool completion errors from Cursor status payloads', async () => {
-    const bus = await CursorSdkNamespace.scopedBus();
+    const bus = await CursorSdkNamespace.scopedBus(createTestBusInstance());
     const routedPayloads: Array<{ isError: boolean; result?: unknown }> = [];
     const unsubscribe = bus.on(CursorSdkSubjects.tool_completed, ({ payload }) => {
       routedPayloads.push(payload);
@@ -70,6 +72,7 @@ describe('cursor SDK event routing', () => {
     const turn = new RoutingTurnHarness();
     const state = createTurnEventState();
     const handler = createDeltaHandler(
+      createTestCall(),
       {
         bus,
         agentId: 'agent-1',
@@ -108,7 +111,8 @@ describe('cursor SDK event routing', () => {
 
   it('handles rejected step lifecycle transitions explicitly', async () => {
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
-    const bus = await CursorSdkNamespace.scopedBus();
+    const bus = await CursorSdkNamespace.scopedBus(createTestBusInstance());
+    const call = createTestCall();
     const turn = new RoutingTurnHarness(true);
     const state = createTurnEventState();
     const config = {
@@ -118,8 +122,8 @@ describe('cursor SDK event routing', () => {
       messageId: 'message-1',
     };
 
-    createDeltaHandler(config, turn, state)({ update: { type: 'text-delta', text: 'hello' } });
-    createStepHandler(config, turn, state)({ step: {} });
+    createDeltaHandler(call, config, turn, state)({ update: { type: 'text-delta', text: 'hello' } });
+    createStepHandler(call, config, turn, state)({ step: {} });
     await Promise.resolve();
 
     expect(turn.stepStartedCalls).toBe(1);

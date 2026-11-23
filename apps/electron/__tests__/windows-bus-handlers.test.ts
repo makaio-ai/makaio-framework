@@ -1,15 +1,16 @@
 /**
  * Tests for registerWindowsBusHandlers.
  *
- * Uses an isolated bus instance (createBusInstance + createBusContext) so
+ * Uses an isolated bus instance (createBusInstance) so
  * tests are independent of the global MakaioBus singleton state.
  * Dependencies are plain function stubs — no WindowManager instance required.
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { createBusContext, createBusInstance, type IMakaioBus } from '@makaio/bus-core';
-import { HostSchemas, HostSubjects } from '@makaio/contracts';
+import { createBusInstance, type IMakaioBus } from '@makaio/bus-core';
+import { type CallContext, HostSchemas, HostSubjects } from '@makaio/contracts';
 import type { WindowState } from '@makaio/host-shared';
+import { createTestCall } from '@makaio/test-utils';
 import { registerWindowsBusHandlers, type WindowsBusHandlerDeps } from '../src/main/windows-bus-handlers.js';
 
 const DASHBOARD_REGISTRATION_ID = 'framework-shell:main';
@@ -38,19 +39,19 @@ function createDepStub(
   onRestoreFromBackground?: () => void,
 ): {
   deps: WindowsBusHandlerDeps;
-  createWindow: ReturnType<typeof vi.fn<(registrationId: string) => number>>;
+  createWindow: ReturnType<typeof vi.fn<(call: CallContext, registrationId: string) => number>>;
   findWindow: ReturnType<typeof vi.fn<(registrationId: string) => WindowState | undefined>>;
   focusWindow: ReturnType<typeof vi.fn<(windowId: number) => boolean>>;
   focusAnyWindow: ReturnType<typeof vi.fn<() => number | null>>;
-  openDefaultWindow: ReturnType<typeof vi.fn<() => number>>;
+  openDefaultWindow: ReturnType<typeof vi.fn<(call: CallContext) => number>>;
 } {
-  const createWindow = vi.fn<(registrationId: string) => number>(() => 42);
+  const createWindow = vi.fn<(call: CallContext, registrationId: string) => number>(() => 42);
   const findWindow = vi.fn<(registrationId: string) => WindowState | undefined>((id: string) =>
     existingWindow && existingWindow.registrationId === id ? existingWindow : undefined,
   );
   const focusWindow = vi.fn<(windowId: number) => boolean>(() => true);
   const focusAnyWindow = vi.fn<() => number | null>(() => focusedWindowId);
-  const openDefaultWindow = vi.fn<() => number>(() => 99);
+  const openDefaultWindow = vi.fn<(call: CallContext) => number>(() => 99);
 
   return {
     deps: {
@@ -75,7 +76,7 @@ describe('registerWindowsBusHandlers', () => {
   let cleanup: (() => void) | undefined;
 
   beforeEach(() => {
-    bus = createBusInstance({ context: createBusContext() });
+    bus = createBusInstance();
     cleanup = undefined;
   });
 
@@ -88,10 +89,14 @@ describe('registerWindowsBusHandlers', () => {
 
     cleanup = registerWindowsBusHandlers(bus, deps);
 
-    const result = await bus.request(HostSubjects.window.openDashboard, {});
+    const call = createTestCall();
+    const result = await bus.request(call, HostSubjects.window.openDashboard, {});
 
     expect(createWindow).toHaveBeenCalledOnce();
-    expect(createWindow).toHaveBeenCalledWith(DASHBOARD_REGISTRATION_ID);
+    expect(createWindow).toHaveBeenCalledWith(
+      expect.objectContaining({ principal: call.principal }),
+      DASHBOARD_REGISTRATION_ID,
+    );
     expect(result.windowId).toBe(42);
   });
 
@@ -101,7 +106,7 @@ describe('registerWindowsBusHandlers', () => {
 
     cleanup = registerWindowsBusHandlers(bus, deps);
 
-    const result = await bus.request(HostSubjects.window.openDashboard, {});
+    const result = await bus.request(createTestCall(), HostSubjects.window.openDashboard, {});
 
     expect(focusWindow).toHaveBeenCalledOnce();
     expect(focusWindow).toHaveBeenCalledWith(7);
@@ -116,11 +121,15 @@ describe('registerWindowsBusHandlers', () => {
 
     cleanup = registerWindowsBusHandlers(bus, deps);
 
-    const result = await bus.request(HostSubjects.window.openDashboard, {});
+    const call = createTestCall();
+    const result = await bus.request(call, HostSubjects.window.openDashboard, {});
 
     expect(focusWindow).toHaveBeenCalledOnce();
     expect(createWindow).toHaveBeenCalledOnce();
-    expect(createWindow).toHaveBeenCalledWith(DASHBOARD_REGISTRATION_ID);
+    expect(createWindow).toHaveBeenCalledWith(
+      expect.objectContaining({ principal: call.principal }),
+      DASHBOARD_REGISTRATION_ID,
+    );
     expect(result.windowId).toBe(42);
   });
 
@@ -128,7 +137,7 @@ describe('registerWindowsBusHandlers', () => {
     const { deps } = createDepStub(undefined);
     cleanup = registerWindowsBusHandlers(bus, deps);
 
-    const result = await bus.request(HostSubjects.window.openDashboard, {});
+    const result = await bus.request(createTestCall(), HostSubjects.window.openDashboard, {});
 
     const parsed = HostSchemas['window.openDashboard'].response.safeParse(result);
     expect(parsed.success).toBe(true);
@@ -144,7 +153,7 @@ describe('registerWindowsBusHandlers', () => {
     });
     cleanup = registerWindowsBusHandlers(bus, deps);
 
-    const result = await bus.request(HostSubjects.window.openDashboard, {});
+    const result = await bus.request(createTestCall(), HostSubjects.window.openDashboard, {});
 
     const parsed = HostSchemas['window.openDashboard'].response.safeParse(result);
     expect(parsed.success).toBe(true);
@@ -164,7 +173,7 @@ describe('registerWindowsBusHandlers', () => {
     try {
       cleanup = registerWindowsBusHandlers(bus, deps);
 
-      const result = await bus.request(HostSubjects.window.openDashboard, {});
+      const result = await bus.request(createTestCall(), HostSubjects.window.openDashboard, {});
 
       const parsed = HostSchemas['window.openDashboard'].response.safeParse(result);
       expect(parsed.success).toBe(true);
@@ -185,16 +194,16 @@ describe('registerWindowsBusHandlers', () => {
     const unregister = registerWindowsBusHandlers(bus, deps);
 
     // Confirm both handlers work before teardown
-    await bus.request(HostSubjects.window.openDashboard, {});
-    await bus.request(HostSubjects.app.focus, {});
+    await bus.request(createTestCall(), HostSubjects.window.openDashboard, {});
+    await bus.request(createTestCall(), HostSubjects.app.focus, {});
 
     // Teardown
     unregister();
     cleanup = undefined;
 
     // After teardown there are no handlers — both requests should throw
-    await expect(bus.request(HostSubjects.window.openDashboard, {})).rejects.toThrow();
-    await expect(bus.request(HostSubjects.app.focus, {})).rejects.toThrow();
+    await expect(bus.request(createTestCall(), HostSubjects.window.openDashboard, {})).rejects.toThrow();
+    await expect(bus.request(createTestCall(), HostSubjects.app.focus, {})).rejects.toThrow();
   });
 
   describe('app.focus', () => {
@@ -204,7 +213,7 @@ describe('registerWindowsBusHandlers', () => {
 
       cleanup = registerWindowsBusHandlers(bus, deps);
 
-      const result = await bus.request(HostSubjects.app.focus, {});
+      const result = await bus.request(createTestCall(), HostSubjects.app.focus, {});
 
       expect(focusAnyWindow).toHaveBeenCalledOnce();
       expect(result.focused).toBe(true);
@@ -216,7 +225,7 @@ describe('registerWindowsBusHandlers', () => {
 
       cleanup = registerWindowsBusHandlers(bus, deps);
 
-      const result = await bus.request(HostSubjects.app.focus, {});
+      const result = await bus.request(createTestCall(), HostSubjects.app.focus, {});
 
       expect(focusAnyWindow).toHaveBeenCalledOnce();
       expect(result.focused).toBe(true);
@@ -228,10 +237,12 @@ describe('registerWindowsBusHandlers', () => {
 
       cleanup = registerWindowsBusHandlers(bus, deps);
 
-      const result = await bus.request(HostSubjects.app.focus, {});
+      const call = createTestCall();
+      const result = await bus.request(call, HostSubjects.app.focus, {});
 
       expect(focusAnyWindow).toHaveBeenCalledOnce();
       expect(openDefaultWindow).toHaveBeenCalledOnce();
+      expect(openDefaultWindow).toHaveBeenCalledWith(expect.objectContaining({ principal: call.principal }));
       expect(result.focused).toBe(true);
       expect(result.windowId).toBe(99);
     });
@@ -244,7 +255,7 @@ describe('registerWindowsBusHandlers', () => {
 
       cleanup = registerWindowsBusHandlers(bus, deps);
 
-      const result = await bus.request(HostSubjects.app.focus, {});
+      const result = await bus.request(createTestCall(), HostSubjects.app.focus, {});
 
       expect(result.focused).toBe(false);
       expect(result.windowId).toBeNull();
@@ -260,7 +271,7 @@ describe('registerWindowsBusHandlers', () => {
       try {
         cleanup = registerWindowsBusHandlers(bus, deps);
 
-        const result = await bus.request(HostSubjects.app.focus, {});
+        const result = await bus.request(createTestCall(), HostSubjects.app.focus, {});
 
         expect(onRestoreFromBackground).toHaveBeenCalledOnce();
         expect(focusAnyWindow).not.toHaveBeenCalled();
@@ -282,7 +293,7 @@ describe('registerWindowsBusHandlers', () => {
 
       cleanup = registerWindowsBusHandlers(bus, deps);
 
-      const result = await bus.request(HostSubjects.app.focus, {});
+      const result = await bus.request(createTestCall(), HostSubjects.app.focus, {});
 
       expect(onRestoreFromBackground).toHaveBeenCalledOnce();
       // restore must be called before the window is opened
@@ -299,7 +310,7 @@ describe('registerWindowsBusHandlers', () => {
 
       cleanup = registerWindowsBusHandlers(bus, deps);
 
-      const result = await bus.request(HostSubjects.app.focus, {});
+      const result = await bus.request(createTestCall(), HostSubjects.app.focus, {});
 
       expect(onRestoreFromBackground).toHaveBeenCalledOnce();
       expect(result.focused).toBe(true);
@@ -311,7 +322,7 @@ describe('registerWindowsBusHandlers', () => {
       const { deps } = createDepStub(existingWindow);
       cleanup = registerWindowsBusHandlers(bus, deps);
 
-      const result = await bus.request(HostSubjects.app.focus, {});
+      const result = await bus.request(createTestCall(), HostSubjects.app.focus, {});
 
       const parsed = HostSchemas['app.focus'].response.safeParse(result);
       expect(parsed.success).toBe(true);

@@ -14,7 +14,7 @@
  *   │
  *   ├─► stream-bridge ──► tool_calls (with ToolCall[])
  *   │
- *   └─► handleToolCalls(toolCalls, callbacks, context)
+ *   └─► handleToolCalls(call, toolCalls, callbacks, context)
  *         │
  *         ├─► requestToolApproval() ──► scoped bus ──► global bus
  *         │
@@ -44,7 +44,7 @@ import type { Tool, ToolResultBlockParam } from '@anthropic-ai/sdk/resources/mes
 
 import type { IMakaioBus } from '@makaio/bus-core';
 import { AnthropicSdkConnectorSubjects, type SdkEventMessage, type ToolCall } from './namespaces/index.js';
-import type { ExtractSubjectPayload, ExtractSubjectResponse } from '@makaio/core';
+import type { CallContext, ExtractSubjectPayload, ExtractSubjectResponse } from '@makaio/core';
 import { type AgentToolApproveRequest, type AgentToolApproveResponse, type ToolListItem } from '@makaio/contracts';
 import {
   createToolApprovalHandler,
@@ -116,6 +116,7 @@ export function toAnthropicToolFormat(tools: ToolListItem[]): Tool[] {
 
 /**
  * Convenience: Load tools and convert to Anthropic format in one call.
+ * @param call - Call of the message requesting registry tools
  * @param bus - Bus that owns the ToolRegistry handlers
  * @param adapterId - Adapter instance ID
  * @param adapterName - Adapter type name
@@ -123,19 +124,21 @@ export function toAnthropicToolFormat(tools: ToolListItem[]): Tool[] {
  * @returns Anthropic-formatted tools ready for messages.create
  */
 export async function fetchToolsForAnthropic(
+  call: CallContext,
   bus: IMakaioBus,
   adapterId: string,
   adapterName: string,
   options?: ToolRegistryLoadOptions,
 ): Promise<Tool[]> {
-  const tools = await loadToolsFromRegistry(bus, adapterId, adapterName, options);
+  const tools = await loadToolsFromRegistry(call, bus, adapterId, adapterName, options);
   return toAnthropicToolFormat(tools);
 }
 
 type AnthropicToolCallsCallbacks = {
   bus: IMakaioBus;
-  emitSdkEvent: (event: SdkEventMessage) => Promise<void>;
+  emitSdkEvent: (call: CallContext, event: SdkEventMessage) => Promise<void>;
   requestToolApproval: (
+    call: CallContext,
     payload: Omit<
       ExtractSubjectPayload<typeof AnthropicSdkConnectorSubjects.tool_approval>,
       'adapterName' | 'adapterId' | 'agentId' | 'adapterSessionId' | 'sessionId'
@@ -150,17 +153,20 @@ type AnthropicToolCallsCallbacks = {
  *
  * Returns Anthropic-format tool results: `{ role: 'user', content: [{ type: 'tool_result', ... }] }`
  * is assembled by the caller using the returned ToolResultBlockParam[].
+ * @param call - Call context of the turn's message handle; forwarded to approval, lifecycle events and tool execution
  * @param toolCalls - Array of normalized tool calls from the stream-bridge tool_calls event
  * @param callbacks - Injected callbacks for event emission, approval requests, and optional ledger recording
  * @param contextOverrides - Execution context (cwd, env, sessionId, agentId, turnId)
  * @returns Tool result blocks to inject into the next user message
  */
 export async function handleToolCalls(
+  call: CallContext,
   toolCalls: ToolCall[],
   callbacks: AnthropicToolCallsCallbacks,
   contextOverrides: ToolExecutionContextOverrides,
 ): Promise<ToolResultBlockParam[]> {
   return handleToolCallsGeneric<ToolResultBlockParam>(
+    call,
     toolCalls,
     callbacks,
     contextOverrides,

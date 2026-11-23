@@ -1,5 +1,6 @@
 import type { z } from 'zod';
 import type { IMakaioBus } from '@makaio/bus-core';
+import { isInProcessCaller, type CallContext } from '@makaio/core';
 import {
   JsonPatchOperationSchema,
   EXTERNAL_EXECUTION_ID_PREFIX,
@@ -76,22 +77,24 @@ function buildExternalCompletionMetadata(
 
 /**
  * Load the workflow definition snapshot used to authorize state schema changes.
+ * @param call - Call context of the message that triggered the load.
  * @param bus - Message bus used for storage requests.
  * @param executionId - Execution whose workflow state is being mutated.
  * @returns Workflow definition snapshot, or `undefined` when no state contract is available.
  */
 async function loadStateWorkflowSnapshot(
+  call: CallContext,
   bus: IMakaioBus,
   executionId: string,
 ): Promise<WorkflowDefinition | undefined> {
-  const { runContext } = await bus.request(WorkflowStorageSubjects.getRunContext, { executionId });
+  const { runContext } = await bus.request(call, WorkflowStorageSubjects.getRunContext, { executionId });
   if (runContext === null) {
     throw new Error(`Run context not found for execution: ${executionId}`);
   }
   if (runContext.definitionSnapshot !== undefined) {
     return runContext.definitionSnapshot;
   }
-  const { workflow } = await bus.request(WorkflowStorageSubjects.get, { id: runContext.workflowId });
+  const { workflow } = await bus.request(call, WorkflowStorageSubjects.get, { id: runContext.workflowId });
   return workflow ?? undefined;
 }
 
@@ -103,57 +106,57 @@ async function loadStateWorkflowSnapshot(
 export function registerWorkflowStorageDelegationHandlers(bus: IMakaioBus): Array<() => void> {
   return [
     bus.on(WorkflowSubjects.getDefinition, async (ctx) => {
-      const result = await bus.request(WorkflowStorageSubjects.get, { id: ctx.payload.id });
+      const result = await bus.request(ctx.call, WorkflowStorageSubjects.get, { id: ctx.payload.id });
       ctx.setResult(result);
     }),
     bus.on(WorkflowSubjects.setDefinition, async (ctx) => {
-      const result = await bus.request(WorkflowStorageSubjects.set, { workflow: ctx.payload.workflow });
+      const result = await bus.request(ctx.call, WorkflowStorageSubjects.set, { workflow: ctx.payload.workflow });
       ctx.setResult(result);
     }),
     bus.on(WorkflowSubjects.deleteDefinition, async (ctx) => {
-      const result = await bus.request(WorkflowStorageSubjects.delete, { id: ctx.payload.id });
+      const result = await bus.request(ctx.call, WorkflowStorageSubjects.delete, { id: ctx.payload.id });
       ctx.setResult(result);
     }),
     bus.on(WorkflowSubjects.listDefinitions, async (ctx) => {
-      const result = await bus.request(WorkflowStorageSubjects.list, ctx.payload);
+      const result = await bus.request(ctx.call, WorkflowStorageSubjects.list, ctx.payload);
       ctx.setResult(result);
     }),
     bus.on(WorkflowSubjects.getExecution, async (ctx) => {
-      const result = await bus.request(WorkflowStorageSubjects.getExecution, {
+      const result = await bus.request(ctx.call, WorkflowStorageSubjects.getExecution, {
         executionId: ctx.payload.executionId,
       });
       ctx.setResult(result);
     }),
     bus.on(WorkflowSubjects.listExecutions, async (ctx) => {
-      const result = await bus.request(WorkflowStorageSubjects.listExecutions, ctx.payload);
+      const result = await bus.request(ctx.call, WorkflowStorageSubjects.listExecutions, ctx.payload);
       ctx.setResult(result);
     }),
     bus.on(WorkflowSubjects.listExecutionsByArtifactRefs, async (ctx) => {
-      const result = await bus.request(WorkflowStorageSubjects.listExecutionsByArtifactRefs, ctx.payload);
+      const result = await bus.request(ctx.call, WorkflowStorageSubjects.listExecutionsByArtifactRefs, ctx.payload);
       ctx.setResult(result);
     }),
     bus.on(WorkflowSubjects.listSpans, async (ctx) => {
-      const result = await bus.request(WorkflowStorageSubjects.listSpans, {
+      const result = await bus.request(ctx.call, WorkflowStorageSubjects.listSpans, {
         executionId: ctx.payload.executionId,
       });
       ctx.setResult(result);
     }),
     bus.on(WorkflowSubjects.listFrames, async (ctx) => {
-      const result = await bus.request(WorkflowStorageSubjects.listFrames, {
+      const result = await bus.request(ctx.call, WorkflowStorageSubjects.listFrames, {
         executionId: ctx.payload.executionId,
       });
       ctx.setResult(result);
     }),
     bus.on(WorkflowSubjects.listGateInstances, async (ctx) => {
-      const result = await bus.request(WorkflowStorageSubjects.listGateInstances, ctx.payload);
+      const result = await bus.request(ctx.call, WorkflowStorageSubjects.listGateInstances, ctx.payload);
       ctx.setResult(result);
     }),
     bus.on(WorkflowSubjects.setExecutionLink, async (ctx) => {
-      const result = await bus.request(WorkflowStorageSubjects.setExecutionLink, { link: ctx.payload.link });
+      const result = await bus.request(ctx.call, WorkflowStorageSubjects.setExecutionLink, { link: ctx.payload.link });
       ctx.setResult(result);
     }),
     bus.on(WorkflowSubjects.listExecutionLinks, async (ctx) => {
-      const result = await bus.request(WorkflowStorageSubjects.listExecutionLinks, ctx.payload);
+      const result = await bus.request(ctx.call, WorkflowStorageSubjects.listExecutionLinks, ctx.payload);
       ctx.setResult(result);
     }),
     bus.on(WorkflowSubjects.getRunContext, async (ctx) => {
@@ -161,7 +164,7 @@ export function registerWorkflowStorageDelegationHandlers(bus: IMakaioBus): Arra
       if (!isExecutionBoundAccessAllowed(ctx, executionId)) {
         throw new Error(`Unauthorized: caller is not permitted to read run context for execution: ${executionId}`);
       }
-      const { runContext } = await bus.request(WorkflowStorageSubjects.getRunContext, { executionId });
+      const { runContext } = await bus.request(ctx.call, WorkflowStorageSubjects.getRunContext, { executionId });
       if (!runContext) {
         throw new Error(`Run context not found for execution: ${executionId}`);
       }
@@ -185,7 +188,7 @@ function registerExternalExecutionHandlers(bus: IMakaioBus): Array<() => void> {
     bus.on(WorkflowSubjects.registerExternalExecution, async (ctx) => {
       const payload = WorkflowSchemas.registerExternalExecution.request.parse(ctx.payload);
       const { name, scope, input } = payload;
-      if (payload.executionId !== undefined && !ctx.origin.local) {
+      if (payload.executionId !== undefined && !isInProcessCaller(ctx.call)) {
         throw new Error('registerExternalExecution: caller-supplied executionId is restricted to local callers');
       }
       // `generateId('wfx-ext')` produces `wfx-ext-<timestamp>-<random>`, which
@@ -207,7 +210,7 @@ function registerExternalExecutionHandlers(bus: IMakaioBus): Array<() => void> {
         ...buildExternalExecutionOptionals(payload),
       };
       const frame = resolveExternalStartFrame(executionId, startedAt, payload.frame);
-      const result = await bus.request(WorkflowStorageSubjects.setExternalExecutionStart, {
+      const result = await bus.request(ctx.call, WorkflowStorageSubjects.setExternalExecutionStart, {
         execution,
         ...(frame !== undefined ? { frame } : {}),
       });
@@ -232,7 +235,7 @@ function registerExternalExecutionHandlers(bus: IMakaioBus): Array<() => void> {
         );
       }
       const frame = resolveExternalTerminalFrame(payload);
-      const result = await bus.request(WorkflowStorageSubjects.settleExternalExecution, {
+      const result = await bus.request(ctx.call, WorkflowStorageSubjects.settleExternalExecution, {
         executionId,
         status,
         ...buildExternalCompletionMetadata(payload),
@@ -328,7 +331,7 @@ export function registerWorkflowStateHandlers(bus: IMakaioBus): Array<() => void
       if (!isExecutionBoundAccessAllowed(ctx, executionId)) {
         throw new Error(`Unauthorized: caller is not permitted to read state for execution: ${executionId}`);
       }
-      const { state } = await bus.request(WorkflowStorageSubjects.getState, { executionId });
+      const { state } = await bus.request(ctx.call, WorkflowStorageSubjects.getState, { executionId });
       if (state === null) {
         throw new Error(`no workflow state for execution ${executionId}`);
       }
@@ -343,18 +346,18 @@ export function registerWorkflowStateHandlers(bus: IMakaioBus): Array<() => void
       if (expectedSequence === undefined) {
         throw new Error('expectedSequence is required to patch workflow state');
       }
-      const workflow = await loadStateWorkflowSnapshot(bus, executionId);
+      const workflow = await loadStateWorkflowSnapshot(ctx.call, bus, executionId);
       if (workflow !== undefined) {
         assertWorkflowStateValueMatchesSchema(workflow, nextValue as JsonValue, 'next');
       }
       JsonPatchOperationSchema.array().parse(patch);
-      const result = await bus.request(WorkflowStorageSubjects.patchState, {
+      const result = await bus.request(ctx.call, WorkflowStorageSubjects.patchState, {
         executionId,
         expectedSequence,
         nextValue: nextValue as JsonValue,
       });
       bus
-        .emit(WorkflowSubjects.state.updated, {
+        .emit(ctx.call, WorkflowSubjects.state.updated, {
           executionId: result.executionId,
           sequence: result.sequence,
           patch: result.patch,

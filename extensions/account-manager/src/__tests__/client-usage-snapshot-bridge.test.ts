@@ -1,6 +1,7 @@
 import { afterEach, assert, describe, expect, it, vi } from 'vitest';
 import { createBusInstance } from '@makaio/bus-core';
 import { ClientSubjects } from '@makaio/contracts/client';
+import { createTestCall } from '@makaio/test-utils';
 import { AccountManager } from '../account-manager.js';
 import { AccountManagerSubjects } from '../bus/namespace.js';
 import { ingestLinkedClientSnapshot } from '../handlers/client-usage-snapshot.js';
@@ -71,7 +72,7 @@ describe('client usage snapshot bridge', () => {
     });
 
     try {
-      await bus.emit(ClientSubjects.usage.snapshot, {
+      await bus.emit(createTestCall(), ClientSubjects.usage.snapshot, {
         clientAccountId: 'client-account-1',
         clientId: 'codex',
         observedAt: 1_000,
@@ -113,7 +114,7 @@ describe('client usage snapshot bridge', () => {
       ]);
 
       await expect(
-        bus.request(AccountManagerSubjects.usage.get, {
+        bus.request(createTestCall(), AccountManagerSubjects.usage.get, {
           clientId: 'codex',
           accountId: 'acc-1',
         }),
@@ -182,7 +183,7 @@ describe('client usage snapshot bridge', () => {
     await service.init();
 
     try {
-      await bus.emit(ClientSubjects.usage.snapshot, {
+      await bus.emit(createTestCall(), ClientSubjects.usage.snapshot, {
         clientAccountId: 'client-account-1',
         clientId: 'codex',
         observedAt: 1_000,
@@ -193,7 +194,7 @@ describe('client usage snapshot bridge', () => {
       });
 
       await expect(
-        bus.request(AccountManagerSubjects.usage.refresh, {
+        bus.request(createTestCall(), AccountManagerSubjects.usage.refresh, {
           clientId: 'codex',
           accountId: 'linked',
         }),
@@ -201,7 +202,7 @@ describe('client usage snapshot bridge', () => {
       expect(resolveUsage).toHaveBeenCalledTimes(1);
 
       await expect(
-        bus.request(AccountManagerSubjects.usage.refresh, {
+        bus.request(createTestCall(), AccountManagerSubjects.usage.refresh, {
           clientId: 'codex',
           accountId: 'unlinked',
         }),
@@ -236,7 +237,7 @@ describe('client usage snapshot bridge', () => {
     });
 
     try {
-      await bus.emit(ClientSubjects.usage.snapshot, {
+      await bus.emit(createTestCall(), ClientSubjects.usage.snapshot, {
         clientAccountId: 'client-account-1',
         clientId: 'codex',
         observedAt: 9_000,
@@ -254,7 +255,7 @@ describe('client usage snapshot bridge', () => {
           expiredAt: 8_000,
         },
       ]);
-      await expect(bus.request(AccountManagerSubjects.usage.getPendingResets, {})).resolves.toEqual({
+      await expect(bus.request(createTestCall(), AccountManagerSubjects.usage.getPendingResets, {})).resolves.toEqual({
         pending: [
           {
             clientId: 'codex',
@@ -275,7 +276,7 @@ describe('client usage snapshot bridge', () => {
 
     const bus = createBusInstance();
     const metadataStore = new InMemoryAccountMetadataStore();
-    await metadataStore.upsert('codex', {
+    await metadataStore.upsert(createTestCall(), 'codex', {
       id: 'linked',
       label: 'Linked Account',
       linkedClientAccountId: 'client-account-1',
@@ -295,6 +296,7 @@ describe('client usage snapshot bridge', () => {
     const persistenceChains = new Map<string, Promise<void>>();
 
     await ingestLinkedClientSnapshot({
+      call: createTestCall(),
       bus,
       metadataStore,
       usageSnapshotStore: undefined,
@@ -328,7 +330,7 @@ describe('client usage snapshot bridge', () => {
   it('does not mutate usage state after stop wins while linked accounts are still loading', async () => {
     const bus = createBusInstance();
     const metadataStore = new InMemoryAccountMetadataStore();
-    await metadataStore.upsert('codex', {
+    await metadataStore.upsert(createTestCall(), 'codex', {
       id: 'linked',
       label: 'Linked Account',
       linkedClientAccountId: 'client-account-1',
@@ -345,12 +347,12 @@ describe('client usage snapshot bridge', () => {
     });
     const originalListByLinkedClientAccountId = metadataStore.listByLinkedClientAccountId.bind(metadataStore);
     vi.spyOn(metadataStore, 'listByLinkedClientAccountId').mockImplementation(
-      async (clientId: string, linkedClientAccountId: string) => {
+      async (call, clientId, linkedClientAccountId) => {
         enteredList?.();
         await new Promise<void>((resolve) => {
           releaseList = resolve;
         });
-        return originalListByLinkedClientAccountId(clientId, linkedClientAccountId);
+        return originalListByLinkedClientAccountId(call, clientId, linkedClientAccountId);
       },
     );
 
@@ -371,6 +373,7 @@ describe('client usage snapshot bridge', () => {
 
     try {
       const pendingIngest = ingestLinkedClientSnapshot({
+        call: createTestCall(),
         bus,
         metadataStore,
         usageSnapshotStore: undefined,
@@ -414,7 +417,7 @@ describe('client usage snapshot bridge', () => {
   it('preserves windows from prior cache that are absent in the incoming statusline snapshot', async () => {
     const bus = createBusInstance();
     const metadataStore = new InMemoryAccountMetadataStore();
-    await metadataStore.upsert('claude-code', {
+    await metadataStore.upsert(createTestCall(), 'claude-code', {
       id: 'acc-1',
       label: 'Test Account',
       linkedClientAccountId: 'client-account-1',
@@ -456,6 +459,7 @@ describe('client usage snapshot bridge', () => {
     // First ingest: API poll with 3 windows including seven-day-sonnet
     await ingestLinkedClientSnapshot({
       ...commonOpts,
+      call: createTestCall(),
       snapshot: {
         clientAccountId: 'client-account-1',
         clientId: 'claude-code',
@@ -479,6 +483,7 @@ describe('client usage snapshot bridge', () => {
     // Second ingest: statusline with only 2 windows (no seven-day-sonnet)
     await ingestLinkedClientSnapshot({
       ...commonOpts,
+      call: createTestCall(),
       snapshot: {
         clientAccountId: 'client-account-1',
         clientId: 'claude-code',
@@ -518,6 +523,7 @@ describe('client usage snapshot bridge', () => {
 
     await ingestLinkedClientSnapshot({
       ...commonOpts,
+      call: createTestCall(),
       snapshot: {
         clientAccountId: 'client-account-1',
         clientId: 'claude-code',

@@ -1,4 +1,5 @@
 import type { IMakaioBus } from '@makaio/bus-core';
+import type { CallContext } from '@makaio/core';
 import { AgentStorageSubjects } from '@makaio/services-core/session';
 
 /**
@@ -32,12 +33,22 @@ const ACTIVITY_STATES = ['idle', 'active'] as const;
  * turn has to make. A refused stamp means the row left the activity domain while
  * the turn ran, and the party that moved it out is the one entitled to say where
  * it goes next.
+ * @param call - Call context of the turn whose activity changed.
  * @param bus - Global bus that may route to an agent-storage owner.
  * @param agentId - Agent whose activity status changed.
  * @param status - Current activity state.
  */
-export function updateAgentActivityStatusBestEffort(bus: IMakaioBus, agentId: string, status: 'active' | 'idle'): void {
+export function updateAgentActivityStatusBestEffort(
+  call: CallContext,
+  bus: IMakaioBus,
+  agentId: string,
+  status: 'active' | 'idle',
+): void {
   void bus
-    .requestOptional(AgentStorageSubjects.updateStatus, { agentId, status, expectedStatus: [...ACTIVITY_STATES] })
+    .requestOptional(call, AgentStorageSubjects.updateStatus, {
+      agentId,
+      status,
+      expectedStatus: [...ACTIVITY_STATES],
+    })
     .catch(() => undefined);
 }

@@ -179,6 +179,10 @@ export interface RequestOptions extends Omit<EmitOptions, 'connectionId'> {
  *
  * Public option types (`EmitOptions`, `RequestOptions`) do not expose this field,
  * so callers cannot forge transport context through `bus.emit()` / `bus.request()`.
+ *
+ * It carries the transport only. The call context is never part of these options:
+ * the send entries take it as their first parameter, and the dispatch path takes it
+ * as the required `DispatchOptions.call`.
  * @internal
  */
 export interface WithReceiveContext {

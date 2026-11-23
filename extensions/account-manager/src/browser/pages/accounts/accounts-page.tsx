@@ -138,8 +138,9 @@ function AccountEntry({
         return;
       }
       setRename({ active: true, value: trimmed, submitting: true, error: null });
+      // ORIGIN: Submitting the rename starts a request from the UI.
       void bus
-        .request(AccountManagerSubjects.accounts.label, {
+        .request(bus.own('root'), AccountManagerSubjects.accounts.label, {
           clientId,
           accountId: account.id,
           label: trimmed,
@@ -200,8 +201,9 @@ function AccountEntry({
   const handleDeleteConfirm = useCallback((): void => {
     if (!bus) return;
     setDeleteState({ phase: 'deleting', error: null });
+    // ORIGIN: Confirming the deletion starts a request from the UI.
     void bus
-      .request(AccountManagerSubjects.accounts.remove, {
+      .request(bus.own('root'), AccountManagerSubjects.accounts.remove, {
         clientId,
         accountId: account.id,
       })

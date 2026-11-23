@@ -1,19 +1,21 @@
-import { MakaioBus } from '@makaio/bus-core';
+import type { IMakaioBus } from '@makaio/bus-core';
 import { ClaudeCodeClientSubjects, CLAUDE_CODE_HOOK_SESSION_START } from '@makaio/client-claude-code/runtime';
 import type { RawClientHookPayload } from '@makaio/subsystem-client';
 
 /**
  * Subscribe before spawning so an immediate SessionStart hook cannot be lost
  * in the gap between process creation and full `TmuxSession` subscription.
+ * @param bus - Bus the early listener is registered on.
  * @param expectedSessionId - Claude Code session ID passed to the spawned process.
  * @param onStart - Callback invoked with the observed Claude session ID.
  * @returns Unsubscribe function for the early listener.
  */
 export function subscribeToEarlySessionStart(
+  bus: IMakaioBus,
   expectedSessionId: string,
   onStart: (sessionId: string) => void,
 ): () => void {
-  return MakaioBus.on(
+  return bus.on(
     ClaudeCodeClientSubjects.hook.received,
     async (ctx: { payload: RawClientHookPayload }) => {
       const { eventName, payload } = ctx.payload;

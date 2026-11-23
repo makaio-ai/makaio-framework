@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
+import { createTestCall } from '@makaio/test-utils';
 import {
   ArtifactNamespace,
   ArtifactSubjects,
@@ -44,19 +45,21 @@ describe('workflow public artifact subjects', () => {
       name: 'Public Start Artifact Ref',
       root: { id: 'public-start-artifact-ref-root', type: 'sequence', nodes: [] },
     });
-    await MakaioBus.request(WorkflowSubjects.setDefinition, { workflow });
+    await MakaioBus.request(createTestCall(), WorkflowSubjects.setDefinition, { workflow });
 
     const artifactRef = { kind: 'implementation-plan', id: 'artifact-start-1' };
-    const { executionId } = await MakaioBus.request(WorkflowSubjects.start, {
+    const { executionId } = await MakaioBus.request(createTestCall(), WorkflowSubjects.start, {
       workflowId: workflow.id,
       artifactRef,
     });
 
-    const { runContext } = await MakaioBus.request(WorkflowStorageSubjects.getRunContext, { executionId });
+    const { runContext } = await MakaioBus.request(createTestCall(), WorkflowStorageSubjects.getRunContext, {
+      executionId,
+    });
 
     expect(runContext?.artifactRef).toEqual(artifactRef);
 
-    const { execution } = await MakaioBus.request(WorkflowSubjects.getExecution, { executionId });
+    const { execution } = await MakaioBus.request(createTestCall(), WorkflowSubjects.getExecution, { executionId });
     expect(execution?.artifactRef).toEqual(artifactRef);
   });
 
@@ -70,7 +73,7 @@ describe('workflow public artifact subjects', () => {
       name: 'Artifact Ref Filter',
       steps: [],
     });
-    await MakaioBus.request(WorkflowSubjects.setDefinition, { workflow });
+    await MakaioBus.request(createTestCall(), WorkflowSubjects.setDefinition, { workflow });
 
     const artifactRef = { kind: 'workpiece', id: 'wp-filter-1' };
     const startedRefs: Array<unknown> = [];
@@ -78,13 +81,15 @@ describe('workflow public artifact subjects', () => {
       startedRefs.push(ctx.payload.artifactRef);
     });
     try {
-      const { executionId } = await MakaioBus.request(WorkflowSubjects.start, {
+      const { executionId } = await MakaioBus.request(createTestCall(), WorkflowSubjects.start, {
         workflowId: workflow.id,
         artifactRef,
       });
-      await MakaioBus.request(WorkflowSubjects.start, { workflowId: workflow.id }); // no ref — must not match
+      await MakaioBus.request(createTestCall(), WorkflowSubjects.start, { workflowId: workflow.id }); // no ref — must not match
 
-      const { executions } = await MakaioBus.request(WorkflowSubjects.listExecutions, { artifactRef });
+      const { executions } = await MakaioBus.request(createTestCall(), WorkflowSubjects.listExecutions, {
+        artifactRef,
+      });
 
       expect(executions.map((execution) => execution.id)).toEqual([executionId]);
       expect(startedRefs).toContainEqual(artifactRef);
@@ -103,25 +108,29 @@ describe('workflow public artifact subjects', () => {
       name: 'Batch Artifact Ref',
       steps: [],
     });
-    await MakaioBus.request(WorkflowSubjects.setDefinition, { workflow });
+    await MakaioBus.request(createTestCall(), WorkflowSubjects.setDefinition, { workflow });
 
     const refA = { kind: 'workpiece', id: 'wp-batch-a' };
     const refB = { kind: 'workpiece', id: 'wp-batch-b' };
     const refMiss = { kind: 'workpiece', id: 'wp-batch-miss' };
 
-    const { executionId: idA } = await MakaioBus.request(WorkflowSubjects.start, {
+    const { executionId: idA } = await MakaioBus.request(createTestCall(), WorkflowSubjects.start, {
       workflowId: workflow.id,
       artifactRef: refA,
     });
-    const { executionId: idB } = await MakaioBus.request(WorkflowSubjects.start, {
+    const { executionId: idB } = await MakaioBus.request(createTestCall(), WorkflowSubjects.start, {
       workflowId: workflow.id,
       artifactRef: refB,
     });
 
-    const { executionsByRef } = await MakaioBus.request(WorkflowSubjects.listExecutionsByArtifactRefs, {
-      refs: [refA, refB, refMiss],
-      limitPerRef: 10,
-    });
+    const { executionsByRef } = await MakaioBus.request(
+      createTestCall(),
+      WorkflowSubjects.listExecutionsByArtifactRefs,
+      {
+        refs: [refA, refB, refMiss],
+        limitPerRef: 10,
+      },
+    );
 
     expect(executionsByRef[serializeArtifactRef(refA)]?.map((e) => e.id)).toEqual([idA]);
     expect(executionsByRef[serializeArtifactRef(refB)]?.map((e) => e.id)).toEqual([idB]);
@@ -137,12 +146,13 @@ describe('workflow public artifact subjects', () => {
     const queriedRefs: Array<{ kind: string; ids: string[] }> = [];
     const capturedConfigs: WorkflowWorkerConfig[] = [];
     const workflowRunner: IWorkflowRunner = {
-      async run(config, signal): Promise<WorkflowRunnerCompletion> {
+      async run(call, config, signal): Promise<WorkflowRunnerCompletion> {
         capturedConfigs.push(config);
         if (config.definition === undefined) {
           throw new Error('Definition-backed runner config must include a workflow definition snapshot.');
         }
         const result = await runWorkflowOrchestrator({
+          call,
           config,
           loaded: {
             definition: config.definition,
@@ -201,7 +211,7 @@ describe('workflow public artifact subjects', () => {
         create: '{ status: "created" }',
       },
     };
-    await MakaioBus.request(WorkflowSubjects.setDefinition, { workflow });
+    await MakaioBus.request(createTestCall(), WorkflowSubjects.setDefinition, { workflow });
 
     const completedPromise = new Promise<string>((resolve) => {
       const unsubscribe = MakaioBus.on(WorkflowSubjects.execution.completed, (ctx) => {
@@ -209,7 +219,7 @@ describe('workflow public artifact subjects', () => {
         resolve(ctx.payload.executionId);
       });
     });
-    const { executionId } = await MakaioBus.request(WorkflowSubjects.start, {
+    const { executionId } = await MakaioBus.request(createTestCall(), WorkflowSubjects.start, {
       workflowId: workflow.id,
       artifactRef: startArtifactRef,
     });

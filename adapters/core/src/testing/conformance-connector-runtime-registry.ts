@@ -38,20 +38,29 @@ export class ConformanceConnectorRuntimeRegistry<
 
   /**
    * Create a connector through the production runtime preparation seam.
-   * @param options - Bound config and adapter connector factory
+   *
+   * The conformance harness originates the test scenario, so preparation and the
+   * managed close mint their own contexts on the connector's carrier
+   * (`config.globalBus`) instead of requiring its consumers to supply one. This
+   * module ships in the adapters entry point, so it must not depend on test-only
+   * packages.
+   * @param options - Bound config and adapter connector factory, without a call (minted here)
    * @returns Managed connector with lease-aware idempotent `close()`
    */
   public async create<TConfig extends BaseAgentConnectorConfig<TBus>>(
-    options: CreateConnectorRuntimeOptions<TBus, TConnector, TConfig>,
+    options: Omit<CreateConnectorRuntimeOptions<TBus, TConnector, TConfig>, 'call'>,
   ): Promise<TConnector> {
-    const runtime = await createConnectorRuntime(options);
+    const carrier = options.config.globalBus;
+    // ORIGIN: the conformance harness starts this connector runtime.
+    const runtime = await createConnectorRuntime({ ...options, call: carrier.own('start') });
     const originalClose = runtime.connector.close.bind(runtime.connector);
     let closePromise: Promise<TeardownReport> | undefined;
 
     const managed: ManagedConnectorRuntime<TConnector> = {
       connector: runtime.connector,
       close: () => {
-        closePromise ??= closeConnectorRuntime({
+        // ORIGIN: managed teardown of a runtime this registry started.
+        closePromise ??= closeConnectorRuntime(carrier.own('stop'), {
           connector: { close: originalClose },
           ...(runtime.lease !== undefined && { lease: runtime.lease }),
         }).finally(() => {

@@ -22,6 +22,7 @@ import {
   type BusTransportRegistry,
 } from '../index.js';
 import { invokeAnyHandlers } from '../utils/invoke-any-handlers.js';
+import { busContextOf } from '../kernel-api.js';
 import { createStubTransport } from './helpers/transport-fixtures.js';
 
 // ---------------------------------------------------------------------------
@@ -90,7 +91,7 @@ describe('Test 6: Timeout and deadline propagation', () => {
       unsubscribe: async () => {},
     };
 
-    unregisterRemote = MakaioBus.getContext().transportRegistry.registerTransport(
+    unregisterRemote = busContextOf(MakaioBus).transportRegistry.registerTransport(
       'deadline-transport' as keyof BusTransportRegistry,
       transport,
     );
@@ -103,16 +104,16 @@ describe('Test 6: Timeout and deadline propagation', () => {
 
   it('sets deadline close to Date.now() + timeout on first hop', async () => {
     // Advertise the remote transport so dispatch routes to it.
-    MakaioBus.getContext().remoteRequestHandlers.set('edgeCase.ping', [
+    busContextOf(MakaioBus).remoteRequestHandlers.set('edgeCase.ping', [
       { transport: 'deadline-transport', priority: 0 },
     ]);
-    MakaioBus.getContext().remoteSubscriptionDeliveryClasses.set(
+    busContextOf(MakaioBus).remoteSubscriptionDeliveryClasses.set(
       'edgeCase.ping',
       new Map([['deadline-transport', 'relayable']]),
     );
 
     const before = Date.now();
-    await MakaioBus.request(EdgeNamespace.ping, { id: 'deadline-test' }, { timeout: 5000 });
+    await MakaioBus.request(MakaioBus.own('root'), EdgeNamespace.ping, { id: 'deadline-test' }, { timeout: 5000 });
     const after = Date.now();
 
     expect(capturedMessage).toBeDefined();
@@ -124,11 +125,11 @@ describe('Test 6: Timeout and deadline propagation', () => {
   });
 
   it('timeout field on wire is approximately equal to the caller-specified timeout', async () => {
-    MakaioBus.getContext().remoteRequestHandlers.set('edgeCase.ping', [
+    busContextOf(MakaioBus).remoteRequestHandlers.set('edgeCase.ping', [
       { transport: 'deadline-transport', priority: 0 },
     ]);
 
-    await MakaioBus.request(EdgeNamespace.ping, { id: 'timeout-field-test' }, { timeout: 5000 });
+    await MakaioBus.request(MakaioBus.own('root'), EdgeNamespace.ping, { id: 'timeout-field-test' }, { timeout: 5000 });
 
     expect(capturedMessage?.timeout).toBeDefined();
     // On the first hop there is negligible elapsed time so remaining ≈ 5000
@@ -164,15 +165,15 @@ describe('Test 6: Timeout and deadline propagation', () => {
       unsubscribe: async () => {},
     };
 
-    const unregisterSource = MakaioBus.getContext().transportRegistry.registerTransport(
+    const unregisterSource = busContextOf(MakaioBus).transportRegistry.registerTransport(
       'relay-source' as keyof BusTransportRegistry,
       sourceTransport,
     );
 
-    MakaioBus.getContext().remoteRequestHandlers.set('edgeCase.ping', [
+    busContextOf(MakaioBus).remoteRequestHandlers.set('edgeCase.ping', [
       { transport: 'deadline-transport', priority: 0 },
     ]);
-    MakaioBus.getContext().remoteSubscriptionDeliveryClasses.set(
+    busContextOf(MakaioBus).remoteSubscriptionDeliveryClasses.set(
       'edgeCase.ping',
       new Map([['deadline-transport', 'relayable']]),
     );
@@ -222,7 +223,7 @@ describe('Test 6b: Deadline surfaces in RequestContext for local and inbound req
 
     try {
       const before = Date.now();
-      await MakaioBus.request(EdgeNamespace.ping, { id: 'ctx-deadline' }, { timeout: 4000 });
+      await MakaioBus.request(MakaioBus.own('root'), EdgeNamespace.ping, { id: 'ctx-deadline' }, { timeout: 4000 });
       const after = Date.now();
 
       expect(observedDeadline).toBeDefined();
@@ -258,7 +259,7 @@ describe('Test 6b: Deadline surfaces in RequestContext for local and inbound req
       unsubscribe: async () => {},
     };
 
-    const unregisterSource = MakaioBus.getContext().transportRegistry.registerTransport(
+    const unregisterSource = busContextOf(MakaioBus).transportRegistry.registerTransport(
       'deadline-ctx-source' as keyof BusTransportRegistry,
       sourceTransport,
     );
@@ -320,14 +321,16 @@ describe('Test 7: Error propagation mid-chain', () => {
       },
     });
 
-    unregisterRemote = MakaioBus.getContext().transportRegistry.registerTransport(
+    unregisterRemote = busContextOf(MakaioBus).transportRegistry.registerTransport(
       'failing' as keyof BusTransportRegistry,
       failingTransport,
     );
 
-    MakaioBus.getContext().remoteRequestHandlers.set('edgeCase.ping', [{ transport: 'failing', priority: 0 }]);
+    busContextOf(MakaioBus).remoteRequestHandlers.set('edgeCase.ping', [{ transport: 'failing', priority: 0 }]);
 
-    await expect(MakaioBus.request(EdgeNamespace.ping, { id: 'err-propagate' })).rejects.toThrow('remote-failure');
+    await expect(MakaioBus.request(MakaioBus.own('root'), EdgeNamespace.ping, { id: 'err-propagate' })).rejects.toThrow(
+      'remote-failure',
+    );
   });
 
   it('swallows non-NoHandlerError from remote when a lower-priority local handler succeeds', async () => {
@@ -339,12 +342,12 @@ describe('Test 7: Error propagation mid-chain', () => {
       },
     });
 
-    unregisterRemote = MakaioBus.getContext().transportRegistry.registerTransport(
+    unregisterRemote = busContextOf(MakaioBus).transportRegistry.registerTransport(
       'transient' as keyof BusTransportRegistry,
       failingTransport,
     );
 
-    MakaioBus.getContext().remoteRequestHandlers.set('edgeCase.ping', [{ transport: 'transient', priority: 100 }]);
+    busContextOf(MakaioBus).remoteRequestHandlers.set('edgeCase.ping', [{ transport: 'transient', priority: 100 }]);
 
     const cleanup = MakaioBus.on(
       EdgeNamespace.ping,
@@ -355,7 +358,7 @@ describe('Test 7: Error propagation mid-chain', () => {
     );
 
     try {
-      const result = await MakaioBus.request(EdgeNamespace.ping, { id: 'swallow-err' });
+      const result = await MakaioBus.request(MakaioBus.own('root'), EdgeNamespace.ping, { id: 'swallow-err' });
       expect(result).toEqual({ pong: true });
     } finally {
       cleanup();
@@ -381,7 +384,7 @@ describe('Test 8: $meta.local subjects never reach a remote transport', () => {
       },
     });
 
-    unregisterRemote = MakaioBus.getContext().transportRegistry.registerTransport(
+    unregisterRemote = busContextOf(MakaioBus).transportRegistry.registerTransport(
       'local-subject-remote' as keyof BusTransportRegistry,
       remoteTransport,
     );
@@ -394,7 +397,7 @@ describe('Test 8: $meta.local subjects never reach a remote transport', () => {
 
   it('does not consult the remote transport even when it is advertised for a local-only subject', async () => {
     // Advertise the transport for the local-only subject.
-    MakaioBus.getContext().remoteRequestHandlers.set('edgeCase.localOnly', [
+    busContextOf(MakaioBus).remoteRequestHandlers.set('edgeCase.localOnly', [
       { transport: 'local-subject-remote', priority: 0 },
     ]);
 
@@ -404,7 +407,7 @@ describe('Test 8: $meta.local subjects never reach a remote transport', () => {
     });
 
     try {
-      const result = await MakaioBus.request(EdgeNamespace.localOnly, { id: 'local-only-test' });
+      const result = await MakaioBus.request(MakaioBus.own('root'), EdgeNamespace.localOnly, { id: 'local-only-test' });
 
       expect(result).toEqual({ result: 'local' });
       // Remote transport must never be called.
@@ -415,13 +418,13 @@ describe('Test 8: $meta.local subjects never reach a remote transport', () => {
   });
 
   it('throws NoHandlerError (not forwarding remotely) when no local handler is present', async () => {
-    MakaioBus.getContext().remoteRequestHandlers.set('edgeCase.localOnly', [
+    busContextOf(MakaioBus).remoteRequestHandlers.set('edgeCase.localOnly', [
       { transport: 'local-subject-remote', priority: 0 },
     ]);
 
-    await expect(MakaioBus.request(EdgeNamespace.localOnly, { id: 'no-local-handler' })).rejects.toThrow(
-      NoHandlerError,
-    );
+    await expect(
+      MakaioBus.request(MakaioBus.own('root'), EdgeNamespace.localOnly, { id: 'no-local-handler' }),
+    ).rejects.toThrow(NoHandlerError);
 
     expect(remoteTransport.send).not.toHaveBeenCalled();
   });
@@ -455,7 +458,7 @@ describe('Test 9: Wildcard remote patterns across transports', () => {
       unsubscribe: async () => {},
     };
 
-    unregisterRemote = MakaioBus.getContext().transportRegistry.registerTransport(
+    unregisterRemote = busContextOf(MakaioBus).transportRegistry.registerTransport(
       'wildcard-transport' as keyof BusTransportRegistry,
       wildcardTransport,
     );
@@ -468,9 +471,9 @@ describe('Test 9: Wildcard remote patterns across transports', () => {
 
   it('routes adapter.start to a remote registered under the wildcard pattern adapter.*', async () => {
     // Register the remote transport under the wildcard pattern.
-    MakaioBus.getContext().remoteRequestHandlers.set('adapter.*', [{ transport: 'wildcard-transport', priority: 0 }]);
+    busContextOf(MakaioBus).remoteRequestHandlers.set('adapter.*', [{ transport: 'wildcard-transport', priority: 0 }]);
 
-    const result = await MakaioBus.request(AdapterNamespace.start, { name: 'my-adapter' });
+    const result = await MakaioBus.request(MakaioBus.own('root'), AdapterNamespace.start, { name: 'my-adapter' });
 
     expect(result).toEqual({ started: true });
     expect(capturedRequests).toHaveLength(1);
@@ -501,17 +504,17 @@ describe('Test 9: Wildcard remote patterns across transports', () => {
       unsubscribe: async () => {},
     };
 
-    const unregisterStop = MakaioBus.getContext().transportRegistry.registerTransport(
+    const unregisterStop = busContextOf(MakaioBus).transportRegistry.registerTransport(
       'wildcard-stop-transport' as keyof BusTransportRegistry,
       stopTransport,
     );
 
-    MakaioBus.getContext().remoteRequestHandlers.set('adapter.*', [
+    busContextOf(MakaioBus).remoteRequestHandlers.set('adapter.*', [
       { transport: 'wildcard-stop-transport', priority: 0 },
     ]);
 
     try {
-      const result = await MakaioBus.request(AdapterNamespace.stop, { name: 'my-adapter' });
+      const result = await MakaioBus.request(MakaioBus.own('root'), AdapterNamespace.stop, { name: 'my-adapter' });
       expect(result).toEqual({ stopped: true });
       expect(stopCaptured).toHaveLength(1);
       expect(stopCaptured[0]).toMatchObject({
@@ -550,7 +553,12 @@ describe('Test 10: __onAny deduplication', () => {
     });
 
     try {
-      await MakaioBus.request(EdgeNamespace.ping, { id: 'once-test' }, { correlationId: 'corr-once' });
+      await MakaioBus.request(
+        MakaioBus.own('root'),
+        EdgeNamespace.ping,
+        { id: 'once-test' },
+        { correlationId: 'corr-once' },
+      );
 
       // Give the fire-and-forget __onAny microtasks a chance to settle.
       await Promise.resolve();
@@ -574,8 +582,8 @@ describe('Test 10: __onAny deduplication', () => {
     });
 
     try {
-      await MakaioBus.request(EdgeNamespace.ping, { id: 'a' }, { correlationId: 'corr-a' });
-      await MakaioBus.request(EdgeNamespace.ping, { id: 'b' }, { correlationId: 'corr-b' });
+      await MakaioBus.request(MakaioBus.own('root'), EdgeNamespace.ping, { id: 'a' }, { correlationId: 'corr-a' });
+      await MakaioBus.request(MakaioBus.own('root'), EdgeNamespace.ping, { id: 'b' }, { correlationId: 'corr-b' });
 
       await Promise.resolve();
 
@@ -588,7 +596,7 @@ describe('Test 10: __onAny deduplication', () => {
   });
 
   it('deduplicates: invokeAnyHandlers called twice with the same correlationId fires handler once', async () => {
-    const context = MakaioBus.getContext();
+    const context = busContextOf(MakaioBus);
     const invocations: string[] = [];
 
     const unsubscribeAny = MakaioBus.__onAny((ctx) => {
@@ -613,7 +621,7 @@ describe('Test 10: __onAny deduplication', () => {
   });
 
   it('does NOT deduplicate when correlationId is absent (events / broadcasts)', async () => {
-    const context = MakaioBus.getContext();
+    const context = busContextOf(MakaioBus);
     const invocations: number[] = [];
 
     const unsubscribeAny = MakaioBus.__onAny(() => {

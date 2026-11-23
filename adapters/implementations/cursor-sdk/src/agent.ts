@@ -204,8 +204,8 @@ export class CursorSdkAgent extends AIAgent<CursorSdkBus, CursorSdkConnector> {
    * @param connector - The CursorSdkConnector to subscribe on
    */
   private wireTurnLifecycleEvents(connector: CursorSdkConnector): void {
-    this.subscribeConnector(connector, CursorSdkSubjects.agent_started, async (_ctx) => {
-      await this.emitStart();
+    this.subscribeConnector(connector, CursorSdkSubjects.agent_started, async (ctx) => {
+      await this.emitStart(ctx.call);
     });
 
     this.subscribeConnector(connector, CursorSdkSubjects.agent_complete, async (ctx) => {
@@ -218,7 +218,7 @@ export class CursorSdkAgent extends AIAgent<CursorSdkBus, CursorSdkConnector> {
         text = typeof candidate === 'string' ? candidate : '';
       }
       if (text) {
-        await this.emitGlobal(AgentSubjects.message, { content: text });
+        await this.emitGlobal(ctx.call, AgentSubjects.message, { content: text });
       }
     });
   }
@@ -240,25 +240,25 @@ export class CursorSdkAgent extends AIAgent<CursorSdkBus, CursorSdkConnector> {
   private wireMessageEvents(connector: CursorSdkConnector): void {
     // --- Text streaming ---
     this.subscribeConnector(connector, CursorSdkSubjects.text_delta, async (ctx) => {
-      await this.emitGlobal(AgentSubjects.message_delta, { text: ctx.payload.delta });
+      await this.emitGlobal(ctx.call, AgentSubjects.message_delta, { text: ctx.payload.delta });
     });
 
     this.subscribeConnector(connector, CursorSdkSubjects.text_complete, async (ctx) => {
       const { text } = ctx.payload;
-      await this.emitStepStarted('text', { type: 'text' });
-      await this.emitStepFinished('text', { type: 'text', content: text });
+      await this.emitStepStarted(ctx.call, 'text', { type: 'text' });
+      await this.emitStepFinished(ctx.call, 'text', { type: 'text', content: text });
     });
 
     // --- Reasoning streaming ---
     this.subscribeConnector(connector, CursorSdkSubjects.thinking_delta, async (ctx) => {
-      await this.emitGlobal(AgentSubjects.reasoning_delta, { content: ctx.payload.delta });
+      await this.emitGlobal(ctx.call, AgentSubjects.reasoning_delta, { content: ctx.payload.delta });
     });
 
     this.subscribeConnector(connector, CursorSdkSubjects.thinking_complete, async (ctx) => {
       const { text } = ctx.payload;
-      await this.emitStepStarted('reasoning', { type: 'reasoning' });
-      await this.emitStepFinished('reasoning', { type: 'reasoning', content: text });
-      await this.emitGlobal(AgentSubjects.reasoning, { content: text });
+      await this.emitStepStarted(ctx.call, 'reasoning', { type: 'reasoning' });
+      await this.emitStepFinished(ctx.call, 'reasoning', { type: 'reasoning', content: text });
+      await this.emitGlobal(ctx.call, AgentSubjects.reasoning, { content: text });
     });
   }
 
@@ -273,9 +273,9 @@ export class CursorSdkAgent extends AIAgent<CursorSdkBus, CursorSdkConnector> {
     this.subscribeConnector(connector, CursorSdkSubjects.tool_started, async (ctx) => {
       const { messageId, toolName, toolCallId, args } = ctx.payload;
       const normalizedArgs = normalizeToolArgs(args);
-      await this.emitToolUse(messageId, toolName, normalizedArgs, toolCallId);
-      await this.emitGlobal(AgentSubjects.tool.started, { messageId, toolName, toolCallId });
-      await this.eventBridge.emitStepStartedForMessage(messageId, 'tool_use', {
+      await this.emitToolUse(ctx.call, messageId, toolName, normalizedArgs, toolCallId);
+      await this.emitGlobal(ctx.call, AgentSubjects.tool.started, { messageId, toolName, toolCallId });
+      await this.eventBridge.emitStepStartedForMessage(ctx.call, messageId, 'tool_use', {
         type: 'tool_use',
         toolName,
         toolCallId,
@@ -286,15 +286,15 @@ export class CursorSdkAgent extends AIAgent<CursorSdkBus, CursorSdkConnector> {
       const { messageId, toolName, toolCallId, result, isError } = ctx.payload;
       const output = normalizeToolOutput(result);
 
-      await this.eventBridge.emitStepFinishedForMessage(messageId, 'tool_use', {
+      await this.eventBridge.emitStepFinishedForMessage(ctx.call, messageId, 'tool_use', {
         type: 'tool_output',
         toolCallId,
         output,
         isError,
       });
 
-      const resolved = await this.emitToolOutput(messageId, output, { nativeId: toolCallId, toolName });
-      await this.emitGlobal(AgentSubjects.tool.completed, {
+      const resolved = await this.emitToolOutput(ctx.call, messageId, output, { nativeId: toolCallId, toolName });
+      await this.emitGlobal(ctx.call, AgentSubjects.tool.completed, {
         messageId,
         toolName: resolved.toolName,
         args: resolved.args,
@@ -328,11 +328,11 @@ export class CursorSdkAgent extends AIAgent<CursorSdkBus, CursorSdkConnector> {
 
       const normalized = normalizeCursorUsage(usage);
 
-      await this.trackUsage(normalized);
+      await this.trackUsage(ctx.call, normalized);
 
       const currentTokens = normalized.totalTokens;
       const maxTokens = this.getContextWindowSize() ?? 200_000;
-      await this.emitContextWindowUpdate({
+      await this.emitContextWindowUpdate(ctx.call, {
         currentTokens,
         maxTokens,
         cachedTokens: normalized.inputCachedTokens,
@@ -358,7 +358,7 @@ export class CursorSdkAgent extends AIAgent<CursorSdkBus, CursorSdkConnector> {
     this.addConnectorWiringCleanup(
       registerToolApprovalHandler(
         connector,
-        async () => {
+        async (call) => {
           if (this.sessionId == null) {
             throw new Error('[CursorSdkAgent] sessionId is required for tool approval');
           }
@@ -366,7 +366,7 @@ export class CursorSdkAgent extends AIAgent<CursorSdkBus, CursorSdkConnector> {
             adapterId: this.adapterId,
             adapterName: this.adapterName,
             agentId: this.agentId,
-            adapterSessionId: await this.getAdapterSessionId(),
+            adapterSessionId: await this.getAdapterSessionId(call),
             sessionId: this.sessionId,
           };
         },

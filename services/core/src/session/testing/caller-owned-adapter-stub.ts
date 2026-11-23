@@ -31,7 +31,7 @@ export function registerCallerSettlementAckHandler(bus: IMakaioBus): () => void 
       ctx.setResult({ acknowledged: true });
       return;
     }
-    const transition = await bus.requestOptional(AgentStorageSubjects.updateStatus, {
+    const transition = await bus.requestOptional(ctx.call, AgentStorageSubjects.updateStatus, {
       agentId: ctx.payload.agentId,
       status: 'idle',
       expectedStatus: ['starting', 'dead'],

@@ -38,7 +38,8 @@ export interface SubjectTelemetryProjectionInput {
   readonly machineId?: string;
   /**
    * Namespace registry used to look up the schema for the observed subject.
-   * Obtain via `bus.getContext().namespaceRegistry`.
+   * Taken from the namespace registry of the bus context the projector runs in
+   * (kernel-internal; not reachable through the public bus interface).
    */
   readonly namespaceRegistry: NamespaceRegistry;
   /**

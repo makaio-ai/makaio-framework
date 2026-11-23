@@ -1,5 +1,6 @@
 /* eslint max-lines-per-function: ["error", { max: 500 }] */
 import { useEffect, useRef, useState, type JSX } from 'react';
+import type { CallContext } from '@makaio/core';
 import { ExtensionSubjects, KernelSubjects, type ExtensionInfo } from '@makaio/kernel';
 import { useBus } from '@makaio/ui-hooks';
 import type { WidgetDefinition, WidgetProps } from '@makaio/ui-kernel';
@@ -49,7 +50,7 @@ function useMachineIdState(): string | null {
 
     const loadMachineId = async (): Promise<void> => {
       try {
-        const { machineId: nextMachineId } = await bus.request(KernelSubjects.isReady, {});
+        const { machineId: nextMachineId } = await bus.request(bus.own('root'), KernelSubjects.isReady, {});
         if (isCurrentRun()) {
           setMachineId(nextMachineId);
         }
@@ -91,9 +92,9 @@ function useExtensionState(enabled: boolean): ExtensionInfo[] {
     const currentRunId = ++runIdRef.current;
     const isCurrentRun = (): boolean => runIdRef.current === currentRunId;
 
-    const loadExtensions = async (): Promise<void> => {
+    const loadExtensions = async (call: CallContext): Promise<void> => {
       try {
-        const { extensions: nextExtensions } = await bus.request(ExtensionSubjects.list, {});
+        const { extensions: nextExtensions } = await bus.request(call, ExtensionSubjects.list, {});
 
         if (!isCurrentRun()) {
           return;
@@ -108,15 +109,15 @@ function useExtensionState(enabled: boolean): ExtensionInfo[] {
       }
     };
 
-    const refreshExtensions = (): void => {
-      void loadExtensions();
+    const refreshExtensions = (call: CallContext): void => {
+      void loadExtensions(call);
     };
 
     const unsubscribe = bus.on(ExtensionSubjects.stateChanged, (ctx) => {
       setExtensions((current) => {
         if (!loadedExtensionsRef.current) {
           // Recover from a cold-cache miss by reloading the authoritative list.
-          refreshExtensions();
+          refreshExtensions(ctx.call);
           return current;
         }
 
@@ -124,7 +125,7 @@ function useExtensionState(enabled: boolean): ExtensionInfo[] {
         if (!existing) {
           // State changes for extensions that were not in the last snapshot mean
           // the local cache is stale; refresh instead of silently dropping them.
-          refreshExtensions();
+          refreshExtensions(ctx.call);
           return current;
         }
 
@@ -145,7 +146,7 @@ function useExtensionState(enabled: boolean): ExtensionInfo[] {
       });
     });
 
-    void loadExtensions();
+    void loadExtensions(bus.own('root'));
 
     return () => {
       ++runIdRef.current;

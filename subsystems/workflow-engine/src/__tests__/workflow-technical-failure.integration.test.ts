@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
+import { createTestCall } from '@makaio/test-utils';
 import {
   ExecutionAttemptNamespace,
   ExecutionAttemptSubjects,
@@ -127,18 +128,18 @@ describe('workflow owner technical failure convergence', () => {
   it.each(['completed', 'paused', 'finalizing'] as const)('does not overwrite a %s workflow owner', async (status) => {
     await seedOwner();
     await MakaioBus.request(WorkflowStorageSubjects.updateExecution, { executionId, status });
-    await expect(setup.workflowExecutor.acceptAuthorityTechnicalFailure(executionId, failure)).rejects.toThrow(
-      'conflicts',
-    );
+    await expect(
+      setup.workflowExecutor.acceptAuthorityTechnicalFailure(createTestCall(), executionId, failure),
+    ).rejects.toThrow('conflicts');
     const stored = await MakaioBus.request(WorkflowStorageSubjects.getExecution, { executionId });
     expect(stored.execution?.status).toBe(status);
   });
 
   it('refuses worker-owned lifecycle without loading the executable definition', async () => {
     await seedOwner('worker');
-    await expect(setup.workflowExecutor.acceptAuthorityTechnicalFailure(executionId, failure)).rejects.toThrow(
-      'terminalAuthority=authority',
-    );
+    await expect(
+      setup.workflowExecutor.acceptAuthorityTechnicalFailure(createTestCall(), executionId, failure),
+    ).rejects.toThrow('terminalAuthority=authority');
     const stored = await MakaioBus.request(WorkflowStorageSubjects.getExecution, { executionId });
     expect(stored.execution?.status).toBe('running');
   });

@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
 import { AgentSubjects } from '@makaio/contracts';
+import { createTestCall } from '@makaio/test-utils';
 import { createAgentTestLifecycle, createTestableAgent } from './helpers/mock-agent.js';
 
 describe('AIAgent interrupt handler', () => {
@@ -16,7 +17,7 @@ describe('AIAgent interrupt handler', () => {
       initialModel: 'test-model-1',
       initialCwd: '/test/cwd',
     });
-    await ctx.agent.init();
+    await ctx.agent.init(createTestCall());
 
     const response = await MakaioBus.request(AgentSubjects.interrupt, {
       agentId: 'test-agent-interrupt',
@@ -38,7 +39,7 @@ describe('AIAgent interrupt handler', () => {
       initialModel: 'test-model-1',
       initialCwd: '/test/cwd',
     });
-    await ctx.agent.init();
+    await ctx.agent.init(createTestCall());
     ctx.agent.currentConnector.interrupt = async () => {
       throw new Error('provider interrupt unavailable');
     };

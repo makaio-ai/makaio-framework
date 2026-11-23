@@ -9,6 +9,7 @@ import {
   type BusEventMessage,
   type BusTransportError,
 } from '../index.js';
+import { busContextOf } from '../kernel-api.js';
 import { serializeError, deserializeTransportError, transportErrorData, findInErrorChain } from '../utils/transport.js';
 import { serializeTransportError } from '../utils/transport-helpers.js';
 
@@ -77,7 +78,7 @@ declare module '../index.js' {
   }
 }
 
-const { registerTransport } = MakaioBus.getContext().transportRegistry;
+const { registerTransport } = busContextOf(MakaioBus).transportRegistry;
 
 describe('Transport error serialization', () => {
   let mockTransport: MockTransport;

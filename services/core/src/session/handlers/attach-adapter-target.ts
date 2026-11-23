@@ -9,6 +9,7 @@
  * @packageDocumentation
  */
 import type { IMakaioBus } from '@makaio/bus-core';
+import type { CallContext } from '@makaio/core';
 import type { AgentSelectionBase, ResolvedAgentConfig } from '@makaio/contracts';
 import { AdapterRuntimeSubjects } from '../../adapter-runtime/namespace.js';
 import { resolveAdapterId } from '../session-orchestrator-helpers.js';
@@ -77,6 +78,7 @@ export interface AttachAdapterTarget {
  * keyed under a pair no owner computes, which the runtime that really owns that
  * instance never sees. So both halves are refused here, and neither branch below
  * has to decide what to do with half an identity.
+ * @param call - Call context of the handled attach message, forwarded to every resolution round trip
  * @param bus - Bus every resolution round trip is issued on
  * @param input - The attach's selection, its host resolution, this runtime's machine
  *   and the session identity the refusals name
@@ -87,6 +89,7 @@ export interface AttachAdapterTarget {
  *   announcement proves a complete explicit pair
  */
 export async function resolveAttachAdapterTarget(
+  call: CallContext,
   bus: IMakaioBus,
   input: {
     readonly selection: AgentSelectionBase;
@@ -115,9 +118,9 @@ export async function resolveAttachAdapterTarget(
   if (refusal !== undefined) throw new Error(refusal);
 
   if (named.adapterId !== undefined) {
-    const adapterName = await resolveAdapterNameById(bus, named.adapterId, normalizedAdapterName, ERROR_PREFIX);
+    const adapterName = await resolveAdapterNameById(call, bus, named.adapterId, normalizedAdapterName, ERROR_PREFIX);
     const instance = toMachineScopedAdapterInstance(
-      await resolveOwnedAdapterInstance(bus, {
+      await resolveOwnedAdapterInstance(call, bus, {
         adapterName,
         adapterId: named.adapterId,
         ...(named.machineId !== undefined && { machineId: named.machineId }),
@@ -137,16 +140,17 @@ export async function resolveAttachAdapterTarget(
   // The early guard proved the name is present; TypeScript cannot narrow through a
   // thrown guard, so the assertion restates what the guard established.
   const resolvedName = normalizedAdapterName as string;
-  const machineId = input.localMachineId ?? (await bus.request(AdapterRuntimeSubjects.getMachineId, {})).machineId;
+  const machineId =
+    input.localMachineId ?? (await bus.request(call, AdapterRuntimeSubjects.getMachineId, {})).machineId;
   if (machineId === undefined) {
     // Preserve the runtime identity seam's diagnostic when no host composed a
     // machine. A successful name lookup without it would still not produce a
     // dispatchable ownership key.
-    await resolveAdapterId(bus, resolvedName);
+    await resolveAdapterId(call, bus, resolvedName);
     throw new Error(`${ERROR_PREFIX}adapter runtime resolved an adapter without a machine identity`);
   }
   const instance = toMachineScopedAdapterInstance(
-    await resolveOwnedAdapterInstance(bus, { adapterName: resolvedName, machineId }),
+    await resolveOwnedAdapterInstance(call, bus, { adapterName: resolvedName, machineId }),
   );
   if (instance === undefined) {
     throw new Error(`${ERROR_PREFIX}adapter runtime did not prove a live owner for ${resolvedName}`);

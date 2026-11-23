@@ -64,7 +64,7 @@ export function registerSessionDiscoveredHandler(bus: IMakaioBus): () => void {
       forkPointMessageId: forkPointMessageId ?? null,
     });
 
-    await bus.request(SessionStorageSubjects.importUpsert, {
+    await bus.request(ctx.call, SessionStorageSubjects.importUpsert, {
       externalSessionId: adapterSessionId,
       source: adapterName,
       adapterId,

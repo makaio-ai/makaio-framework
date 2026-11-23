@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { createMakaioContext } from '@makaio/core';
+import { createTestCall } from '@makaio/test-utils';
 import { SubagentErrorCode, SubagentSubjects, type SpawnSubagentRpcRequest } from '@makaio/contracts';
 import { spawnSubagentTool } from '../tools/parent/index.js';
 import { spawnInput, createMockBus, createParentContext } from './test-helpers.js';
@@ -126,6 +127,7 @@ describe('spawn_subagent tool', () => {
     const tool = spawnSubagentTool();
     const noSessionContext = {
       ...createMakaioContext({ cwd: '/test' }),
+      call: createTestCall(),
       subagentDepth: 0,
       bus: mockBus.bus,
     };
@@ -143,6 +145,7 @@ describe('spawn_subagent tool', () => {
     const tool = spawnSubagentTool();
     const noBusContext = {
       ...createMakaioContext({ cwd: '/test' }),
+      call: createTestCall(),
       sessionId: 'parent-session-1',
       subagentDepth: 0,
     };

@@ -3,7 +3,7 @@ import { HmacAuth } from './hmac-auth.js';
 import {
   clearHmacIdentitySecretsForTesting,
   registerHmacIdentitySecret,
-  resolveHmacIdentityPeer,
+  resolveHmacIdentityParty,
   resolveHmacIdentitySecret,
   rotateHmacIdentitySecret,
 } from './identity-secret-registry.js';
@@ -83,12 +83,12 @@ describe('HmacAuth claims propagation', () => {
     clearHmacIdentitySecretsForTesting();
   });
 
-  it('propagates peer claims through getReceiveContext after auth', async () => {
+  it('propagates caller claims through getReceiveContext after auth', async () => {
     const attemptId = 'attempt-claims-test';
     const executionId = 'exec-claims-test';
     const secret = 'claims-test-secret';
     registerHmacIdentitySecret(attemptId, secret, {
-      peerKind: 'workflow-execution-attempt',
+      partyKind: 'workflow.execution-attempt',
       claims: { executionId },
     });
 
@@ -96,7 +96,7 @@ describe('HmacAuth claims propagation', () => {
       secret: 'global-secret',
       challengeTimeout: 200,
       resolveSecret: resolveHmacIdentitySecret,
-      resolvePeer: resolveHmacIdentityPeer,
+      resolveParty: resolveHmacIdentityParty,
     });
     const clientAuth = new HmacAuth({
       secret,
@@ -109,10 +109,10 @@ describe('HmacAuth claims propagation', () => {
 
     const ctx = serverAuth.getReceiveContext(socket);
     expect(ctx).toBeDefined();
-    expect(ctx?.peer).toEqual({
-      kind: 'workflow-execution-attempt',
+    expect(ctx?.authenticated).toBe(true);
+    expect(ctx?.caller).toEqual({
+      kind: 'workflow.execution-attempt',
       id: attemptId,
-      authenticated: true,
       claims: { executionId },
     });
   });
@@ -132,7 +132,7 @@ describe('HmacAuth secret rotation fencing', () => {
     const executionId = 'exec-rotate-fence';
     const oldSecret = 'old-secret-fence';
     registerHmacIdentitySecret(attemptId, oldSecret, {
-      peerKind: 'workflow-execution-attempt',
+      partyKind: 'workflow.execution-attempt',
       claims: { executionId },
     });
 
@@ -140,7 +140,7 @@ describe('HmacAuth secret rotation fencing', () => {
       secret: 'global-secret',
       challengeTimeout: 200,
       resolveSecret: resolveHmacIdentitySecret,
-      resolvePeer: resolveHmacIdentityPeer,
+      resolveParty: resolveHmacIdentityParty,
     });
     const clientAuth = new HmacAuth({
       secret: oldSecret,
@@ -166,7 +166,7 @@ describe('HmacAuth secret rotation fencing', () => {
     const oldSecret = 'old-secret-reconnect';
     const newSecret = 'new-secret-reconnect';
     registerHmacIdentitySecret(attemptId, oldSecret, {
-      peerKind: 'workflow-execution-attempt',
+      partyKind: 'workflow.execution-attempt',
       claims: { executionId },
     });
 
@@ -174,7 +174,7 @@ describe('HmacAuth secret rotation fencing', () => {
       secret: 'global-secret',
       challengeTimeout: 200,
       resolveSecret: resolveHmacIdentitySecret,
-      resolvePeer: resolveHmacIdentityPeer,
+      resolveParty: resolveHmacIdentityParty,
     });
 
     // First connection with old secret.
@@ -200,10 +200,10 @@ describe('HmacAuth secret rotation fencing', () => {
     await runAuthHandshake(serverAuth, clientAuth2, socket2);
 
     expect(serverAuth.isSocketAuthenticated(socket2)).toBe(true);
-    expect(serverAuth.getReceiveContext(socket2)?.peer).toEqual({
-      kind: 'workflow-execution-attempt',
+    expect(serverAuth.getReceiveContext(socket2)?.authenticated).toBe(true);
+    expect(serverAuth.getReceiveContext(socket2)?.caller).toEqual({
+      kind: 'workflow.execution-attempt',
       id: attemptId,
-      authenticated: true,
       claims: { executionId },
     });
   });
@@ -216,11 +216,11 @@ describe('HmacAuth secret rotation fencing', () => {
     const secretB = 'secret-B';
 
     registerHmacIdentitySecret(attemptA, secretA, {
-      peerKind: 'workflow-execution-attempt',
+      partyKind: 'workflow.execution-attempt',
       claims: { executionId },
     });
     registerHmacIdentitySecret(attemptB, secretB, {
-      peerKind: 'workflow-execution-attempt',
+      partyKind: 'workflow.execution-attempt',
       claims: { executionId },
     });
 
@@ -228,7 +228,7 @@ describe('HmacAuth secret rotation fencing', () => {
       secret: 'global-secret',
       challengeTimeout: 200,
       resolveSecret: resolveHmacIdentitySecret,
-      resolvePeer: resolveHmacIdentityPeer,
+      resolveParty: resolveHmacIdentityParty,
     });
 
     const clientA = new HmacAuth({
@@ -253,7 +253,7 @@ describe('HmacAuth secret rotation fencing', () => {
     // Revoke attempt A by clearing its registry entry.
     clearHmacIdentitySecretsForTesting();
     registerHmacIdentitySecret(attemptB, secretB, {
-      peerKind: 'workflow-execution-attempt',
+      partyKind: 'workflow.execution-attempt',
       claims: { executionId },
     });
 
@@ -267,7 +267,7 @@ describe('HmacAuth secret rotation fencing', () => {
     const executionId = 'exec-fenced-ctx';
     const oldSecret = 'old-fenced-secret';
     registerHmacIdentitySecret(attemptId, oldSecret, {
-      peerKind: 'workflow-execution-attempt',
+      partyKind: 'workflow.execution-attempt',
       claims: { executionId },
     });
 
@@ -275,7 +275,7 @@ describe('HmacAuth secret rotation fencing', () => {
       secret: 'global-secret',
       challengeTimeout: 200,
       resolveSecret: resolveHmacIdentitySecret,
-      resolvePeer: resolveHmacIdentityPeer,
+      resolveParty: resolveHmacIdentityParty,
     });
     const clientAuth = new HmacAuth({
       secret: oldSecret,

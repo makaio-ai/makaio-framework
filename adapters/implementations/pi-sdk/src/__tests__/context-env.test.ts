@@ -1,5 +1,5 @@
 import os from 'node:os';
-import { createTestBusInstance } from '@makaio/test-utils';
+import { createTestBusInstance, createTestCall } from '@makaio/test-utils';
 import { describe, expect, it } from 'vitest';
 import { AuthCredentialRefSchema } from '@makaio/contracts';
 import { PiConnector } from '../connector.js';
@@ -20,7 +20,7 @@ class TestPiConnector extends PiConnector {
  * @returns Configured connector and its scoped bus
  */
 async function createConnector(hostBus = createTestBusInstance()) {
-  const bus = await PiSdkNamespace.scopedBus(hostBus.getContext());
+  const bus = await PiSdkNamespace.scopedBus(hostBus);
   const connector = new TestPiConnector({
     bus,
     globalBus: hostBus,
@@ -80,8 +80,8 @@ describe('PiConnector context environment', () => {
     const { bus, connector } = await createConnector();
     connector.wireTurnEvents();
 
-    await expect(connector.close()).resolves.toEqual({ evidence: 'released' });
-    await bus.emit(PiSdkSubjects.turn.turn_started, {
+    await expect(connector.close(createTestCall())).resolves.toEqual({ evidence: 'released' });
+    await bus.emit(createTestCall(), PiSdkSubjects.turn.turn_started, {
       adapterId: 'adapter-pi-context',
       agentId: 'agent-pi-context',
       oldState: 'idle',

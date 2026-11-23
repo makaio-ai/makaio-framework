@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
 import { SessionSubjects, type TurnIngestionMarker } from '@makaio/contracts';
 import { TurnStorageSubjects } from '@makaio/services-core/turn';
+import { createTestCall } from '@makaio/test-utils';
 import { createHook } from '../create-hook.js';
 
 /**
@@ -48,7 +49,7 @@ describe('PostTurn backfill filter', () => {
    * @param ingestionMarker - Marker to stamp on the emission; omit for legacy/managed events
    */
   async function emitTurnCompleted(ingestionMarker?: TurnIngestionMarker): Promise<void> {
-    await MakaioBus.emit(SessionSubjects.turn.completed, {
+    await MakaioBus.emit(createTestCall(), SessionSubjects.turn.completed, {
       sessionId: 'session-1',
       turnId: 'turn-1',
       turnNumber: 1,
@@ -60,7 +61,7 @@ describe('PostTurn backfill filter', () => {
   it("does not invoke the handler for ingestionMarker 'backfill' by default, but still propagates", async () => {
     const handler = vi.fn();
     const subscriber = vi.fn();
-    createHook('PostTurn', { name: 'backfill-default', handler });
+    createHook('PostTurn', { bus: MakaioBus, name: 'backfill-default', handler });
     MakaioBus.on(SessionSubjects.turn.completed, subscriber);
 
     await emitTurnCompleted('backfill');
@@ -72,7 +73,7 @@ describe('PostTurn backfill filter', () => {
 
   it("invokes the handler for ingestionMarker 'live'", async () => {
     const handler = vi.fn();
-    createHook('PostTurn', { name: 'live-marker', handler });
+    createHook('PostTurn', { bus: MakaioBus, name: 'live-marker', handler });
 
     await emitTurnCompleted('live');
 
@@ -82,7 +83,7 @@ describe('PostTurn backfill filter', () => {
 
   it('invokes the handler when the marker is absent (legacy/managed compatibility)', async () => {
     const handler = vi.fn();
-    createHook('PostTurn', { name: 'absent-marker', handler });
+    createHook('PostTurn', { bus: MakaioBus, name: 'absent-marker', handler });
 
     await emitTurnCompleted();
 
@@ -92,7 +93,7 @@ describe('PostTurn backfill filter', () => {
 
   it("invokes the handler for 'backfill' when includeBackfill: true", async () => {
     const handler = vi.fn();
-    createHook('PostTurn', { name: 'opt-in', includeBackfill: true, handler });
+    createHook('PostTurn', { bus: MakaioBus, name: 'opt-in', includeBackfill: true, handler });
 
     await emitTurnCompleted('backfill');
 
@@ -101,7 +102,7 @@ describe('PostTurn backfill filter', () => {
   });
 
   it('performs no context-enrichment storage requests for filtered events', async () => {
-    createHook('PostTurn', { name: 'no-enrichment', handler: vi.fn() });
+    createHook('PostTurn', { bus: MakaioBus, name: 'no-enrichment', handler: vi.fn() });
 
     await emitTurnCompleted('backfill');
 

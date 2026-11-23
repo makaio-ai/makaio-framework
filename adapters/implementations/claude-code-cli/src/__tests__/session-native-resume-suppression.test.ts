@@ -1,6 +1,7 @@
 import os from 'node:os';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
+import { createTestCall } from '@makaio/test-utils';
 import { MessageHandle, UserMessageQueue } from '@makaio/ai-adapters-core';
 import type { SDKMessage } from '@makaio/client-claude-code';
 import type { CliStdioTransport } from '../utils/createStdioTransport.js';
@@ -78,6 +79,7 @@ const RESUME_TARGET = 'stored-provider-session';
  */
 function makeHandle(useNativeResume?: boolean): MessageHandle {
   return new MessageHandle(
+    createTestCall(),
     `message-${String(useNativeResume)}`,
     {
       role: 'user',
@@ -102,7 +104,7 @@ function makeHandle(useNativeResume?: boolean): MessageHandle {
  */
 async function makeSession(): Promise<ClaudeCliSession> {
   const config: ClaudeCliSessionConfig = {
-    bus: await ClaudeCodeCliConnectorNamespace.scopedBus(),
+    bus: await ClaudeCodeCliConnectorNamespace.scopedBus(MakaioBus),
     adapterId: 'adapter-test',
     adapterName: 'claude-code-cli',
     agentId: 'agent-test',

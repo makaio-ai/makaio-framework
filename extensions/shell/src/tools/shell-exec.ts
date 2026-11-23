@@ -19,7 +19,7 @@ export const shellExecTool = defineTool({
     }
 
     try {
-      const result = await context.bus.requestOptional(ShellSubjects.exec, {
+      const result = await context.bus.requestOptional(context.call, ShellSubjects.exec, {
         input,
         context: {
           cwd: context.cwd,

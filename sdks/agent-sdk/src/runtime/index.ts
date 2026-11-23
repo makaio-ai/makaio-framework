@@ -130,7 +130,8 @@ export { supportedCommands };
  */
 export async function listSessions(options?: ListSessionsOptions): Promise<SDKSessionInfo[]> {
   const bus = await ensureRuntime();
-  return listSessionsShared(bus, options);
+  // ORIGIN: SDK-user operation
+  return listSessionsShared(bus.own('root'), bus, options);
 }
 
 /**
@@ -140,7 +141,8 @@ export async function listSessions(options?: ListSessionsOptions): Promise<SDKSe
  */
 export async function getSessionInfo(sessionId: string): Promise<SDKSessionInfo | undefined> {
   const bus = await ensureRuntime();
-  return getSessionInfoShared(bus, sessionId);
+  // ORIGIN: SDK-user operation
+  return getSessionInfoShared(bus.own('root'), bus, sessionId);
 }
 
 /**
@@ -150,7 +152,8 @@ export async function getSessionInfo(sessionId: string): Promise<SDKSessionInfo 
  */
 export async function getSessionMessages(sessionId: string): Promise<SessionMessage[]> {
   const bus = await ensureRuntime();
-  return getSessionMessagesShared(bus, sessionId);
+  // ORIGIN: SDK-user operation
+  return getSessionMessagesShared(bus.own('root'), bus, sessionId);
 }
 
 /**
@@ -161,7 +164,8 @@ export async function getSessionMessages(sessionId: string): Promise<SessionMess
  */
 export async function forkSession(sessionId: string, options?: ForkSessionOptions): Promise<ForkSessionResult> {
   const bus = await ensureRuntime();
-  return forkSessionShared(bus, sessionId, options);
+  // ORIGIN: SDK-user operation
+  return forkSessionShared(bus.own('root'), bus, sessionId, options);
 }
 
 /**
@@ -171,7 +175,8 @@ export async function forkSession(sessionId: string, options?: ForkSessionOption
  */
 export async function deleteSession(sessionId: string): Promise<void> {
   const bus = await ensureRuntime();
-  return deleteSessionShared(bus, sessionId);
+  // ORIGIN: SDK-user operation
+  return deleteSessionShared(bus.own('root'), bus, sessionId);
 }
 
 /**
@@ -182,7 +187,8 @@ export async function deleteSession(sessionId: string): Promise<void> {
  */
 export async function renameSession(sessionId: string, title: string): Promise<void> {
   const bus = await ensureRuntime();
-  return renameSessionShared(bus, sessionId, title);
+  // ORIGIN: SDK-user operation
+  return renameSessionShared(bus.own('root'), bus, sessionId, title);
 }
 
 // ---------------------------------------------------------------------------
@@ -195,7 +201,8 @@ export async function renameSession(sessionId: string, title: string): Promise<v
  */
 export async function supportedModels(): Promise<ModelInfo[]> {
   const bus = await ensureRuntime();
-  return supportedModelsShared(bus);
+  // ORIGIN: SDK-user operation
+  return supportedModelsShared(bus.own('root'), bus);
 }
 
 /**
@@ -205,7 +212,8 @@ export async function supportedModels(): Promise<ModelInfo[]> {
  */
 export async function mcpServerStatus(sessionId?: string): Promise<McpServerStatus[]> {
   const bus = await ensureRuntime();
-  return mcpServerStatusShared(bus, sessionId);
+  // ORIGIN: SDK-user operation
+  return mcpServerStatusShared(bus.own('root'), bus, sessionId);
 }
 
 /**

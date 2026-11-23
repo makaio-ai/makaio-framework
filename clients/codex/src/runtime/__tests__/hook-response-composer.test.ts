@@ -1,8 +1,9 @@
 /** Source-backed Codex 0.158.0 response contract tests. */
-import { describe, expect, it } from 'vitest';
+import { describe, expect, expectTypeOf, it } from 'vitest';
 import { ClientHookProviderContractRegistry, ClientHookResponseRegistry } from '@makaio/subsystem-client';
 import type { ContributorDefinition } from '@makaio/contracts/client';
 import { createAppendEffect, createSessionTokenEffect } from '@makaio/contracts/client';
+import { createTestCall } from '@makaio/test-utils';
 import { composeCodexHookResponse } from '../hook-response-composer.js';
 import {
   CODEX_INTERACTION_BLOCKABILITY,
@@ -54,7 +55,9 @@ describe('Codex hook response contract', () => {
       selectors: [{ kind: 'event-name', name: 'SessionStart' }],
       respond: () => ({ canonicalEffects: [createAppendEffect('session context')] }),
     });
-    expect(JSON.parse((await composeCodexHookResponse(target, payload('SessionStart'))).stdout)).toEqual({
+    expect(
+      JSON.parse((await composeCodexHookResponse(createTestCall(), target, payload('SessionStart'))).stdout),
+    ).toEqual({
       hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext: 'session context' },
     });
   });
@@ -67,7 +70,9 @@ describe('Codex hook response contract', () => {
       })),
     );
 
-    expect(JSON.parse((await composeCodexHookResponse(target, payload('SessionStart'))).stdout)).toEqual({
+    expect(
+      JSON.parse((await composeCodexHookResponse(createTestCall(), target, payload('SessionStart'))).stdout),
+    ).toEqual({
       continue: false,
       stopReason: 'startup rejected',
     });
@@ -80,7 +85,9 @@ describe('Codex hook response contract', () => {
         providerEnvelope: createCodexPostToolUseBlockEffect('stop prompt'),
       })),
     );
-    expect(JSON.parse((await composeCodexHookResponse(target, payload('UserPromptSubmit'))).stdout)).toEqual({
+    expect(
+      JSON.parse((await composeCodexHookResponse(createTestCall(), target, payload('UserPromptSubmit'))).stdout),
+    ).toEqual({
       decision: 'block',
       reason: 'stop prompt',
     });
@@ -91,7 +98,9 @@ describe('Codex hook response contract', () => {
       target,
       provider('deny', 'PreToolUse', () => ({ providerEnvelope: createCodexPreToolUseDenyEffect('deny') })),
     );
-    expect(JSON.parse((await composeCodexHookResponse(target, payload('PreToolUse'))).stdout)).toEqual({
+    expect(
+      JSON.parse((await composeCodexHookResponse(createTestCall(), target, payload('PreToolUse'))).stdout),
+    ).toEqual({
       hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: 'deny' },
     });
     const update = registry();
@@ -102,13 +111,12 @@ describe('Codex hook response contract', () => {
       })),
     );
     expect(
-      JSON.parse((await composeCodexHookResponse(update, payload('PreToolUse'))).stdout).hookSpecificOutput
-        .updatedInput,
+      JSON.parse((await composeCodexHookResponse(createTestCall(), update, payload('PreToolUse'))).stdout)
+        .hookSpecificOutput.updatedInput,
     ).toEqual({ command: 'echo safe' });
   });
   it('rejects top-level null updates while preserving nested JSON null values', async () => {
-    // @ts-expect-error Codex's native `Option<Value>` parser rejects top-level null as an absent update.
-    createCodexPreToolUseUpdateEffect(null);
+    expectTypeOf<null>().not.toExtend<Parameters<typeof createCodexPreToolUseUpdateEffect>[0]>();
 
     expect(
       codexProviderContractCatalog.validate(
@@ -131,8 +139,8 @@ describe('Codex hook response contract', () => {
       })),
     );
     expect(
-      JSON.parse((await composeCodexHookResponse(target, payload('PreToolUse'))).stdout).hookSpecificOutput
-        .updatedInput,
+      JSON.parse((await composeCodexHookResponse(createTestCall(), target, payload('PreToolUse'))).stdout)
+        .hookSpecificOutput.updatedInput,
     ).toEqual({ command: null });
   });
   it('renders PostToolUse and Stop blocks', async () => {
@@ -141,16 +149,18 @@ describe('Codex hook response contract', () => {
       post,
       provider('post', 'PostToolUse', () => ({ providerEnvelope: createCodexPostToolUseBlockEffect('post block') })),
     );
-    expect(JSON.parse((await composeCodexHookResponse(post, payload('PostToolUse'))).stdout)).toEqual({
-      decision: 'block',
-      reason: 'post block',
-    });
+    expect(JSON.parse((await composeCodexHookResponse(createTestCall(), post, payload('PostToolUse'))).stdout)).toEqual(
+      {
+        decision: 'block',
+        reason: 'post block',
+      },
+    );
     const stop = registry();
     install(
       stop,
       provider('stop', 'Stop', () => ({ providerEnvelope: createCodexStopBlockEffect('continue') })),
     );
-    expect(JSON.parse((await composeCodexHookResponse(stop, payload('Stop'))).stdout)).toEqual({
+    expect(JSON.parse((await composeCodexHookResponse(createTestCall(), stop, payload('Stop'))).stdout)).toEqual({
       decision: 'block',
       reason: 'continue',
     });
@@ -161,7 +171,11 @@ describe('Codex hook response contract', () => {
       target,
       provider('wrong', 'Stop', () => ({ providerEnvelope: createCodexPreToolUseDenyEffect('no') })),
     );
-    expect(await composeCodexHookResponse(target, payload('Stop'))).toEqual({ exitCode: 0, stdout: '', stderr: '' });
+    expect(await composeCodexHookResponse(createTestCall(), target, payload('Stop'))).toEqual({
+      exitCode: 0,
+      stdout: '',
+      stderr: '',
+    });
   });
 
   it('uses restrictive block precedence over deny and input updates', async () => {
@@ -181,7 +195,9 @@ describe('Codex hook response contract', () => {
       provider('block', 'PreToolUse', () => ({ providerEnvelope: createCodexPreToolUseBlockEffect('block') })),
     );
 
-    expect(JSON.parse((await composeCodexHookResponse(target, payload('PreToolUse'))).stdout)).toEqual({
+    expect(
+      JSON.parse((await composeCodexHookResponse(createTestCall(), target, payload('PreToolUse'))).stdout),
+    ).toEqual({
       decision: 'block',
       reason: 'block',
     });
@@ -197,7 +213,9 @@ describe('Codex hook response contract', () => {
       preTool,
       provider('second', 'PreToolUse', () => ({ providerEnvelope: createCodexPreToolUseBlockEffect('second') })),
     );
-    expect(JSON.parse((await composeCodexHookResponse(preTool, payload('PreToolUse'))).stdout).reason).toBe('first');
+    expect(
+      JSON.parse((await composeCodexHookResponse(createTestCall(), preTool, payload('PreToolUse'))).stdout).reason,
+    ).toBe('first');
 
     const postTool = registry();
     install(
@@ -208,9 +226,9 @@ describe('Codex hook response contract', () => {
       postTool,
       provider('second', 'PostToolUse', () => ({ providerEnvelope: createCodexPostToolUseBlockEffect('second') })),
     );
-    expect(JSON.parse((await composeCodexHookResponse(postTool, payload('PostToolUse'))).stdout).reason).toBe(
-      'first\n\nsecond',
-    );
+    expect(
+      JSON.parse((await composeCodexHookResponse(createTestCall(), postTool, payload('PostToolUse'))).stdout).reason,
+    ).toBe('first\n\nsecond');
   });
 
   it('rejects incompatible input rewrites instead of selecting one silently', async () => {
@@ -228,7 +246,7 @@ describe('Codex hook response contract', () => {
       })),
     );
 
-    await expect(composeCodexHookResponse(target, payload('PreToolUse'))).rejects.toThrow(
+    await expect(composeCodexHookResponse(createTestCall(), target, payload('PreToolUse'))).rejects.toThrow(
       'Conflicting Codex PreToolUse input.update effects',
     );
   });
@@ -239,7 +257,9 @@ describe('Codex hook response contract', () => {
       preTool,
       provider('context', 'PreToolUse', () => ({ providerEnvelope: createCodexPreToolUseContextEffect('remember') })),
     );
-    expect(JSON.parse((await composeCodexHookResponse(preTool, payload('PreToolUse'))).stdout)).toEqual({
+    expect(
+      JSON.parse((await composeCodexHookResponse(createTestCall(), preTool, payload('PreToolUse'))).stdout),
+    ).toEqual({
       hookSpecificOutput: { hookEventName: 'PreToolUse', additionalContext: 'remember' },
     });
 
@@ -253,7 +273,11 @@ describe('Codex hook response contract', () => {
       selectors: [{ kind: 'event-name', name: 'Stop' }],
       respond: () => ({ canonicalEffects: [createAppendEffect('must not render')] }),
     });
-    expect(await composeCodexHookResponse(stop, payload('Stop'))).toEqual({ exitCode: 0, stdout: '', stderr: '' });
+    expect(await composeCodexHookResponse(createTestCall(), stop, payload('Stop'))).toEqual({
+      exitCode: 0,
+      stdout: '',
+      stderr: '',
+    });
   });
 
   it('validates exact envelopes and event-specific effect schemas', () => {
@@ -323,7 +347,9 @@ describe('Codex hook response contract', () => {
       },
     });
 
-    expect(JSON.parse((await composeCodexHookResponse(target, payload('PreToolUse'))).stdout)).toEqual({
+    expect(
+      JSON.parse((await composeCodexHookResponse(createTestCall(), target, payload('PreToolUse'))).stdout),
+    ).toEqual({
       decision: 'block',
       reason: expect.stringContaining(`failed ${capability}`),
     });
@@ -364,7 +390,7 @@ describe('Codex hook response contract', () => {
 
       const sinkCalls: string[] = [];
       const rawPayload = { eventName: 'SessionStart', receivedAt: Date.now(), payload: { session_id: 'sid-1' } };
-      const response = await composeCodexHookResponse(target, rawPayload, {
+      const response = await composeCodexHookResponse(createTestCall(), target, rawPayload, {
         onSessionToken: (token) => {
           sinkCalls.push(token);
         },
@@ -392,7 +418,7 @@ describe('Codex hook response contract', () => {
 
       const sinkCalls: string[] = [];
       const rawPayload = { eventName: 'PostToolUse', receivedAt: Date.now(), payload: { session_id: 'sid-2' } };
-      await composeCodexHookResponse(target, rawPayload, {
+      await composeCodexHookResponse(createTestCall(), target, rawPayload, {
         onSessionToken: (token) => {
           sinkCalls.push(token);
         },
@@ -419,7 +445,7 @@ describe('Codex hook response contract', () => {
         receivedAt: Date.now(),
         payload: { session_id: 'sid-3', agent_id: 'agent-xyz' },
       };
-      await composeCodexHookResponse(target, rawPayload, {
+      await composeCodexHookResponse(createTestCall(), target, rawPayload, {
         onSessionToken: (token) => {
           sinkCalls.push(token);
         },
@@ -451,7 +477,7 @@ describe('Codex hook response contract', () => {
 
       const sinkCalls: string[] = [];
       const rawPayload = { eventName: 'SessionStart', receivedAt: Date.now(), payload: { session_id: 'sid-4' } };
-      await composeCodexHookResponse(target, rawPayload, {
+      await composeCodexHookResponse(createTestCall(), target, rawPayload, {
         onSessionToken: (token) => {
           sinkCalls.push(token);
         },
@@ -479,7 +505,7 @@ describe('Codex hook response contract', () => {
         receivedAt: Date.now(),
         payload: { session_id: 'sid-parent' },
       };
-      await composeCodexHookResponse(target, rawPayload, {
+      await composeCodexHookResponse(createTestCall(), target, rawPayload, {
         onSessionToken: (token) => {
           sinkCalls.push(token);
         },
@@ -506,7 +532,7 @@ describe('Codex hook response contract', () => {
         receivedAt: Date.now(),
         payload: { session_id: 'sid-5', agent_id: 'stray-id' },
       };
-      await composeCodexHookResponse(target, rawPayload, {
+      await composeCodexHookResponse(createTestCall(), target, rawPayload, {
         onSessionToken: (token) => {
           sinkCalls.push(token);
         },

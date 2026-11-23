@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { z } from 'zod';
-import { MakaioBus, type IMakaioBus } from '@makaio/bus-core';
+import type { IMakaioBus } from '@makaio/bus-core';
+import type { CallContext } from '@makaio/core';
 import { BaseService } from '@makaio/service-base';
 import {
   HarnessSubjects,
@@ -44,7 +45,7 @@ export class HarnessService extends BaseService {
    * Creates a new HarnessService instance.
    * @param bus - Bus instance for request/event handling
    */
-  public constructor(bus: IMakaioBus = MakaioBus) {
+  public constructor(bus: IMakaioBus) {
     super(bus);
   }
 
@@ -52,13 +53,13 @@ export class HarnessService extends BaseService {
     // Seed before registering handlers so a seeding failure leaves no registered handlers behind.
     // Runtime contract: NodeRuntime runs DB migrations before lifecycle services start.
     // Seeding assumes storage is ready and `harness_definitions` already exists.
-    await seedDefaultHarnesses(this.bus);
+    await seedDefaultHarnesses(this.bus.own('start'), this.bus);
     this.registerHandlers();
   }
 
   private registerHandlers(): void {
     this.registerHandler(HarnessSubjects.get, async (ctx) => {
-      const harness = await this.loadHarness(ctx.payload);
+      const harness = await this.loadHarness(ctx.call, ctx.payload);
       if (!harness) {
         throw new Error('Harness not found');
       }
@@ -67,22 +68,22 @@ export class HarnessService extends BaseService {
     });
 
     this.registerHandler(HarnessSubjects.list, async (ctx) => {
-      const { harnesses } = await this.bus.request(HarnessStorageSubjects.list, ctx.payload);
+      const { harnesses } = await this.bus.request(ctx.call, HarnessStorageSubjects.list, ctx.payload);
       ctx.setResult({ harnesses });
     });
 
     this.registerHandler(HarnessSubjects.set, async (ctx) => {
-      const id = await this.upsertHarness(ctx.payload);
+      const id = await this.upsertHarness(ctx.call, ctx.payload);
       ctx.setResult({ id });
     });
 
     this.registerHandler(HarnessSubjects.delete, async (ctx) => {
-      const { deleted } = await this.bus.request(HarnessStorageSubjects.delete, { id: ctx.payload.id });
+      const { deleted } = await this.bus.request(ctx.call, HarnessStorageSubjects.delete, { id: ctx.payload.id });
       ctx.setResult({ success: deleted });
     });
 
     this.registerHandler(HarnessSubjects.getDefault, async (ctx) => {
-      const harness = await this.getDefaultHarness(ctx.payload.adapterName, ctx.payload.clientId);
+      const harness = await this.getDefaultHarness(ctx.call, ctx.payload.adapterName, ctx.payload.clientId);
       ctx.setResult(harness);
     });
 
@@ -90,18 +91,30 @@ export class HarnessService extends BaseService {
       const { adapterName, clientId, personaHarnessId, profileHarnessId } = ctx.payload;
 
       if (personaHarnessId) {
-        const personaHarness = await this.resolveAndValidateHarness(personaHarnessId, adapterName, 'persona', clientId);
+        const personaHarness = await this.resolveAndValidateHarness(
+          ctx.call,
+          personaHarnessId,
+          adapterName,
+          'persona',
+          clientId,
+        );
         ctx.setResult(personaHarness);
         return;
       }
 
       if (profileHarnessId) {
-        const profileHarness = await this.resolveAndValidateHarness(profileHarnessId, adapterName, 'profile', clientId);
+        const profileHarness = await this.resolveAndValidateHarness(
+          ctx.call,
+          profileHarnessId,
+          adapterName,
+          'profile',
+          clientId,
+        );
         ctx.setResult(profileHarness);
         return;
       }
 
-      const harness = await this.getDefaultHarness(adapterName, clientId);
+      const harness = await this.getDefaultHarness(ctx.call, adapterName, clientId);
       ctx.setResult(harness);
     });
 
@@ -124,21 +137,22 @@ export class HarnessService extends BaseService {
    * Applies partial-update semantics: any field omitted from `payload` falls back
    * to the current persisted value, then to a safe default. This prevents
    * schema-driven editors from silently zeroing fields they don't render.
+   * @param call - Call context of the handled message
    * @param payload - Incoming create/update payload from the bus
    * @returns The stable harness ID
    */
-  private async upsertHarness(payload: HarnessDefinitionCreate): Promise<string> {
-    const id = await this.resolveHarnessId(payload.name, payload.adapterName, payload.clientId);
-    const existing = await this.loadHarness({
+  private async upsertHarness(call: CallContext, payload: HarnessDefinitionCreate): Promise<string> {
+    const id = await this.resolveHarnessId(call, payload.name, payload.adapterName, payload.clientId);
+    const existing = await this.loadHarness(call, {
       id,
       adapterName: payload.adapterName,
       clientId: payload.clientId,
     });
     const harness = this.mergeHarnessPayload(id, payload, existing);
     if (harness.adapterName) {
-      await this.validateNativeTools(harness.adapterName, harness.nativeTools);
+      await this.validateNativeTools(call, harness.adapterName, harness.nativeTools);
     }
-    await this.bus.request(HarnessStorageSubjects.set, { harness });
+    await this.bus.request(call, HarnessStorageSubjects.set, { harness });
     return id;
   }
 
@@ -187,12 +201,14 @@ export class HarnessService extends BaseService {
    * Queries by name only to detect discriminator conflicts: if an existing
    * harness with the same name was created under a different scope, an error
    * is thrown rather than silently creating a duplicate with a new ID.
+   * @param call - Call context of the handled message
    * @param name - Harness name
    * @param adapterName - Adapter driver name (used when clientId is absent)
    * @param clientId - Client package identifier (preferred discriminator)
    * @returns Stable harness ID
    */
   private async resolveHarnessId(
+    call: CallContext,
     name: string,
     adapterName: string | undefined,
     clientId: string | undefined,
@@ -201,7 +217,7 @@ export class HarnessService extends BaseService {
     // Query by name only so we can detect harnesses with the same name but a
     // different scope. Filtering by adapterName/clientId would miss conflicts
     // when the caller changes discriminators between create and update.
-    const { harnesses } = await this.bus.request(HarnessStorageSubjects.list, { name });
+    const { harnesses } = await this.bus.request(call, HarnessStorageSubjects.list, { name });
     const existing = harnesses.find(
       (harness) => harness.name === name && (harness.clientId ?? harness.adapterName) === discriminator,
     );
@@ -224,9 +240,9 @@ export class HarnessService extends BaseService {
     return this.createStableHarnessId(name, discriminator);
   }
 
-  private async loadHarness(input: HarnessLookupInput): Promise<Harness | null> {
+  private async loadHarness(call: CallContext, input: HarnessLookupInput): Promise<Harness | null> {
     if (input.id) {
-      const { harness } = await this.bus.request(HarnessStorageSubjects.get, { id: input.id });
+      const { harness } = await this.bus.request(call, HarnessStorageSubjects.get, { id: input.id });
       if (
         harness &&
         (!input.adapterName || harness.adapterName === input.adapterName) &&
@@ -243,7 +259,7 @@ export class HarnessService extends BaseService {
       return null;
     }
 
-    const { harnesses } = await this.bus.request(HarnessStorageSubjects.list, {
+    const { harnesses } = await this.bus.request(call, HarnessStorageSubjects.list, {
       name: input.name,
       adapterName: input.adapterName,
       clientId: input.clientId,
@@ -266,13 +282,18 @@ export class HarnessService extends BaseService {
    * Searches by `clientId` first when provided, then falls back to `adapterName`.
    * Within each candidate set, prefers the default-flagged harness, then any enabled harness.
    * At least one of `adapterName` or `clientId` must be provided (enforced by schema).
+   * @param call - Call context of the handled message
    * @param adapterName - Adapter driver name; may be omitted when `clientId` is provided
    * @param clientId - Optional client package identifier to search first
    * @returns The resolved harness
    */
-  private async getDefaultHarness(adapterName: string | undefined, clientId?: string): Promise<Harness> {
+  private async getDefaultHarness(
+    call: CallContext,
+    adapterName: string | undefined,
+    clientId?: string,
+  ): Promise<Harness> {
     if (clientId) {
-      const { harnesses: clientHarnesses } = await this.bus.request(HarnessStorageSubjects.list, { clientId });
+      const { harnesses: clientHarnesses } = await this.bus.request(call, HarnessStorageSubjects.list, { clientId });
       const defaultClientHarness = clientHarnesses.find((harness) => harness.isDefault && harness.enabled);
       if (defaultClientHarness) {
         return defaultClientHarness;
@@ -285,7 +306,7 @@ export class HarnessService extends BaseService {
     }
 
     if (adapterName) {
-      const { harnesses } = await this.bus.request(HarnessStorageSubjects.list, { adapterName });
+      const { harnesses } = await this.bus.request(call, HarnessStorageSubjects.list, { adapterName });
       const defaultHarness = harnesses.find((harness) => harness.isDefault && harness.enabled);
 
       if (defaultHarness) {
@@ -350,14 +371,16 @@ export class HarnessService extends BaseService {
    * Skips validation when the adapter is not loaded (e.g., during seeding,
    * offline harness editing, or tests without a running adapter).
    * Throws a hard error when the adapter is loaded but a tool name is not found.
+   * @param call - Call context of the handled message
    * @param adapterName - The adapter to query for declared tools
    * @param nativeTools - The harness tool selection to validate
    */
   private async validateNativeTools(
+    call: CallContext,
     adapterName: string,
     nativeTools: { enabled: string[]; disabled: string[] },
   ): Promise<void> {
-    const result = await this.bus.requestOptional(AdapterSubjects.getCapabilities, { adapterName });
+    const result = await this.bus.requestOptional(call, AdapterSubjects.getCapabilities, { adapterName });
     if (!result.handled) {
       // Adapter not loaded — skip validation to allow seeding and offline editing.
       return;
@@ -394,6 +417,7 @@ export class HarnessService extends BaseService {
   /**
    * Loads a harness by ID, validates it is compatible with the requested adapter context,
    * and asserts it is enabled.
+   * @param call - Call context of the handled message
    * @param harnessId - ID of the harness to resolve
    * @param adapterName - Adapter name from the resolve request
    * @param source - Context label for error messages
@@ -401,12 +425,13 @@ export class HarnessService extends BaseService {
    * @returns The validated harness
    */
   private async resolveAndValidateHarness(
+    call: CallContext,
     harnessId: string,
     adapterName: string | undefined,
     source: 'persona' | 'profile',
     clientId?: string,
   ): Promise<Harness> {
-    const harness = await this.loadHarness({ id: harnessId });
+    const harness = await this.loadHarness(call, { id: harnessId });
     if (!harness) {
       const sourceLabel = source === 'persona' ? 'Persona' : 'Profile';
       throw new Error(`${sourceLabel} harness not found: ${harnessId}`);

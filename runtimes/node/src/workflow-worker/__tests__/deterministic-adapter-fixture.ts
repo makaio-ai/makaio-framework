@@ -12,10 +12,11 @@ import {
   type BaseAgentConnectorConfig,
   type ConfigFactoryInput,
   type ConnectorSendMessageOptions,
+  type ConnectorStartOptions,
   type NormalizedMessageInput,
 } from '@makaio/ai-adapters-core';
 import type { IMakaioBus } from '@makaio/bus-core';
-import type { ConnectorTeardownResult } from '@makaio/contracts';
+import type { CallContext, ConnectorTeardownResult } from '@makaio/contracts';
 import {
   AgentSubjects,
   ToolSubjects,
@@ -46,17 +47,26 @@ export interface DeterministicAdapterCapture {
 }
 
 class DeterministicConnector extends AIAgentConnector<FixtureBus> {
-  public onUsage?: (usage: {
-    granularity: 'provider-call';
-    provider: string;
-    inputTokens: number;
-    inputCachedTokens: number;
-    outputTokens: number;
-    reasoningTokens: number;
-    totalTokens: number;
-    costUnits: number;
-    costUnitType: 'tokens';
-  }) => Promise<void>;
+  /**
+   * Report usage for the deterministic turn.
+   * @param call - Call that triggered the turn.
+   * @param usage - Normalized provider usage for that turn.
+   * @returns Completion of usage tracking.
+   */
+  public onUsage?: (
+    call: CallContext,
+    usage: {
+      granularity: 'provider-call';
+      provider: string;
+      inputTokens: number;
+      inputCachedTokens: number;
+      outputTokens: number;
+      reasoningTokens: number;
+      totalTokens: number;
+      costUnits: number;
+      costUnitType: 'tokens';
+    },
+  ) => Promise<void>;
   public constructor(
     config: BaseAgentConnectorConfig<FixtureBus> & { adapterId: string },
     private readonly runtimeBus: IMakaioBus,
@@ -67,13 +77,19 @@ class DeterministicConnector extends AIAgentConnector<FixtureBus> {
 
   public async initialize(): Promise<void> {}
 
-  public async start(message: NormalizedMessageInput): Promise<AgentStartResult> {
+  /**
+   * Run the deterministic turn under the triggering call.
+   * @param message - Initial normalized message.
+   * @param options - Turn options carrying the triggering call.
+   * @returns The completed handle and fixed session identity.
+   */
+  public async start(message: NormalizedMessageInput, options: ConnectorStartOptions): Promise<AgentStartResult> {
     this.capture.starts.push({
       cwd: this.config.cwd,
       allowedTools: this.config.allowedTools,
       allowedDirectories: this.config.allowedDirectories,
     });
-    this.capture.readResult = await this.runtimeBus.request(ToolSubjects.execute, {
+    this.capture.readResult = await this.runtimeBus.request(options.call, ToolSubjects.execute, {
       toolName: 'read_file',
       input: { path: 'input.txt' },
       adapterId: this.config.adapterId,
@@ -83,7 +99,7 @@ class DeterministicConnector extends AIAgentConnector<FixtureBus> {
         constraints: { allowedDirectories: this.config.allowedDirectories ?? [] },
       },
     });
-    await this.onUsage?.({
+    await this.onUsage?.(options.call, {
       granularity: 'provider-call',
       provider: 'deterministic',
       inputTokens: 1,
@@ -94,13 +110,13 @@ class DeterministicConnector extends AIAgentConnector<FixtureBus> {
       costUnits: 2,
       costUnitType: 'tokens',
     });
-    const handle = new MessageHandle('deterministic-message', message, 'enqueue');
+    const handle = new MessageHandle(options.call, 'deterministic-message', message, 'enqueue');
     handle.markCompleted({ outcome: 'completed', result: { message: 'authority governed read' } });
     this.capture.completionTasks.push(
       new Promise<void>((resolve, reject) => {
         setTimeout(() => {
           void this.runtimeBus
-            .emit(AgentSubjects.complete, {
+            .emit(options.call, AgentSubjects.complete, {
               agentId: this.getAgentId(),
               adapterId: this.config.adapterId,
               adapterName: this.config.adapterName,
@@ -115,11 +131,17 @@ class DeterministicConnector extends AIAgentConnector<FixtureBus> {
     return { adapterSessionId: 'deterministic-session', agentId: this.getAgentId(), messageHandle: handle };
   }
 
+  /**
+   * Complete a deterministic follow-up under the triggering call.
+   * @param message - Follow-up normalized message.
+   * @param options - Turn options carrying the triggering call and message identity.
+   * @returns The completed follow-up handle.
+   */
   public async sendMessage(
     message: NormalizedMessageInput,
-    options?: ConnectorSendMessageOptions,
+    options: ConnectorSendMessageOptions,
   ): Promise<MessageHandle> {
-    const handle = new MessageHandle(options?.messageId ?? 'deterministic-followup', message, 'enqueue');
+    const handle = new MessageHandle(options.call, options.messageId ?? 'deterministic-followup', message, 'enqueue');
     handle.markCompleted({ outcome: 'completed', result: { message: 'authority governed read' } });
     return handle;
   }
@@ -147,7 +169,7 @@ class DeterministicConnector extends AIAgentConnector<FixtureBus> {
 
 class DeterministicAgent extends AIAgent<FixtureBus, DeterministicConnector> {
   protected async wireEvents(connector: DeterministicConnector): Promise<void> {
-    connector.onUsage = (usage) => this.trackUsage(usage);
+    connector.onUsage = (call, usage) => this.trackUsage(call, usage);
   }
 }
 
@@ -210,6 +232,7 @@ export function createDeterministicAdapterContribution(capture: DeterministicAda
           capture.providerContext = input.providerContext;
           return {
             bus: scopedBus,
+            globalBus: input.globalBus,
             agentId: input.agentId ?? 'deterministic-agent',
             adapterId: input.adapterId ?? 'deterministic-adapter',
             adapterName: 'workflow-test-adapter',

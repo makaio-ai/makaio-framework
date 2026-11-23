@@ -22,6 +22,7 @@ import { tmpdir } from 'node:os';
 import { describe, expect, it } from 'vitest';
 import { TeardownEvidenceSchema, teardownWasObserved } from '@makaio/contracts';
 import type { ConformanceTestConfig, CreateConformanceTestConfigOptions } from '@makaio/ai-adapters-core';
+import { createTestCall } from '@makaio/test-utils';
 import { discoverAdapters } from '../../scripts/lib/conformance/discovery.js';
 import { loadConformanceProviderDefinitions } from '../../scripts/lib/conformance/provider-catalog.js';
 // Imported for its module-level harness — the framework namespaces and the
@@ -119,11 +120,11 @@ describe('§3.3: every adapter answers the teardown question', () => {
         reasoningEffort: testConfig.options?.primaryModel?.reasoningEffort ?? 'low',
         model: testConfig.options?.primaryModel?.modelName,
       });
-      const report = await connector.close();
+      const report = await connector.close(createTestCall());
 
       expect(
         evidenceClasses,
-        `Adapter '${adapterName}' close() must resolve with a ConnectorTeardownResult whose evidence is one of ` +
+        `Adapter '${adapterName}' close(call) must resolve with a ConnectorTeardownResult whose evidence is one of ` +
           `[${evidenceClasses.join(', ')}]; received ${JSON.stringify(report)}`,
       ).toContain(report.evidence);
 

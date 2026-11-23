@@ -56,10 +56,11 @@ function makeAuth(
     authenticateClient: async () => undefined,
     authenticateServer: async () => undefined,
     handleAuthMessage: () => false,
+    getAuthenticatedIdentityId: (socket) => identities.get(socket),
     getReceiveContext: (socket) => {
       const identityId = socket ? identities.get(socket) : undefined;
       return identityId
-        ? { transportName: 'websocket', peer: { kind: 'worker-bootstrap', id: identityId, authenticated: true } }
+        ? { transportName: 'websocket', authenticated: true, caller: { kind: 'test.worker-bootstrap', id: identityId } }
         : undefined;
     },
     isSocketAuthenticated,
@@ -86,7 +87,8 @@ describe('Server mode behavior', () => {
     const receiveContext = {
       transportName: '',
       connectionId: 'host-loopback-connection',
-      peer: { kind: 'makaio-loopback', authenticated: false },
+      authenticated: false,
+      caller: { kind: 'test.makaio-loopback', id: 'host-loopback' },
     };
     const auth: TransportAuth = {
       authenticateClient: async () => undefined,
@@ -153,7 +155,7 @@ describe('Server mode behavior', () => {
   it('excludes subject-restricted clients from server-initiated request targets', async () => {
     const identityId = 'restricted-request-target';
     registerHmacIdentitySecret(identityId, 'request-target-secret', {
-      peerKind: 'worker-bootstrap',
+      partyKind: 'test.worker-bootstrap',
       allowedSubscriptionSubjects: ['worker.control.bootstrap.claim'],
     });
 
@@ -224,7 +226,7 @@ describe('Server mode behavior', () => {
   it('routes correlated responses only to their requesting socket', async () => {
     const identityId = 'restricted-response-observer';
     registerHmacIdentitySecret(identityId, 'response-observer-secret', {
-      peerKind: 'worker-bootstrap',
+      partyKind: 'test.worker-bootstrap',
       allowedSubscriptionSubjects: ['worker.control.bootstrap.claim'],
     });
 

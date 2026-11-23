@@ -166,7 +166,16 @@ export const frameworkReactPreset = {
  * tsdown preset for `@makaio/bus-core` itself.
  *
  * Inlines all `@makaio/*` deps (only `@makaio/core`) with no external rewrites,
- * since bus-core IS the singleton root.
+ * so the standalone `@makaio/bus-core` build is self-contained. That package is
+ * private and never reaches consumers on its own.
+ *
+ * The bus stage of the unified framework build (`packages/framework/build.ts`)
+ * adds `plugins: [frameworkExternals()]` on top of this preset, so the shipped
+ * bus entry imports `@makaio/framework/core` and `/contracts` instead of
+ * inlining them. That leaves exactly one declaration and one runtime copy of
+ * the core types, which an unforgeable call context needs: a nominal type or a
+ * module-level registry duplicated across entry points could no longer be
+ * matched by identity.
  *
  * `dts.eager` is required here because bus-core bundles `@makaio/core` types
  * inline via `alwaysBundle`. rolldown-plugin-dts in non-eager mode only

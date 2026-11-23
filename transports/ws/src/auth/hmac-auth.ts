@@ -9,8 +9,9 @@
  * Uses Web Crypto API for HMAC computation (browser and Node.js compatible).
  */
 
-import type { TransportPeerContext, TransportReceiveContext } from '@makaio/core';
+import { ATTESTING_CONNECTION_ROLES, type Party, type TransportReceiveContext } from '@makaio/core';
 import type { TransportAuth } from './interface.js';
+import { resolveHmacIdentityAttestingRole } from './identity-secret-registry.js';
 import type { WebSocketLike } from '../types.js';
 import { WebSocketConnectionError } from '../connection-error.js';
 
@@ -69,7 +70,7 @@ export interface HmacAuthOptions {
    *
    * When set the client includes this value as `identityId` in the
    * `auth-response` frame. The server stores it in
-   * `serverAuthenticatedPeers` and exposes it via `getReceiveContext()`.
+   * `serverAuthenticatedPeers` after verifying the signature.
    *
    * Leave undefined for global-secret mode (backward-compatible default).
    */
@@ -90,16 +91,17 @@ export interface HmacAuthOptions {
   resolveSecret?: (claimedId: string) => string | null;
 
   /**
-   * Server-side peer context resolver for identity-bound mode.
+   * Server-side caller party resolver for identity-bound mode.
    *
    * Authenticated identities are exposed to bus handlers only through this
-   * trusted resolver. Omitting it authenticates the socket without inventing
-   * authorization semantics from the caller-controlled identity ID. Return
-   * `null` when no peer context should be exposed.
+   * trusted resolver, as the caller of every message of the connection.
+   * Omitting it authenticates the socket without inventing authorization
+   * semantics from the caller-controlled identity ID. Return `null` when no
+   * caller party should be exposed.
    * @param claimedId - The authenticated `identityId`.
-   * @returns Trusted peer context for the authenticated identity, or `null`.
+   * @returns Trusted caller party for the authenticated identity, or `null`.
    */
-  resolvePeer?: (claimedId: string) => TransportPeerContext | null;
+  resolveParty?: (claimedId: string) => Party | null;
 }
 
 /**
@@ -133,7 +135,7 @@ export class HmacAuth implements TransportAuth {
   private readonly challengeTimeout: number;
   private readonly identityId: string | undefined;
   private readonly resolveSecret: ((claimedId: string) => string | null) | undefined;
-  private readonly resolvePeer: ((claimedId: string) => TransportPeerContext | null) | undefined;
+  private readonly resolveParty: ((claimedId: string) => Party | null) | undefined;
 
   // Client-side: pending auth operations (single client per instance)
   private pendingChallenge?: PendingAuth<string>;
@@ -171,7 +173,7 @@ export class HmacAuth implements TransportAuth {
     this.challengeTimeout = options.challengeTimeout ?? 5000;
     this.identityId = options.identityId;
     this.resolveSecret = options.resolveSecret;
-    this.resolvePeer = options.resolvePeer;
+    this.resolveParty = options.resolveParty;
   }
 
   /**
@@ -188,7 +190,7 @@ export class HmacAuth implements TransportAuth {
    * Same flow, but the `auth-response` also carries `identityId`. The server
    * resolves the per-identity secret via `resolveSecret(identityId)` and
    * verifies HMAC against that secret. On success the socket is registered in
-   * `serverAuthenticatedPeers` so `getReceiveContext()` can expose the peer.
+   * `serverAuthenticatedPeers` for policy lookups and caller resolution.
    * @param socket - The client WebSocket connection to authenticate
    * @param send - Function to send auth messages to the client
    * @throws Error if authentication fails
@@ -230,7 +232,6 @@ export class HmacAuth implements TransportAuth {
         expectedSignature = await this.computeHmacWithSecret(nonce, identitySecret);
         this.assertServerOwner(socket, owner);
         if (this.constantTimeEqual(signature, expectedSignature)) {
-          // Persist the authenticated identity for getReceiveContext().
           this.serverAuthenticatedPeers.set(socket, identityId);
           // Record the secret used during this handshake so
           // isSocketAuthenticated can detect post-auth rotation.
@@ -527,34 +528,38 @@ export class HmacAuth implements TransportAuth {
   }
 
   /**
-   * Return trusted receive context for a socket that has authenticated
-   * in identity-bound mode.
+   * Return the identity verified by the server's HMAC handshake.
+   * @param socket - Server-side socket whose identity should be retrieved.
+   * @returns The verified identity ID, or undefined for sockets without an identity-bound handshake.
+   */
+  public getAuthenticatedIdentityId(socket: WebSocketLike): string | undefined {
+    return this.serverAuthenticatedPeers.get(socket);
+  }
+
+  /**
+   * Return trusted receive context for a socket that completed authentication.
    *
-   * For global-secret clients this returns `undefined` — there is no
-   * per-identity peer to expose.
-   *
-   * The `transportName` is intentionally left as `''` here; the transport
-   * registry merges in the registered name when it synthesises the effective
-   * receive context (§1.3 of the bus-origin design).
-   * @param socket - The socket whose peer identity to retrieve.
-   * @returns Trusted receive context with peer identity, or `undefined`.
+   * Global-secret sockets have a connection id and use the anonymous caller.
+   * The transport registry supplies the registered transport name.
+   * @param socket - The socket whose receive context to retrieve.
+   * @returns Trusted receive context for the socket, or `undefined`.
    */
   public getReceiveContext(socket?: WebSocketLike): TransportReceiveContext | undefined {
-    if (!socket) {
+    if (!socket) return undefined;
+    const connectionId = this.serverConnectionIds.get(socket);
+    if (connectionId === undefined) return undefined;
+    const connection = { transportName: '', connectionId, authenticated: true };
+    const identityId = this.getAuthenticatedIdentityId(socket);
+    if (identityId === undefined) return connection;
+    const caller = this.resolveParty?.(identityId);
+    if (caller === undefined || caller === null) {
       return undefined;
     }
-    const identityId = this.serverAuthenticatedPeers.get(socket);
-    if (identityId === undefined) {
-      return undefined;
-    }
-    const resolvedPeer = this.resolvePeer?.(identityId);
-    if (resolvedPeer === undefined || resolvedPeer === null) {
-      return undefined;
-    }
+    const role = resolveHmacIdentityAttestingRole(identityId, this.serverAuthenticatedSecrets.get(socket));
     return {
-      transportName: '',
-      connectionId: this.serverConnectionIds.get(socket),
-      peer: { ...resolvedPeer, id: resolvedPeer.id ?? identityId, authenticated: true },
+      ...connection,
+      caller,
+      ...(role === undefined ? {} : { attests: ATTESTING_CONNECTION_ROLES[role] }),
     };
   }
 
@@ -577,7 +582,7 @@ export class HmacAuth implements TransportAuth {
       return true;
     }
 
-    const identityId = this.serverAuthenticatedPeers.get(socket);
+    const identityId = this.getAuthenticatedIdentityId(socket);
     if (identityId === undefined) {
       return true;
     }

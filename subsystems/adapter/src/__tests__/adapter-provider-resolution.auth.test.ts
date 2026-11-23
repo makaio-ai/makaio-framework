@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
 import { defineAdapterProviderAuth, type ProviderDefinitionInput } from '@makaio/contracts';
 import { ClientDefinitionSchema } from '@makaio/contracts/client';
+import { createTestCall } from '@makaio/test-utils';
 import { resolveProviderDefinitions, type ProviderDefinitionCacheEntry } from '../adapter-provider-resolution.js';
 
 const providerDefinition = {
@@ -66,6 +67,7 @@ describe('resolveProviderDefinitions normalized auth', () => {
     });
 
     const providers = await resolveProviderDefinitions(
+      createTestCall(),
       MakaioBus,
       [{ definitionId: 'test-provider', auth }],
       'test-adapter',
@@ -91,10 +93,13 @@ describe('resolveProviderDefinitions normalized auth', () => {
     });
 
     await expect(
-      resolveProviderDefinitions(MakaioBus, [{ definitionId: 'test-provider', auth }], 'test-adapter', {
-        clientDefinitions: [clientDefinition],
-        providerDefinitionCache: providerCache,
-      }),
+      resolveProviderDefinitions(
+        createTestCall(),
+        MakaioBus,
+        [{ definitionId: 'test-provider', auth }],
+        'test-adapter',
+        { clientDefinitions: [clientDefinition], providerDefinitionCache: providerCache },
+      ),
     ).rejects.toThrow(/Explicit authentication requires/);
   });
 });

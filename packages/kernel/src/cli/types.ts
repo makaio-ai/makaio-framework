@@ -37,6 +37,7 @@
  */
 import type { z } from 'zod';
 import type { IMakaioBus } from '@makaio/bus-core';
+import type { CallContext } from '@makaio/core';
 import type { CliManifest } from '@makaio/contracts/extension';
 
 // ---------------------------------------------------------------------------
@@ -83,6 +84,12 @@ export interface OutputWriter {
 export interface CommandContext<TArgs> {
   /** Parsed and validated command arguments/options. */
   readonly args: TArgs;
+  /**
+   * Call context of this invocation: the caller is the contributing extension's
+   * carrier, principal and attestation come from the incoming request. Pass it
+   * as the first argument of every bus send made on behalf of the invocation.
+   */
+  readonly call: CallContext;
   /**
    * Bus client connected to the running Makaio instance.
    *
@@ -136,6 +143,12 @@ export interface BeforeRunContext {
   readonly subcommandName: string;
   /** Parsed and validated arguments for the subcommand. */
   readonly args: Record<string, unknown>;
+  /**
+   * Call context of this invocation: the caller is the contributing extension's
+   * carrier, principal and attestation come from the incoming request. Pass it
+   * as the first argument of every bus send made on behalf of the invocation.
+   */
+  readonly call: CallContext;
   /**
    * Bus client, or `null` when the server is unreachable.
    *
@@ -224,6 +237,12 @@ export const ALWAYS_PROCEED: BeforeRunResult = { proceed: true } as const;
  * Execution context provided to bare interactive CLI handlers.
  */
 export interface InteractiveCommandContext {
+  /**
+   * Call context of this invocation: the caller is the contributing extension's
+   * carrier, principal and attestation come from the incoming request. Pass it
+   * as the first argument of every bus send made on behalf of the invocation.
+   */
+  readonly call: CallContext;
   /**
    * Bus client connected to the running Makaio instance.
    *

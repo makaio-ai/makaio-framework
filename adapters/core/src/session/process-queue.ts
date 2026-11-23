@@ -1,3 +1,4 @@
+import type { CallContext } from '@makaio/contracts';
 import type { MessageHandle } from '../message-handle/message-handle.js';
 import type { PauseResult } from '../connector/base-connector-turn.js';
 import type { UserMessageQueue } from './user-message-queue.js';
@@ -23,7 +24,7 @@ export interface QueueableTurn {
   canAcceptImmediate(): boolean;
   isCompleted(): boolean;
   getMessageHandle(): MessageHandle;
-  pause(): Promise<PauseResult>;
+  pause(call: CallContext): Promise<PauseResult>;
 }
 
 /**
@@ -128,7 +129,7 @@ export async function processQueueMessages<TExtra = unknown>(
     if (immediateMsg) {
       queue.removeImmediate(immediateMsg);
 
-      const pauseResult = await currentTurn.pause();
+      const pauseResult = await currentTurn.pause(immediateMsg.call);
 
       if (!pauseResult.turnEnded) {
         // Successfully paused - merge and restart

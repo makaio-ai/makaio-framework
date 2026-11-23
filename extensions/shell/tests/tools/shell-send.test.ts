@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest';
+import { createTestCall } from '@makaio/test-utils';
 import { shellSendTool } from '../../src/tools/shell-send.js';
 import { createDefaultCreateOptions, setupShellToolTest } from './shared.js';
 
@@ -20,6 +21,7 @@ describe('shellSendTool', () => {
       });
 
       const result = await ctx.registry.execute(
+        createTestCall(),
         'shell_send',
         {
           shellId: ctx.instance.shellId,
@@ -50,6 +52,7 @@ describe('shellSendTool', () => {
       await ctx.instance.waitForExit();
 
       const result = await ctx.registry.execute(
+        createTestCall(),
         'shell_send',
         {
           shellId: ctx.instance.shellId,
@@ -73,6 +76,7 @@ describe('shellSendTool', () => {
       });
 
       const result1 = await ctx.registry.execute(
+        createTestCall(),
         'shell_send',
         {
           shellId: ctx.instance.shellId,
@@ -88,6 +92,7 @@ describe('shellSendTool', () => {
       }
 
       const result2 = await ctx.registry.execute(
+        createTestCall(),
         'shell_send',
         {
           shellId: ctx.instance.shellId,
@@ -112,6 +117,7 @@ describe('shellSendTool', () => {
   describe('error handling', () => {
     it('errors for unknown shell ID', async () => {
       const result = await ctx.registry.execute(
+        createTestCall(),
         'shell_send',
         {
           shellId: 'nonexistent-shell-id',

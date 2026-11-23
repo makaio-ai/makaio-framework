@@ -16,6 +16,7 @@ import {
   type AgentStartResult,
 } from './shared.js';
 import { createNoAuthTestProviderContext } from '../../testing/index.js';
+import type { ConnectorStartOptions } from '../../agent/types.js';
 
 const TEST_PROVIDER_CONTEXT = createNoAuthTestProviderContext('test-config', 'provider-1');
 
@@ -30,15 +31,18 @@ const TEST_PROVIDER_CONTEXT = createNoAuthTestProviderContext('test-config', 'pr
 class TrackingConnector extends MockConnector {
   public capturedSystemPrompt: SystemPrompt | undefined;
 
-  public override async initialize(options?: { systemPrompt?: SystemPrompt }): Promise<void> {
+  public override async initialize(options?: ConnectorStartOptions): Promise<void> {
     this.capturedSystemPrompt = options?.systemPrompt;
   }
 
-  public override async start(message: NormalizedMessageInput): Promise<AgentStartResult> {
+  public override async start(
+    message: NormalizedMessageInput,
+    options: ConnectorStartOptions,
+  ): Promise<AgentStartResult> {
     return {
       adapterSessionId: 'mock-adapter-session-id',
       agentId: this.getAgentId(),
-      messageHandle: new MessageHandle('mock-message-id', message, 'enqueue'),
+      messageHandle: new MessageHandle(options.call, 'mock-message-id', message, 'enqueue'),
     };
   }
 }

@@ -1,4 +1,5 @@
 import type { IMakaioBus } from '@makaio/bus-core';
+import type { CallContext } from '@makaio/core';
 import {
   SessionSubjects,
   SessionOwnershipStorageSubjects,
@@ -192,6 +193,7 @@ export interface ReservedRehydrateRequest {
  * a provider session another generation holds is never spoken to; and the
  * settlement names the key the connector *confirmed*, not the one that was
  * requested, because the manager prefers the live connector's own identity.
+ * @param call - Call context of the message that asked for the recovery; every step that belongs to it forwards it.
  * @param bus - Bus every step is issued on.
  * @param request - Agent, session, live adapter identity and resume target.
  * @returns How the recovery ended, as the consumer's own decision input.
@@ -199,6 +201,7 @@ export interface ReservedRehydrateRequest {
  *   reservation or the dispatch threw.
  */
 export async function runReservedRehydrate(
+  call: CallContext,
   bus: IMakaioBus,
   request: ReservedRehydrateRequest,
 ): Promise<ReservedRehydrateOutcome> {
@@ -212,9 +215,9 @@ export async function runReservedRehydrate(
   if (request.recoveryGuard === undefined) {
     throw new Error(`[session.start] recovery of agent ${agent.agentId} omitted its atomic recovery guard`);
   }
-  const reserved = await reserveRehydrate(bus, request);
+  const reserved = await reserveRehydrate(call, bus, request);
   if (reserved.kind === 'settled') return reserved.outcome;
-  return dispatchReservedRehydrate(bus, request, reserved.reservation);
+  return dispatchReservedRehydrate(call, bus, request, reserved.reservation);
 }
 
 /** Either a committed reservation, or the outcome the attempt ends on. */
@@ -237,12 +240,17 @@ type ReservationStep =
  * throw — an absent authority, a storage failure, or a shutdown mid-flight,
  * which is the likely one — would otherwise strand it there, where the send
  * path's consumer rule turns it into a phantom recovery on the next send.
+ * @param call - Call context of the recovery; forwarded to the rollback acts.
  * @param bus - Bus the reservation is issued on.
  * @param request - The attempt's resolved identity and resume target.
  * @param claim - The recovery claim to give back on every refusal.
  * @returns The committed reservation, or the outcome the attempt ends on.
  */
-async function reserveRehydrate(bus: IMakaioBus, request: ReservedRehydrateRequest): Promise<ReservationStep> {
+async function reserveRehydrate(
+  call: CallContext,
+  bus: IMakaioBus,
+  request: ReservedRehydrateRequest,
+): Promise<ReservationStep> {
   const { agent, instance, resumeProviderSessionId, sessionId } = request;
   const recoveryGuard = request.recoveryGuard;
   if (recoveryGuard === undefined)
@@ -251,7 +259,7 @@ async function reserveRehydrate(bus: IMakaioBus, request: ReservedRehydrateReque
   const recoveryAttemptId = mintClaimToken();
   let reserved;
   try {
-    reserved = await reserveStartFor(bus, {
+    reserved = await reserveStartFor(call, bus, {
       sessionId,
       agentId: agent.agentId,
       adapterName: agent.adapterName,
@@ -263,8 +271,9 @@ async function reserveRehydrate(bus: IMakaioBus, request: ReservedRehydrateReque
       recoveryAttemptId,
     });
   } catch (error) {
-    await releaseUnknownReservation(bus, agent.agentId, claimToken);
+    await releaseUnknownReservation(call, bus, agent.agentId, claimToken);
     await finalizeUnknownRecovery(
+      call,
       bus,
       agent.agentId,
       request.instance,
@@ -299,14 +308,20 @@ async function reserveRehydrate(bus: IMakaioBus, request: ReservedRehydrateReque
 /**
  * Release a reservation whose transaction may have committed before its reply
  * was lost.
+ * @param call - Call context of the recovery the release belongs to.
  * @param bus - Bus carrying the token-scoped release.
  * @param agentId - Agent the reservation belonged to.
  * @param claimToken - Caller-minted reservation generation.
  * @returns Whether storage confirmed that exact generation was released.
  */
-async function releaseUnknownReservation(bus: IMakaioBus, agentId: string, claimToken: string): Promise<boolean> {
+async function releaseUnknownReservation(
+  call: CallContext,
+  bus: IMakaioBus,
+  agentId: string,
+  claimToken: string,
+): Promise<boolean> {
   try {
-    const released = await bus.request(SessionSubjects.ownership.release, {
+    const released = await bus.request(call, SessionSubjects.ownership.release, {
       agentId,
       claimToken,
       disposition: 'released',
@@ -325,6 +340,7 @@ async function releaseUnknownReservation(bus: IMakaioBus, agentId: string, claim
  * the reservation's, and the candidate this attempt mints for its own
  * settlement — so every failure below can give back exactly what it took, even
  * one whose settlement response never arrives.
+ * @param call - Call context of the recovery; forwarded to every step that belongs to it.
  * @param bus - Bus every step is issued on.
  * @param request - The attempt's resolved identity and resume target.
  * @param reservation - The committed reservation.
@@ -332,6 +348,7 @@ async function releaseUnknownReservation(bus: IMakaioBus, agentId: string, claim
  * @returns How the recovery ended.
  */
 async function dispatchReservedRehydrate(
+  call: CallContext,
   bus: IMakaioBus,
   request: ReservedRehydrateRequest,
   reservation: SessionOwnershipReservation,
@@ -341,9 +358,8 @@ async function dispatchReservedRehydrate(
   const agentId = agent.agentId;
   const { ownerInstanceId } = reservation;
   const recovery = recoveryReservation(reservation);
-  if (recovery === undefined) {
+  if (recovery === undefined)
     throw new Error(`[session.start] recovery reservation for agent ${agentId} omitted its terminal authority`);
-  }
   // Minted *before* the settle call and releasable from the moment it exists: a
   // settlement whose transaction commits and whose response is then lost leaves
   // the caller holding nothing else that names the successor generation, and a
@@ -353,7 +369,7 @@ async function dispatchReservedRehydrate(
 
   let response;
   try {
-    response = await dispatchAgentRehydrate(bus, {
+    response = await dispatchAgentRehydrate(call, bus, {
       agentId,
       adapterId,
       ownerInstanceId,
@@ -365,8 +381,8 @@ async function dispatchReservedRehydrate(
   } catch (error) {
     // A throw carries no disposition, so the key is retired rather than freed:
     // the provider may hold a live session behind it.
-    await abandonDispatchedStart(bus, agentId, CALLER_OWNED_STATUS, claimTokens);
-    await finalizeRecovery(bus, agentId, recovery, 'failed');
+    await abandonDispatchedStart(call, bus, agentId, CALLER_OWNED_STATUS, claimTokens);
+    await finalizeRecovery(call, bus, agentId, recovery, 'failed');
     // **And the connector is stopped, which the fresh-start paths do not do
     // here.** They can rely on the adapter unwinding its own dispatch: a
     // `startAgent` that throws after registering evicts the agent it registered.
@@ -383,7 +399,7 @@ async function dispatchReservedRehydrate(
     // recovers the agent, whereas an unowned writer is not recoverable at all.
     // The stop is best-effort and idempotent: an agent with no registry entry is
     // a no-op, and the response is never read as evidence (I15).
-    await stopStartedConnector(bus, adapterId, agentId, ownerInstanceId, true);
+    await stopStartedConnector(call, bus, adapterId, agentId, ownerInstanceId, true);
     throw error;
   }
   if (!response.success) {
@@ -393,19 +409,18 @@ async function dispatchReservedRehydrate(
     // on the warm path, still live. The generations go back cleanly, and the row
     // goes back where the claim found it rather than to the `dead` the shared
     // cleanup writes for a start that did dispatch.
-    await releaseUndispatchedStart(bus, agentId, PRE_DISPATCH_ROLLBACK, claimTokens);
-    await finalizeRecovery(bus, agentId, recovery, 'rollback');
+    await releaseUndispatchedStart(call, bus, agentId, PRE_DISPATCH_ROLLBACK, claimTokens);
+    await finalizeRecovery(call, bus, agentId, recovery, 'rollback');
     return { kind: 'refused', outcome: 'rehydrate-refused', message: response.message };
   }
   if (response.ownerInstanceId !== ownerInstanceId) {
     throw await failPostDispatch(
+      call,
       bus,
       adapterId,
       agentId,
       claimTokens,
-      new Error(
-        `Adapter owner mismatch for rehydrated agent ${agentId}: expected ${ownerInstanceId}, received ${response.ownerInstanceId ?? 'none'}`,
-      ),
+      ownerMismatchError(agentId, ownerInstanceId, response.ownerInstanceId),
       ownerInstanceId,
       recovery,
     );
@@ -435,9 +450,9 @@ async function dispatchReservedRehydrate(
   agent.adapterId = adapterId;
   let settled: SessionOwnershipSettleMovementServiceResult | undefined;
   try {
-    if (confirmed !== null) settled = await settleConfirmedKey(bus, request, confirmed, settlementCandidate);
+    if (confirmed !== null) settled = await settleConfirmedKey(call, bus, request, confirmed, settlementCandidate);
   } catch (error) {
-    throw await failPostDispatch(bus, adapterId, agentId, claimTokens, error, ownerInstanceId, recovery);
+    throw await failPostDispatch(call, bus, adapterId, agentId, claimTokens, error, ownerInstanceId, recovery);
   }
   // Deliberately unguarded: this cleans and throws for itself, and a `try`
   // spanning it would clean a second time and relabel a precisely classified
@@ -446,18 +461,40 @@ async function dispatchReservedRehydrate(
   // never releases or stops a second time.
   if (settled !== undefined) {
     try {
-      await applySettlementOutcome(bus, adapterId, agentId, ownerInstanceId, settled, CALLER_OWNED_STATUS, claimTokens);
+      await applySettlementOutcome(
+        call,
+        bus,
+        adapterId,
+        agentId,
+        ownerInstanceId,
+        settled,
+        CALLER_OWNED_STATUS,
+        claimTokens,
+      );
     } catch (error) {
-      await finalizeRecovery(bus, agentId, recovery, 'failed');
+      await finalizeRecovery(call, bus, agentId, recovery, 'failed');
       throw error;
     }
   }
 
   try {
-    return await commitRehydratedRow(bus, request, response.settlementAckToken, ownerInstanceId, recovery);
+    return await commitRehydratedRow(call, bus, request, response.settlementAckToken, ownerInstanceId, recovery);
   } catch (error) {
-    throw await failPostDispatch(bus, adapterId, agentId, claimTokens, error, ownerInstanceId, recovery);
+    throw await failPostDispatch(call, bus, adapterId, agentId, claimTokens, error, ownerInstanceId, recovery);
   }
+}
+
+/**
+ * Describe an adapter that answered a rehydrate from a different runtime incarnation than the one reserved.
+ * @param agentId - Agent whose rehydrate was answered.
+ * @param expected - Runtime incarnation the reservation selected.
+ * @param received - Runtime incarnation the adapter reported, if any.
+ * @returns The error the post-dispatch unwind reports as its cause.
+ */
+function ownerMismatchError(agentId: string, expected: string, received: string | undefined): Error {
+  return new Error(
+    `Adapter owner mismatch for rehydrated agent ${agentId}: expected ${expected}, received ${received ?? 'none'}`,
+  );
 }
 
 /**
@@ -471,6 +508,7 @@ async function dispatchReservedRehydrate(
  * own announcement published the new one. Settling on the confirmed key instead
  * moves the reservation: the successor is allocated there and the predecessor
  * generation is deleted in the same transaction.
+ * @param call - Call context of the recovery the settlement belongs to.
  * @param bus - Bus the settlement is issued on.
  * @param request - The attempt's resolved identity.
  * @param providerSessionId - Key the connector confirmed.
@@ -478,6 +516,7 @@ async function dispatchReservedRehydrate(
  * @returns What the authority answered.
  */
 async function settleConfirmedKey(
+  call: CallContext,
   bus: IMakaioBus,
   request: ReservedRehydrateRequest,
   providerSessionId: string,
@@ -485,7 +524,7 @@ async function settleConfirmedKey(
 ): Promise<SessionOwnershipSettleMovementServiceResult> {
   const { agent, sessionId } = request;
   const { adapterId, machineId } = request.instance;
-  return bus.request(SessionSubjects.ownership.settleMovement, {
+  return bus.request(call, SessionSubjects.ownership.settleMovement, {
     sessionId,
     agentId: agent.agentId,
     adapterId,
@@ -499,6 +538,7 @@ async function settleConfirmedKey(
 
 /**
  * Return the adapter-minted token after this rehydrate's durable settlement.
+ * @param call - Call context of the recovery being committed.
  * @param bus - Bus carrying the targeted acknowledgement RPC.
  * @param request - The attempt's resolved identity and resume target.
  * @param settlementAckToken - Adapter-minted token for the hosted generation.
@@ -507,6 +547,7 @@ async function settleConfirmedKey(
  * @returns The recovered agent after the adapter accepts responsibility.
  */
 async function commitRehydratedRow(
+  call: CallContext,
   bus: IMakaioBus,
   request: ReservedRehydrateRequest,
   settlementAckToken: string | undefined,
@@ -515,15 +556,16 @@ async function commitRehydratedRow(
 ): Promise<ReservedRehydrateOutcome> {
   const { agent, resumeProviderSessionId } = request;
   const { adapterId } = request.instance;
-  await assertSessionActiveAfterStart(bus, request.sessionId);
+  await assertSessionActiveAfterStart(call, bus, request.sessionId);
   await acknowledgeCallerSettlement(
+    call,
     bus,
     { adapterId, agentId: agent.agentId },
     settlementAckToken,
     ownerInstanceId,
     true,
   );
-  await finalizeRecovery(bus, agent.agentId, recovery, 'succeeded');
+  await finalizeRecovery(call, bus, agent.agentId, recovery, 'succeeded');
   return { kind: 'rehydrated', agent, native: resumeProviderSessionId !== null };
 }
 
@@ -534,6 +576,7 @@ async function commitRehydratedRow(
  * The teardown itself is the shared one: what it does, and how it names what it
  * finds, is the same question on every caller-owned path, and this one is a
  * caller-owned path.
+ * @param call - Call context of the recovery being unwound.
  * @param bus - Bus the cleanup is issued on.
  * @param adapterId - Adapter instance the connector lives on.
  * @param agentId - Agent whose start is unwound.
@@ -544,6 +587,7 @@ async function commitRehydratedRow(
  * @returns The error the caller reports, so the call site stays a single `throw`.
  */
 async function failPostDispatch(
+  call: CallContext,
   bus: IMakaioBus,
   adapterId: string,
   agentId: string,
@@ -553,6 +597,7 @@ async function failPostDispatch(
   recovery?: RecoveryTerminalReservation,
 ): Promise<SessionStartError> {
   const failure = await failDispatchedStart(
+    call,
     bus,
     {
       adapterId,
@@ -564,7 +609,7 @@ async function failPostDispatch(
     },
     cause,
   );
-  await finalizeRecovery(bus, agentId, recovery, 'failed');
+  await finalizeRecovery(call, bus, agentId, recovery, 'failed');
   return failure;
 }
 
@@ -592,12 +637,14 @@ function recoveryReservation(reservation: SessionOwnershipReservation): Recovery
 
 /**
  * Apply one terminal action under the reservation's exact attempt and binding.
+ * @param call - Call context of the recovery being terminalized.
  * @param bus - Bus carrying the storage finalization request.
  * @param agentId - Agent whose recovery attempt is terminalized.
  * @param recovery - Exact attempt and binding captured by the reservation.
  * @param terminal - Terminal recovery outcome to apply.
  */
 async function finalizeRecovery(
+  call: CallContext,
   bus: IMakaioBus,
   agentId: string,
   recovery: RecoveryTerminalReservation | undefined,
@@ -606,7 +653,7 @@ async function finalizeRecovery(
   if (recovery === undefined) return;
   const action =
     terminal === 'rollback' ? { kind: 'rollback' as const, preimage: recovery.preimage } : { kind: terminal };
-  const finalized = await bus.request(SessionOwnershipStorageSubjects.finalizeRecovery, {
+  const finalized = await bus.request(call, SessionOwnershipStorageSubjects.finalizeRecovery, {
     agentId,
     attemptId: recovery.attemptId,
     binding: recovery.binding,
@@ -621,6 +668,7 @@ async function finalizeRecovery(
 
 /**
  * Terminalize a reservation whose commit succeeded but whose response was lost.
+ * @param call - Call context of the recovery being rolled back.
  * @param bus - Bus carrying the storage finalization request.
  * @param agentId - Agent whose response-lost attempt is rolled back.
  * @param instance - Exact adapter binding installed by the attempt.
@@ -628,13 +676,14 @@ async function finalizeRecovery(
  * @param preimage - Transaction-validated row state to restore.
  */
 async function finalizeUnknownRecovery(
+  call: CallContext,
   bus: IMakaioBus,
   agentId: string,
   instance: MachineScopedAdapterInstance,
   attemptId: string,
   preimage: SessionOwnershipRecoveryPreimage,
 ): Promise<void> {
-  await bus.request(SessionOwnershipStorageSubjects.finalizeRecovery, {
+  await bus.request(call, SessionOwnershipStorageSubjects.finalizeRecovery, {
     agentId,
     attemptId,
     binding: {

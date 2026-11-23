@@ -1,5 +1,6 @@
 import type { IMakaioBus } from '@makaio/bus-core';
 import type {
+  CallContext,
   FetchFindingsParams,
   IReviewSource,
   ReviewRequestContext,
@@ -55,11 +56,15 @@ export class CodeRabbitSource implements IReviewSource {
    *
    * Requests both inline review comments and the PR detail (with full review
    * bodies) in parallel, then filters each collection to CodeRabbit bot authors.
+   * @param call - Call context of the request this fetch works for; both VCS requests are sent under it.
    * @param params - The fetch parameters including VCS routing context.
    * @returns A snapshot filtered to CodeRabbit bot comments and reviews.
    * @throws Error if the target has no PR number.
    */
-  public async fetchSnapshot(params: FetchFindingsParams & ReviewRequestContext): Promise<ReviewSourceSnapshot> {
+  public async fetchSnapshot(
+    call: CallContext,
+    params: FetchFindingsParams & ReviewRequestContext,
+  ): Promise<ReviewSourceSnapshot> {
     if (params.target.prNumber === undefined) {
       throw new Error('CodeRabbit source requires a PR number');
     }
@@ -67,8 +72,8 @@ export class CodeRabbitSource implements IReviewSource {
     const { repoPath } = params;
 
     const [commentsResult, prResult] = await Promise.all([
-      this.bus.request(VCSSubjects.comments.list, { repoPath, prNumber: params.target.prNumber }),
-      this.bus.request(VCSSubjects.pr.get, { repoPath, prNumber: params.target.prNumber }),
+      this.bus.request(call, VCSSubjects.comments.list, { repoPath, prNumber: params.target.prNumber }),
+      this.bus.request(call, VCSSubjects.pr.get, { repoPath, prNumber: params.target.prNumber }),
     ]);
 
     return {

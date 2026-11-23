@@ -1,4 +1,5 @@
 import type { ScopedBus } from '@makaio/bus-core';
+import type { CallContext } from '@makaio/contracts';
 import type { MessageHandle } from '../message-handle/message-handle.js';
 
 /**
@@ -30,7 +31,7 @@ export abstract class BaseConnectorTurn<TState extends string = string> {
   protected readonly bus: ScopedBus<string>;
   protected readonly adapterId: string;
   protected readonly adapterName: string;
-  protected stateChangedCallback?: (oldState: TState, newState: TState) => Promise<void> | void;
+  protected stateChangedCallback?: (call: CallContext, oldState: TState, newState: TState) => Promise<void> | void;
 
   /**
    * Active message handle for this turn.
@@ -47,15 +48,17 @@ export abstract class BaseConnectorTurn<TState extends string = string> {
 
   /**
    * Pause the turn at next safe boundary.
+   * @param call - Call of the message requesting the pause
    * @returns Pause result indicating whether turn already ended
    */
-  public abstract pause(): Promise<PauseResult<TState>>;
+  public abstract pause(call: CallContext): Promise<PauseResult<TState>>;
 
   /**
    * Resume the paused turn with optional additional message.
+   * @param call - Call of the message requesting the resume
    * @param message - Optional message to inject when resuming
    */
-  public abstract resume(message?: unknown): Promise<void>;
+  public abstract resume(call: CallContext, message?: unknown): Promise<void>;
 
   /**
    * Check if turn is currently paused.
@@ -66,7 +69,7 @@ export abstract class BaseConnectorTurn<TState extends string = string> {
    * Register callback for state changes.
    * @param cb - Callback to invoke on state transitions
    */
-  public onStateChanged(cb: (oldState: TState, newState: TState) => Promise<void> | void): void {
+  public onStateChanged(cb: (call: CallContext, oldState: TState, newState: TState) => Promise<void> | void): void {
     this.stateChangedCallback = cb;
   }
 
@@ -76,25 +79,27 @@ export abstract class BaseConnectorTurn<TState extends string = string> {
    *
    * NOTE: Subclasses should use their typed namespace subjects for emission.
    * This is a template - concrete implementation in adapter-specific Turn classes.
+   * @param call - Call of the message causing the transition
    * @param newState - New state to transition to
    */
-  protected async transitionTo(newState: TState): Promise<void> {
+  protected async transitionTo(call: CallContext, newState: TState): Promise<void> {
     const oldState = this.state;
     this.state = newState;
 
     // Subclasses emit via typed subjects (see ClaudeConnectorTurn for example)
-    await this.emitStateChange(oldState, newState);
+    await this.emitStateChange(call, oldState, newState);
 
     // Invoke registered callback if exists
-    await this.stateChangedCallback?.(oldState, newState);
+    await this.stateChangedCallback?.(call, oldState, newState);
   }
 
   /**
    * Emit state change event - implemented by subclass with typed subjects.
+   * @param call - Call of the message causing the transition
    * @param oldState - Previous state
    * @param newState - New state
    */
-  protected abstract emitStateChange(oldState: TState, newState: TState): Promise<void>;
+  protected abstract emitStateChange(call: CallContext, oldState: TState, newState: TState): Promise<void>;
 
   /**
    * Get current turn state.

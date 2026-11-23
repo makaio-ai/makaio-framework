@@ -8,7 +8,8 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import * as fs from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { createBusInstance, createBusContext, type IMakaioBus } from '@makaio/bus-core';
+import { createBusInstance, type IMakaioBus } from '@makaio/bus-core';
+import { createTestCall } from '@makaio/test-utils';
 import { PackageSubjects } from '../namespace.js';
 import type { PackageInfo, PackageRegistry, PackageInstallResult, PackageUninstallResult } from '../namespace.js';
 import {
@@ -269,7 +270,7 @@ describe('PackageManagerService', () => {
   let packageManager: StubPackageManager;
 
   beforeEach(async () => {
-    bus = createBusInstance({ context: createBusContext() });
+    bus = createBusInstance();
     packageManager = new StubPackageManager(
       [{ name: '@makaio/ai-adapters-claude-code', version: '1.0.0', hasDescriptor: false }],
       new Map([['@makaio/ai-adapters-claude-code', '2.0.0']]),
@@ -291,7 +292,7 @@ describe('PackageManagerService', () => {
 
   describe('bus handler registration', () => {
     it('should list packages from npm (via StubPackageManager)', async () => {
-      const result = await bus.request(PackageSubjects.list, {});
+      const result = await bus.request(createTestCall(), PackageSubjects.list, {});
       expect(result.packages).toHaveLength(1);
       expect(result.packages[0]?.name).toBe('@makaio/ai-adapters-claude-code');
     });
@@ -299,14 +300,14 @@ describe('PackageManagerService', () => {
     it('should include local extensions in packages.list', async () => {
       const localInstaller = new StubLocalInstaller();
       await localInstaller.install('/tmp/my-local-ext');
-      const localBus = createBusInstance({ context: createBusContext() });
+      const localBus = createBusInstance();
       const localService = new PackageManagerService(localBus, '/tmp/.makaio', {
         yarnManager: new StubPackageManager([], new Map()),
         localInstaller,
       });
       await localService.init();
 
-      const result = await localBus.request(PackageSubjects.list, {});
+      const result = await localBus.request(createTestCall(), PackageSubjects.list, {});
 
       expect(result.packages).toEqual([
         {
@@ -331,14 +332,14 @@ describe('PackageManagerService', () => {
       // descriptor must report the same fact.
       const localInstaller = new StubLocalInstaller();
       await localInstaller.install('/tmp/my-critical-local-ext', { critical: true, serverImportPath: null });
-      const localBus = createBusInstance({ context: createBusContext() });
+      const localBus = createBusInstance();
       const localService = new PackageManagerService(localBus, '/tmp/.makaio', {
         yarnManager: new StubPackageManager([], new Map()),
         localInstaller,
       });
       await localService.init();
 
-      const result = await localBus.request(PackageSubjects.list, {});
+      const result = await localBus.request(createTestCall(), PackageSubjects.list, {});
 
       expect(result.packages).toEqual([
         {
@@ -371,14 +372,14 @@ describe('PackageManagerService', () => {
 
         const localInstaller = new StubLocalInstaller();
         await localInstaller.install(tempDir, { serverImportPath });
-        const localBus = createBusInstance({ context: createBusContext() });
+        const localBus = createBusInstance();
         const localService = new PackageManagerService(localBus, '/tmp/.makaio', {
           yarnManager: new StubPackageManager([], new Map()),
           localInstaller,
         });
         await localService.init();
 
-        const result = await localBus.request(PackageSubjects.list, {});
+        const result = await localBus.request(createTestCall(), PackageSubjects.list, {});
 
         expect(result.packages).toEqual([
           {
@@ -403,7 +404,7 @@ describe('PackageManagerService', () => {
         installedEvents.push(ctx.payload);
       });
 
-      const result = await bus.request(PackageSubjects.install, {
+      const result = await bus.request(createTestCall(), PackageSubjects.install, {
         packageNames: ['@makaio/extension-github'],
       });
 
@@ -418,7 +419,7 @@ describe('PackageManagerService', () => {
     });
 
     it('accepts backward-compatible single packageName install payloads', async () => {
-      const result = await bus.request(PackageSubjects.install, {
+      const result = await bus.request(createTestCall(), PackageSubjects.install, {
         packageName: '@makaio/extension-github',
       });
 
@@ -428,7 +429,7 @@ describe('PackageManagerService', () => {
     });
 
     it('uses a host-provided framework package path for npm installs when available', async () => {
-      const localBus = createBusInstance({ context: createBusContext() });
+      const localBus = createBusInstance();
       const localYarnManager = new StubPackageManager([], new Map());
       const localService = new PackageManagerService(localBus, '/tmp/.makaio', {
         yarnManager: localYarnManager,
@@ -439,7 +440,7 @@ describe('PackageManagerService', () => {
       });
       await localService.init();
 
-      const result = await localBus.request(PackageSubjects.install, {
+      const result = await localBus.request(createTestCall(), PackageSubjects.install, {
         packageNames: ['@makaio/extension-github'],
       });
 
@@ -454,7 +455,7 @@ describe('PackageManagerService', () => {
     it('should route source: local to LocalInstallClient', async () => {
       const localInstaller = new StubLocalInstaller();
       const localYarnManager = new StubPackageManager([], new Map());
-      const localBus = createBusInstance({ context: createBusContext() });
+      const localBus = createBusInstance();
       const localService = new PackageManagerService(localBus, '/tmp/.makaio', {
         yarnManager: localYarnManager,
         localInstaller,
@@ -466,7 +467,7 @@ describe('PackageManagerService', () => {
         installedEvents.push(ctx.payload);
       });
 
-      const result = await localBus.request(PackageSubjects.install, {
+      const result = await localBus.request(createTestCall(), PackageSubjects.install, {
         packageNames: ['/tmp/my-local-ext'],
         source: 'local',
       });
@@ -486,14 +487,14 @@ describe('PackageManagerService', () => {
 
     it('should detect local path installs when source is omitted', async () => {
       const localInstaller = new StubLocalInstaller();
-      const localBus = createBusInstance({ context: createBusContext() });
+      const localBus = createBusInstance();
       const localService = new PackageManagerService(localBus, '/tmp/.makaio', {
         yarnManager: new StubPackageManager([], new Map()),
         localInstaller,
       });
       await localService.init();
 
-      const result = await localBus.request(PackageSubjects.install, {
+      const result = await localBus.request(createTestCall(), PackageSubjects.install, {
         packageNames: ['./my-local-ext'],
       });
 
@@ -509,7 +510,7 @@ describe('PackageManagerService', () => {
         installedEvents.push(ctx.payload);
       });
 
-      await bus.request(PackageSubjects.install, { packageNames: ['@makaio/extension-github'] });
+      await bus.request(createTestCall(), PackageSubjects.install, { packageNames: ['@makaio/extension-github'] });
 
       expect(installedEvents).toHaveLength(1);
       expect(installedEvents[0]?.packageName).toBe('@makaio/extension-github');
@@ -523,7 +524,7 @@ describe('PackageManagerService', () => {
         uninstalledEvents.push(ctx.payload);
       });
 
-      const result = await bus.request(PackageSubjects.uninstall, {
+      const result = await bus.request(createTestCall(), PackageSubjects.uninstall, {
         packageName: '@makaio/ai-adapters-claude-code',
       });
 
@@ -538,14 +539,14 @@ describe('PackageManagerService', () => {
     it('should uninstall local extensions before npm packages', async () => {
       const localInstaller = new StubLocalInstaller();
       await localInstaller.install('/tmp/my-local-ext');
-      const localBus = createBusInstance({ context: createBusContext() });
+      const localBus = createBusInstance();
       const localService = new PackageManagerService(localBus, '/tmp/.makaio', {
         yarnManager: new StubPackageManager([{ name: 'other-ext', version: '1.0.0', hasDescriptor: true }], new Map()),
         localInstaller,
       });
       await localService.init();
 
-      const result = await localBus.request(PackageSubjects.uninstall, {
+      const result = await localBus.request(createTestCall(), PackageSubjects.uninstall, {
         packageName: 'local-ext-0',
       });
 
@@ -556,7 +557,7 @@ describe('PackageManagerService', () => {
     });
 
     it('should return restartRequired: false for invalid install packageName', async () => {
-      const result = await bus.request(PackageSubjects.install, {
+      const result = await bus.request(createTestCall(), PackageSubjects.install, {
         packageNames: [''],
       });
 
@@ -564,7 +565,7 @@ describe('PackageManagerService', () => {
     });
 
     it('should return restartRequired: false for invalid uninstall packageName', async () => {
-      const result = await bus.request(PackageSubjects.uninstall, {
+      const result = await bus.request(createTestCall(), PackageSubjects.uninstall, {
         packageName: '',
       });
 
@@ -572,7 +573,7 @@ describe('PackageManagerService', () => {
     });
 
     it('should register packages.getLatestVersion handler', async () => {
-      const result = await bus.request(PackageSubjects.getLatestVersion, {
+      const result = await bus.request(createTestCall(), PackageSubjects.getLatestVersion, {
         packageName: '@makaio/ai-adapters-claude-code',
       });
 
@@ -582,14 +583,14 @@ describe('PackageManagerService', () => {
     });
 
     it('should register packages.getRegistry handler and return registry data', async () => {
-      const result = await bus.request(PackageSubjects.getRegistry, {});
+      const result = await bus.request(createTestCall(), PackageSubjects.getRegistry, {});
 
       expect(result.adapters).toHaveLength(1);
       expect(result.extensions).toHaveLength(1);
     });
 
     it('should use the injected package registry service when provided', async () => {
-      const emptyBus = createBusInstance({ context: createBusContext() });
+      const emptyBus = createBusInstance();
       const registry: PackageRegistry = {
         $schema: 'makaio/package-registry/v1',
         updatedAt: '2026-05-17T00:00:00Z',
@@ -603,13 +604,13 @@ describe('PackageManagerService', () => {
       });
       await emptyService.init();
 
-      await expect(emptyBus.request(PackageSubjects.getRegistry, {})).resolves.toEqual(registry);
+      await expect(emptyBus.request(createTestCall(), PackageSubjects.getRegistry, {})).resolves.toEqual(registry);
 
       await emptyService.destroy();
     });
 
     it('should check for updates using semver comparison', async () => {
-      const result = await bus.request(PackageSubjects.checkUpdates, {});
+      const result = await bus.request(createTestCall(), PackageSubjects.checkUpdates, {});
 
       expect(result.updates).toHaveLength(1);
       expect(result.updates[0]?.name).toBe('@makaio/ai-adapters-claude-code');
@@ -633,7 +634,7 @@ describe('PackageManagerService', () => {
       await service.destroy();
 
       await expect(async () => {
-        await bus.request(PackageSubjects.list, {});
+        await bus.request(createTestCall(), PackageSubjects.list, {});
       }).rejects.toThrow();
     });
   });
@@ -659,7 +660,7 @@ describe('PackageManagerService', () => {
         ['@acme/prompt-tools', createDescriptor('prompt-tools')],
       ]);
       const localYarnManager = new StubPackageManager([], new Map(), descriptors);
-      const localBus = createBusInstance({ context: createBusContext() });
+      const localBus = createBusInstance();
       const localService = new PackageManagerService(localBus, '/tmp/.makaio', {
         yarnManager: localYarnManager,
         localInstaller: new StubLocalInstaller(),
@@ -668,7 +669,7 @@ describe('PackageManagerService', () => {
       });
       await localService.init();
 
-      const result = await localBus.request(PackageSubjects.install, {
+      const result = await localBus.request(createTestCall(), PackageSubjects.install, {
         packageNames: ['@acme/root'],
       });
 
@@ -684,7 +685,7 @@ describe('PackageManagerService', () => {
 
     it('delegates npm installs to dependency resolver when configured', async () => {
       const resolver = new StubDependencyResolver();
-      const localBus = createBusInstance({ context: createBusContext() });
+      const localBus = createBusInstance();
       const localService = new PackageManagerService(localBus, '/tmp/.makaio', {
         yarnManager: new StubPackageManager([], new Map()),
         localInstaller: new StubLocalInstaller(),
@@ -692,7 +693,7 @@ describe('PackageManagerService', () => {
       });
       await localService.init();
 
-      const result = await localBus.request(PackageSubjects.install, {
+      const result = await localBus.request(createTestCall(), PackageSubjects.install, {
         packageNames: ['@makaio/adapter-claude-code-tmux', '@makaio/extension-prompt'],
         force: true,
       });
@@ -709,7 +710,7 @@ describe('PackageManagerService', () => {
     it('restores the full npm manifest snapshot when dependency resolution fails after framework peer setup', async () => {
       const resolver = new StubDependencyResolver(new Error('resolver failed'));
       const localYarnManager = new StubPackageManager([], new Map());
-      const localBus = createBusInstance({ context: createBusContext() });
+      const localBus = createBusInstance();
       const localService = new PackageManagerService(localBus, '/tmp/.makaio', {
         yarnManager: localYarnManager,
         localInstaller: new StubLocalInstaller(),
@@ -718,7 +719,7 @@ describe('PackageManagerService', () => {
       });
       await localService.init();
 
-      const result = await localBus.request(PackageSubjects.install, {
+      const result = await localBus.request(createTestCall(), PackageSubjects.install, {
         packageNames: ['@makaio/adapter-claude-code-tmux'],
       });
 

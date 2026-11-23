@@ -1,4 +1,5 @@
 import type { IMakaioBus } from '@makaio/bus-core';
+import type { CallContext } from '@makaio/core';
 import { AgentSubjects, SessionSubjects, type MessageOutcome } from '@makaio/contracts';
 import type { Turn } from './entities/turn.js';
 import type { TurnCompleteCallback, TurnCompletionResult } from './turn-completion.js';
@@ -12,7 +13,7 @@ export interface TurnCompletionEventHooks {
   addUsage(turn: Turn, event: AgentUsageEvent): void;
   bufferUsage(turnId: string, event: AgentUsageEvent): void;
   canRetry(turnId: string): boolean;
-  retry(turnId: string): Promise<void>;
+  retry(call: CallContext, turnId: string): Promise<void>;
   beginFinalization(turn: Turn, result: TurnCompletionResult): void;
 }
 
@@ -51,7 +52,7 @@ export function registerTurnCompletionEvents(
     bus.on(AgentSubjects.complete, async (ctx) => {
       const { agentId, outcome, error, turnId, messageId } = ctx.payload;
       if ((ctx.payload as Record<string, unknown>)['_import'] || !turnId) return;
-      await recordTurnPairCompletion(bus, hooks, {
+      await recordTurnPairCompletion(ctx.call, bus, hooks, {
         agentId,
         messageId,
         outcome: outcome ?? 'completed',
@@ -65,12 +66,14 @@ export function registerTurnCompletionEvents(
 
 /**
  * Record one exact delivery outcome and finalize the turn when its ledger closes.
+ * @param call - Call context of the handled `agent.complete` (or equivalent) message that observed this outcome.
  * @param bus - Bus used for lifecycle observation.
  * @param hooks - Manager-owned state transition hooks.
  * @param input - Exact pair outcome and terminal callback.
  * @returns Promise resolved after observation and any finalization.
  */
 export async function recordTurnPairCompletion(
+  call: CallContext,
   bus: IMakaioBus,
   hooks: TurnCompletionEventHooks,
   input: {
@@ -86,11 +89,11 @@ export async function recordTurnPairCompletion(
   if (!turn?.hasAgent(input.agentId)) return;
   const change = turn.recordPairTerminal(input.messageId, input.agentId, input.outcome, input.error);
   if (!change.accepted) {
-    if (hooks.canRetry(turn.turnId)) await hooks.retry(turn.turnId);
+    if (hooks.canRetry(turn.turnId)) await hooks.retry(call, turn.turnId);
     return;
   }
   if (change.turnComplete) hooks.beginFinalization(turn, change.result);
-  const observation = bus.emit(SessionSubjects.user_message.completed, {
+  const observation = bus.emit(call, SessionSubjects.user_message.completed, {
     sessionId: turn.sessionId,
     turnId: turn.turnId,
     turnNumber: turn.turnNumber,
@@ -99,7 +102,7 @@ export async function recordTurnPairCompletion(
     outcome: input.outcome,
     ...(input.error !== undefined && { error: input.error }),
   });
-  const finalization = change.turnComplete ? input.onTurnComplete(turn, change.result) : Promise.resolve();
+  const finalization = change.turnComplete ? input.onTurnComplete(call, turn, change.result) : Promise.resolve();
   const [observed, finalized] = await Promise.allSettled([observation, finalization]);
   if (observed.status === 'rejected') {
     console.error('[SessionTurnManager] Failed to emit user-message completion:', observed.reason);

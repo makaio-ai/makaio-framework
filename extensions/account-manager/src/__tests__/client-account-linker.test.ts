@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { createBusInstance } from '@makaio/bus-core';
 import { ClientSubjects } from '@makaio/contracts/client';
+import { createTestCall } from '@makaio/test-utils';
 import { AccountManager } from '../account-manager.js';
 import { AccountManagerSubjects } from '../bus/namespace.js';
 import type { StoredAccount } from '../interfaces/account-store.js';
@@ -168,10 +169,11 @@ describe('ClientAccountLinker', () => {
       });
 
       try {
-        const account = await store.metadataStore.setLabel('claude-code', 'local-account-retry', 'Retry Account');
+        const call = createTestCall();
+        const account = await store.metadataStore.setLabel(call, 'claude-code', 'local-account-retry', 'Retry Account');
         expect(account).not.toBeNull();
 
-        await bus.emit(AccountManagerSubjects.accounts.labeled, {
+        await bus.emit(call, AccountManagerSubjects.accounts.labeled, {
           clientId: 'claude-code',
           account: account!,
         });

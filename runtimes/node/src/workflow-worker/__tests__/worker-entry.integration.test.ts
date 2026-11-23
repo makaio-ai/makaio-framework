@@ -1,6 +1,6 @@
 import { createServer } from 'node:http';
 import { describe, expect, it, vi } from 'vitest';
-import { createBusContext, createBusInstance, type IMakaioBus } from '@makaio/bus-core';
+import { createBusInstance, type IMakaioBus } from '@makaio/bus-core';
 import {
   FrameworkContractNamespaces,
   FrameworkStorageNamespaces,
@@ -13,7 +13,7 @@ import {
   type JsonValue,
 } from '@makaio/contracts';
 import { WorkflowStorageSubjects } from '@makaio/subsystem-workflow-engine';
-import { HmacAuth, resolveHmacIdentityPeer, resolveHmacIdentitySecret } from '@makaio/bus-transport-websocket';
+import { HmacAuth, resolveHmacIdentityParty, resolveHmacIdentitySecret } from '@makaio/bus-transport-websocket';
 import { closeHttpServer, listenOnLoopback } from '../../__tests__/http-test-helpers.js';
 import { BusServerTransportProvider } from '../../bus-server-transport.js';
 import { mintWorkflowExecutionBusSecret } from '../../workflow-execution-bus-access.js';
@@ -59,7 +59,7 @@ interface HostWorkflowBus {
 async function startHostWorkflowBus(executionId: string): Promise<HostWorkflowBus> {
   const server = createServer();
   const port = await listenOnLoopback(server);
-  const bus = createBusInstance({ context: createBusContext() });
+  const bus = createBusInstance();
   bus.registerNamespaces(FrameworkContractNamespaces);
   bus.registerNamespaces(FrameworkStorageNamespaces);
   // Before the transport: the gates must be bound and the attempt allocated by
@@ -125,7 +125,7 @@ async function startHostWorkflowBus(executionId: string): Promise<HostWorkflowBu
     auth: new HmacAuth({
       secret: HOST_BUS_SECRET,
       resolveSecret: resolveHmacIdentitySecret,
-      resolvePeer: resolveHmacIdentityPeer,
+      resolveParty: resolveHmacIdentityParty,
     }),
   });
   try {
@@ -308,7 +308,7 @@ describe('runWorkflowInWorker integration', () => {
         // subscription is established before the response arrives.
         setTimeout(() => {
           void host.bus
-            .request(WorkflowSubjects.gate.respond, {
+            .request(ctx.call, WorkflowSubjects.gate.respond, {
               executionId: ctx.payload.executionId,
               gateId: ctx.payload.nodeId,
               frameId: ctx.payload.frameId,
@@ -378,7 +378,7 @@ describe('runWorkflowInWorker integration', () => {
         // defer the Authority request until the transport has propagated it.
         setTimeout(() => {
           void host.bus
-            .request(WorkflowSubjects.gate.respond, {
+            .request(ctx.call, WorkflowSubjects.gate.respond, {
               executionId: ctx.payload.executionId,
               executionAttemptId: ctx.payload.executionAttemptId,
               gateId: ctx.payload.nodeId,

@@ -3,6 +3,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
+import { createTestCall } from '@makaio/test-utils';
 import {
   CredentialRefSchema,
   buildStoredCredentialRef,
@@ -226,9 +227,13 @@ async function createHarness(): Promise<Harness> {
  * @param providerConfigId - Config whose atomic runtime snapshot is required.
  */
 async function resolveRuntime(providerConfigId: string) {
-  const { snapshot } = await MakaioBus.request(AdapterSubsystemSubjects.resolveProviderRuntimeSnapshot, {
-    providerConfigId,
-  });
+  const { snapshot } = await MakaioBus.request(
+    createTestCall(),
+    AdapterSubsystemSubjects.resolveProviderRuntimeSnapshot,
+    {
+      providerConfigId,
+    },
+  );
   if (snapshot === null) {
     throw new Error(`Expected runtime snapshot for ${providerConfigId}`);
   }
@@ -254,7 +259,7 @@ describe('AdapterSubsystemService canonical reads', () => {
       enabled: false,
     });
 
-    const { config } = await MakaioBus.request(AdapterSubsystemSubjects.getProviderConfig, {
+    const { config } = await MakaioBus.request(createTestCall(), AdapterSubsystemSubjects.getProviderConfig, {
       id: 'anthropic.work',
     });
     const snapshot = await resolveRuntime('anthropic.work');
@@ -301,7 +306,7 @@ describe('AdapterSubsystemService canonical reads', () => {
   it('surfaces managed account selection only through the safe auth summary', async () => {
     harness = await createHarness();
 
-    const { config } = await MakaioBus.request(AdapterSubsystemSubjects.getProviderConfig, {
+    const { config } = await MakaioBus.request(createTestCall(), AdapterSubsystemSubjects.getProviderConfig, {
       id: 'anthropic.account',
     });
 
@@ -352,6 +357,7 @@ describe('AdapterSubsystemService canonical reads', () => {
     try {
       await expect(
         buildProviderRuntimeContextFromRaw(
+          createTestCall(),
           MakaioBus,
           'anthropic.work',
           explicitConfig('anthropic', 'Anthropic Work', CredentialRefSchema.parse('env:ANTHROPIC_API_KEY')),

@@ -267,6 +267,15 @@ export class DispatchingAuth implements TransportAuth {
   }
 
   /**
+   * Return the authenticated identity from the strategy selected for this socket.
+   * @param socket - Server-side socket whose identity should be retrieved.
+   * @returns The verified identity ID, or undefined when the selected strategy has none.
+   */
+  public getAuthenticatedIdentityId(socket: WebSocketLike): string | undefined {
+    return this.resolveSocketStrategy(socket)?.getAuthenticatedIdentityId?.(socket);
+  }
+
+  /**
    * Return whether the strategy selected for a socket still authorizes it.
    * @param socket - Server-side socket whose authorization should be checked.
    * @returns True when no selected strategy provides a liveness check, otherwise its result.

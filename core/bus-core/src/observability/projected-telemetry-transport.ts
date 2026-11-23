@@ -25,7 +25,8 @@ export interface ProjectedTelemetryTransportOptions {
   /**
    * Namespace registry used to resolve schemas for attribute projection.
    *
-   * Obtain via `bus.getContext().namespaceRegistry`.
+   * Taken from the namespace registry of the bus context the transport is wired into
+   * (kernel-internal; not reachable through the public bus interface).
    */
   readonly namespaceRegistry: NamespaceRegistry;
   /**

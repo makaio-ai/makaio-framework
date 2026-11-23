@@ -105,6 +105,49 @@
         "toolName": "shell.execute"
       }
     },
+    "request.approval.request.with-principal": {
+      "type": "request",
+      "namespace": "approval",
+      "subject": "request",
+      "correlationId": "corr-approval-principal-001",
+      "messageId": "req-approval-principal-001",
+      "timeout": 5000,
+      "priority": 250,
+      "deadline": 6000,
+      "metadata": {
+        "principal": {
+          "kind": "makaio.extension",
+          "id": "fixture-extension"
+        }
+      },
+      "payload": {
+        "agentId": "agent-001",
+        "requestId": "approval-request-principal-001",
+        "sessionId": "session-001",
+        "toolCallId": "tool-call-001",
+        "toolName": "shell.execute"
+      }
+    },
+    "request.approval.request.unknown-envelope-field": {
+      "type": "request",
+      "namespace": "approval",
+      "subject": "request",
+      "correlationId": "corr-approval-envelope-001",
+      "messageId": "req-approval-envelope-001",
+      "timeout": 5000,
+      "priority": 250,
+      "deadline": 6000,
+      "futureEnvelopeField": {
+        "ignored": true
+      },
+      "payload": {
+        "agentId": "agent-001",
+        "requestId": "approval-request-envelope-001",
+        "sessionId": "session-001",
+        "toolCallId": "tool-call-001",
+        "toolName": "shell.execute"
+      }
+    },
     "request.tool.execute.no-handler": {
       "type": "request",
       "namespace": "tool",

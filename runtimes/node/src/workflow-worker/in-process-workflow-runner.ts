@@ -1,4 +1,5 @@
 import type { IMakaioBus } from '@makaio/bus-core';
+import type { CallContext } from '@makaio/core';
 import type {
   IWorkflowRunner,
   WorkerContributionManifest,
@@ -66,12 +67,14 @@ export class InProcessWorkflowRunner implements IWorkflowRunner {
    *
    * The `manifest` parameter is accepted for interface conformance but is
    * unused — in-process execution does not load worker-local contributions.
+   * @param call - Call context of the execution that starts the run; the orchestrator runs on the host bus under it.
    * @param config - Workflow worker configuration to validate before execution.
    * @param signal - AbortSignal for cooperative cancellation.
    * @param _manifest - Ignored; in-process runners share the host contribution set.
    * @returns Uncommitted completion; the host executor owns finalization.
    */
   public async run(
+    call: CallContext,
     config: WorkflowWorkerConfig,
     signal: AbortSignal,
     _manifest?: WorkerContributionManifest,
@@ -80,6 +83,7 @@ export class InProcessWorkflowRunner implements IWorkflowRunner {
     const loaded = await loadWorkflowFromConfig(parsedConfig);
     const effectiveConfig = await resolveAwaitTriggerConfig(parsedConfig, loaded, this.#bus, signal);
     const result = await runWorkflowOrchestrator({
+      call,
       config: effectiveConfig,
       loaded,
       bus: this.#bus,

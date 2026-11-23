@@ -23,11 +23,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createBusInstance, type IMakaioBus } from '@makaio/bus-core';
 import { RawClientHookPayloadSchema, ClientHookHandleResponseSchema } from '@makaio/subsystem-client';
 import { createBusNamespace, type SchemaRecord } from '@makaio/core';
-import {
-  runClientHookHandleCommand,
-  type ClientHookHandleCommandContext,
-  type ClientHookHandleCommandDependencies,
-} from '../cli/client-hook-command.js';
+import { runClientHookHandleCommand, type ClientHookHandleCommandDependencies } from '../cli/client-hook-command.js';
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -142,24 +138,20 @@ describe('deadline bridge — single stdin read', () => {
 describe('deadline bridge — relative timeout passthrough', () => {
   it('passes a relative timeout (not an absolute deadline) to requestOptional', async () => {
     const emit = vi.fn(async () => {});
-    let capturedOptions: { readonly timeout?: number } | undefined;
-    const requestOptional: NonNullable<ClientHookHandleCommandContext['bus']>['requestOptional'] = async (
-      _subject,
-      _payload,
-      options,
-    ) => {
-      capturedOptions = options;
-      return { handled: false };
-    };
+    const bus = createBusInstance();
+    registerTestClientNamespace(bus, 'timeout-relative');
+    const requestOptional = vi.spyOn(bus, 'requestOptional');
 
     const before = Date.now();
     await runClientHookHandleCommand(
       {
         args: { client: 'timeout-relative', eventName: 'PreToolUse', timeout: 3000, failClose: false },
-        bus: { emit, requestOptional },
+        bus: { emit, requestOptional: requestOptional.bind(bus) },
       },
       makeDeps({}),
     );
+
+    const capturedOptions = requestOptional.mock.calls[0]?.[2];
 
     // The timeout passed to requestOptional must be a relative duration (<=3000ms),
     // not an absolute timestamp (which would be ~Date.now() + 3000, i.e. >1e12).
@@ -173,23 +165,19 @@ describe('deadline bridge — relative timeout passthrough', () => {
   it('deducts observation time from the remaining timeout budget', async () => {
     // Simulate an observation emit that takes ~50ms.
     const emit = vi.fn(() => new Promise<void>((resolve) => setTimeout(resolve, 50)));
-    let capturedTimeout: number | undefined;
-    const requestOptional: NonNullable<ClientHookHandleCommandContext['bus']>['requestOptional'] = async (
-      _subject,
-      _payload,
-      options,
-    ) => {
-      capturedTimeout = options?.timeout;
-      return { handled: false };
-    };
+    const bus = createBusInstance();
+    registerTestClientNamespace(bus, 'timeout-budget');
+    const requestOptional = vi.spyOn(bus, 'requestOptional');
 
     await runClientHookHandleCommand(
       {
         args: { client: 'timeout-budget', eventName: 'PreToolUse', timeout: 5000, failClose: false },
-        bus: { emit, requestOptional },
+        bus: { emit, requestOptional: requestOptional.bind(bus) },
       },
       makeDeps({}),
     );
+
+    const capturedTimeout = requestOptional.mock.calls[0]?.[2]?.timeout;
 
     // The remaining timeout should be less than the original 5000ms because the
     // observation step consumed part of the budget.

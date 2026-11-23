@@ -8,6 +8,7 @@
  */
 
 import type { IMakaioBus } from '@makaio/bus-core';
+import type { CallContext } from '@makaio/core';
 import type { HealthResult } from '@makaio/utils/health-probe';
 import { KernelSubjects } from '@makaio/kernel';
 import type { SetupRestartAndReconnect } from '@makaio/setup';
@@ -41,8 +42,13 @@ export interface SetupReconnectDeps {
   readonly resolveClientAuth: (health: HealthResult) => ConnectBusClientOptions['auth'];
   /** Connect a fresh bus client. */
   readonly connectBusClient: (busUrl: string, options: ConnectBusClientOptions) => Promise<IMakaioBus>;
-  /** Request host restart on the current bus. */
-  readonly requestKernelRestart: (bus: IMakaioBus, reason?: string) => Promise<void>;
+  /**
+   * Request host restart on the current bus.
+   * @param call - Call context for the restart operation.
+   * @param bus - Current bus connected to the host.
+   * @param reason - Optional human-readable restart reason.
+   */
+  readonly requestKernelRestart: (call: CallContext, bus: IMakaioBus, reason?: string) => Promise<void>;
   /** Sleep between polling attempts. */
   readonly sleep: (ms: number) => Promise<void>;
 }
@@ -150,7 +156,7 @@ async function waitForKernelReady(bus: IMakaioBus, timeoutMs: number): Promise<v
 
     void (async () => {
       try {
-        const result = await bus.request(KernelSubjects.isReady, {});
+        const result = await bus.request(bus.own('start'), KernelSubjects.isReady, {});
         if (result.ready) {
           settle();
         }
@@ -179,7 +185,7 @@ export function createSetupRestartAndReconnect(
 
   return async (bus, reason) => {
     const busUrl = deps.resolveBusUrl();
-    await deps.requestKernelRestart(bus, reason);
+    await deps.requestKernelRestart(bus.own('root'), bus, reason);
     try {
       await waitForHealth(deps, busUrl, (health) => health === null, healthDownTimeoutMs, pollIntervalMs);
     } catch (error) {

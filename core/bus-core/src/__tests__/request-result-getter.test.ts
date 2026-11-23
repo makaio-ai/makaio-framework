@@ -29,7 +29,7 @@ describe('RequestContext.result getter', () => {
       { priority: 0 },
     );
 
-    await MakaioBus.request(TestSubjects.compute, { input: 1 });
+    await MakaioBus.request(MakaioBus.own('root'), TestSubjects.compute, { input: 1 });
     expect(observedResult).toBeUndefined();
   });
 
@@ -45,7 +45,7 @@ describe('RequestContext.result getter', () => {
       { priority: 0 },
     );
 
-    await MakaioBus.request(TestSubjects.compute, { input: 1 });
+    await MakaioBus.request(MakaioBus.own('root'), TestSubjects.compute, { input: 1 });
     expect(observedResult).toEqual({ output: 42 });
   });
 
@@ -70,7 +70,7 @@ describe('RequestContext.result getter', () => {
       { priority: 0 },
     );
 
-    const response = await MakaioBus.request(TestSubjects.compute, { input: 7 });
+    const response = await MakaioBus.request(MakaioBus.own('root'), TestSubjects.compute, { input: 7 });
     expect(response).toEqual({ output: 70 });
     expect(interceptorResult).toEqual({ output: 70 });
   });
@@ -94,7 +94,7 @@ describe('RequestContext.result getter', () => {
       { priority: 0 },
     );
 
-    const response = await MakaioBus.request(TestSubjects.compute, { input: 5 });
+    const response = await MakaioBus.request(MakaioBus.own('root'), TestSubjects.compute, { input: 5 });
     expect(response).toEqual({ output: 51 });
   });
 
@@ -119,7 +119,7 @@ describe('RequestContext.result getter', () => {
       { priority: 0 },
     );
 
-    const response = await MakaioBus.request(TestSubjects.compute, { input: 0 });
+    const response = await MakaioBus.request(MakaioBus.own('root'), TestSubjects.compute, { input: 0 });
     // setResult before next() means the interceptor's value wins
     expect(response).toEqual({ output: 999 });
     // result getter reflects the interceptor's own value (downstream was discarded)
@@ -158,7 +158,7 @@ describe('RequestContext.result getter', () => {
       { priority: 0 },
     );
 
-    await MakaioBus.request(TestSubjects.compute, { input: 1 });
+    await MakaioBus.request(MakaioBus.own('root'), TestSubjects.compute, { input: 1 });
 
     expect(observations).toEqual([
       { handler: 'outer', result: undefined },

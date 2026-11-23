@@ -6,6 +6,7 @@ import type {
   WorkerContributionManifest,
 } from '@makaio/contracts';
 import { WorkerSubjects } from '@makaio/contracts';
+import type { CallContext } from '@makaio/core';
 import type { IMakaioBus } from '@makaio/bus-core';
 import {
   ExecutionAttemptAuthority,
@@ -229,8 +230,9 @@ export function createNodeWorkflowRunner(params: CreateNodeWorkflowRunnerParams)
         runner.dispatch ??
         (bus === undefined
           ? undefined
-          : (request, signal) =>
+          : (call, request, signal) =>
               bus.request(
+                call,
                 WorkerSubjects.dispatch,
                 {
                   executionAttemptId: request.executionAttemptId,
@@ -251,8 +253,8 @@ export function createNodeWorkflowRunner(params: CreateNodeWorkflowRunnerParams)
         dispatch,
         authority: params.authority,
         ...(bus !== undefined && {
-          readRunContext: async (executionId: string, signal: AbortSignal) =>
-            (await bus.request(WorkflowStorageSubjects.getRunContext, { executionId }, { signal })).runContext,
+          readRunContext: async (call: CallContext, executionId: string, signal: AbortSignal) =>
+            (await bus.request(call, WorkflowStorageSubjects.getRunContext, { executionId }, { signal })).runContext,
         }),
         ...(runner.manifest !== undefined && { manifest: runner.manifest }),
         ...(runner.requirements !== undefined && { requirements: runner.requirements }),

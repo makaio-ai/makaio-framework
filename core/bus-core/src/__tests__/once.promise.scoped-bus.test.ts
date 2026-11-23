@@ -22,7 +22,7 @@ describe('once - Promise overload', () => {
       const scopedBus = MakaioBus.scoped(namespace);
       const promise = scopedBus.once(namespace.subjects.event);
 
-      await scopedBus.emit(namespace.subjects.event, { value: 'scoped-value' });
+      await scopedBus.emit(MakaioBus.own('root'), namespace.subjects.event, { value: 'scoped-value' });
 
       const ctx = await promise;
       expect(ctx.payload.value).toBe('scoped-value');
@@ -42,11 +42,11 @@ describe('once - Promise overload', () => {
       });
 
       // Emit non-matching
-      await scopedBus.emit(namespace.subjects.event, { id: 1 });
-      await scopedBus.emit(namespace.subjects.event, { id: 2 });
+      await scopedBus.emit(MakaioBus.own('root'), namespace.subjects.event, { id: 1 });
+      await scopedBus.emit(MakaioBus.own('root'), namespace.subjects.event, { id: 2 });
 
       // Emit matching
-      await scopedBus.emit(namespace.subjects.event, { id: 42 });
+      await scopedBus.emit(MakaioBus.own('root'), namespace.subjects.event, { id: 42 });
 
       const ctx = await promise;
       expect(ctx.payload.id).toBe(42);

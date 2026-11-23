@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { createBusInstance } from '@makaio/bus-core';
+import { createTestCall } from '@makaio/test-utils';
 import {
   WorkflowNamespace,
   type JsonValue,
@@ -143,6 +144,7 @@ function makeLoopNode(nodeId: string, stationId: string, gateHandler: string, ma
 
 describe('executeLoopNode', () => {
   it('completes when gate returns pass after one round', async () => {
+    const call = createTestCall();
     let callCount = 0;
     const stationHandler: StationHandler = async () => {
       callCount++;
@@ -162,13 +164,14 @@ describe('executeLoopNode', () => {
 
     const { ctx } = makeCtx({ 'work-station': stationHandler }, { 'check-gate': gateHandler });
 
-    const outcome = await executeSequence(rootSequence, ctx, emptyExpressionCtx);
+    const outcome = await executeSequence(call, rootSequence, ctx, emptyExpressionCtx);
 
     expect(outcome.status).toBe('completed');
     expect(callCount).toBe(1);
   });
 
   it('loops then passes after two rounds', async () => {
+    const call = createTestCall();
     let callCount = 0;
     const stationHandler: StationHandler = async () => {
       callCount++;
@@ -191,7 +194,7 @@ describe('executeLoopNode', () => {
 
     const { ctx } = makeCtx({ 'work-station': stationHandler }, { 'check-gate': gateHandler });
 
-    const outcome = await executeSequence(rootSequence, ctx, emptyExpressionCtx);
+    const outcome = await executeSequence(call, rootSequence, ctx, emptyExpressionCtx);
 
     expect(outcome.status).toBe('completed');
     expect(callCount).toBe(2);
@@ -211,6 +214,7 @@ describe('executeLoopNode', () => {
   });
 
   it('passes evaluated gate input, config, and loop context after body execution', async () => {
+    const call = createTestCall();
     const stationHandler: StationHandler = async () => ({ score: 42 });
     const gateCalls: Array<{ input: unknown; config: unknown; round: number; maxRounds: number; nodeId: string }> = [];
     const gateHandler: LoopGateHandler = (
@@ -237,7 +241,7 @@ describe('executeLoopNode', () => {
     };
 
     const { ctx } = makeCtx({ 'work-station': stationHandler }, { 'check-gate': gateHandler });
-    const outcome = await executeSequence(rootSequence, ctx, emptyExpressionCtx);
+    const outcome = await executeSequence(call, rootSequence, ctx, emptyExpressionCtx);
 
     expect(outcome.status).toBe('completed');
     expect(gateCalls).toEqual([
@@ -252,6 +256,7 @@ describe('executeLoopNode', () => {
   });
 
   it('escalates when max rounds reached', async () => {
+    const call = createTestCall();
     let callCount = 0;
     const stationHandler: StationHandler = async () => {
       callCount++;
@@ -274,7 +279,7 @@ describe('executeLoopNode', () => {
 
     const { ctx } = makeCtx({ 'work-station': stationHandler }, { 'check-gate': gateHandler });
 
-    const outcome = await executeSequence(rootSequence, ctx, emptyExpressionCtx);
+    const outcome = await executeSequence(call, rootSequence, ctx, emptyExpressionCtx);
 
     expect(outcome.status).toBe('completed');
     expect(callCount).toBe(1);
@@ -295,6 +300,7 @@ describe('executeLoopNode', () => {
   });
 
   it('fails with clear error when gate handler is not registered', async () => {
+    const call = createTestCall();
     const stationHandler: StationHandler = async () => 'done';
 
     // No gate handler registered — the handler name 'missing-gate' has no entry.
@@ -307,7 +313,7 @@ describe('executeLoopNode', () => {
 
     const { ctx } = makeCtx({ 'work-station': stationHandler }, {});
 
-    const outcome = await executeSequence(rootSequence, ctx, emptyExpressionCtx);
+    const outcome = await executeSequence(call, rootSequence, ctx, emptyExpressionCtx);
 
     expect(outcome.status).toBe('failed');
     if (outcome.status === 'failed') {
@@ -317,6 +323,7 @@ describe('executeLoopNode', () => {
   });
 
   it('fails when body station throws', async () => {
+    const call = createTestCall();
     const stationHandler: StationHandler = async () => {
       throw new Error('station exploded');
     };
@@ -334,7 +341,7 @@ describe('executeLoopNode', () => {
 
     const { ctx } = makeCtx({ 'work-station': stationHandler }, { 'check-gate': gateHandler });
 
-    const outcome = await executeSequence(rootSequence, ctx, emptyExpressionCtx);
+    const outcome = await executeSequence(call, rootSequence, ctx, emptyExpressionCtx);
 
     expect(outcome.status).toBe('failed');
     if (outcome.status === 'failed') {
@@ -375,6 +382,7 @@ function makeLoopNodeWithEscalation(
 
 describe('executeLoopNode — escalation gate', () => {
   it.each([undefined, 'attempt-a'])('opens escalation for its owning attempt (%s)', async (executionAttemptId) => {
+    const call = createTestCall();
     let callCount = 0;
     const stationHandler: StationHandler = async () => {
       callCount++;
@@ -399,7 +407,7 @@ describe('executeLoopNode — escalation gate', () => {
     );
 
     // Create a container frame so updateFrame can find it during escalation.
-    const containerFrame = ctx.createFrame({
+    const containerFrame = ctx.createFrame(call, {
       nodeId: 'loop-esc',
       nodeType: 'loop',
       path: [],
@@ -413,9 +421,9 @@ describe('executeLoopNode — escalation gate', () => {
     });
 
     // Respond immediately when the gate is suspended so the test doesn't hang.
-    bus.on(WorkflowSubjects.gate.suspended, () => {
+    bus.on(WorkflowSubjects.gate.suspended, (c) => {
       setImmediate(() => {
-        void bus.request(WorkflowSubjects.gate.respond, {
+        void bus.request(c.call, WorkflowSubjects.gate.respond, {
           executionId: 'exec-test',
           executionAttemptId,
           gateId: 'loop-esc',
@@ -427,6 +435,7 @@ describe('executeLoopNode — escalation gate', () => {
 
     const { executeLoopNode } = await import('../runtime/loop-node.js');
     const outcome = await executeLoopNode(
+      call,
       loopNode,
       ctx,
       emptyExpressionCtx,
@@ -457,6 +466,7 @@ describe('executeLoopNode — escalation gate', () => {
   });
 
   it('returns paused for exit-based suspension on escalation', async () => {
+    const call = createTestCall();
     let callCount = 0;
     const stationHandler: StationHandler = async () => {
       callCount++;
@@ -494,7 +504,7 @@ describe('executeLoopNode — escalation gate', () => {
     });
 
     // Create a container frame so updateFrame can find it.
-    const containerFrame = ctx.createFrame({
+    const containerFrame = ctx.createFrame(call, {
       nodeId: 'loop-park',
       nodeType: 'loop',
       path: [],
@@ -503,6 +513,7 @@ describe('executeLoopNode — escalation gate', () => {
 
     const { executeLoopNode } = await import('../runtime/loop-node.js');
     const outcome = await executeLoopNode(
+      call,
       loopNode,
       ctx,
       emptyExpressionCtx,
@@ -520,6 +531,7 @@ describe('executeLoopNode — escalation gate', () => {
   });
 
   it('fails an in-process escalation wait when timeoutMs expires with autoAction reject', async () => {
+    const call = createTestCall();
     vi.useFakeTimers();
     try {
       const stationHandler: StationHandler = async () => ({ needsReview: true });
@@ -533,7 +545,7 @@ describe('executeLoopNode — escalation gate', () => {
         timeoutMs: 1000,
       });
       const { ctx } = makeCtx({ 'work-station': stationHandler }, { 'check-gate': gateHandler });
-      const containerFrame = ctx.createFrame({
+      const containerFrame = ctx.createFrame(call, {
         nodeId: 'loop-timeout-in-process',
         nodeType: 'loop',
         path: [],
@@ -542,6 +554,7 @@ describe('executeLoopNode — escalation gate', () => {
 
       const { executeLoopNode } = await import('../runtime/loop-node.js');
       const outcomePromise = executeLoopNode(
+        call,
         loopNode,
         ctx,
         emptyExpressionCtx,
@@ -562,6 +575,7 @@ describe('executeLoopNode — escalation gate', () => {
   });
 
   it('completes without gate when escalation config is absent', async () => {
+    const call = createTestCall();
     let callCount = 0;
     const stationHandler: StationHandler = async () => {
       callCount++;
@@ -585,7 +599,7 @@ describe('executeLoopNode — escalation gate', () => {
     });
 
     const { executeLoopNode } = await import('../runtime/loop-node.js');
-    const outcome = await executeLoopNode(loopNode, ctx, emptyExpressionCtx, executeSequence, parentFrameId, [
+    const outcome = await executeLoopNode(call, loopNode, ctx, emptyExpressionCtx, executeSequence, parentFrameId, [
       parentFrameId,
     ]);
 
@@ -607,6 +621,7 @@ describe('executeLoopNode — escalation gate', () => {
 
 describe('executeLoopNode — resume frame reuse', () => {
   it('skips body execution for rounds with reusable resume frames', async () => {
+    const call = createTestCall();
     // This test uses executeLoopNode directly with a known parentFrameId
     // to verify frame reuse behavior.
     let callCount = 0;
@@ -665,7 +680,7 @@ describe('executeLoopNode — resume frame reuse', () => {
     // Import executeLoopNode for direct invocation.
     const { executeLoopNode } = await import('../runtime/loop-node.js');
 
-    const outcome = await executeLoopNode(loopNode, ctx, emptyExpressionCtx, executeSequence, parentFrameId, [
+    const outcome = await executeLoopNode(call, loopNode, ctx, emptyExpressionCtx, executeSequence, parentFrameId, [
       parentFrameId,
     ]);
 
@@ -685,6 +700,7 @@ describe('executeLoopNode — resume frame reuse', () => {
   });
 
   it('normalizes replayed and fresh no-output rounds consistently', async () => {
+    const call = createTestCall();
     let gateCallCount = 0;
     const gateHandler: LoopGateHandler = (): LoopGateOutcome => {
       gateCallCount++;
@@ -720,7 +736,7 @@ describe('executeLoopNode — resume frame reuse', () => {
     });
 
     const { executeLoopNode } = await import('../runtime/loop-node.js');
-    const outcome = await executeLoopNode(loopNode, ctx, emptyExpressionCtx, executeSequence, parentFrameId, [
+    const outcome = await executeLoopNode(call, loopNode, ctx, emptyExpressionCtx, executeSequence, parentFrameId, [
       parentFrameId,
     ]);
 
@@ -734,6 +750,7 @@ describe('executeLoopNode — resume frame reuse', () => {
   });
 
   it('resolves a persisted escalation gate after replaying completed round frames', async () => {
+    const call = createTestCall();
     const stationHandler: StationHandler = async () => {
       throw new Error('body should not rerun');
     };
@@ -801,7 +818,7 @@ describe('executeLoopNode — resume frame reuse', () => {
     });
 
     const { executeLoopNode } = await import('../runtime/loop-node.js');
-    const outcome = await executeLoopNode(loopNode, ctx, emptyExpressionCtx, executeSequence, parentFrameId, [
+    const outcome = await executeLoopNode(call, loopNode, ctx, emptyExpressionCtx, executeSequence, parentFrameId, [
       parentFrameId,
     ]);
 
@@ -816,6 +833,7 @@ describe('executeLoopNode — resume frame reuse', () => {
   });
 
   it('reuses a waiting structural loop frame when resolving an escalation gate on redispatch', async () => {
+    const call = createTestCall();
     const stationHandler: StationHandler = async () => {
       throw new Error('body should not rerun');
     };
@@ -894,7 +912,7 @@ describe('executeLoopNode — resume frame reuse', () => {
       });
     });
 
-    const outcome = await executeSequence(rootSequence, ctx, emptyExpressionCtx);
+    const outcome = await executeSequence(call, rootSequence, ctx, emptyExpressionCtx);
 
     expect(outcome.status).toBe('completed');
     expect(completedLoopFrame).toMatchObject({ frameId: parentFrameId, status: 'completed' });
@@ -909,6 +927,7 @@ describe('executeLoopNode — resume frame reuse', () => {
   });
 
   it('fails an expired persisted escalation gate with auto-reject on redispatch', async () => {
+    const call = createTestCall();
     const loopNode = makeLoopNodeWithEscalation('loop-timeout', 'work-station', 'check-gate', 5, {
       prompt: 'Review needed',
       autoAction: 'reject',
@@ -958,7 +977,7 @@ describe('executeLoopNode — resume frame reuse', () => {
     });
 
     const { executeLoopNode } = await import('../runtime/loop-node.js');
-    const outcome = await executeLoopNode(loopNode, ctx, emptyExpressionCtx, executeSequence, parentFrameId, [
+    const outcome = await executeLoopNode(call, loopNode, ctx, emptyExpressionCtx, executeSequence, parentFrameId, [
       parentFrameId,
     ]);
 

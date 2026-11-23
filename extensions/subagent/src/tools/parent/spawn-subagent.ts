@@ -51,7 +51,7 @@ export function spawnSubagentTool() {
       const depth = (context.subagentDepth ?? 0) + 1;
 
       try {
-        const result = await context.bus.requestOptional(SubagentSubjects.spawn, {
+        const result = await context.bus.requestOptional(context.call, SubagentSubjects.spawn, {
           parentSessionId,
           config: input,
           depth,

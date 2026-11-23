@@ -19,6 +19,7 @@ import {
   type BusEventMessage,
   type BusBroadcastMessage,
 } from '../index.js';
+import { busContextOf } from '../kernel-api.js';
 
 // ---------------------------------------------------------------------------
 // Test transport
@@ -131,7 +132,7 @@ declare module '../index.js' {
 // Shared helpers
 // ---------------------------------------------------------------------------
 
-const { registerTransport } = MakaioBus.getContext().transportRegistry;
+const { registerTransport } = busContextOf(MakaioBus).transportRegistry;
 
 const withCleanup = async (register: () => () => void, run: () => Promise<void>): Promise<void> => {
   const cleanup = register();
@@ -167,9 +168,9 @@ describe('broadcast() options.transports behavior', () => {
     Number.POSITIVE_INFINITY,
   ])('rejects timeout %s with a RangeError before anything is sent', async (timeout) => {
     // Only `0` means "no timeout"; an invalid budget never reaches a transport.
-    await expect(MakaioBus.broadcast(BroadcastSubjects.remoteRequest, { q: 'ping' }, { timeout })).rejects.toThrow(
-      RangeError,
-    );
+    await expect(
+      MakaioBus.broadcast(MakaioBus.own('root'), BroadcastSubjects.remoteRequest, { q: 'ping' }, { timeout }),
+    ).rejects.toThrow(RangeError);
     expect(primary.messages).toHaveLength(0);
   });
 
@@ -184,7 +185,9 @@ describe('broadcast() options.transports behavior', () => {
             ctx.setResult({ output: `local:${ctx.payload.q}` });
           }),
         async () => {
-          const results = await MakaioBus.broadcast(BroadcastSubjects.remoteRequest, { q: 'ping' });
+          const results = await MakaioBus.broadcast(MakaioBus.own('root'), BroadcastSubjects.remoteRequest, {
+            q: 'ping',
+          });
           const localResult = results.find((r) => r.payload.output.startsWith('local:'));
           expect(localResult).toBeDefined();
           expect(localResult?.payload).toEqual({ output: 'local:ping' });
@@ -193,7 +196,7 @@ describe('broadcast() options.transports behavior', () => {
     });
 
     it('delivers to registered transports', async () => {
-      const results = await MakaioBus.broadcast(BroadcastSubjects.remoteRequest, { q: 'ping' });
+      const results = await MakaioBus.broadcast(MakaioBus.own('root'), BroadcastSubjects.remoteRequest, { q: 'ping' });
 
       expect(primary.messages).toHaveLength(1);
       expect(primary.messages[0]).toMatchObject({
@@ -216,7 +219,9 @@ describe('broadcast() options.transports behavior', () => {
             ctx.setResult({ output: `local:${ctx.payload.q}` });
           }),
         async () => {
-          const results = await MakaioBus.broadcast(BroadcastSubjects.remoteRequest, { q: 'both' });
+          const results = await MakaioBus.broadcast(MakaioBus.own('root'), BroadcastSubjects.remoteRequest, {
+            q: 'both',
+          });
 
           expect(primary.messages).toHaveLength(1);
           expect(results).toHaveLength(2);
@@ -235,7 +240,12 @@ describe('broadcast() options.transports behavior', () => {
   // -------------------------------------------------------------------------
   describe('empty array (options.transports = [])', () => {
     it('does NOT dispatch to any transport', async () => {
-      await MakaioBus.broadcast(BroadcastSubjects.remoteRequest, { q: 'local-only' }, { transports: [] });
+      await MakaioBus.broadcast(
+        MakaioBus.own('root'),
+        BroadcastSubjects.remoteRequest,
+        { q: 'local-only' },
+        { transports: [] },
+      );
 
       expect(primary.messages).toHaveLength(0);
     });
@@ -248,6 +258,7 @@ describe('broadcast() options.transports behavior', () => {
           }),
         async () => {
           const results = await MakaioBus.broadcast(
+            MakaioBus.own('root'),
             BroadcastSubjects.remoteRequest,
             { q: 'local-only' },
             { transports: [] },
@@ -261,7 +272,12 @@ describe('broadcast() options.transports behavior', () => {
     });
 
     it('returns empty results when no local handlers are registered', async () => {
-      const results = await MakaioBus.broadcast(BroadcastSubjects.remoteRequest, { q: 'nobody' }, { transports: [] });
+      const results = await MakaioBus.broadcast(
+        MakaioBus.own('root'),
+        BroadcastSubjects.remoteRequest,
+        { q: 'nobody' },
+        { transports: [] },
+      );
 
       expect(results).toHaveLength(0);
       expect(primary.messages).toHaveLength(0);
@@ -286,6 +302,7 @@ describe('broadcast() options.transports behavior', () => {
 
     it('sends to the named transport only', async () => {
       await MakaioBus.broadcast(
+        MakaioBus.own('root'),
         BroadcastSubjects.remoteRequest,
         { q: 'selective' },
         { transports: ['broadcastPrimary'] },
@@ -297,6 +314,7 @@ describe('broadcast() options.transports behavior', () => {
 
     it('does not send to unspecified transports', async () => {
       await MakaioBus.broadcast(
+        MakaioBus.own('root'),
         BroadcastSubjects.remoteRequest,
         { q: 'selective' },
         { transports: ['broadcastSecondary'] },
@@ -308,6 +326,7 @@ describe('broadcast() options.transports behavior', () => {
 
     it('aggregates results from the named transport', async () => {
       const results = await MakaioBus.broadcast(
+        MakaioBus.own('root'),
         BroadcastSubjects.remoteRequest,
         { q: 'named' },
         { transports: ['broadcastPrimary'] },
@@ -329,7 +348,9 @@ describe('broadcast() options.transports behavior', () => {
             ctx.setResult({ output: 'local-only' });
           }),
         async () => {
-          const results = await MakaioBus.broadcast(BroadcastSubjects.localRequest, { q: 'local-test' });
+          const results = await MakaioBus.broadcast(MakaioBus.own('root'), BroadcastSubjects.localRequest, {
+            q: 'local-test',
+          });
 
           // Transport must not receive the broadcast
           expect(primary.messages).toHaveLength(0);
@@ -349,6 +370,7 @@ describe('broadcast() options.transports behavior', () => {
           }),
         async () => {
           const results = await MakaioBus.broadcast(
+            MakaioBus.own('root'),
             BroadcastSubjects.localRequest,
             { q: 'local-test' },
             { transports: ['broadcastPrimary'] },

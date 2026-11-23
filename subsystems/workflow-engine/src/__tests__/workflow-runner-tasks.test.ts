@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
+import { createTestCall } from '@makaio/test-utils';
 import {
   type IWorkflowRunner,
   type WorkflowRunnerCompletion,
@@ -158,16 +159,16 @@ describe('worker-owned paused runner results', () => {
     const lifecyclePublications = new Map<string, Promise<void>>();
     const publishingLifecycleExecutions = new Set<string>();
     const workerRunner: IWorkflowRunner = {
-      run: async (config: WorkflowWorkerConfig): Promise<WorkflowRunnerCompletion> => {
+      run: async (call, config: WorkflowWorkerConfig): Promise<WorkflowRunnerCompletion> => {
         expect(config.terminalAuthority).toBe('worker');
-        const { execution: running } = await MakaioBus.request(WorkflowStorageSubjects.getExecution, {
+        const { execution: running } = await MakaioBus.request(call, WorkflowStorageSubjects.getExecution, {
           executionId: config.executionId,
         });
         if (!running) throw new Error('Worker-owned execution was not persisted.');
-        await MakaioBus.request(WorkflowStorageSubjects.setExecution, {
+        await MakaioBus.request(call, WorkflowStorageSubjects.setExecution, {
           execution: { ...running, status: 'paused' },
         });
-        await MakaioBus.emit(WorkflowSubjects.execution.paused, {
+        await MakaioBus.emit(call, WorkflowSubjects.execution.paused, {
           executionId: config.executionId,
           workflowId: config.workflowId,
           pausedAtGateId: 'gate-worker-paused',
@@ -213,7 +214,7 @@ describe('worker-owned paused runner results', () => {
     });
 
     try {
-      await buildExecutionTask(deps, {
+      await buildExecutionTask(createTestCall(), deps, {
         executionId: execution.id,
         workflowId: workflow.id,
         workflow,
@@ -303,11 +304,11 @@ describe('recorded-only runner results', () => {
     ]);
     const workflowAbortControllers = new Map<string, AbortController>();
     const workerRunner: IWorkflowRunner = {
-      run: async (config): Promise<WorkflowRunnerCompletion> => {
+      run: async (call, config): Promise<WorkflowRunnerCompletion> => {
         // Public cancellation owns durable state; the task's existing signal
         // separately records whether this runner was asked to stop.
         expect(
-          await MakaioBus.request(WorkflowSubjects.cancel, {
+          await MakaioBus.request(call, WorkflowSubjects.cancel, {
             executionId: execution.id,
             reason: 'Operator stopped work',
           }),
@@ -363,7 +364,7 @@ describe('recorded-only runner results', () => {
       },
     };
 
-    await buildExecutionTask(deps, {
+    await buildExecutionTask(createTestCall(), deps, {
       executionId: execution.id,
       workflowId: workflow.id,
       workflow,

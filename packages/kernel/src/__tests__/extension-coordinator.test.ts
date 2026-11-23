@@ -1223,7 +1223,7 @@ describe('ExtensionCoordinator', () => {
     // registered — they would otherwise remain dispatchable (e.g. through
     // `cli.execute`) for code that is guaranteed never to become active.
     expect(coordinator.windowRegistry.size).toBe(0);
-    expect(coordinator.cliContributions.find((c) => c.name === 'ext-b-cmd')).toBeUndefined();
+    expect(coordinator.cliContributions.find((c) => c.contribution.name === 'ext-b-cmd')).toBeUndefined();
     expect(coordinator.cliContributions).toHaveLength(0);
   });
 
@@ -1275,7 +1275,7 @@ describe('ExtensionCoordinator', () => {
     // introduced.
     expect(coordinator.windowRegistry.size).toBe(1);
     expect(coordinator.windowRegistry.get('main-ext:main')).toBeDefined();
-    expect(coordinator.cliContributions.map((c) => c.name)).toEqual(['main-ext-cmd']);
+    expect(coordinator.cliContributions.map((c) => c.contribution.name)).toEqual(['main-ext-cmd']);
   });
 
   // ---------------------------------------------------------------------------
@@ -1843,13 +1843,17 @@ describe('ExtensionCoordinator', () => {
     expect(registerHandlers).toHaveBeenCalledOnce();
     const storageContext = registerHandlers.mock.calls[0]?.[2];
     expect(storageContext).toMatchObject({
-      bus,
+      bus: registerHandlers.mock.calls[0]?.[0],
       platform: TEST_PKG_CTX_BASE.platform,
       homedir: TEST_PKG_CTX_BASE.homedir,
       makaioHome: TEST_PKG_CTX_BASE.makaioHome,
       dataDir: '/home/test/.makaio/data/storage-context-pkg',
       username: TEST_PKG_CTX_BASE.username,
       machineId: TEST_PKG_CTX_BASE.machineId,
+    });
+    expect(storageContext?.bus.own('start').caller).toEqual({
+      kind: 'makaio.extension',
+      id: 'storage-context-pkg',
     });
     expect(storageContext?.identity.extensionName).toBe('storage-context-pkg');
     expect(typeof storageContext?.getService).toBe('function');

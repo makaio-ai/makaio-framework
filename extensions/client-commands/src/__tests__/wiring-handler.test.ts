@@ -10,6 +10,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createBusInstance, type IMakaioBus } from '@makaio/bus-core';
 import { ClientSubjects } from '@makaio/contracts/client';
+import { createTestCall } from '@makaio/test-utils';
 import { runClientWiringCommand, type ClientWiringCommandContext } from '../cli/wiring-handler.js';
 
 // ---------------------------------------------------------------------------
@@ -43,6 +44,7 @@ function createContext(
   const setExitCodeSpy = vi.fn<(code: number) => void>();
   return {
     args,
+    call: createTestCall(),
     bus,
     output: createOutput(),
     setExitCode: setExitCodeSpy,

@@ -1,14 +1,13 @@
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import type { IMakaioBus } from '@makaio/bus-core';
+import type { ExtractSubjectPayload } from '@makaio/core';
 import { WorkflowRunContextSchema, type WorkflowDefinition, type WorkflowRunContext } from '@makaio/contracts';
+import { createTestBusInstance, createTestCall } from '@makaio/test-utils';
 import { bootstrapAuthorityLoadedState } from '../authority-state-bootstrap.js';
 import { WorkflowStorageSubjects } from '../storage/namespace.js';
 import { createWorkflowDefinition } from './shared.js';
 
-interface SetRunContextPayload {
-  runContext: WorkflowRunContext;
-  initialState?: unknown;
-}
+type SetRunContextPayload = ExtractSubjectPayload<typeof WorkflowStorageSubjects.setRunContext>;
 
 function createRunContext(definitionSnapshot?: WorkflowDefinition): WorkflowRunContext {
   return WorkflowRunContextSchema.parse({
@@ -36,16 +35,14 @@ function createBus(runContext: WorkflowRunContext): {
   bus: IMakaioBus;
   writes: SetRunContextPayload[];
 } {
+  const bus = createTestBusInstance();
   const writes: SetRunContextPayload[] = [];
-  const request = vi.fn(async (subject: unknown, payload: unknown) => {
-    if (subject === WorkflowStorageSubjects.getRunContext) return { runContext };
-    if (subject === WorkflowStorageSubjects.setRunContext) {
-      writes.push(payload as SetRunContextPayload);
-      return { executionId: runContext.executionId };
-    }
-    throw new Error('Unexpected bus request');
+  bus.on(WorkflowStorageSubjects.getRunContext, (ctx) => ctx.setResult({ runContext }));
+  bus.on(WorkflowStorageSubjects.setRunContext, (ctx) => {
+    writes.push(ctx.payload);
+    ctx.setResult({ executionId: runContext.executionId });
   });
-  return { bus: { request } as unknown as IMakaioBus, writes };
+  return { bus, writes };
 }
 
 function createStatefulDefinition(description = 'authority snapshot'): WorkflowDefinition {
@@ -68,7 +65,9 @@ describe('bootstrapAuthorityLoadedState', () => {
     const definition = createStatefulDefinition();
     const { bus, writes } = createBus(createRunContext());
 
-    await expect(bootstrapAuthorityLoadedState(bus, 'execution-authority-bootstrap', definition)).resolves.toBe(false);
+    await expect(
+      bootstrapAuthorityLoadedState(createTestCall(), bus, 'execution-authority-bootstrap', definition),
+    ).resolves.toBe(false);
 
     expect(writes).toHaveLength(1);
     expect(writes[0]?.runContext.definitionSnapshot).toBeUndefined();
@@ -84,9 +83,9 @@ describe('bootstrapAuthorityLoadedState', () => {
     const storedRunContext = createRunContext(storedDefinition);
     const { bus, writes } = createBus(storedRunContext);
 
-    await expect(bootstrapAuthorityLoadedState(bus, 'execution-authority-bootstrap', workerDefinition)).resolves.toBe(
-      true,
-    );
+    await expect(
+      bootstrapAuthorityLoadedState(createTestCall(), bus, 'execution-authority-bootstrap', workerDefinition),
+    ).resolves.toBe(true);
 
     expect(writes).toHaveLength(1);
     expect(writes[0]?.runContext.definitionSnapshot).toBe(storedRunContext.definitionSnapshot);
@@ -98,9 +97,9 @@ describe('bootstrapAuthorityLoadedState', () => {
     const workerDefinition = createStatefulDefinition('worker replacement');
     const { bus, writes } = createBus(createRunContext(storedDefinition));
 
-    await expect(bootstrapAuthorityLoadedState(bus, 'execution-authority-bootstrap', workerDefinition)).rejects.toThrow(
-      "Authority bootstrap definition mismatch for 'execution-authority-bootstrap'",
-    );
+    await expect(
+      bootstrapAuthorityLoadedState(createTestCall(), bus, 'execution-authority-bootstrap', workerDefinition),
+    ).rejects.toThrow("Authority bootstrap definition mismatch for 'execution-authority-bootstrap'");
 
     expect(writes).toHaveLength(0);
   });

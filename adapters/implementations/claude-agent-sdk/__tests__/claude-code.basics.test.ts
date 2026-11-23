@@ -24,6 +24,7 @@ import { normalizeMessageInput } from '@makaio/ai-adapters-core';
 import { MakaioBus } from '@makaio/bus-core';
 import { clientDefinition as claudeClientDefinition } from '@makaio/client-claude-code';
 import { EventContext } from '@makaio/core';
+import { createTestCall } from '@makaio/test-utils';
 import type { SDKMessage } from '@makaio/client-claude-code';
 import { createSessionAccountObservationRequester } from '../src/account-observation-requester.js';
 
@@ -44,7 +45,7 @@ type SdkEvent = EventContext<SDKMessage>;
 // Test Setup
 // ─────────────────────────────────────────────────────────────────────────────
 
-const scopedBus = await ClaudeCodeConnectorNamespace.scopedBus();
+const scopedBus = await ClaudeCodeConnectorNamespace.scopedBus(MakaioBus);
 
 /**
  * Unique temp directory for this test run.
@@ -67,6 +68,7 @@ const systemPrompt = `${Date.now().toString()} ${systemPromptBase}`;
 function createTestConnector(options?: { useSystemPrompt?: boolean; agentId?: string }): ClaudeSdkConnector {
   return new ClaudeSdkConnector({
     bus: scopedBus,
+    globalBus: MakaioBus,
     agentId: options?.agentId ?? crypto.randomUUID(),
     adapterId: 'test-adapter',
     adapterName: ClaudeCodeAdapterName,
@@ -136,7 +138,9 @@ describe.sequential
       // ─────────────────────────────────────────────────────────────────────────
       // First call: establishes session and creates cache
       // ─────────────────────────────────────────────────────────────────────────
-      const firstCallResult = await connector.start(normalizeMessageInput('Reply with OK only.'));
+      const firstCallResult = await connector.start(normalizeMessageInput('Reply with OK only.'), {
+        call: createTestCall(),
+      });
       firstTurnSessionId = firstCallResult.adapterSessionId;
 
       await firstCallResult.messageHandle.waitForCompletion();
@@ -151,6 +155,7 @@ describe.sequential
       // ─────────────────────────────────────────────────────────────────────────
       const secondCallHandle = await connector.sendMessage(
         normalizeMessageInput('Remind me: What was my first prompt?'),
+        { call: createTestCall() },
       );
       // waitForAdapterSessionId() resolves when processing starts - safe to call before completion
       secondTurnSessionId = await secondCallHandle.waitForAdapterSessionId();
@@ -199,7 +204,9 @@ describe.sequential
       it('uses different sessionId for different connectors', async () => {
         const otherConnector = createTestConnector();
 
-        const result = await otherConnector.start(normalizeMessageInput('Reply with OK only.'));
+        const result = await otherConnector.start(normalizeMessageInput('Reply with OK only.'), {
+          call: createTestCall(),
+        });
         const otherSessionId = result.adapterSessionId;
 
         await result.messageHandle.waitForCompletion();

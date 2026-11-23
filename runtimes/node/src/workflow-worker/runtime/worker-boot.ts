@@ -65,6 +65,7 @@ export function createWorkerBus(config: {
 
   const transport = new WebSocketClientTransport({
     url: config.busUrl,
+    attestingRole: 'core-uplink',
     auth,
     autoReconnect: false,
   });

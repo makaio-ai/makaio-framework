@@ -1,4 +1,5 @@
 import type { IMakaioBus } from '@makaio/bus-core';
+import type { CallContext } from '@makaio/core';
 import { AdapterSubjects } from '@makaio/contracts';
 import { AdapterRuntimeSubjects } from './namespace.js';
 import type { ResolveIdRequest, ResolveLiveIdentityRequest, ResolveLiveIdentityResponse } from './schemas.js';
@@ -266,20 +267,22 @@ export class AdapterIdentityRegistry {
   /**
    * Hydrate local deterministic adapter names from the provided catalog and
    * retry the reverse lookup.
+   * @param call - Handled message context forwarded to the name supplier.
    * @param adapterId - Runtime adapter id to resolve.
    * @param listKnownAdapterNames - Canonical name supplier.
    * @returns Adapter name when known after hydration.
    */
   public async resolveAdapterNameFromKnownNames(
+    call: CallContext,
     adapterId: string,
-    listKnownAdapterNames: () => Promise<Iterable<string>>,
+    listKnownAdapterNames: (call: CallContext) => Promise<Iterable<string>>,
   ): Promise<string | undefined> {
     const knownName = this.resolveAdapterName(adapterId);
     if (knownName) {
       return knownName;
     }
 
-    this.replaceKnownAdapterNames(await listKnownAdapterNames());
+    this.replaceKnownAdapterNames(await listKnownAdapterNames(call));
     return this.resolveAdapterName(adapterId);
   }
 
@@ -326,8 +329,11 @@ export interface AdapterRuntimeIdentityHandlerOptions {
   readonly listLiveAdapterIdentities?: () => Iterable<ResolveLiveIdentityResponse>;
   /** Static local names for lightweight host compatibility. */
   readonly knownAdapterNames?: Iterable<string>;
-  /** Lazy local-name enumeration for reverse lookup compatibility. */
-  readonly listKnownAdapterNames?: () => Promise<Iterable<string>>;
+  /**
+   * Lazy local-name enumeration for reverse lookup compatibility.
+   * @param call - Handled message context for the catalog lookup.
+   */
+  readonly listKnownAdapterNames?: (call: CallContext) => Promise<Iterable<string>>;
 }
 
 /**
@@ -490,7 +496,11 @@ export function registerAdapterRuntimeIdentityHandlers(
       const adapterName =
         registry.resolveAdapterName(ctx.payload.adapterId) ??
         (options.listKnownAdapterNames
-          ? await registry.resolveAdapterNameFromKnownNames(ctx.payload.adapterId, options.listKnownAdapterNames)
+          ? await registry.resolveAdapterNameFromKnownNames(
+              ctx.call,
+              ctx.payload.adapterId,
+              options.listKnownAdapterNames,
+            )
           : undefined);
       if (!adapterName) {
         throw new Error(`Adapter not found for adapterId="${ctx.payload.adapterId}"`);

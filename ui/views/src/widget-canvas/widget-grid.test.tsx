@@ -22,15 +22,13 @@ import { createElement } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { WidgetGrid, SIZE_MAPPING, toFixedLayout } from './WidgetGrid.js';
-import type { UiContextSnapshot } from '@makaio/contracts';
+import { HostSubjects, type UiContextSnapshot } from '@makaio/contracts';
 import type { WidgetDefinition, WidgetLayout, WidgetProps } from '@makaio/ui-kernel';
 import { usePageOverlayStore } from '@makaio/ui-hooks';
-import type { IMakaioBus } from '@makaio/bus-core';
-
-type ActivationBus = Pick<IMakaioBus, 'emit' | 'request'>;
+import { createBusInstance, type IMakaioBus } from '@makaio/bus-core';
 
 const mockHookState = vi.hoisted(() => ({
-  bus: null as ActivationBus | null,
+  bus: null as IMakaioBus | null,
 }));
 
 vi.mock('@makaio/ui-hooks', async (importOriginal) => {
@@ -283,13 +281,12 @@ describe('WidgetGrid — activation', () => {
 
   it('waits for window activation before running a custom activation handler', async () => {
     const order: string[] = [];
-    mockHookState.bus = {
-      emit: vi.fn().mockResolvedValue(undefined),
-      request: vi.fn().mockImplementation(async () => {
-        order.push('window');
-        return {};
-      }),
-    };
+    const bus = createBusInstance();
+    bus.on(HostSubjects.window.create, (ctx) => {
+      order.push('window');
+      ctx.setResult({ windowId: 1 });
+    });
+    mockHookState.bus = bus;
 
     renderGrid({
       widgets: [

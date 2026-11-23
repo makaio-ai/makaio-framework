@@ -1,6 +1,7 @@
 import { useEffect, useCallback } from 'react';
 import type { ReactNode } from 'react';
 import type { IMakaioBus } from '@makaio/bus-core';
+import type { CallContext } from '@makaio/core';
 import { Toaster, toast as sonnerToast } from 'sonner';
 import { ToastSubjects } from '@makaio/contracts/toast';
 import type { ToastAction } from '@makaio/contracts/toast';
@@ -39,10 +40,10 @@ export interface ToastProviderProps {
  */
 export function ToastProvider({ bus, children }: ToastProviderProps): React.ReactElement {
   const handleActionClick = useCallback(
-    (toastId: string, action: ToastAction) => {
+    (call: CallContext, toastId: string, action: ToastAction) => {
       return (event: React.MouseEvent) => {
         event.preventDefault();
-        void bus.emit(ToastSubjects.interacted, {
+        void bus.emit(call, ToastSubjects.interacted, {
           toastId,
           actionId: action.id,
           timestamp: Date.now(),
@@ -62,7 +63,7 @@ export function ToastProvider({ bus, children }: ToastProviderProps): React.Reac
 
       // Handle dismiss callback
       const onDismiss = () => {
-        void bus.emit(ToastSubjects.dismissed, {
+        void bus.emit(ctx.call, ToastSubjects.dismissed, {
           toastId,
           timestamp: Date.now(),
         });
@@ -109,7 +110,7 @@ export function ToastProvider({ bus, children }: ToastProviderProps): React.Reac
           description: title ? message : undefined,
           action: {
             label: action.label,
-            onClick: (event: React.MouseEvent) => handleActionClick(toastId, action)(event),
+            onClick: (event: React.MouseEvent) => handleActionClick(ctx.call, toastId, action)(event),
           },
         });
         return;
@@ -129,7 +130,7 @@ export function ToastProvider({ bus, children }: ToastProviderProps): React.Reac
           <MultiActionToast
             payload={payload}
             onAction={(actionId) => {
-              void bus.emit(ToastSubjects.interacted, {
+              void bus.emit(ctx.call, ToastSubjects.interacted, {
                 toastId,
                 actionId,
                 timestamp: Date.now(),

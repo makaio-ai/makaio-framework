@@ -2,6 +2,7 @@ import * as path from 'node:path';
 import * as fs from 'node:fs/promises';
 import { describe, expect, it } from 'vitest';
 import { createMakaioContext } from '@makaio/core';
+import { createTestCall } from '@makaio/test-utils';
 import { FILE_ACCESS_RULES_KEY, type FileAccessRules } from '../../types.js';
 import { listDirectoryTool } from '../list-directory.js';
 import { useTempDir } from './test-helpers.js';
@@ -34,7 +35,7 @@ describe('list_directory .makaioignore filtering', () => {
       await fs.writeFile(path.join(tmpDir, 'readme.txt'), 'Hello');
 
       const context = buildContext(tmpDir, (p) => path.basename(p) === 'secret.env');
-      const result = await listDirectoryTool.execute({ path: tmpDir }, context);
+      const result = await listDirectoryTool.execute({ path: tmpDir }, { ...context, call: createTestCall() });
 
       expect(result.success).toBe(true);
       if (result.success) {
@@ -52,7 +53,7 @@ describe('list_directory .makaioignore filtering', () => {
       await fs.writeFile(path.join(tmpDir, 'private.key'), 'key');
 
       const context = buildContext(tmpDir, (p) => path.basename(p) === 'private.key');
-      const result = await listDirectoryTool.execute({ path: tmpDir }, context);
+      const result = await listDirectoryTool.execute({ path: tmpDir }, { ...context, call: createTestCall() });
 
       expect(result.success).toBe(true);
       if (result.success) {
@@ -71,7 +72,7 @@ describe('list_directory .makaioignore filtering', () => {
       await fs.writeFile(path.join(tmpDir, 'beta.txt'), '');
 
       const context = buildContext(tmpDir, () => false);
-      const result = await listDirectoryTool.execute({ path: tmpDir }, context);
+      const result = await listDirectoryTool.execute({ path: tmpDir }, { ...context, call: createTestCall() });
 
       expect(result.success).toBe(true);
       if (result.success) {
@@ -97,7 +98,10 @@ describe('list_directory .makaioignore filtering', () => {
         return rel === '.ssh' || rel.startsWith('.ssh' + path.sep);
       });
 
-      const result = await listDirectoryTool.execute({ path: tmpDir, recursive: true, includeHidden: true }, context);
+      const result = await listDirectoryTool.execute(
+        { path: tmpDir, recursive: true, includeHidden: true },
+        { ...context, call: createTestCall() },
+      );
 
       expect(result.success).toBe(true);
       if (result.success) {
@@ -121,7 +125,10 @@ describe('list_directory .makaioignore filtering', () => {
       // Only deny secrets.env
       const context = buildContext(tmpDir, (p) => path.basename(p) === 'secrets.env');
 
-      const result = await listDirectoryTool.execute({ path: tmpDir, recursive: true }, context);
+      const result = await listDirectoryTool.execute(
+        { path: tmpDir, recursive: true },
+        { ...context, call: createTestCall() },
+      );
 
       expect(result.success).toBe(true);
       if (result.success) {
@@ -145,7 +152,10 @@ describe('list_directory .makaioignore filtering', () => {
         return childValidations >= 2;
       });
 
-      const result = await listDirectoryTool.execute({ path: tmpDir, recursive: true }, context);
+      const result = await listDirectoryTool.execute(
+        { path: tmpDir, recursive: true },
+        { ...context, call: createTestCall() },
+      );
 
       expect(result.success).toBe(true);
       expect(childValidations).toBe(2);
@@ -168,7 +178,10 @@ describe('list_directory .makaioignore filtering', () => {
       // Deny all .log files EXCEPT important.log (predicate-level negation scenario)
       const context = buildContext(tmpDir, (p) => p.endsWith('.log') && path.basename(p) !== 'important.log');
 
-      const result = await listDirectoryTool.execute({ path: tmpDir, recursive: true }, context);
+      const result = await listDirectoryTool.execute(
+        { path: tmpDir, recursive: true },
+        { ...context, call: createTestCall() },
+      );
 
       expect(result.success).toBe(true);
       if (result.success) {
@@ -194,7 +207,10 @@ describe('list_directory .makaioignore filtering', () => {
       constraints: { [FILE_ACCESS_RULES_KEY]: rules },
     });
 
-    const result = await listDirectoryTool.execute({ path: allowedDir, recursive: true }, context);
+    const result = await listDirectoryTool.execute(
+      { path: allowedDir, recursive: true },
+      { ...context, call: createTestCall() },
+    );
 
     expect(result.success).toBe(true);
     if (result.success) {

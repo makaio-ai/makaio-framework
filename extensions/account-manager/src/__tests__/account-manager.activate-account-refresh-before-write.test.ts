@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
+import { createTestCall } from '@makaio/test-utils';
 import { AccountManagerSubjects } from '../bus/namespace.js';
 import type { RawCredential } from '../interfaces/credential-source.js';
 import { AccountManager } from '../account-manager.js';
@@ -79,7 +80,7 @@ describe('AccountManager', () => {
       source.setCredential(null);
       source.setRefreshHandler(async () => ({ status: 'refreshed', credential: refreshed }));
 
-      await MakaioBus.request(AccountManagerSubjects.credentials.switch, {
+      await MakaioBus.request(createTestCall(), AccountManagerSubjects.credentials.switch, {
         clientId: 'claude-code',
         accountId: ACCOUNT_ID,
       });
@@ -97,7 +98,7 @@ describe('AccountManager', () => {
       source.setCredential(null);
       source.setRefreshHandler(async () => ({ status: 'unchanged' }));
 
-      await MakaioBus.request(AccountManagerSubjects.credentials.switch, {
+      await MakaioBus.request(createTestCall(), AccountManagerSubjects.credentials.switch, {
         clientId: 'claude-code',
         accountId: ACCOUNT_ID,
       });
@@ -117,7 +118,7 @@ describe('AccountManager', () => {
         reason: 'Claude OAuth refresh failed with HTTP 500 Internal Server Error',
       }));
 
-      const result = await MakaioBus.request(AccountManagerSubjects.credentials.switch, {
+      const result = await MakaioBus.request(createTestCall(), AccountManagerSubjects.credentials.switch, {
         clientId: 'claude-code',
         accountId: ACCOUNT_ID,
       });
@@ -152,7 +153,7 @@ describe('AccountManager', () => {
       // No refresh needed — isolate the keychain adoption check.
       source.setRefreshHandler(async () => ({ status: 'unchanged' }));
 
-      await MakaioBus.request(AccountManagerSubjects.credentials.switch, {
+      await MakaioBus.request(createTestCall(), AccountManagerSubjects.credentials.switch, {
         clientId: 'claude-code',
         accountId: ACCOUNT_ID,
       });
@@ -194,7 +195,7 @@ describe('AccountManager', () => {
         return { status: 'unchanged' }; // no further refresh needed
       });
 
-      await MakaioBus.request(AccountManagerSubjects.credentials.switch, {
+      await MakaioBus.request(createTestCall(), AccountManagerSubjects.credentials.switch, {
         clientId: 'claude-code',
         accountId: ACCOUNT_ID,
       });
@@ -217,7 +218,7 @@ describe('AccountManager', () => {
       const refreshed = makeCredential('token-refreshed');
       source.setRefreshHandler(async () => ({ status: 'refreshed', credential: refreshed }));
 
-      await MakaioBus.request(AccountManagerSubjects.credentials.switch, {
+      await MakaioBus.request(createTestCall(), AccountManagerSubjects.credentials.switch, {
         clientId: 'claude-code',
         accountId: ACCOUNT_ID,
       });
@@ -243,7 +244,7 @@ describe('AccountManager', () => {
       source.setCredential(keychainNewer);
       source.setRefreshHandler(async () => ({ status: 'unchanged' }));
 
-      await MakaioBus.request(AccountManagerSubjects.credentials.switch, {
+      await MakaioBus.request(createTestCall(), AccountManagerSubjects.credentials.switch, {
         clientId: 'claude-code',
         accountId: ACCOUNT_ID,
       });
@@ -264,7 +265,7 @@ describe('AccountManager', () => {
       source.setCredential(keychainOther);
       source.setRefreshHandler(async () => ({ status: 'unchanged' }));
 
-      await MakaioBus.request(AccountManagerSubjects.credentials.switch, {
+      await MakaioBus.request(createTestCall(), AccountManagerSubjects.credentials.switch, {
         clientId: 'claude-code',
         accountId: ACCOUNT_ID,
       });
@@ -298,7 +299,7 @@ describe('AccountManager', () => {
       source.setCredential(keychainEmpty);
       source.setRefreshHandler(async () => ({ status: 'unchanged' }));
 
-      await MakaioBus.request(AccountManagerSubjects.credentials.switch, {
+      await MakaioBus.request(createTestCall(), AccountManagerSubjects.credentials.switch, {
         clientId: 'claude-code',
         accountId: ACCOUNT_ID,
       });
@@ -318,7 +319,7 @@ describe('AccountManager', () => {
         reason: 'invalid_grant: refresh token revoked',
       }));
 
-      const result = await MakaioBus.request(AccountManagerSubjects.credentials.switch, {
+      const result = await MakaioBus.request(createTestCall(), AccountManagerSubjects.credentials.switch, {
         clientId: 'claude-code',
         accountId: ACCOUNT_ID,
       });
@@ -347,7 +348,7 @@ describe('AccountManager', () => {
       source.setCredential(null);
       source.setRefreshHandler(async () => ({ status: 'refreshed', credential: refreshed }));
 
-      const result = await MakaioBus.request(AccountManagerSubjects.credentials.switch, {
+      const result = await MakaioBus.request(createTestCall(), AccountManagerSubjects.credentials.switch, {
         clientId: 'claude-code',
         accountId: ACCOUNT_ID,
       });
@@ -371,7 +372,7 @@ describe('AccountManager', () => {
         reason: 'OAuth token exchange failed with HTTP 500 Internal Server Error',
       }));
 
-      const result = await MakaioBus.request(AccountManagerSubjects.credentials.switch, {
+      const result = await MakaioBus.request(createTestCall(), AccountManagerSubjects.credentials.switch, {
         clientId: 'claude-code',
         accountId: ACCOUNT_ID,
       });

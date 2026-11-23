@@ -1,6 +1,7 @@
 import os from 'node:os';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
+import { createTestCall } from '@makaio/test-utils';
 import { MessageHandle, UserMessageQueue } from '@makaio/ai-adapters-core';
 import type { SDKMessage } from '@makaio/client-claude-code';
 
@@ -35,6 +36,7 @@ const transportHarness = makeTransportHarness(transportStub.transport);
 
 function makeHandle(messageId = 'message-1'): MessageHandle {
   return new MessageHandle(
+    createTestCall(),
     messageId,
     {
       role: 'user',
@@ -81,7 +83,7 @@ describe('ClaudeCliSession shutdown vs queue processing', () => {
   });
 
   it('completes dequeued handle when close() begins during startTurn setup', async () => {
-    const bus = await ClaudeCodeCliConnectorNamespace.scopedBus();
+    const bus = await ClaudeCodeCliConnectorNamespace.scopedBus(MakaioBus);
 
     // Simulate close() interleaving during the awaited MCP registration
     // by spying on registerMcpContextAndBuildConfig and setting closing = true
@@ -160,7 +162,7 @@ describe('ClaudeCliSession shutdown vs queue processing', () => {
   });
 
   it('rejects queued handles after close() begins instead of starting a new subprocess', async () => {
-    const bus = await ClaudeCodeCliConnectorNamespace.scopedBus();
+    const bus = await ClaudeCodeCliConnectorNamespace.scopedBus(MakaioBus);
     const session = new ClaudeCliSession({
       bus,
       adapterId: 'adapter-test',
@@ -205,7 +207,7 @@ describe('ClaudeCliSession shutdown vs queue processing', () => {
   });
 
   it('rejects queued follow-ups during close() drain window', async () => {
-    const bus = await ClaudeCodeCliConnectorNamespace.scopedBus();
+    const bus = await ClaudeCodeCliConnectorNamespace.scopedBus(MakaioBus);
     const session = new ClaudeCliSession({
       bus,
       adapterId: 'adapter-test',

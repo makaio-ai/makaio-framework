@@ -1,4 +1,5 @@
 import type { IMakaioBus } from '@makaio/bus-core';
+import type { CallContext } from '@makaio/core';
 import type { ExtensionCoordinator } from '@makaio/kernel';
 import {
   AdapterSubsystemToken,
@@ -91,8 +92,9 @@ export interface ActivateAdapterRuntimeIdentityInput {
   /**
    * Optional override for enumerating known adapter names. Defaults to querying
    * `AdapterSubsystemSubjects.listAdapterConfigs` on the bus, matching the host.
+   * @param call - Handled message context for the catalog lookup.
    */
-  readonly listKnownAdapterNames?: () => Promise<Iterable<string>>;
+  readonly listKnownAdapterNames?: (call: CallContext) => Promise<Iterable<string>>;
 }
 
 /** Result of {@link activateAdapterRuntimeIdentity}. */
@@ -153,8 +155,8 @@ export function activateAdapterRuntimeIdentity(
 
   const listKnownAdapterNames =
     input.listKnownAdapterNames ??
-    (async (): Promise<Iterable<string>> => {
-      const { configs } = await bus.request(AdapterSubsystemSubjects.listAdapterConfigs, {});
+    (async (call: CallContext): Promise<Iterable<string>> => {
+      const { configs } = await bus.request(call, AdapterSubsystemSubjects.listAdapterConfigs, {});
       return configs.map((config) => config.name);
     });
 

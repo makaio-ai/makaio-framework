@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import type { CallContext } from '@makaio/core';
 import { AccountActivationFinalizationError, type PreparedAccountActivation } from './account-activation.js';
 import { AccountManagerQuiesceError } from './account-manager-types.js';
 import {
@@ -7,6 +8,7 @@ import {
   type ActivationFinalizationResult,
   type ActivationRollbackResult,
   type ActivationTransactionDecision,
+  type ActivationTransactionFinalization,
   type PendingActivationTransaction,
 } from './activation-transaction-state.js';
 import type { ClientMutationQueue } from './client-mutation-queue.js';
@@ -22,11 +24,16 @@ export interface AccountActivationTransactionsOptions {
   readonly clientMutations: ClientMutationQueue;
   /**
    * Prepare one reversible native and durable account activation.
+   * @param call - Call of the prepare request.
    * @param clientId - Client whose account is selected.
    * @param accountId - Exact stored account to prepare.
    * @returns Prepared activation, or `null` when the account disappeared.
    */
-  readonly prepareActivation: (clientId: string, accountId: string) => Promise<PreparedAccountActivation | null>;
+  readonly prepareActivation: (
+    call: CallContext,
+    clientId: string,
+    accountId: string,
+  ) => Promise<PreparedAccountActivation | null>;
 }
 
 /**
@@ -50,13 +57,14 @@ export class AccountActivationTransactions {
 
   /**
    * Close admission, roll back unclaimed transactions, and await claimed work.
+   * @param call - Call used for the rollback writes of unclaimed transactions.
    */
-  public async shutdown(): Promise<void> {
+  public async shutdown(call: CallContext): Promise<void> {
     this.accepting = false;
     const results = await Promise.allSettled(
       [...this.transactions].map(
         ([transactionId, transaction]) =>
-          transaction.finalization?.result ?? this.beginFinalization(transactionId, transaction, 'rollback'),
+          transaction.finalization?.result ?? this.beginFinalization(call, transactionId, transaction, 'rollback'),
       ),
     );
     const failures = results.flatMap((result) => {
@@ -70,15 +78,16 @@ export class AccountActivationTransactions {
 
   /**
    * Prepare one account selection and retain its client lock until finalization.
+   * @param call - Call of the prepare request.
    * @param clientId - Client whose native account is selected.
    * @param accountId - Exact stored account to prepare.
    * @returns Opaque transaction identifier or typed credential-free failure.
    */
-  public async prepare(clientId: string, accountId: string): Promise<ActivationPrepareResult> {
+  public async prepare(call: CallContext, clientId: string, accountId: string): Promise<ActivationPrepareResult> {
     if (!this.accepting) return { success: false, code: 'activation-failed' };
 
     const ready = createDeferredValue<ActivationPrepareResult>();
-    const decision = createDeferredValue<ActivationTransactionDecision>();
+    const decision = createDeferredValue<ActivationTransactionFinalization>();
     const transactionId = randomUUID();
     let published = false;
     const workflow = this.options.clientMutations.run(clientId, async () => {
@@ -86,7 +95,7 @@ export class AccountActivationTransactions {
         ready.resolve({ success: false, code: 'activation-failed' });
         return;
       }
-      const activation = await this.options.prepareActivation(clientId, accountId);
+      const activation = await this.options.prepareActivation(call, clientId, accountId);
       if (activation === null) {
         ready.resolve({ success: false, code: 'account-not-found' });
         return;
@@ -97,8 +106,10 @@ export class AccountActivationTransactions {
       } else {
         ready.resolve({ success: false, code: 'activation-failed' });
       }
-      const action = await decision.promise;
-      await (action === 'commit' ? activation.commit() : activation.rollback());
+      const finalizing = await decision.promise;
+      await (finalizing.action === 'commit'
+        ? activation.commit(finalizing.call)
+        : activation.rollback(finalizing.call));
     });
     const transaction: PendingActivationTransaction = { decision, completion: workflow };
     this.transactions.set(transactionId, transaction);
@@ -121,26 +132,28 @@ export class AccountActivationTransactions {
 
   /**
    * Commit one prepared activation exactly once.
+   * @param call - Call of the commit request.
    * @param transactionId - Opaque prepare response identifier.
    * @returns Stable credential-free commit result.
    */
-  public commit(transactionId: string): Promise<ActivationCommitResult> {
+  public commit(call: CallContext, transactionId: string): Promise<ActivationCommitResult> {
     const transaction = this.claim(transactionId);
     return transaction === undefined
       ? Promise.resolve({ success: false, code: 'transaction-not-found' })
-      : this.beginFinalization(transactionId, transaction, 'commit');
+      : this.beginFinalization(call, transactionId, transaction, 'commit');
   }
 
   /**
    * Roll back one prepared activation exactly once.
+   * @param call - Call of the rollback request.
    * @param transactionId - Opaque prepare response identifier.
    * @returns Stable credential-free rollback result.
    */
-  public rollback(transactionId: string): Promise<ActivationRollbackResult> {
+  public rollback(call: CallContext, transactionId: string): Promise<ActivationRollbackResult> {
     const transaction = this.claim(transactionId);
     return transaction === undefined
       ? Promise.resolve({ success: false, code: 'transaction-not-found' })
-      : this.beginFinalization(transactionId, transaction, 'rollback');
+      : this.beginFinalization(call, transactionId, transaction, 'rollback');
   }
 
   /**
@@ -154,16 +167,27 @@ export class AccountActivationTransactions {
   }
 
   private beginFinalization(
+    call: CallContext,
     transactionId: string,
     transaction: PendingActivationTransaction,
     action: 'commit',
   ): Promise<ActivationCommitResult>;
   private beginFinalization(
+    call: CallContext,
     transactionId: string,
     transaction: PendingActivationTransaction,
     action: 'rollback',
   ): Promise<ActivationRollbackResult>;
+  /**
+   * Claim a transaction for one terminal action and hand the finalizing call to its workflow.
+   * @param call - Call of the request that finalizes the transaction.
+   * @param transactionId - Opaque transaction identifier.
+   * @param transaction - Transaction being claimed.
+   * @param action - Terminal action to run.
+   * @returns Stable credential-free finalization result.
+   */
   private beginFinalization(
+    call: CallContext,
     transactionId: string,
     transaction: PendingActivationTransaction,
     action: ActivationTransactionDecision,
@@ -172,7 +196,7 @@ export class AccountActivationTransactions {
       if (this.transactions.get(transactionId) === transaction) this.transactions.delete(transactionId);
     });
     transaction.finalization = { action, result };
-    transaction.decision.resolve(action);
+    transaction.decision.resolve({ action, call });
     return result;
   }
 

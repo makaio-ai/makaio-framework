@@ -9,6 +9,7 @@
 
 import { DEFAULT_REQUEST_TIMEOUT_MS, type IMakaioBus } from '@makaio/bus-core';
 import type {
+  CallContext,
   ExtensionInitOptions,
   MakaioNodeExtension,
   NodeExtensionContext,
@@ -222,7 +223,9 @@ class BusStdioExtensionService implements ExtensionServiceLifecycle {
       this.transport = transport;
       this.unregister = unregister;
 
+      // ORIGIN: Host startup initializes the stdio child after the handshake.
       await this.ctx.bus.request(
+        this.ctx.bus.own('start'),
         lifecycleSubjects.init,
         {
           config: this.ctx.config ?? this.descriptor.config?.defaults,
@@ -247,7 +250,9 @@ class BusStdioExtensionService implements ExtensionServiceLifecycle {
     if (this.transport !== null) {
       const lifecycleSubjects = this.getLifecycleSubjects();
       try {
+        // ORIGIN: Host teardown requests graceful shutdown of the stdio child.
         await this.ctx.bus.request(
+          this.ctx.bus.own('stop'),
           lifecycleSubjects.destroy,
           { reason: 'runtime-shutdown' },
           { timeout: this.stopLimits.destroyRequestTimeoutMs },
@@ -346,7 +351,8 @@ class ProcessLifecycleExtensionService implements ExtensionServiceLifecycle {
 
     try {
       await this.lifecycle.start({ signal });
-      await this.requestInit(signal);
+      // ORIGIN: Host startup initializes the first WebSocket child generation.
+      await this.requestInit(this.ctx.bus.own('start'), signal);
     } catch (error) {
       await this.lifecycle.stop();
       this.lifecycle = null;
@@ -356,11 +362,13 @@ class ProcessLifecycleExtensionService implements ExtensionServiceLifecycle {
 
   /**
    * Send the host's lifecycle `init` request to the current generation.
+   * @param call - Context for the startup or automatic restart.
    * @param signal - Cancels the wait for the reply.
    * @returns Promise that settles with the request.
    */
-  private async requestInit(signal?: AbortSignal): Promise<void> {
+  private async requestInit(call: CallContext, signal?: AbortSignal): Promise<void> {
     await this.ctx.bus.request(
+      call,
       this.getLifecycleSubjects().init,
       {
         config: this.ctx.config ?? this.descriptor.config?.defaults,
@@ -389,7 +397,8 @@ class ProcessLifecycleExtensionService implements ExtensionServiceLifecycle {
     const lifecycle = this.lifecycle;
     if (lifecycle === null || lifecycle.generation <= 1) return;
     const { generation } = lifecycle;
-    this.requestInit().catch(async (error: unknown) => {
+    // ORIGIN: The restart policy starts a new generation independently of host startup.
+    this.requestInit(this.ctx.bus.own('schedule')).catch(async (error: unknown) => {
       console.error(
         `[extensions] ${this.descriptor.name}: init of restarted generation ${generation} failed:`,
         error instanceof Error ? error.message : error,
@@ -420,7 +429,9 @@ class ProcessLifecycleExtensionService implements ExtensionServiceLifecycle {
     if (this.lifecycle !== null) {
       const lifecycleSubjects = this.getLifecycleSubjects();
       try {
+        // ORIGIN: Host teardown requests graceful shutdown of the WebSocket child.
         await this.ctx.bus.request(
+          this.ctx.bus.own('stop'),
           lifecycleSubjects.destroy,
           { reason: 'runtime-shutdown' },
           { timeout: this.stopLimits.destroyRequestTimeoutMs },
@@ -475,7 +486,7 @@ class McpStdioExtensionService implements ExtensionServiceLifecycle {
     const { startMcpClientBridge } = await import('@makaio/subsystem-mcp-http-server');
     const { transport: transportConfig } = this.descriptor;
 
-    this.bridge = await startMcpClientBridge({
+    this.bridge = await startMcpClientBridge(this.ctx.bus.own('start'), {
       command: transportConfig.command,
       args: transportConfig.args,
       env: transportConfig.env,
@@ -491,7 +502,7 @@ class McpStdioExtensionService implements ExtensionServiceLifecycle {
    */
   public async destroy(): Promise<void> {
     if (this.bridge !== null) {
-      await this.bridge.close();
+      await this.bridge.close(this.ctx.bus.own('stop'));
       this.bridge = null;
     }
   }

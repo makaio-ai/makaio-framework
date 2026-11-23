@@ -1,8 +1,9 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { WebSocketServer } from 'ws';
 import { BusLifecycle, ConnectionLostError, createBusInstance } from '@makaio/bus-core';
+import { busContextOf } from '@makaio/bus-core/kernel-api';
 import { HmacAuth, ServerTransport, WebSocketConnectionError } from '@makaio/bus-transport-websocket';
-import { ExecutionAttemptSubjects, FrameworkContractNamespaces } from '@makaio/contracts';
+import { ExecutionAttemptSubjects, FrameworkContractNamespaces, MAKAIO_JOB_RUN_PARTY_KIND } from '@makaio/contracts';
 import {
   ExecutionAttemptAuthority,
   registerBootstrapStartHandler,
@@ -68,10 +69,9 @@ describe('authenticated bootstrap start client', () => {
         auth: new HmacAuth({
           secret: 'test-secret',
           resolveSecret: () => 'test-secret',
-          resolvePeer: (id) => ({
-            kind: 'workflow-execution-attempt',
+          resolveParty: (id) => ({
+            kind: MAKAIO_JOB_RUN_PARTY_KIND,
             id,
-            authenticated: true,
             claims: { executionId: 'execution' },
           }),
         }),
@@ -170,7 +170,7 @@ describe('authenticated bootstrap start client', () => {
     expect(started.connection).toBe(host.connections[1]);
     expect(await registerWorkerRuntime(started.connection.bus, host.options)).toBe(1);
     expect(
-      host.connections[0]?.bus.getContext().requestHandlers.get('execution-attempt.operation.deliver') ?? [],
+      busContextOf(firstConnection.bus).requestHandlers.get('execution-attempt.operation.deliver') ?? [],
     ).toHaveLength(0);
     started.endpoint.cleanup();
   });
@@ -232,8 +232,10 @@ describe('authenticated bootstrap start client', () => {
     const started = await pending;
     expect(started.connection).toBe(host.connections[1]);
     expect(await registerWorkerRuntime(started.connection.bus, host.options)).toBe(1);
+    const firstConnection = host.connections[0];
+    if (!firstConnection) throw new Error('First request has no connection');
     expect(
-      host.connections[0]?.bus.getContext().requestHandlers.get('execution-attempt.operation.deliver') ?? [],
+      busContextOf(firstConnection.bus).requestHandlers.get('execution-attempt.operation.deliver') ?? [],
     ).toHaveLength(0);
     started.endpoint.cleanup();
   });

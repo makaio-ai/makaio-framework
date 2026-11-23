@@ -22,7 +22,7 @@
 
 import { createServer, type Server, type IncomingMessage, type ServerResponse } from 'node:http';
 import { MakaioBus } from '@makaio/bus-core';
-import { AgentSubjects } from '@makaio/contracts';
+import { AgentSubjects, type CallContext } from '@makaio/contracts';
 import {
   ClaudeCodeClientSubjects,
   CLAUDE_CODE_HOOK_PRE_TOOL_USE,
@@ -141,10 +141,11 @@ function handleRequest(req: IncomingMessage, res: ServerResponse): void {
     const eventName = decodeURIComponent(hookMatch[1]!);
     collectBody(req)
       .then(async (body) => {
+        const call = MakaioBus.own('observer');
         const payload = parseJsonSafe(body);
 
         if (eventName === CLAUDE_CODE_HOOK_PRE_TOOL_USE) {
-          const decisionBody = await handlePreToolUseApproval(payload);
+          const decisionBody = await handlePreToolUseApproval(call, payload);
           res.writeHead(200, { 'Content-Type': 'application/json' });
           res.end(decisionBody);
           return;
@@ -153,7 +154,7 @@ function handleRequest(req: IncomingMessage, res: ServerResponse): void {
         console.log(
           `[claude-code-tmux:test] hook received eventName=${eventName} sessionId=${String(payload.session_id ?? '')}`,
         );
-        await MakaioBus.emit(ClaudeCodeClientSubjects.hook.received, {
+        await MakaioBus.emit(call, ClaudeCodeClientSubjects.hook.received, {
           eventName,
           receivedAt: Date.now(),
           payload,
@@ -177,7 +178,7 @@ function handleRequest(req: IncomingMessage, res: ServerResponse): void {
   collectBody(req)
     .then(async (body) => {
       const payload = parseJsonSafe(body);
-      await MakaioBus.emit(ClaudeCodeClientSubjects.statusline.received, payload);
+      await MakaioBus.emit(MakaioBus.own('observer'), ClaudeCodeClientSubjects.statusline.received, payload);
       res.writeHead(200);
       res.end();
     })
@@ -206,10 +207,11 @@ function renderDenyBody(reason: string): string {
  * Looks up the agent context from the `session_id` in the payload, emits
  * `AgentSubjects.toolApprove`, and translates the response into the
  * Claude Code hook decision format.
+ * @param call - Observer call for this HTTP hook request.
  * @param payload - Raw PreToolUse hook payload from Claude Code.
  * @returns Serialized Claude Code hook decision body for stdout.
  */
-async function handlePreToolUseApproval(payload: Record<string, unknown>): Promise<string> {
+async function handlePreToolUseApproval(call: CallContext, payload: Record<string, unknown>): Promise<string> {
   const sessionId = typeof payload.session_id === 'string' ? payload.session_id : undefined;
   const toolName = typeof payload.tool_name === 'string' ? payload.tool_name : '';
   const toolUseId = typeof payload.tool_use_id === 'string' ? payload.tool_use_id : '';
@@ -221,15 +223,15 @@ async function handlePreToolUseApproval(payload: Record<string, unknown>): Promi
   const ctx = sessionId ? agentContextMap.get(sessionId) : undefined;
   if (!ctx) {
     // Also emit as a regular hook so the turn state machine still advances.
-    await emitRawHook(CLAUDE_CODE_HOOK_PRE_TOOL_USE, payload);
+    await emitRawHook(call, CLAUDE_CODE_HOOK_PRE_TOOL_USE, payload);
     return renderDenyBody('Missing agent context for PreToolUse approval');
   }
 
   // Also emit as a regular hook so the connector's onPreToolUse fires.
-  await emitRawHook(CLAUDE_CODE_HOOK_PRE_TOOL_USE, payload);
+  await emitRawHook(call, CLAUDE_CODE_HOOK_PRE_TOOL_USE, payload);
 
   try {
-    const result = await MakaioBus.request(AgentSubjects.toolApprove, {
+    const result = await MakaioBus.request(call, AgentSubjects.toolApprove, {
       agentId: ctx.agentId,
       adapterId: ctx.adapterId,
       adapterName: ctx.adapterName,
@@ -254,14 +256,15 @@ async function handlePreToolUseApproval(payload: Record<string, unknown>): Promi
 
 /**
  * Emit a raw hook event on the global bus.
+ * @param call - Observer call for this HTTP hook request.
  * @param eventName - Hook event name.
  * @param payload - Raw hook payload.
  */
-async function emitRawHook(eventName: string, payload: Record<string, unknown>): Promise<void> {
+async function emitRawHook(call: CallContext, eventName: string, payload: Record<string, unknown>): Promise<void> {
   console.log(
     `[claude-code-tmux:test] hook received eventName=${eventName} sessionId=${String(payload.session_id ?? '')}`,
   );
-  await MakaioBus.emit(ClaudeCodeClientSubjects.hook.received, {
+  await MakaioBus.emit(call, ClaudeCodeClientSubjects.hook.received, {
     eventName,
     receivedAt: Date.now(),
     payload,

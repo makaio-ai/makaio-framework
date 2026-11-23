@@ -6,7 +6,8 @@
  * @packageDocumentation
  */
 
-import { MakaioBus, type IMakaioBus } from '@makaio/bus-core';
+import type { IMakaioBus } from '@makaio/bus-core';
+import type { CallContext } from '@makaio/core';
 import type { LogImportOrchestrator } from '@makaio/ai-adapters-core';
 import { LogImportSubjects } from './namespace.js';
 import type { LogImportMode, LogImporterInfo } from './schemas/index.js';
@@ -34,7 +35,7 @@ import { stopAndDisposeOrchestrator, startOrchestratorOrCleanup } from './orches
  * - Auto-detection via detectImporter()
  * @example
  * ```typescript
- * const registry = new LogImportRegistry();
+ * const registry = new LogImportRegistry({ bus });
  * await registry.init();
  *
  * // Register an importer
@@ -61,11 +62,11 @@ export class LogImportRegistry implements CapabilityProviderRegistrar {
 
   /**
    * Creates a new LogImportRegistry instance.
-   * @param options - Optional configuration
+   * @param options - Registry configuration (bus is required)
    */
-  public constructor(options?: LogImportRegistryOptions) {
-    this.bus = options?.bus ?? MakaioBus;
-    this.capabilityService = options?.capabilityService;
+  public constructor(options: LogImportRegistryOptions) {
+    this.bus = options.bus;
+    this.capabilityService = options.capabilityService;
   }
 
   /**
@@ -207,11 +208,12 @@ export class LogImportRegistry implements CapabilityProviderRegistrar {
    *
    * No-op when the importer has no `orchestratorFactory` (no orchestrator
    * classes were provided at registration time).
+   * @param _call - Call context for the triggering message or lifecycle operation
    * @param importerId - Unique importer ID
    * @param mode - Target import mode
    * @throws If the importer is not registered
    */
-  public async switchMode(importerId: string, mode: LogImportMode): Promise<void> {
+  public async switchMode(_call: CallContext, importerId: string, mode: LogImportMode): Promise<void> {
     const registration = this.registrations.get(importerId);
     if (!registration) {
       throw new Error(`Log importer '${importerId}' is not registered`);
@@ -244,14 +246,15 @@ export class LogImportRegistry implements CapabilityProviderRegistrar {
   /**
    * Convenience method that starts discovery mode for a registered importer.
    *
-   * Equivalent to calling `switchMode(id, 'discover')`. Provided as a
+   * Equivalent to calling `switchMode(call, id, 'discover')`. Provided as a
    * named shorthand so call sites read as intent rather than mechanism.
+   * @param call - Call context for the triggering message or lifecycle operation
    * @param importerId - Unique importer ID
    * @returns Promise that resolves when the discovery orchestrator has started
    * @throws If the importer is not registered
    */
-  public async startDiscovery(importerId: string): Promise<void> {
-    return this.switchMode(importerId, 'discover');
+  public async startDiscovery(call: CallContext, importerId: string): Promise<void> {
+    return this.switchMode(call, importerId, 'discover');
   }
 
   /**

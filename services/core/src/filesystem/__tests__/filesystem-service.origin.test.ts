@@ -1,7 +1,7 @@
 /**
  * Tests for the FileSystemService origin guard.
  *
- * Remote callers (origin.local === false) must supply a `machineId` in the
+ * Remote callers must supply a `machineId` in the
  * request payload unless they arrive through the host-owned SharedWorker bridge.
  * Without it the handler throws immediately. With a matching `machineId` the
  * request is executed normally. With a non-matching `machineId` the handler
@@ -15,14 +15,9 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import * as fs from 'node:fs/promises';
 import { describe, expect, it, beforeEach, afterEach } from 'vitest';
-import {
-  createBusContext,
-  createBusInstance,
-  type BusMessage,
-  type BusReceiveHandler,
-  type BusTransport,
-} from '@makaio/bus-core';
-import type { TransportReceiveContext } from '@makaio/core';
+import { createBusInstance, type BusMessage, type BusReceiveHandler, type BusTransport } from '@makaio/bus-core';
+import { MAKAIO_WORKER_THREAD_PARTY_KIND, type TransportReceiveContext } from '@makaio/core';
+import { createTestCall } from '@makaio/test-utils';
 import { FsSubjects } from '../namespace.js';
 import { FileSystemService } from '../filesystem-service.js';
 
@@ -94,18 +89,18 @@ describe('FileSystemService — origin guard on readFile', () => {
   });
 
   it('local readFile without machineId executes normally', async () => {
-    const bus = createBusInstance({ context: createBusContext() });
+    const bus = createBusInstance();
     const service = new FileSystemService(bus, MACHINE_ID);
     cleanupFns.push(() => service.destroy());
     await service.init();
 
-    const result = await bus.request(FsSubjects.readFile, { path: tmpFile });
+    const result = await bus.request(createTestCall(), FsSubjects.readFile, { path: tmpFile });
 
     expect(result.content).toBe('hello origin guard');
   });
 
   it('remote readFile without machineId throws', async () => {
-    const bus = createBusInstance({ context: createBusContext() });
+    const bus = createBusInstance();
     const service = new FileSystemService(bus, MACHINE_ID);
     cleanupFns.push(() => service.destroy());
     await service.init();
@@ -137,7 +132,7 @@ describe('FileSystemService — origin guard on readFile', () => {
   });
 
   it('host UI bridge readFile without machineId executes normally', async () => {
-    const bus = createBusInstance({ context: createBusContext() });
+    const bus = createBusInstance();
     const service = new FileSystemService(bus, MACHINE_ID);
     cleanupFns.push(() => service.destroy());
     await service.init();
@@ -154,7 +149,7 @@ describe('FileSystemService — origin guard on readFile', () => {
         correlationId: CORR_ID,
         messageId: MSG_ID,
       },
-      { transportName: 'worker' },
+      { transportName: 'worker', caller: { kind: MAKAIO_WORKER_THREAD_PARTY_KIND, id: 'host-ui' } },
     );
 
     const responses = transport.messages.filter((m) => m.type === 'response');
@@ -167,7 +162,7 @@ describe('FileSystemService — origin guard on readFile', () => {
   });
 
   it('remote readFile with matching machineId executes normally', async () => {
-    const bus = createBusInstance({ context: createBusContext() });
+    const bus = createBusInstance();
     const service = new FileSystemService(bus, MACHINE_ID);
     cleanupFns.push(() => service.destroy());
     await service.init();
@@ -197,7 +192,7 @@ describe('FileSystemService — origin guard on readFile', () => {
   });
 
   it('remote readFile with non-matching machineId is declined', async () => {
-    const bus = createBusInstance({ context: createBusContext() });
+    const bus = createBusInstance();
     const service = new FileSystemService(bus, MACHINE_ID);
     cleanupFns.push(() => service.destroy());
     await service.init();

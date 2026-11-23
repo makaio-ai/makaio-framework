@@ -1,4 +1,5 @@
 import type { IMakaioBus } from '@makaio/bus-core';
+import type { CallContext } from '@makaio/core';
 import { AdapterSubjects } from '@makaio/contracts';
 import type {
   AdapterRuntimeOptions,
@@ -229,11 +230,13 @@ export interface LaunchAttachAgentInput extends AttachLaunchTarget {
  * rollback has about whether anything reached the provider, and a
  * `not-dispatched` refusal unwound as if it were dispatch-uncertain would leave
  * a `dead` row and an abandoned key for a start that never got there.
+ * @param call - Call context of the handled attach message
  * @param bus - Bus instance for adapter dispatch
  * @param input - All resolved attach parameters required to construct and send the request
  * @returns The successful idle startAgent response containing agentId and adapterId
  */
 export async function launchAttachAgent(
+  call: CallContext,
   bus: IMakaioBus,
   input: LaunchAttachAgentInput,
 ): Promise<Extract<StartAgentResponse, { success: true }>> {
@@ -259,7 +262,7 @@ export async function launchAttachAgent(
     attachSessionContext,
     ownerInstanceId,
   );
-  const startResult = await bus.request(AdapterSubjects.startAgent, { ...startAgentRequest, agentId });
+  const startResult = await bus.request(call, AdapterSubjects.startAgent, { ...startAgentRequest, agentId });
   if (!startResult.success) {
     throw new AttachStartError(
       'start-failed',

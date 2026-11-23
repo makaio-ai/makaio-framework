@@ -21,6 +21,7 @@ import type { KernelMakaioExtension, TransportProvider } from '@makaio/kernel';
 import { ExtensionSubjects, KernelSubjects } from '@makaio/kernel';
 import type { PersistedMachineIdentity } from '@makaio/machine-identity';
 import { ConfigProvider } from '@makaio/providers';
+import { createTestCall } from '@makaio/test-utils';
 import { DispatchingAuth } from '@makaio/bus-transport-websocket';
 import {
   AdapterRuntimeSubjects,
@@ -39,7 +40,7 @@ import {
 import { localAutomationCronSchedulerPackage } from '@makaio/services-core/automation-trigger';
 import { AdapterSubsystemToken } from '@makaio/subsystem-adapter';
 import { ClientsCoreToken } from '@makaio/subsystem-client';
-import { nativeSessionSupervisorPackage } from '@makaio/subsystem-native-session-supervisor/package';
+import { NATIVE_SESSION_SUPERVISOR_PACKAGE_NAME } from '@makaio/subsystem-native-session-supervisor/package';
 import { LogImportRegistryToken } from '@makaio/services-log-import';
 import { WorkflowEngineToken } from '@makaio/subsystem-workflow-engine';
 import { createPackageManagerPackage } from '@makaio/services-package-manager/package';
@@ -71,7 +72,7 @@ const EXPECTED_FRAMEWORK_BOOT_PACKAGE_NAMES = new Set([
   ClientsCoreToken.name,
   createPackageManagerPackage().name,
   AdapterSubsystemToken.name,
-  nativeSessionSupervisorPackage.name,
+  NATIVE_SESSION_SUPERVISOR_PACKAGE_NAME,
   ...frameworkCorePackages.filter(isHeadlessPackage).map((pkg) => pkg.name),
   // Framework-only boot has no host-supplied cron provider, so `makaio.cron`
   // bindings fall back to the framework's local in-process scheduler.
@@ -120,8 +121,10 @@ describe('createCompositeWorkspaceRootResolver', () => {
     expect(runnerResolver).not.toHaveBeenCalled();
     expect(fallbackResolver).not.toHaveBeenCalled();
     await expect(resolveWorkspaceRoot('runner')).resolves.toBe('/runner/workspace');
+    expect(runnerResolver).toHaveBeenCalledWith('runner');
     expect(fallbackResolver).not.toHaveBeenCalled();
     await expect(resolveWorkspaceRoot('static')).resolves.toBe('/fallback/static');
+    expect(fallbackResolver).toHaveBeenCalledWith('static');
   });
 });
 
@@ -814,7 +817,7 @@ export default {
     const registry = runtime.coordinator.getExtensionService(ArtifactLifecycleHookRegistryToken);
     expect(registry).toBeDefined();
 
-    await registry!.runAfterCreate({
+    await registry!.runAfterCreate(createTestCall(), {
       artifact: {
         kind: 'test',
         id: 'test-1',

@@ -1,4 +1,5 @@
 import type { IMakaioBus } from '@makaio/bus-core';
+import type { CallContext } from '@makaio/core';
 import type {
   AdapterRuntimeSnapshotResolution,
   ProviderRuntimeSnapshot,
@@ -88,10 +89,12 @@ function hasRuntimePackageMetadata(
  * The result remains refs-only. It deliberately returns adapter auth
  * declarations rather than importing Adapter Core to bind them, preserving the
  * subsystem → services dependency direction.
+ * @param call - Call context of the handled message.
  * @param input - Captured provider, adapter, and metadata bus inputs
  * @returns Typed success or credential-free failure
  */
 export async function resolveAdapterRuntimeSnapshot(
+  call: CallContext,
   input: ResolveAdapterRuntimeSnapshotInput,
 ): Promise<AdapterRuntimeSnapshotResolution> {
   if (input.snapshot === null) {
@@ -124,7 +127,7 @@ export async function resolveAdapterRuntimeSnapshot(
     return { status: 'error', code: 'client-incompatible' };
   }
 
-  const catalog = await input.bus.request(ExtensionSubjects.contributions.catalog, {});
+  const catalog = await input.bus.request(call, ExtensionSubjects.contributions.catalog, {});
   const clientCatalogEntries =
     adapterClientId === undefined ? [] : catalog.clients.filter((entry) => entry.definition.id === adapterClientId);
   if (adapterClientId !== undefined && clientCatalogEntries.length !== 1) {

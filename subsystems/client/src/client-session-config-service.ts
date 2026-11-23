@@ -35,7 +35,7 @@ import {
 } from '@makaio/contracts/client';
 import { SessionSubjects } from '@makaio/contracts/session';
 import { BaseService } from '@makaio/service-base';
-import type { RequestMessagePayload, SubjectDefinition, SubjectRecord } from '@makaio/core';
+import type { CallContext, RequestMessagePayload, SubjectDefinition, SubjectRecord } from '@makaio/core';
 import { ClientProfileStorageSubjects } from './storage/profile-storage-namespace.js';
 import { canonicalizeClientId } from './hook-subjects.js';
 import { primeClientConfig } from './client-config-prime.js';
@@ -211,9 +211,9 @@ export class ClientSessionConfigService extends BaseService {
       const sessionDir = this.resolveClientSessionDir(canonicalId, leaseId, 'sessionConfig.destroy');
       const lease = this.getLiveLease(canonicalId, leaseId);
       if (lease === undefined) {
-        await this.destroyClientSessionDir(canonicalId, sessionDir);
+        await this.destroyClientSessionDir(ctx.call, canonicalId, sessionDir);
       } else {
-        await this.releaseLiveLease(lease);
+        await this.releaseLiveLease(ctx.call, lease);
       }
       ctx.setResult({ success: true });
     });
@@ -221,16 +221,16 @@ export class ClientSessionConfigService extends BaseService {
     this.registerHandler(ClientSubjects.sessionConfig.cleanup, async (ctx) => {
       const { clientId } = ctx.payload;
       const canonicalId = clientId !== undefined ? canonicalizeClientId(clientId, 'sessionConfig.cleanup') : undefined;
-      const removed = await this.cleanupOrphanedDirs(canonicalId);
+      const removed = await this.cleanupOrphanedDirs(ctx.call, canonicalId);
       ctx.setResult({ removed });
     });
 
     this.registerHandler(SessionSubjects.closed, async (ctx) => {
-      await this.destroyOwnedLeases(ctx.payload.sessionId);
+      await this.destroyOwnedLeases(ctx.call, ctx.payload.sessionId);
     });
 
     // Remove any stale session directories left over from a previous process.
-    await this.cleanupOrphanedDirs();
+    await this.cleanupOrphanedDirs(this.bus.own('start'));
   }
 
   /** Register the config-lease creation handler and its rollback lifecycle. */
@@ -257,6 +257,7 @@ export class ClientSessionConfigService extends BaseService {
       try {
         await fs.mkdir(sessionDir, { recursive: true });
         const baseConfigDir = await this.resolveBaseConfigDir(
+          ctx.call,
           canonicalId,
           sessionDir,
           profileName,
@@ -266,7 +267,7 @@ export class ClientSessionConfigService extends BaseService {
         // Delegate setup to the client-owned handler.  NoHandlerError is expected
         // and silently ignored — the session directory remains empty.
         const setupSubject = createClientSessionConfigSetupSubjectDef(canonicalId);
-        const setupResult = await this.bus.requestOptional(setupSubject, {
+        const setupResult = await this.bus.requestOptional(ctx.call, setupSubject, {
           sessionDir,
           baseConfigDir,
           projectDir,
@@ -281,7 +282,7 @@ export class ClientSessionConfigService extends BaseService {
         // blocking so that config writes complete before the session directory
         // path is returned to the caller.  The call is a no-op when the client
         // has not registered a handler.
-        await primeClientConfig(this.bus, {
+        await primeClientConfig(ctx.call, this.bus, {
           clientId: canonicalId,
           configDir: sessionDir,
           phase: 'session-create',
@@ -295,7 +296,7 @@ export class ClientSessionConfigService extends BaseService {
         lease.state = 'ready';
       } catch (error) {
         try {
-          await this.beginLeaseCleanup(lease);
+          await this.beginLeaseCleanup(ctx.call, lease);
         } catch (cleanupError) {
           throw new AggregateError([error, cleanupError], 'Client session config creation and rollback both failed');
         }
@@ -318,6 +319,7 @@ export class ClientSessionConfigService extends BaseService {
    * 3. Default profile's `configDir` when no explicit name was provided.
    * 4. `sessionDir` — the client-owned setup handler decides the actual source
    *    (e.g. `~/.claude` for Claude Code) when no profile is configured.
+   * @param call - Call context of the handled create message, forwarded to the storage requests
    * @param clientId - Canonicalized stable client identifier
    * @param sessionDir - Absolute path to the already-created session directory
    * @param profileName - Optional profile name to look up
@@ -325,6 +327,7 @@ export class ClientSessionConfigService extends BaseService {
    * @returns Resolved absolute path for the base config directory
    */
   private async resolveBaseConfigDir(
+    call: CallContext,
     clientId: string,
     sessionDir: string,
     profileName: string | undefined,
@@ -335,7 +338,7 @@ export class ClientSessionConfigService extends BaseService {
     }
 
     if (profileName !== undefined) {
-      const result = await this.bus.request(ClientProfileStorageSubjects.get, {
+      const result = await this.bus.request(call, ClientProfileStorageSubjects.get, {
         clientId,
         name: profileName,
       });
@@ -346,7 +349,7 @@ export class ClientSessionConfigService extends BaseService {
     }
 
     // Check for a default profile when no explicit profile name was provided.
-    const listResult = await this.bus.request(ClientProfileStorageSubjects.list, { clientId });
+    const listResult = await this.bus.request(call, ClientProfileStorageSubjects.list, { clientId });
     const defaultProfile = listResult.records.find((r) => r.isDefault);
     if (defaultProfile) {
       return defaultProfile.configDir;
@@ -362,10 +365,11 @@ export class ClientSessionConfigService extends BaseService {
    *
    * When `clientId` is supplied only that client's sessions are scanned.
    * Omit it to clean across all clients.
+   * @param call - Call context of the cleanup request, or the lifecycle call of the boot-time sweep
    * @param clientId - Optional client ID to scope cleanup
    * @returns Absolute paths of all directories that were removed
    */
-  private async cleanupOrphanedDirs(clientId?: string): Promise<string[]> {
+  private async cleanupOrphanedDirs(call: CallContext, clientId?: string): Promise<string[]> {
     const removed: string[] = [];
     const now = this.getNow();
 
@@ -398,7 +402,7 @@ export class ClientSessionConfigService extends BaseService {
             // birthtimeMs as 0.
             const createdAt = stat.birthtimeMs > 0 ? stat.birthtimeMs : stat.ctimeMs;
             if (stat.isDirectory() && now - createdAt > SESSION_MAX_AGE_MS && !this.isLiveLease(id, entry)) {
-              await this.destroyClientSessionDir(id, entryPath);
+              await this.destroyClientSessionDir(call, id, entryPath);
               removed.push(entryPath);
             }
           }),
@@ -411,14 +415,15 @@ export class ClientSessionConfigService extends BaseService {
 
   /**
    * Release every live config lease owned by a closed framework session.
+   * @param call - Call context of the `session.closed` message being handled.
    * @param ownerSessionId - Framework session ID from `session.closed`.
    */
-  private async destroyOwnedLeases(ownerSessionId: string): Promise<void> {
+  private async destroyOwnedLeases(call: CallContext, ownerSessionId: string): Promise<void> {
     const leases = [...(this.liveLeasesByOwner.get(ownerSessionId) ?? [])];
     const results = await Promise.allSettled(
       leases.map(async (lease) => {
         if (this.getLiveLease(lease.clientId, lease.leaseId) === lease) {
-          await this.releaseLiveLease(lease);
+          await this.releaseLiveLease(call, lease);
         }
       }),
     );
@@ -430,12 +435,13 @@ export class ClientSessionConfigService extends BaseService {
 
   /**
    * Run client-owned session config teardown before removing the directory.
+   * @param call - Call context of the handled message that triggers the teardown.
    * @param clientId - Canonical client identifier.
    * @param sessionDir - Absolute session config directory to destroy.
    */
-  private async destroyClientSessionDir(clientId: string, sessionDir: string): Promise<void> {
+  private async destroyClientSessionDir(call: CallContext, clientId: string, sessionDir: string): Promise<void> {
     try {
-      await this.bus.requestOptional(createClientSessionConfigTeardownSubjectDef(clientId), {
+      await this.bus.requestOptional(call, createClientSessionConfigTeardownSubjectDef(clientId), {
         sessionDir,
         platform: resolveSessionConfigPlatform(),
       });
@@ -509,9 +515,10 @@ export class ClientSessionConfigService extends BaseService {
 
   /**
    * Release one lease generation, waiting for in-flight creation when needed.
+   * @param call - Call context of the handled message that triggers the release.
    * @param lease - Exact reservation generation to release.
    */
-  private async releaseLiveLease(lease: LiveConfigLease): Promise<void> {
+  private async releaseLiveLease(call: CallContext, lease: LiveConfigLease): Promise<void> {
     if (this.getLiveLease(lease.clientId, lease.leaseId) !== lease) {
       if (lease.releasePromise !== undefined) {
         await lease.releasePromise;
@@ -526,15 +533,16 @@ export class ClientSessionConfigService extends BaseService {
       }
       return;
     }
-    await this.beginLeaseCleanup(lease);
+    await this.beginLeaseCleanup(call, lease);
   }
 
   /**
    * Start or join the single cleanup operation for a lease generation.
+   * @param call - Call context of the caller that starts the cleanup; a joining caller keeps the starter's call.
    * @param lease - Exact reservation generation whose resources must be removed.
    * @returns Shared cleanup promise for this generation.
    */
-  private beginLeaseCleanup(lease: LiveConfigLease): Promise<void> {
+  private beginLeaseCleanup(call: CallContext, lease: LiveConfigLease): Promise<void> {
     if (lease.releasePromise !== undefined) {
       return lease.releasePromise;
     }
@@ -545,7 +553,7 @@ export class ClientSessionConfigService extends BaseService {
     const cleanupStartedDuringCreation = lease.state === 'creating';
     lease.state = 'releasing';
     const sessionDir = this.resolveClientSessionDir(lease.clientId, lease.leaseId, 'sessionConfig.release');
-    lease.releasePromise = this.destroyClientSessionDir(lease.clientId, sessionDir).finally(() => {
+    lease.releasePromise = this.destroyClientSessionDir(call, lease.clientId, sessionDir).finally(() => {
       lease.state = 'released';
       if (!cleanupStartedDuringCreation) {
         this.untrackLiveLease(lease);

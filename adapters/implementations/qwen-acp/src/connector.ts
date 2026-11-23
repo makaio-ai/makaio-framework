@@ -23,7 +23,7 @@ import {
   type MessageHandle,
   reportRepeatTeardown,
 } from '@makaio/ai-adapters-core';
-import type { ConnectorTeardownResult } from '@makaio/contracts';
+import type { CallContext, ConnectorTeardownResult } from '@makaio/contracts';
 import { createAcpConnection, MakaioAcpClient, TerminalManager } from '@makaio/ai-adapters-acp-client';
 import type { AcpConnectionHandle } from '@makaio/ai-adapters-acp-client';
 import { QwenAcpTurn } from './turn.js';
@@ -39,6 +39,12 @@ import {
 import { SessionIdWaiters } from './session-id-waiters.js';
 import { mergeUsageFromMeta, type TurnUsageAccumulator } from './turn-usage.js';
 import { awaitCancelAcknowledgement, QwenRetirementLedgers, type QwenSupersededGenerations } from './teardown.js';
+import {
+  assertFsApprovalAllows,
+  NO_OPERATION_DENIAL,
+  permissionPayload,
+  routeSessionUpdate,
+} from './session-update-routing.js';
 import { executeAcpReadTextFile, executeAcpWriteTextFile } from './tool-execution.js';
 import { buildCliArgs } from './utils/build-cli-args.js';
 import { buildPromptContent } from './utils/build-prompt.js';
@@ -64,7 +70,8 @@ export class QwenAcpConnector extends AIAgentConnector<QwenAcpBus> {
   private readonly terminalManager: TerminalManager;
   /** toolCallId from the most recent tool_call session update, used to correlate filesystem callbacks. */
   private lastToolCallId?: string;
-  private readonly toolCallMessageIds = new Map<string, string>();
+  /** Operation handle each live tool call was announced under, so its updates carry that operation's call. */
+  private readonly toolCallHandles = new Map<string, MessageHandle>();
 
   /** Per-turn, last-wins usage totals; null when no active turn has reported usage. */
   private turnUsageAccumulator: TurnUsageAccumulator | null = null;
@@ -127,10 +134,10 @@ export class QwenAcpConnector extends AIAgentConnector<QwenAcpBus> {
   /**
    * Start the connector with an initial user message.
    * @param message - Normalized user message
-   * @param options - Optional start options
+   * @param options - Start options including the call
    * @returns Session ID, agent ID, and message handle
    */
-  public async start(message: NormalizedMessageInput, options?: ConnectorStartOptions): Promise<AgentStartResult> {
+  public async start(message: NormalizedMessageInput, options: ConnectorStartOptions): Promise<AgentStartResult> {
     await this.initialize(options);
     const messageHandle = await this.sendMessage(message, options);
     return { adapterSessionId: this.acpSessionId!, agentId: this.agentId, messageHandle };
@@ -139,12 +146,12 @@ export class QwenAcpConnector extends AIAgentConnector<QwenAcpBus> {
   /**
    * Enqueue a user message and trigger queue processing when idle.
    * @param message - Normalized user message
-   * @param options - Optional delivery mode options
+   * @param options - Send options including the call and delivery mode
    * @returns Message handle for tracking acknowledgment and completion
    */
   public async sendMessage(
     message: NormalizedMessageInput,
-    options?: ConnectorSendMessageOptions,
+    options: ConnectorSendMessageOptions,
   ): Promise<MessageHandle> {
     if (!this.isInitialized) await this.initialize();
     const handle = this.createMessageHandle(message, options);
@@ -395,7 +402,7 @@ export class QwenAcpConnector extends AIAgentConnector<QwenAcpBus> {
     this.pendingMessageHandle = handle;
     handle.adapterSessionId = sessionId;
     handle.markAcknowledged();
-    await turn.start();
+    await turn.start(handle.call);
     await this.updateProcessingState('turn_started');
     const prompt = buildPromptContent(handle.message, handle.messageHistory, handle.turnContext, mergedContent);
     queueMicrotask(() => void this.runPromptTurn(turn, handle, prompt, connection, sessionId));
@@ -412,15 +419,14 @@ export class QwenAcpConnector extends AIAgentConnector<QwenAcpBus> {
       await connection.connection.prompt({ sessionId, prompt: promptContent });
       const accumulatedText = turn.getAccumulatedText();
       const successResult: MessageResult = { outcome: 'completed', result: { message: accumulatedText } };
-      await (this.config.bus as QwenAcpBus).emit(QwenAcpSubjects.turn_text_completed, {
-        agentId: this.agentId,
+      await this.emit<typeof QwenAcpSubjects.turn_text_completed>(handle.call, QwenAcpSubjects.turn_text_completed, {
         text: accumulatedText,
         timestamp: Date.now(),
       });
       // Flush BEFORE handle completion: shared-core usage attribution
       // (executionId/frameId) enriches from the active message handle,
       // which the lifecycle tracker clears once the handle completes.
-      await this.flushAccumulatedUsage(Date.now());
+      await this.flushAccumulatedUsage(handle.call, Date.now());
       await markCompletedWithFinalResult(handle, successResult, (_handle, finalResult) => {
         this.lastResult = finalResult;
       });
@@ -428,13 +434,13 @@ export class QwenAcpConnector extends AIAgentConnector<QwenAcpBus> {
       if (turn.isPaused()) return;
       const err = error instanceof Error ? error : new Error(String(error));
       const errorResult: MessageResult = { outcome: 'error', error: err };
-      await this.flushAccumulatedUsage(Date.now());
+      await this.flushAccumulatedUsage(handle.call, Date.now());
       await markCompletedWithFinalResult(handle, errorResult, (_handle, finalResult) => {
         this.lastResult = finalResult;
       });
     } finally {
       if (!turn.isPaused()) {
-        await turn.markTurnFinished();
+        await turn.markTurnFinished(handle.call);
         await this.updateProcessingState('turn_finished');
         await this.updateProcessingState('processing_finished');
         this.pendingMessageHandle = undefined;
@@ -468,16 +474,17 @@ export class QwenAcpConnector extends AIAgentConnector<QwenAcpBus> {
    * (executionId/frameId) enriches usage from that active handle.
    * Emission failures are swallowed: usage telemetry must not break turn
    * completion; the bus logs handler errors.
+   * @param call - Call context of the turn whose usage is flushed
    * @param timestamp - Timestamp to attach to the emitted event
    */
-  private async flushAccumulatedUsage(timestamp: number): Promise<void> {
+  private async flushAccumulatedUsage(call: CallContext, timestamp: number): Promise<void> {
     const acc = this.turnUsageAccumulator;
     if (acc === null) return;
     this.turnUsageAccumulator = null;
     // Empty accumulator — stale state cleared, skip emission.
     if (Object.keys(acc).length === 0) return;
     try {
-      await this.emit(QwenAcpSubjects.session_update_usage, {
+      await this.emit<typeof QwenAcpSubjects.session_update_usage>(call, QwenAcpSubjects.session_update_usage, {
         inputTokens: acc.inputTokens,
         outputTokens: acc.outputTokens,
         totalTokens: acc.totalTokens,
@@ -490,82 +497,46 @@ export class QwenAcpConnector extends AIAgentConnector<QwenAcpBus> {
     }
   }
 
+  /**
+   * Translate one ACP session update into bus events.
+   *
+   * The operation handle is read first, before any await: it is the most recent
+   * started, not yet completed turn, and the whole callback forwards its call.
+   * Without one the update is an observation no operation caused.
+   * @param notification - Session notification pushed by the ACP agent
+   */
   private async onSessionUpdate(notification: SessionNotification): Promise<void> {
-    const timestamp = Date.now();
-    const update = notification.update;
-
-    switch (update.sessionUpdate) {
-      case 'agent_message_chunk': {
-        const delta = update.content.type === 'text' ? update.content.text : '';
-        this.currentTurn?.appendText(delta);
-        await this.startTurnStep('text');
-        await this.emit(QwenAcpSubjects.session_update_message_chunk, { delta, timestamp });
-        this.accumulateUsageFromMeta(update._meta);
-        break;
-      }
-      case 'agent_thought_chunk': {
-        const delta = update.content.type === 'text' ? update.content.text : '';
-        await this.emit(QwenAcpSubjects.session_update_thought_chunk, { delta, timestamp });
-        break;
-      }
-      case 'tool_call': {
-        const messageId = this.pendingMessageHandle?.messageId;
-        if (messageId !== undefined) this.toolCallMessageIds.set(update.toolCallId, messageId);
-        this.lastToolCallId = update.toolCallId;
-        await this.finishActiveTurnStep();
-        await this.startTurnStep('tool_use');
-        if (messageId !== undefined) {
-          await this.emit(QwenAcpSubjects.session_update_tool_call, {
-            messageId,
-            toolCallId: update.toolCallId,
-            title: update.title,
-            kind: update.kind,
-            rawInput: update.rawInput,
-            timestamp,
-          });
-        }
-        break;
-      }
-      case 'tool_call_update': {
-        const messageId = this.toolCallMessageIds.get(update.toolCallId);
-        if (messageId !== undefined) {
-          await this.emit(QwenAcpSubjects.session_update_tool_call_update, {
-            messageId,
-            toolCallId: update.toolCallId,
-            status: update.status ?? undefined,
-            rawOutput: update.rawOutput,
-            timestamp,
-          });
-        }
-        if (update.status === 'completed' || update.status === 'failed') {
-          this.toolCallMessageIds.delete(update.toolCallId);
-          this.lastToolCallId = undefined;
-          await this.finishActiveTurnStep();
-        }
-        break;
-      }
-      case 'usage_update':
-        await this.emit(QwenAcpSubjects.session_update_context_window, {
-          size: update.size,
-          used: update.used,
-          timestamp,
-        });
-        break;
-      default:
-        break;
-    }
+    const handle = this.pendingMessageHandle;
+    await routeSessionUpdate(notification.update, Date.now(), handle, {
+      emitForCall: this.emit.bind(this),
+      emitObserved: this.emitObserved.bind(this),
+      toolCallHandles: this.toolCallHandles,
+      setLastToolCallId: (toolCallId) => {
+        this.lastToolCallId = toolCallId;
+      },
+      appendText: (delta) => this.currentTurn?.appendText(delta),
+      startTurnStep: this.startTurnStep.bind(this),
+      finishActiveTurnStep: this.finishActiveTurnStep.bind(this),
+      accumulateUsage: (meta) => this.accumulateUsageFromMeta(meta),
+    });
   }
 
+  /**
+   * Route an ACP permission request through the approval flow under the pending turn's call.
+   * The handle is read first, before any await; without one the request is cancelled and no
+   * approval round trip happens.
+   * @param params - Permission request from the ACP agent
+   * @returns The ACP permission response
+   */
   private async onRequestPermission(params: RequestPermissionRequest): Promise<RequestPermissionResponse> {
+    const handle = this.pendingMessageHandle;
+    if (handle === undefined) return { outcome: { outcome: 'cancelled' } };
     try {
-      const response = await this.requestToolApprovalWithHandling(QwenAcpSubjects.permission_request, {
-        toolCallId: params.toolCall.toolCallId,
-        toolName: params.toolCall.title ?? undefined,
-        args:
-          typeof params.toolCall.rawInput === 'object' && params.toolCall.rawInput !== null
-            ? (params.toolCall.rawInput as Record<string, unknown>)
-            : {},
-      });
+      const response = await this.requestToolApprovalWithHandling<typeof QwenAcpSubjects.permission_request>(
+        handle.call,
+        QwenAcpSubjects.permission_request,
+        permissionPayload(params),
+      );
       return mapApprovalToAcpResponse(response.action, params.options);
     } catch {
       return { outcome: { outcome: 'cancelled' } };
@@ -577,30 +548,34 @@ export class QwenAcpConnector extends AIAgentConnector<QwenAcpBus> {
    * Throws on denial so the ACP agent sees a filesystem error.
    * Go/no-go gate only — updatedInput is ignored because ACP controls
    * execution. Args are path-only to keep approval UI payloads minimal.
+   * @param handle - Operation handle captured at the callback's ingress, or `undefined` when none is attributable
    * @param toolName - Tool identifier for the approval request
    * @param args - Tool arguments for the approval payload
+   * @returns The handle the approval was requested under, for the execution that follows
+   * @throws When no operation is attributable or the approval handler denies
    */
-  private async requestFsApproval(toolName: string, args: Record<string, unknown>): Promise<void> {
+  private async requestFsApproval(
+    handle: MessageHandle | undefined,
+    toolName: string,
+    args: Record<string, unknown>,
+  ): Promise<MessageHandle> {
+    if (handle === undefined) throw new Error(NO_OPERATION_DENIAL);
     const toolCallId = this.lastToolCallId ?? `fs:${toolName}`;
-    const response = await this.requestToolApprovalWithHandling(QwenAcpSubjects.permission_request, {
-      toolCallId,
-      toolName,
-      args,
-    });
-    // Implicit allow for any non-deny action (including future action types).
-    // The ToolApprovalResponse contract is allow/deny; new actions would require
-    // contract-level changes that update all callers.
-    if (response.action === 'deny') {
-      throw new Error(
-        response.shouldAbort
-          ? `Tool use denied by approval handler: ${response.message ?? `${toolName} denied`}`
-          : (response.message ?? `${toolName} denied`),
-      );
-    }
+    const response = await this.requestToolApprovalWithHandling<typeof QwenAcpSubjects.permission_request>(
+      handle.call,
+      QwenAcpSubjects.permission_request,
+      { toolCallId, toolName, args },
+    );
+    assertFsApprovalAllows(response, toolName);
+    return handle;
   }
 
-  /** @returns Filesystem execution context shared by read/write handlers. */
-  private get fsExecutionContext() {
+  /**
+   * Build the filesystem execution context for one operation.
+   * @param handle - Handle captured before the approval await; never re-read from the pending slot
+   * @returns Execution context shared by the read and write handlers
+   */
+  private fsExecutionContext(handle: MessageHandle) {
     return {
       bus: this.globalBus,
       adapterId: this.adapterId,
@@ -608,19 +583,19 @@ export class QwenAcpConnector extends AIAgentConnector<QwenAcpBus> {
       cwd: this.cwd,
       sessionId: this.sessionId,
       agentId: this.agentId,
-      turnId: this.pendingMessageHandle?.messageId,
+      turnId: handle.messageId,
       allowedDirectories: this.config.allowedDirectories,
     };
   }
 
   private async onReadTextFile(params: ReadTextFileRequest): Promise<ReadTextFileResponse> {
-    await this.requestFsApproval('read_file', { path: params.path });
-    return executeAcpReadTextFile(params, this.fsExecutionContext);
+    const handle = await this.requestFsApproval(this.pendingMessageHandle, 'read_file', { path: params.path });
+    return executeAcpReadTextFile(handle.call, params, this.fsExecutionContext(handle));
   }
 
   private async onWriteTextFile(params: WriteTextFileRequest): Promise<WriteTextFileResponse> {
-    await this.requestFsApproval('write_file', { path: params.path });
-    return executeAcpWriteTextFile(params, this.fsExecutionContext);
+    const handle = await this.requestFsApproval(this.pendingMessageHandle, 'write_file', { path: params.path });
+    return executeAcpWriteTextFile(handle.call, params, this.fsExecutionContext(handle));
   }
 
   /**
@@ -637,7 +612,7 @@ export class QwenAcpConnector extends AIAgentConnector<QwenAcpBus> {
    */
   private clearConnectionState(): QwenSupersededGenerations {
     this.lastToolCallId = undefined;
-    this.toolCallMessageIds.clear();
+    this.toolCallHandles.clear();
     const terminals = this.retirements.supersedeTerminals(this.terminalManager.releaseAll());
     const handle = this.acpConnectionHandle;
     this.acpConnectionHandle = undefined;
@@ -647,21 +622,21 @@ export class QwenAcpConnector extends AIAgentConnector<QwenAcpBus> {
     return { process: handle === undefined ? undefined : this.retirements.supersedeProcess(handle), terminals };
   }
 
-  private async startTurnStep(stepType: 'text' | 'tool_use'): Promise<void> {
+  private async startTurnStep(call: CallContext, stepType: 'text' | 'tool_use'): Promise<void> {
     const turn = this.currentTurn;
     if (!turn) return;
     const previousState = turn.getState();
-    await turn.markStepStarted(stepType);
+    await turn.markStepStarted(call, stepType);
     if (turn.getState() !== previousState) {
       await this.updateProcessingState('step_started');
     }
   }
 
-  private async finishActiveTurnStep(): Promise<void> {
+  private async finishActiveTurnStep(call: CallContext): Promise<void> {
     const turn = this.currentTurn;
     if (!turn) return;
     const previousState = turn.getState();
-    await turn.markStepFinished();
+    await turn.markStepFinished(call);
     if (turn.getState() !== previousState) {
       await this.updateProcessingState('step_finished');
     }

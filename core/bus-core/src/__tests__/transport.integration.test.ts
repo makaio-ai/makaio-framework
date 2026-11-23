@@ -10,6 +10,7 @@ import {
   NoHandlerError,
   type BusTransportRegistry,
 } from '../index.js';
+import { busContextOf } from '../kernel-api.js';
 
 /**
  * Mock transport for testing transport integration.
@@ -114,7 +115,7 @@ declare module '../index.js' {
     test: typeof TestSubjects;
   }
 }
-const { registerTransport, getTransport } = MakaioBus.getContext().transportRegistry;
+const { registerTransport, getTransport } = busContextOf(MakaioBus).transportRegistry;
 
 describe('Transport Integration', () => {
   let mockTransport: MockTransport;
@@ -139,7 +140,7 @@ describe('Transport Integration', () => {
 
   describe('emit() with transport filtering', () => {
     it('should send to all transports when transports is undefined', async () => {
-      await MakaioBus.emit(TestSubjects.testEvent, { message: 'hello' });
+      await MakaioBus.emit(MakaioBus.own('root'), TestSubjects.testEvent, { message: 'hello' });
 
       expect(mockTransport.messages).toHaveLength(1);
       expect(mockTransport.messages[0]).toMatchObject({
@@ -151,13 +152,14 @@ describe('Transport Integration', () => {
     });
 
     it('should not send to any transport when transports is empty array', async () => {
-      await MakaioBus.emit(TestSubjects.testEvent, { message: 'hello' }, { transports: [] });
+      await MakaioBus.emit(MakaioBus.own('root'), TestSubjects.testEvent, { message: 'hello' }, { transports: [] });
 
       expect(mockTransport.messages).toHaveLength(0);
     });
 
     it('should send to specific transport when transports array contains it', async () => {
       await MakaioBus.emit(
+        MakaioBus.own('root'),
         TestSubjects.testEvent,
         { message: 'hello' },
         {
@@ -181,7 +183,7 @@ describe('Transport Integration', () => {
         localPayloads.push(payload);
       });
 
-      await MakaioBus.emit(TestSubjects.testEvent, { message: 'hello' }, { transports: [] });
+      await MakaioBus.emit(MakaioBus.own('root'), TestSubjects.testEvent, { message: 'hello' }, { transports: [] });
 
       expect(localPayloads).toHaveLength(1);
       expect(localPayloads[0]).toEqual({ message: 'hello' });
@@ -190,6 +192,7 @@ describe('Transport Integration', () => {
 
     it('should include messageId and correlationId in transport message', async () => {
       await MakaioBus.emit(
+        MakaioBus.own('root'),
         TestSubjects.testEvent,
         { message: 'hello' },
         {
@@ -224,7 +227,7 @@ describe('Transport Integration', () => {
         context.setResult({ output: `processed: ${context.payload.input}` });
       });
 
-      const result = await MakaioBus.request(TestSubjects.testRequest, { input: 'test' });
+      const result = await MakaioBus.request(MakaioBus.own('root'), TestSubjects.testRequest, { input: 'test' });
 
       expect(result).toEqual({ output: 'processed: test' });
       expect(mockTransport.messages).toHaveLength(0);
@@ -233,7 +236,7 @@ describe('Transport Integration', () => {
     it('should fall back to transport when no local handler exists', async () => {
       await advertiseTestRequest();
 
-      const result = await MakaioBus.request(TestSubjects.testRequest, { input: 'test' });
+      const result = await MakaioBus.request(MakaioBus.own('root'), TestSubjects.testRequest, { input: 'test' });
 
       expect(result).toEqual({ output: 'mocked' });
       expect(mockTransport.messages).toHaveLength(1);
@@ -246,9 +249,9 @@ describe('Transport Integration', () => {
     });
 
     it('should not use transport when transports is empty array', async () => {
-      await expect(MakaioBus.request(TestSubjects.testRequest, { input: 'test' }, { transports: [] })).rejects.toThrow(
-        NoHandlerError,
-      );
+      await expect(
+        MakaioBus.request(MakaioBus.own('root'), TestSubjects.testRequest, { input: 'test' }, { transports: [] }),
+      ).rejects.toThrow(NoHandlerError);
 
       expect(mockTransport.messages).toHaveLength(0);
     });
@@ -256,7 +259,7 @@ describe('Transport Integration', () => {
     it('should route to advertised transport (remote handler registry)', async () => {
       await advertiseTestRequest();
 
-      const result = await MakaioBus.request(TestSubjects.testRequest, { input: 'test' });
+      const result = await MakaioBus.request(MakaioBus.own('root'), TestSubjects.testRequest, { input: 'test' });
 
       expect(result).toEqual({ output: 'mocked' });
       expect(mockTransport.messages).toHaveLength(1);
@@ -265,7 +268,12 @@ describe('Transport Integration', () => {
     it('should allow non-empty transport allowlists for remote requests', async () => {
       await advertiseTestRequest();
 
-      const result = await MakaioBus.request(TestSubjects.testRequest, { input: 'test' }, { transports: ['mock'] });
+      const result = await MakaioBus.request(
+        MakaioBus.own('root'),
+        TestSubjects.testRequest,
+        { input: 'test' },
+        { transports: ['mock'] },
+      );
 
       expect(result).toEqual({ output: 'mocked' });
       expect(mockTransport.messages).toHaveLength(1);
@@ -281,6 +289,7 @@ describe('Transport Integration', () => {
       await advertiseTestRequest();
 
       await MakaioBus.request(
+        MakaioBus.own('root'),
         TestSubjects.testRequest,
         { input: 'test' },
         {
@@ -311,7 +320,9 @@ describe('Transport Integration', () => {
         deliveryClasses: { 'test.testRequest': 'relayable' },
       });
 
-      const result = await MakaioBus.request(TestSubjects.testRequest, { input: 'stale-subscription' });
+      const result = await MakaioBus.request(MakaioBus.own('root'), TestSubjects.testRequest, {
+        input: 'stale-subscription',
+      });
 
       expect(result).toEqual({ output: 'mocked' });
       expect(filteredOutTransport.messages).toHaveLength(1);
@@ -342,7 +353,9 @@ describe('Transport Integration', () => {
         };
 
         try {
-          const result = await MakaioBus.request(TestSubjects.testRequest, { input: 'fallback' });
+          const result = await MakaioBus.request(MakaioBus.own('root'), TestSubjects.testRequest, {
+            input: 'fallback',
+          });
 
           expect(result).toEqual({ output: 'mocked' });
           expect(secondTransport.messages).toHaveLength(1);
@@ -374,12 +387,13 @@ describe('Transport Integration', () => {
       // Advertise the pending transport as the handler for this subject so dispatch
       // routes to it. The fallback transport is intentionally not advertised — the
       // test verifies it never receives a request after the caller aborts.
-      MakaioBus.getContext().remoteRequestHandlers.set('test.testRequest', [{ transport: 'mock', priority: 0 }]);
+      busContextOf(MakaioBus).remoteRequestHandlers.set('test.testRequest', [{ transport: 'mock', priority: 0 }]);
 
       const controller = new AbortController();
 
       try {
         const requestPromise = MakaioBus.request(
+          MakaioBus.own('root'),
           TestSubjects.testRequest,
           { input: 'abort' },
           { timeout: 0, signal: controller.signal },
@@ -398,12 +412,19 @@ describe('Transport Integration', () => {
 
   describe('broadcast() with transport', () => {
     it('should pass default timeout to transport broadcasts', async () => {
-      await MakaioBus.broadcast(TestSubjects.testRequest, { input: 'broadcast-default-timeout' });
+      await MakaioBus.broadcast(MakaioBus.own('root'), TestSubjects.testRequest, {
+        input: 'broadcast-default-timeout',
+      });
       expect(mockTransport.lastTimeout).toBe(60_000);
     });
 
     it('should pass custom timeout to transport broadcasts', async () => {
-      await MakaioBus.broadcast(TestSubjects.testRequest, { input: 'broadcast-custom-timeout' }, { timeout: 5_432 });
+      await MakaioBus.broadcast(
+        MakaioBus.own('root'),
+        TestSubjects.testRequest,
+        { input: 'broadcast-custom-timeout' },
+        { timeout: 5_432 },
+      );
       expect(mockTransport.lastTimeout).toBe(5_432);
     });
 
@@ -414,6 +435,7 @@ describe('Transport Integration', () => {
 
       const controller = new AbortController();
       const broadcastPromise = MakaioBus.broadcast(
+        MakaioBus.own('root'),
         TestSubjects.testRequest,
         { input: 'broadcast-abort' },
         { timeout: 0, signal: controller.signal },
@@ -540,7 +562,7 @@ describe('Transport Integration', () => {
     });
 
     it('should send event to all registered transports by default', async () => {
-      await MakaioBus.emit(TestSubjects.testEvent, { message: 'broadcast' });
+      await MakaioBus.emit(MakaioBus.own('root'), TestSubjects.testEvent, { message: 'broadcast' });
 
       expect(mockTransport.messages).toHaveLength(1);
       expect(secondTransport.messages).toHaveLength(1);
@@ -548,6 +570,7 @@ describe('Transport Integration', () => {
 
     it('should send event only to specified transports', async () => {
       await MakaioBus.emit(
+        MakaioBus.own('root'),
         TestSubjects.testEvent,
         { message: 'selective' },
         {
@@ -569,7 +592,9 @@ describe('Transport Integration', () => {
       };
 
       // Should not throw
-      await expect(MakaioBus.emit(TestSubjects.testEvent, { message: 'test' })).resolves.toBeUndefined();
+      await expect(
+        MakaioBus.emit(MakaioBus.own('root'), TestSubjects.testEvent, { message: 'test' }),
+      ).resolves.toBeUndefined();
 
       // Restore
       mockTransport.send = originalSend;
@@ -586,7 +611,9 @@ describe('Transport Integration', () => {
         throw new Error('Transport error');
       };
 
-      await expect(MakaioBus.request(TestSubjects.testRequest, { input: 'test' })).rejects.toThrow('Transport error');
+      await expect(
+        MakaioBus.request(MakaioBus.own('root'), TestSubjects.testRequest, { input: 'test' }),
+      ).rejects.toThrow('Transport error');
     });
   });
 });

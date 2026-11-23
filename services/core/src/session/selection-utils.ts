@@ -6,6 +6,7 @@
  */
 
 import type { IMakaioBus } from '@makaio/bus-core';
+import type { CallContext } from '@makaio/core';
 import { AdapterRuntimeSubjects } from '../adapter-runtime/namespace.js';
 
 /**
@@ -97,6 +98,7 @@ export function describeHalfNamedInstanceRefusal(
  *
  * The adapter runtime owns reverse lookup for deterministic IDs, including
  * remote-machine IDs that still identify a known adapter type.
+ * @param call - Call context of the handled message this lookup serves
  * @param bus - Bus instance used to query the adapter runtime reverse lookup
  * @param adapterId - Adapter instance identifier to look up
  * @param explicitAdapterName - Caller-supplied name to validate against storage;
@@ -105,12 +107,13 @@ export function describeHalfNamedInstanceRefusal(
  * @returns Canonical adapter name resolved by the adapter runtime
  */
 export async function resolveAdapterNameById(
+  call: CallContext,
   bus: IMakaioBus,
   adapterId: string,
   explicitAdapterName: string | undefined,
   errorPrefix: string,
 ): Promise<string> {
-  const { adapterName } = await bus.request(AdapterRuntimeSubjects.resolveName, { adapterId });
+  const { adapterName } = await bus.request(call, AdapterRuntimeSubjects.resolveName, { adapterId });
   if (explicitAdapterName && adapterName !== explicitAdapterName) {
     throw new Error(`${errorPrefix}adapterName "${explicitAdapterName}" does not match adapterId "${adapterId}"`);
   }

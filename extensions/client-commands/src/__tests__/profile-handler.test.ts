@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { ClientSubjects, type ClientProfile } from '@makaio/contracts/client';
+import { createTestCall } from '@makaio/test-utils';
 
 const childProcessMocks = vi.hoisted(() => ({
   exec: vi.fn(),
@@ -36,8 +37,10 @@ describe('profile CLI handlers', () => {
     const output = { write: vi.fn(), error: vi.fn() };
     const setExitCode = vi.fn();
     const request = vi.fn().mockResolvedValue({ profile: makeProfile({ configDir: '/tmp/profile with spaces' }) });
+    const call = createTestCall();
     const ctx: ProfileOpenCommandContext = {
       args: { client: 'claude-code', name: 'work' },
+      call,
       bus: { request },
       output,
       setExitCode,
@@ -45,7 +48,7 @@ describe('profile CLI handlers', () => {
 
     await runProfileOpenCommand(ctx);
 
-    expect(request).toHaveBeenCalledWith(ClientSubjects.profile.get, {
+    expect(request).toHaveBeenCalledWith(call, ClientSubjects.profile.get, {
       clientId: 'claude-code',
       name: 'work',
     });

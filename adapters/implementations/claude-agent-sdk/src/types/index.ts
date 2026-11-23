@@ -10,6 +10,7 @@ import {
 } from '@makaio/ai-adapters-core';
 import type {
   McpResolvedServer,
+  CallContext,
   McpRuntimeSessionContext,
   McpSessionContext,
   NativeForkDirective,
@@ -102,8 +103,10 @@ export type CreateToolApprovalHandler = (policy: ResolvedToolPolicy) => Options[
 
 /**
  * Callback type for emitting SDK events with connector metadata.
+ * @param call - Call context supplied by the session for this event.
+ * @param msg - Raw SDK event payload.
  */
-export type EmitSdkEventCallback = (msg: unknown) => Promise<void>;
+export type EmitSdkEventCallback = (call: CallContext, msg: unknown) => Promise<void>;
 
 /**
  * Callback type for notifying when a turn starts processing a message.

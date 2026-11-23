@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import { createDatabaseClient } from '@makaio/storage-drizzle/client';
 import { getRawSqlExecutor } from '@makaio/storage-drizzle';
+import { createTestCall } from '@makaio/test-utils';
 import { ExecutionAttemptAuthority } from '../execution-attempt-authority.js';
 import { DuplicateExecutionAttemptError, type OutcomeCodec } from '../execution-attempt-repository.js';
 import { submitAttemptOutcome } from '../outcome-convergence.js';
@@ -102,7 +103,7 @@ describe('durable owner request recovery', () => {
             },
           },
         },
-        { ...identity, outcome },
+        { call: createTestCall(), ...identity, outcome },
       ),
     ).rejects.toThrow('Owner unavailable after commit');
     await store.closeConnections();

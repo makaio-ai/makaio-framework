@@ -1,5 +1,7 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import { createBusInstance } from '@makaio/bus-core';
+import type { CallContext } from '@makaio/core';
+import { createTestCall } from '@makaio/test-utils';
 import { AccountManagerSubjects } from '../bus/namespace.js';
 import type { AccountUsage } from '../bus/schemas.js';
 import type { UsageEntry } from '../bus/usage-entry.js';
@@ -68,7 +70,7 @@ class PendingSnapshotStore implements IAccountUsageSnapshotStore {
     });
   }
 
-  public async append(clientId: string, accountId: string, entry: UsageEntry): Promise<boolean> {
+  public async append(_call: CallContext, clientId: string, accountId: string, entry: UsageEntry): Promise<boolean> {
     const key = `${clientId}:${accountId}`;
     const rows = this.entries.get(key) ?? [];
     rows.push(structuredClone(entry));
@@ -82,6 +84,7 @@ class PendingSnapshotStore implements IAccountUsageSnapshotStore {
   }
 
   public async *read(
+    _call: CallContext,
     clientId: string,
     accountId: string,
     _opts: { from: number; to: number; windowId?: string },
@@ -91,7 +94,7 @@ class PendingSnapshotStore implements IAccountUsageSnapshotStore {
     }
   }
 
-  public async hasAnySnapshots(): Promise<boolean> {
+  public async hasAnySnapshots(_call: CallContext): Promise<boolean> {
     return [...this.entries.values()].some((rows) => rows.length > 0);
   }
 
@@ -185,7 +188,7 @@ describe('UsageTracker', () => {
     const account = accounts.find((a) => a.fingerprint === cred.fingerprint);
     expect(account).toBeDefined();
 
-    const result = await bus.request(AccountManagerSubjects.usage.get, {
+    const result = await bus.request(createTestCall(), AccountManagerSubjects.usage.get, {
       clientId: 'claude-code',
       accountId: account!.id,
     });
@@ -216,7 +219,7 @@ describe('UsageTracker', () => {
     await service.init();
 
     try {
-      const result = await bus.request(AccountManagerSubjects.usage.get, {
+      const result = await bus.request(createTestCall(), AccountManagerSubjects.usage.get, {
         clientId: 'claude-code',
         accountId: 'nonexistent-account',
       });
@@ -356,7 +359,7 @@ describe('UsageTracker', () => {
       });
 
       try {
-        const response = await bus.request(AccountManagerSubjects.usage.refresh, {
+        const response = await bus.request(createTestCall(), AccountManagerSubjects.usage.refresh, {
           clientId: 'claude-code',
           accountId: accounts[0].id,
         });
@@ -419,7 +422,7 @@ describe('UsageTracker', () => {
       });
 
       try {
-        const response = await bus.request(AccountManagerSubjects.usage.refresh, {});
+        const response = await bus.request(createTestCall(), AccountManagerSubjects.usage.refresh, {});
         expect(response.refreshed).toBe(3);
 
         await vi.advanceTimersByTimeAsync(0);
@@ -622,7 +625,7 @@ describe('UsageTracker', () => {
       });
 
       try {
-        const response = await bus.request(AccountManagerSubjects.usage.refresh, {
+        const response = await bus.request(createTestCall(), AccountManagerSubjects.usage.refresh, {
           clientId: 'claude-code',
         });
         expect(response.refreshed).toBe(1);
@@ -662,7 +665,7 @@ describe('UsageTracker', () => {
       await vi.advanceTimersByTimeAsync(1000);
       const baselineFetchCount = fetchCount;
 
-      const response = await bus.request(AccountManagerSubjects.usage.refresh, {
+      const response = await bus.request(createTestCall(), AccountManagerSubjects.usage.refresh, {
         clientId: 'claude-code',
         accountId: 'not-a-real-account-id',
       });
@@ -705,7 +708,7 @@ describe('UsageTracker', () => {
       expect(account).toBeDefined();
 
       shouldRateLimit = true;
-      const firstRefresh = await bus.request(AccountManagerSubjects.usage.refresh, {
+      const firstRefresh = await bus.request(createTestCall(), AccountManagerSubjects.usage.refresh, {
         clientId: 'claude-code',
         accountId: account!.id,
       });
@@ -713,7 +716,7 @@ describe('UsageTracker', () => {
       await vi.advanceTimersByTimeAsync(0);
       const countAfterCooldownStart = fetchCount;
 
-      const secondRefresh = await bus.request(AccountManagerSubjects.usage.refresh, {
+      const secondRefresh = await bus.request(createTestCall(), AccountManagerSubjects.usage.refresh, {
         clientId: 'claude-code',
         accountId: account!.id,
       });
@@ -932,7 +935,7 @@ describe('UsageTracker', () => {
     });
 
     try {
-      const refreshPromise = bus.request(AccountManagerSubjects.usage.refresh, {
+      const refreshPromise = bus.request(createTestCall(), AccountManagerSubjects.usage.refresh, {
         clientId: 'claude-code',
         accountId: 'acct-post-stop',
       });
@@ -990,7 +993,7 @@ describe('UsageTracker', () => {
       expect(updates).toHaveLength(1);
       expect(firstAccountId).toBeDefined();
 
-      const removeResult = await bus.request(AccountManagerSubjects.accounts.remove, {
+      const removeResult = await bus.request(createTestCall(), AccountManagerSubjects.accounts.remove, {
         clientId: 'claude-code',
         accountId: firstAccountId!,
       });
@@ -1219,7 +1222,9 @@ describe('UsageTracker', () => {
       await vi.advanceTimersByTimeAsync(20_000);
       expect(fetchCount).toBe(1);
 
-      const suppressedRefresh = await bus.request(AccountManagerSubjects.usage.refresh, { clientId: 'claude-code' });
+      const suppressedRefresh = await bus.request(createTestCall(), AccountManagerSubjects.usage.refresh, {
+        clientId: 'claude-code',
+      });
       expect(suppressedRefresh).toMatchObject({ refreshed: 0 });
 
       shouldFailAuth = false;
@@ -1230,7 +1235,7 @@ describe('UsageTracker', () => {
         credential: restoredCredential,
         fingerprint: restoredCredential.fingerprint,
       });
-      await bus.emit(AccountManagerSubjects.credentials.refreshed, {
+      await bus.emit(createTestCall(), AccountManagerSubjects.credentials.refreshed, {
         clientId: 'claude-code',
         account: {
           id: storedAccount.id,
@@ -1374,11 +1379,11 @@ describe('UsageTracker', () => {
       expect(accounts).toHaveLength(2);
 
       const [refreshA, refreshB] = await Promise.all([
-        bus.request(AccountManagerSubjects.usage.refresh, {
+        bus.request(createTestCall(), AccountManagerSubjects.usage.refresh, {
           clientId: 'claude-code',
           accountId: accounts[0].id,
         }),
-        bus.request(AccountManagerSubjects.usage.refresh, {
+        bus.request(createTestCall(), AccountManagerSubjects.usage.refresh, {
           clientId: 'claude-code',
           accountId: accounts[1].id,
         }),
@@ -1395,7 +1400,7 @@ describe('UsageTracker', () => {
       await vi.advanceTimersByTimeAsync(0);
       const countAfterOverlap = overlapFetchCount;
 
-      const secondRefresh = await bus.request(AccountManagerSubjects.usage.refresh, {
+      const secondRefresh = await bus.request(createTestCall(), AccountManagerSubjects.usage.refresh, {
         clientId: 'claude-code',
         accountId: accounts[1].id,
       });
@@ -1443,14 +1448,14 @@ describe('UsageTracker', () => {
       const [account] = await store.list('claude-code');
       expect(account).toBeDefined();
 
-      const firstRefresh = bus.request(AccountManagerSubjects.usage.refresh, {
+      const firstRefresh = bus.request(createTestCall(), AccountManagerSubjects.usage.refresh, {
         clientId: 'claude-code',
         accountId: account!.id,
       });
       await vi.advanceTimersByTimeAsync(0);
       expect(fetchCount).toBe(2);
 
-      const secondRefresh = await bus.request(AccountManagerSubjects.usage.refresh, {
+      const secondRefresh = await bus.request(createTestCall(), AccountManagerSubjects.usage.refresh, {
         clientId: 'claude-code',
         accountId: account!.id,
       });
@@ -1495,7 +1500,7 @@ describe('UsageTracker', () => {
     await service.init();
 
     try {
-      const refreshPromise = bus.request(AccountManagerSubjects.usage.refresh, {
+      const refreshPromise = bus.request(createTestCall(), AccountManagerSubjects.usage.refresh, {
         clientId: 'claude-code',
         accountId: 'acct-remove-persist',
       });
@@ -1504,7 +1509,7 @@ describe('UsageTracker', () => {
 
       let resolved = false;
       const removePromise = bus
-        .request(AccountManagerSubjects.accounts.remove, {
+        .request(createTestCall(), AccountManagerSubjects.accounts.remove, {
           clientId: 'claude-code',
           accountId: 'acct-remove-persist',
         })
@@ -1559,7 +1564,7 @@ describe('UsageTracker', () => {
     await service.init();
 
     try {
-      const refreshPromise = bus.request(AccountManagerSubjects.usage.refresh, {
+      const refreshPromise = bus.request(createTestCall(), AccountManagerSubjects.usage.refresh, {
         clientId: 'claude-code',
         accountId: 'acct-remove-fetch',
       });
@@ -1567,7 +1572,7 @@ describe('UsageTracker', () => {
 
       let resolved = false;
       const removePromise = bus
-        .request(AccountManagerSubjects.accounts.remove, {
+        .request(createTestCall(), AccountManagerSubjects.accounts.remove, {
           clientId: 'claude-code',
           accountId: 'acct-remove-fetch',
         })
@@ -1630,14 +1635,14 @@ describe('UsageTracker', () => {
 
     try {
       await expect(
-        bus.request(AccountManagerSubjects.usage.refresh, {
+        bus.request(createTestCall(), AccountManagerSubjects.usage.refresh, {
           clientId: 'claude-code',
           accountId: 'acct-zombie',
         }),
       ).resolves.toMatchObject({ refreshed: 0 });
       let resolved = false;
       const switchResultPromise = bus
-        .request(AccountManagerSubjects.credentials.switch, {
+        .request(createTestCall(), AccountManagerSubjects.credentials.switch, {
           clientId: 'claude-code',
           accountId: 'acct-zombie',
         })

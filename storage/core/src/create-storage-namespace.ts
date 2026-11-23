@@ -1,19 +1,19 @@
-import { MakaioBus } from '@makaio/bus-core';
+import type { IMakaioBus } from '@makaio/bus-core';
 import type { FilterablePayloadIntersection, SchemaRecord, SubjectRecordFromSchemaRecord } from '@makaio/core';
 import type { StorageNamespace, StorageNamespaceExtensions } from './types';
 import type { StorageNamespaceDefinition } from './create-storage-namespace-definition';
 
 /**
- * Registers a storage namespace definition on the bus singleton.
+ * Registers a storage namespace definition on the given bus.
  *
  * Accepts a {@link StorageNamespaceDefinition} created by
  * {@link createStorageNamespaceDefinition} and registers it with
- * `MakaioBus.registerNamespace()`. Returns a {@link StorageNamespace} that
+ * `bus.registerNamespace()`. Returns a {@link StorageNamespace} that
  * additionally exposes `scopedBus()` for scoped bus operations.
  *
  * Call this function at composition roots (app entry-points, service
- * constructors) — never in module scope where the bus singleton may not yet
- * be ready.
+ * constructors) — never in module scope where the bus may not yet be ready.
+ * @param bus - Bus instance the namespace is registered on
  * @param definition - Storage namespace definition created by
  *   `createStorageNamespaceDefinition()`
  * @returns Storage namespace with typed subjects, `scopedBus()`, and
@@ -29,7 +29,7 @@ import type { StorageNamespaceDefinition } from './create-storage-namespace-defi
  * });
  *
  * // At composition root (registers on the bus):
- * const SessionStorage = createStorageNamespace(SessionStorageDefinition);
+ * const SessionStorage = createStorageNamespace(bus, SessionStorageDefinition);
  * await bus.request(SessionStorage.subjects.get, { id: '123' });
  * ```
  */
@@ -38,6 +38,7 @@ export function createStorageNamespace<
   Schemas extends SchemaRecord,
   Ext extends StorageNamespaceExtensions = StorageNamespaceExtensions,
 >(
+  bus: IMakaioBus,
   definition: StorageNamespaceDefinition<N, Schemas, Ext>,
 ): StorageNamespace<
   N,
@@ -46,7 +47,7 @@ export function createStorageNamespace<
   Ext,
   Schemas
 > {
-  const busNamespace = MakaioBus.registerNamespace(definition);
+  const busNamespace = bus.registerNamespace(definition);
 
   return {
     ...busNamespace,

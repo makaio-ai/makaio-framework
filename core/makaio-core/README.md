@@ -78,7 +78,6 @@ function handler(ctx: WildcardContext<Payload, Response>) {
 | Export | Type | Description |
 |--------|------|-------------|
 | `MakaioContext` | Interface | Execution environment: cwd, env, platform, signal, constraints |
-| `MakaioContextSchema` | Zod Schema | Runtime validation |
 | `createMakaioContext(overrides?)` | Function | Factory with sensible defaults (auto-detects cwd, env, platform) |
 
 ### Errors
@@ -95,7 +94,7 @@ function handler(ctx: WildcardContext<Payload, Response>) {
 **Subject Definitions:**
 - `SubjectRecord<Keys, Payload>` - Map subject names to payloads
 - `SubjectDefinition<Subject, Key, Namespace>` - Full subject metadata with `$meta`
-- `SubjectDefinitionRecord<Subjects, Namespace>` - All definitions in a namespace
+- `SubjectRecordFromSchemaRecord<Schemas>` - Infer subject payloads from schemas
 
 **Handler Contexts:**
 - `EventContext<Payload>` - Handler context for events (`isRequest: false`)
@@ -109,9 +108,18 @@ function handler(ctx: WildcardContext<Payload, Response>) {
 - `HandlerForSubjectDefinition<T>` - Resolves correct handler from definition
 
 **Messages:**
-- `BaseMessageContext` - Common metadata: `messageId`, `correlationId`, `isRequest`
+- `BaseMessageContext` - Common metadata including `call` and optional receive-side `transport`
 - `EventMessagePayload<P>` - Event payload wrapper
 - `RequestMessagePayload<Req, Res>` - Request/response payload wrapper
+
+**Call and Transport Context:**
+- `CallContext` - Minted context carrying `caller`, `principal`, and optional `attestedBy`
+- `OwnWorkPurpose` - Purpose accepted by `bus.own()`
+- `Party`, `PartyRef` - Party identity with optional claims, and its kind-and-ID reference
+- `CallContextRecord`, `CallContextRecordSchema` - Serializable call data and its validation schema
+- `CrossHostMetadata`, `CrossHostMetadataSchema` - Wire metadata for the optional principal reference and its validation schema
+- `TransportConnectionInfo` - Receive-side connection facts
+- `TransportReceiveContext` - Trusted receive-side connection facts and optional caller, derived locally by the transport
 
 **Filtering:**
 - `PayloadFilter` - Untyped filter with operators

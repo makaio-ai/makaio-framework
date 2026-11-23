@@ -1,4 +1,5 @@
 import type { IMakaioBus } from '@makaio/bus-core';
+import type { CallContext } from '@makaio/core';
 import type { StartAgentRequest } from '@makaio/contracts';
 import { AgentStorageSubjects } from '../storage/agent-namespace.js';
 import type { AttachIdentity } from './attach-execution-types.js';
@@ -35,15 +36,20 @@ export interface AttachAgentRowInput {
  * The short-circuit that skipped the write for an attach with no persona,
  * profile, harness or provider config is gone with it: a reserved start has to
  * have a row, because the reservation checks the agent's membership against one.
+ * @param call - Call context of the handled attach message.
  * @param bus - Bus the write is issued on.
  * @param input - Identity, adapter binding and runtime facts of the attach.
  */
-export async function persistAttachAgentRow(bus: IMakaioBus, input: AttachAgentRowInput): Promise<void> {
+export async function persistAttachAgentRow(
+  call: CallContext,
+  bus: IMakaioBus,
+  input: AttachAgentRowInput,
+): Promise<void> {
   const { identity } = input;
   // `requestOptional`, exactly as the fresh lead start writes its own row: a host
   // with no agent storage is refused a page later, by the reservation that reads
   // the row — the seam that can say what is missing and why.
-  await bus.requestOptional(AgentStorageSubjects.set, {
+  await bus.requestOptional(call, AgentStorageSubjects.set, {
     agentId: input.agentId,
     agent: buildCallerOwnedAgentRow({
       agentId: input.agentId,

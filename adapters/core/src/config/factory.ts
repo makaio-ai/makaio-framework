@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import type { Simplify } from 'type-fest';
+import type { IMakaioBus } from '@makaio/bus-core';
 import type { BaseAgentConnectorConfig } from '../agent/types.js';
 import { resolveTimeouts, type TrackedTimeoutConfig, type TimeoutConfig } from '@makaio/utils';
 import type { AdapterProviderAuth, ProtocolId, ProviderContext } from '@makaio/contracts';
@@ -12,7 +13,7 @@ import { AdapterAuthError, bindProviderAuth, type BoundProviderAuthContext } fro
  * All fields optional — model comes from provider config at runtime.
  */
 export type AdapterDefaults<TConfig extends BaseAgentConnectorConfig = BaseAgentConnectorConfig> = Partial<
-  Omit<TConfig, 'agentId' | 'sessionId' | 'adapterName' | 'bus'>
+  Omit<TConfig, 'agentId' | 'sessionId' | 'adapterName' | 'bus' | 'globalBus'>
 >;
 
 /**
@@ -43,6 +44,8 @@ export interface CreateAdapterConfigFactoryOptions<TConfig extends BaseAgentConn
  */
 export interface AdapterConfigFactoryInput<TConfig extends BaseAgentConnectorConfig> {
   bus: TConfig extends BaseAgentConnectorConfig<infer TBus> ? TBus : never;
+  /** Bus of the carrier that owns the connector; the caller hands it in, the factory never defaults it. */
+  globalBus: IMakaioBus;
   agentId: string;
   adapterName: string;
   adapterId: string;

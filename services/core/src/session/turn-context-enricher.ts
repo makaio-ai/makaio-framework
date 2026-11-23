@@ -1,4 +1,5 @@
 import type { IMakaioBus } from '@makaio/bus-core';
+import type { CallContext } from '@makaio/core';
 import { NoHandlerError } from '@makaio/bus-core';
 // IMPORTANT: Use shared Message type (has .blocks), NOT agent/schemas/message.ts (has .content)
 import type { Message, SessionMessage } from '@makaio/contracts';
@@ -17,12 +18,13 @@ export class TurnContextEnricher {
 
   /**
    * Load turn-so-far messages and convert to Message[].
+   * @param call - Call context of the handled message requesting context.
    * @param turnId - Turn ID to load context for
    * @returns Messages representing turn-so-far context
    */
-  public async getTurnSoFarContext(turnId: string): Promise<Message[]> {
+  public async getTurnSoFarContext(call: CallContext, turnId: string): Promise<Message[]> {
     try {
-      const { messages } = await this.bus.request(MessageStorageSubjects.getByTurn, {
+      const { messages } = await this.bus.request(call, MessageStorageSubjects.getByTurn, {
         turnId,
       });
 
@@ -39,12 +41,14 @@ export class TurnContextEnricher {
 
   /**
    * Enrich messageHistory for immediate delivery mode.
+   * @param call - Call context of the handled message being delivered.
    * @param originalHistory - Curated history from sessionContext
    * @param turnId - Turn ID for current turn
    * @param deliveryMode - Message delivery mode
    * @returns Enriched messageHistory (original + turn-so-far for immediate)
    */
   public async enrichForDeliveryMode(
+    call: CallContext,
     originalHistory: Message[] | undefined,
     turnId: string,
     deliveryMode: 'enqueue' | 'immediate' | 'replace' | undefined,
@@ -54,7 +58,7 @@ export class TurnContextEnricher {
       return originalHistory;
     }
 
-    const turnSoFar = await this.getTurnSoFarContext(turnId);
+    const turnSoFar = await this.getTurnSoFarContext(call, turnId);
 
     if (turnSoFar.length === 0) {
       return originalHistory;

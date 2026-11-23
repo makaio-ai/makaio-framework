@@ -10,9 +10,10 @@
  * and the result forwarded back through the bus.
  */
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { createBusInstance, createBusContext, NoHandlerError } from '@makaio/bus-core';
+import { createBusInstance, NoHandlerError } from '@makaio/bus-core';
 import { PlatformSubjects } from '@makaio/contracts';
 import type { IAutoLaunchProvider } from '@makaio/contracts';
+import { createTestCall } from '@makaio/test-utils';
 import { registerAutoLaunchHandlers } from '../auto-launch-handler.js';
 
 // ---------------------------------------------------------------------------
@@ -39,11 +40,11 @@ function createMockProvider(overrides: Partial<IAutoLaunchProvider> = {}): IAuto
 /**
  * Create an isolated bus instance for a single test.
  *
- * Using an explicit fresh context keeps tests hermetic — no shared handler
+ * The default fresh context keeps tests hermetic — no shared handler
  * state from the `MakaioBus` singleton, and no need for `__resetHandlers`.
  */
 function createTestBus() {
-  return createBusInstance({ context: createBusContext() });
+  return createBusInstance();
 }
 
 // ---------------------------------------------------------------------------
@@ -61,7 +62,7 @@ describe('registerAutoLaunchHandlers', () => {
     const cleanup = registerAutoLaunchHandlers(bus, provider);
 
     try {
-      const result = await bus.request(PlatformSubjects.autoLaunch.enable, {
+      const result = await bus.request(createTestCall(), PlatformSubjects.autoLaunch.enable, {
         hidden: true,
       });
 
@@ -80,7 +81,7 @@ describe('registerAutoLaunchHandlers', () => {
     const cleanup = registerAutoLaunchHandlers(bus, provider);
 
     try {
-      await bus.request(PlatformSubjects.autoLaunch.enable, { hidden: false });
+      await bus.request(createTestCall(), PlatformSubjects.autoLaunch.enable, { hidden: false });
 
       expect(provider.enable).toHaveBeenCalledWith(false);
     } finally {
@@ -94,7 +95,7 @@ describe('registerAutoLaunchHandlers', () => {
     const cleanup = registerAutoLaunchHandlers(bus, provider);
 
     try {
-      const result = await bus.request(PlatformSubjects.autoLaunch.disable, {});
+      const result = await bus.request(createTestCall(), PlatformSubjects.autoLaunch.disable, {});
 
       expect(result.disabled).toBe(true);
       expect(provider.disable).toHaveBeenCalled();
@@ -109,7 +110,7 @@ describe('registerAutoLaunchHandlers', () => {
     const cleanup = registerAutoLaunchHandlers(bus, provider);
 
     try {
-      const result = await bus.request(PlatformSubjects.autoLaunch.getStatus, {});
+      const result = await bus.request(createTestCall(), PlatformSubjects.autoLaunch.getStatus, {});
 
       expect(result).toEqual({ enabled: false, supported: true });
       expect(provider.getStatus).toHaveBeenCalled();
@@ -126,7 +127,7 @@ describe('registerAutoLaunchHandlers', () => {
     const cleanup = registerAutoLaunchHandlers(bus, provider);
 
     try {
-      const result = await bus.request(PlatformSubjects.autoLaunch.enable, {});
+      const result = await bus.request(createTestCall(), PlatformSubjects.autoLaunch.enable, {});
 
       expect(result.enabled).toBe(false);
       expect(result.error).toBe('permission denied');
@@ -143,7 +144,7 @@ describe('registerAutoLaunchHandlers', () => {
     const cleanup = registerAutoLaunchHandlers(bus, provider);
 
     try {
-      const result = await bus.request(PlatformSubjects.autoLaunch.getStatus, {});
+      const result = await bus.request(createTestCall(), PlatformSubjects.autoLaunch.getStatus, {});
 
       expect(result).toEqual({ enabled: false, supported: true, error: 'permission denied' });
     } finally {
@@ -157,7 +158,9 @@ describe('registerAutoLaunchHandlers', () => {
     const cleanup = registerAutoLaunchHandlers(bus, provider);
     cleanup();
 
-    await expect(bus.request(PlatformSubjects.autoLaunch.getStatus, {})).rejects.toThrow(NoHandlerError);
+    await expect(bus.request(createTestCall(), PlatformSubjects.autoLaunch.getStatus, {})).rejects.toThrow(
+      NoHandlerError,
+    );
   });
 
   it('cleanup unregisters enable and disable handlers too', async () => {
@@ -166,8 +169,12 @@ describe('registerAutoLaunchHandlers', () => {
     const cleanup = registerAutoLaunchHandlers(bus, provider);
     cleanup();
 
-    await expect(bus.request(PlatformSubjects.autoLaunch.enable, { hidden: true })).rejects.toThrow(NoHandlerError);
+    await expect(bus.request(createTestCall(), PlatformSubjects.autoLaunch.enable, { hidden: true })).rejects.toThrow(
+      NoHandlerError,
+    );
 
-    await expect(bus.request(PlatformSubjects.autoLaunch.disable, {})).rejects.toThrow(NoHandlerError);
+    await expect(bus.request(createTestCall(), PlatformSubjects.autoLaunch.disable, {})).rejects.toThrow(
+      NoHandlerError,
+    );
   });
 });

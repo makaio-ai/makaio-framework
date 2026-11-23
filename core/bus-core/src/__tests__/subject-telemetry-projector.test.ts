@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import { createBusNamespace, observability } from '@makaio/core';
 import { createBusInstance } from '../bus.js';
+import { busContextOf } from '../kernel-api.js';
 import { createSubjectTelemetryProjectorRegistry, projectSubjectTelemetryFacts } from '../observability/index.js';
 
 describe('projectSubjectTelemetryFacts', () => {
@@ -22,7 +23,7 @@ describe('projectSubjectTelemetryFacts', () => {
       },
       direction: 'local',
       observedAt: 1000,
-      namespaceRegistry: bus.getContext().namespaceRegistry,
+      namespaceRegistry: busContextOf(bus).namespaceRegistry,
     });
 
     expect(fact).toMatchObject({
@@ -64,7 +65,7 @@ describe('projectSubjectTelemetryFacts', () => {
       },
       direction: 'local',
       observedAt: 1001,
-      namespaceRegistry: bus.getContext().namespaceRegistry,
+      namespaceRegistry: busContextOf(bus).namespaceRegistry,
     });
 
     expect(fact.attributes).toEqual({ status: 'active', limit: 20 });
@@ -100,7 +101,7 @@ describe('projectSubjectTelemetryFacts', () => {
       },
       direction: 'local',
       observedAt: 1001,
-      namespaceRegistry: bus.getContext().namespaceRegistry,
+      namespaceRegistry: busContextOf(bus).namespaceRegistry,
     });
 
     expect(fact.attributes).toEqual({ valid: 42 });
@@ -126,7 +127,7 @@ describe('projectSubjectTelemetryFacts', () => {
       },
       direction: 'local',
       observedAt: 1002,
-      namespaceRegistry: bus.getContext().namespaceRegistry,
+      namespaceRegistry: busContextOf(bus).namespaceRegistry,
     });
 
     expect(fact.attributes).toEqual({ id: 'sess-1' });
@@ -151,7 +152,7 @@ describe('projectSubjectTelemetryFacts', () => {
       },
       direction: 'local',
       observedAt: 1003,
-      namespaceRegistry: bus.getContext().namespaceRegistry,
+      namespaceRegistry: busContextOf(bus).namespaceRegistry,
     });
 
     expect(fact.attributes).toEqual({ idCount: 3 });
@@ -189,7 +190,7 @@ describe('projectSubjectTelemetryFacts', () => {
       },
       direction: 'local',
       observedAt: 1004,
-      namespaceRegistry: bus.getContext().namespaceRegistry,
+      namespaceRegistry: busContextOf(bus).namespaceRegistry,
       projectorRegistry: registry,
     });
 
@@ -224,7 +225,7 @@ describe('projectSubjectTelemetryFacts', () => {
       },
       direction: 'local',
       observedAt: 1005,
-      namespaceRegistry: bus.getContext().namespaceRegistry,
+      namespaceRegistry: busContextOf(bus).namespaceRegistry,
       projectorRegistry: registry,
     });
 
@@ -265,7 +266,7 @@ describe('projectSubjectTelemetryFacts', () => {
       },
       direction: 'local',
       observedAt: 1006,
-      namespaceRegistry: bus.getContext().namespaceRegistry,
+      namespaceRegistry: busContextOf(bus).namespaceRegistry,
       projectorRegistry: registry,
     });
 

@@ -25,14 +25,14 @@ export function registerDelegateResultFinalizationGateway(bus: IMakaioBus): () =
     const payload = ctx.payload;
     assertExecutionAttemptPeer(ctx, payload.executionId);
 
-    const { execution } = await bus.request(WorkflowStorageSubjects.getExecution, {
+    const { execution } = await bus.request(ctx.call, WorkflowStorageSubjects.getExecution, {
       executionId: payload.executionId,
     });
     if (execution === null || execution.workflowId !== payload.workflowId) {
       throw new Error('delegate result finalization execution does not own the requested workflow');
     }
 
-    const { runContext } = await bus.request(WorkflowStorageSubjects.getRunContext, {
+    const { runContext } = await bus.request(ctx.call, WorkflowStorageSubjects.getRunContext, {
       executionId: payload.executionId,
     });
     if (
@@ -53,7 +53,7 @@ export function registerDelegateResultFinalizationGateway(bus: IMakaioBus): () =
     );
 
     const { subjects } = createWorkflowDelegateResultFinalizerNamespace(payload.finalizerId);
-    const result = await bus.request(subjects.finalize, {
+    const result = await bus.request(ctx.call, subjects.finalize, {
       executionId: payload.executionId,
       workflowId: payload.workflowId,
       frameId: payload.frameId,

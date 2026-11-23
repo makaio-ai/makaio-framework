@@ -1,5 +1,6 @@
 import type { IMakaioBus } from '@makaio/bus-core';
 import { SessionSubjects } from '@makaio/contracts';
+import type { CallContext } from '@makaio/core';
 import type { Turn } from './entities/turn.js';
 import { MessageStorageSubjects } from './messages/namespace.js';
 
@@ -23,18 +24,18 @@ export class AssistantPersistenceBarrier {
 
   /**
    * @param bus - Bus carrying storage probes and persistence-settlement events.
-   * @param resolveTurn - Resolver for active or finalizing turns by identifier.
+   * @param resolveTurn - Resolver for active or finalizing turns under the handled message call.
    * @param timeoutMs - Upper bound for a missing persistence-settlement signal.
    */
   public constructor(
     private readonly bus: IMakaioBus,
-    private readonly resolveTurn: (turnId: string) => Turn | undefined,
+    private readonly resolveTurn: (call: CallContext, turnId: string) => Turn | undefined,
     private readonly timeoutMs: number,
   ) {
     this.cleanup = bus.on(SessionSubjects.turn.assistantPersistenceSettled, (ctx) => {
       if (this.destroyed) return;
       const { sessionId, turnId, messageId, agentId } = ctx.payload;
-      const turn = this.resolveTurn(turnId);
+      const turn = this.resolveTurn(ctx.call, turnId);
       if (!turn || turn.sessionId !== sessionId || !turn.hasAdmittedPair(messageId, agentId)) return;
 
       const pairs = this.settledPairs.get(turnId) ?? new Set<string>();
@@ -46,12 +47,13 @@ export class AssistantPersistenceBarrier {
 
   /**
    * Wait for every participating agent's persistence decision when storage is present.
+   * @param call - Call context of the message finalizing the turn.
    * @param turn - Finalizing turn whose assistant persistence must settle.
    */
-  public async waitFor(turn: Turn): Promise<void> {
+  public async waitFor(call: CallContext, turn: Turn): Promise<void> {
     if (this.destroyed || turn.agentIds.length === 0 || this.isSettled(turn)) return;
 
-    const probe = await this.bus.requestOptional(MessageStorageSubjects.getByTurn, { turnId: turn.turnId });
+    const probe = await this.bus.requestOptional(call, MessageStorageSubjects.getByTurn, { turnId: turn.turnId });
     if (this.destroyed || !probe.handled) return;
 
     await new Promise<void>((resolve) => {

@@ -1,5 +1,6 @@
 import type { IMakaioBus } from '@makaio/bus-core';
 import type { TurnUsage } from '@makaio/contracts';
+import type { CallContext } from '@makaio/core';
 import type { Turn } from './entities/turn.js';
 import type { TurnCompletionResult } from './turn-completion.js';
 import type { AgentUsageEvent, TurnUsageAccumulator } from './turn-usage-accumulator.js';
@@ -59,6 +60,7 @@ function usageEquals(left: TurnUsage | undefined, right: TurnUsage | undefined):
 
 /**
  * Persist a canonical turn result with response-loss reconciliation.
+ * @param call - Call context of the handled message completing the turn.
  * @param bus - Bus used for turn storage requests.
  * @param turn - Turn being finalized.
  * @param result - Canonical terminal result.
@@ -67,6 +69,7 @@ function usageEquals(left: TurnUsage | undefined, right: TurnUsage | undefined):
  * @returns Storage handling and transition result.
  */
 export async function persistTurnCompletion(
+  call: CallContext,
   bus: IMakaioBus,
   turn: Turn,
   result: TurnCompletionResult,
@@ -74,7 +77,7 @@ export async function persistTurnCompletion(
   expectedStatus?: 'active',
 ): Promise<{ handled: boolean; transitioned: boolean }> {
   const canonical = canonicalTurnCompletion(result);
-  const completeResult = await bus.requestOptional(TurnStorageSubjects.complete, {
+  const completeResult = await bus.requestOptional(call, TurnStorageSubjects.complete, {
     turnId: turn.turnId,
     status: canonical.status,
     ...(expectedStatus !== undefined && { expectedStatus }),
@@ -92,7 +95,7 @@ export async function persistTurnCompletion(
     throw new Error(`Turn completion storage returned non-canonical usage for transitioned turn ${turn.turnId}`);
   }
 
-  const reconciled = await bus.requestOptional(TurnStorageSubjects.complete, {
+  const reconciled = await bus.requestOptional(call, TurnStorageSubjects.complete, {
     turnId: turn.turnId,
     status: canonical.status,
     error: canonical.error,
@@ -110,17 +113,21 @@ export async function persistTurnCompletion(
 /**
  * Drain buffered usage into reconciled terminal snapshots. Each batch is
  * detached before persistence so arrivals during a write form the next batch.
+ * @param call - Call context of the handled message completing the turn.
  * @param input - Finalization state and buffered usage dependencies.
  * @returns Updated usage snapshot.
  */
-export async function flushBufferedTurnUsage(input: {
-  bus: IMakaioBus;
-  turn: Turn;
-  result: TurnCompletionResult;
-  usageAccumulator: TurnUsageAccumulator | undefined;
-  currentUsage: TurnUsage | undefined;
-  bufferedUsage: Map<string, AgentUsageEvent[]>;
-}): Promise<TurnUsage | undefined> {
+export async function flushBufferedTurnUsage(
+  call: CallContext,
+  input: {
+    bus: IMakaioBus;
+    turn: Turn;
+    result: TurnCompletionResult;
+    usageAccumulator: TurnUsageAccumulator | undefined;
+    currentUsage: TurnUsage | undefined;
+    bufferedUsage: Map<string, AgentUsageEvent[]>;
+  },
+): Promise<TurnUsage | undefined> {
   const turnId = input.turn.turnId;
   let currentUsage = input.currentUsage;
   while (true) {
@@ -129,7 +136,7 @@ export async function flushBufferedTurnUsage(input: {
     input.bufferedUsage.delete(turnId);
     const mergedUsage = input.usageAccumulator ? input.usageAccumulator.preview(detached) : currentUsage;
     try {
-      await persistTurnCompletion(input.bus, input.turn, input.result, mergedUsage);
+      await persistTurnCompletion(call, input.bus, input.turn, input.result, mergedUsage);
     } catch (error) {
       const concurrent = input.bufferedUsage.get(turnId) ?? [];
       input.bufferedUsage.set(turnId, [...detached, ...concurrent]);

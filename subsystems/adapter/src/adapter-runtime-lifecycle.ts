@@ -16,6 +16,7 @@
  * @see {@link AdapterSubsystemService} for the event-driven replacement.
  */
 import type { IMakaioBus } from '@makaio/bus-core';
+import type { CallContext } from '@makaio/core';
 import { AdapterSubjects, type ConnectorTeardownResult } from '@makaio/contracts';
 import { buildDeterministicAdapterId } from '@makaio/services-core/adapter-runtime';
 import { AdapterSubsystemSubjects } from './namespace.js';
@@ -309,6 +310,7 @@ async function retireFailedAdapterInitialization(
 
 /**
  * Publish the initialized lifecycle event for one validated adapter instance.
+ * @param call - Call context of the handled message.
  * @param bus - Global lifecycle bus.
  * @param adapter - Loaded definition for the initialized adapter.
  * @param adapterId - Validated runtime identifier.
@@ -317,6 +319,7 @@ async function retireFailedAdapterInitialization(
  * @param instance - Initialized adapter instance.
  */
 async function publishAdapterInitialized(
+  call: CallContext,
   bus: IMakaioBus,
   adapter: LoadedAdapter,
   adapterId: string,
@@ -328,7 +331,7 @@ async function publishAdapterInitialized(
     readonly capabilities?: readonly string[];
     readonly nativeTools?: readonly string[];
   };
-  await bus.emit(AdapterSubjects.initialized, {
+  await bus.emit(call, AdapterSubjects.initialized, {
     adapterId,
     adapterName: adapter.name,
     machineId,
@@ -340,12 +343,13 @@ async function publishAdapterInitialized(
 
 /**
  * Check whether an adapter is enabled in file-backed settings.
+ * @param call - Call context of the handled message.
  * @param bus - Bus instance used for adapter-subsystem requests.
  * @param adapterName - Adapter driver name.
  * @returns `true` when the adapter config exists and is enabled.
  */
-async function isAdapterEnabled(bus: IMakaioBus, adapterName: string): Promise<boolean> {
-  const { config } = await bus.request(AdapterSubsystemSubjects.getAdapterConfig, { name: adapterName });
+async function isAdapterEnabled(call: CallContext, bus: IMakaioBus, adapterName: string): Promise<boolean> {
+  const { config } = await bus.request(call, AdapterSubsystemSubjects.getAdapterConfig, { name: adapterName });
   return config?.enabled ?? false;
 }
 
@@ -391,15 +395,17 @@ interface AdapterInitializationContext {
 
 /**
  * Initialize one enabled definition while preserving its exact activation epoch.
+ * @param call - Call context of the handled message.
  * @param adapter - Exact loaded definition to initialize.
  * @param context - Registry-owned lifecycle and activation dependencies.
  */
 async function initializeOneEnabledAdapter(
+  call: CallContext,
   adapter: LoadedAdapter,
   context: AdapterInitializationContext,
 ): Promise<void> {
   const { bus, machineId, adapterInstances, platformDefaults, onRollback, isCurrentAdapter } = context;
-  if (!(await isAdapterEnabled(bus, adapter.name))) {
+  if (!(await isAdapterEnabled(call, bus, adapter.name))) {
     console.info(`Skipping disabled adapter: ${adapter.name}`);
     return;
   }
@@ -438,7 +444,7 @@ async function initializeOneEnabledAdapter(
     throw activationError;
   }
   try {
-    await publishAdapterInitialized(bus, adapter, expectedAdapterId, machineId, ownerInstanceId, instance);
+    await publishAdapterInitialized(call, bus, adapter, expectedAdapterId, machineId, ownerInstanceId, instance);
   } catch (emitError) {
     await retireFailedAdapterInitialization(adapter, expectedAdapterId, ownerInstanceId, instance, onRollback, true);
     throw emitError;
@@ -448,6 +454,7 @@ async function initializeOneEnabledAdapter(
 
 /**
  * Initialize the subset of loaded adapters that are enabled in settings.
+ * @param call - Call context of the handled message.
  * @param bus - Bus instance used for adapter-subsystem requests.
  * @param machineId - Current machine identifier.
  * @param adapters - Loaded adapter definitions to initialize.
@@ -459,6 +466,7 @@ async function initializeOneEnabledAdapter(
  * @param isCurrentAdapter - Confirm the exact definition epoch remains active across awaits.
  */
 export async function initializeEnabledAdapters(
+  call: CallContext,
   bus: IMakaioBus,
   machineId: string,
   adapters: readonly LoadedAdapter[],
@@ -483,7 +491,7 @@ export async function initializeEnabledAdapters(
 
   for (const adapter of adapters) {
     try {
-      await initializeOneEnabledAdapter(adapter, context);
+      await initializeOneEnabledAdapter(call, adapter, context);
     } catch (error) {
       failedAdapters.push({ adapterName: adapter.name, error });
     }
@@ -509,11 +517,14 @@ export async function initializeEnabledAdapters(
  * @param bus - Bus instance used for adapter-subsystem requests.
  */
 export async function ensureAdapterConfigs(adapters: LoadedAdapter[], bus: IMakaioBus): Promise<void> {
-  await bus.request(AdapterSubsystemSubjects.ensureReady, {});
+  // ORIGIN: config bootstrap waits for the adapter subsystem to become ready.
+  await bus.request(bus.own('start'), AdapterSubsystemSubjects.ensureReady, {});
   const adapterConfigs = await Promise.all(
     adapters.map(async (adapter) => ({
       adapter,
-      config: (await bus.request(AdapterSubsystemSubjects.getAdapterConfig, { name: adapter.name })).config,
+      // ORIGIN: config bootstrap checks which discovered adapters already have settings.
+      config: (await bus.request(bus.own('start'), AdapterSubsystemSubjects.getAdapterConfig, { name: adapter.name }))
+        .config,
     })),
   );
 
@@ -521,7 +532,8 @@ export async function ensureAdapterConfigs(adapters: LoadedAdapter[], bus: IMaka
     adapterConfigs
       .filter(({ config }) => !config)
       .map(({ adapter }) =>
-        bus.request(AdapterSubsystemSubjects.setAdapterConfig, {
+        // ORIGIN: config bootstrap creates disabled settings for adapters without a config.
+        bus.request(bus.own('start'), AdapterSubsystemSubjects.setAdapterConfig, {
           name: adapter.name,
           patch: {
             displayName: adapter.displayName,

@@ -23,6 +23,7 @@
  */
 
 import type { IMakaioBus } from '@makaio/bus-core';
+import type { CallContext } from '@makaio/core';
 import type { CredentialResolver } from '@makaio/contracts';
 import type { CredentialRef } from '@makaio/contracts/config';
 import { KernelSubjects } from '@makaio/kernel/namespace';
@@ -102,14 +103,20 @@ function collectCredentialRequests(config: GatewayConfig): UpstreamCredentialReq
  * the thrown message; the resolved plaintext never does. That message is what
  * reaches the operator log line at the coordinator-ready barrier, so it has to
  * be complete enough to act on and safe enough to print.
+ * @param call - Call context of the work this lookup belongs to.
  * @param resolver - Host-supplied credential resolver.
  * @param ref - Branded credential reference string to resolve.
  * @param site - Human-readable description of the config site requiring it.
  * @returns The resolved plaintext credential.
  * @throws When the credential resolves to `null` or an empty string.
  */
-async function resolveRequiredSecret(resolver: CredentialResolver, ref: CredentialRef, site: string): Promise<string> {
-  const value = await resolver.resolve(ref);
+async function resolveRequiredSecret(
+  call: CallContext,
+  resolver: CredentialResolver,
+  ref: CredentialRef,
+  site: string,
+): Promise<string> {
+  const value = await resolver.resolve(call, ref);
   if (!value) {
     throw new Error(`Credential for ${site} (ref "${ref}") could not be resolved.`);
   }
@@ -256,7 +263,7 @@ export class GatewayService extends BaseService {
       emit: (event) => {
         // Fire-and-forget: catch prevents an unhandled rejection if the bus
         // has no subscriber or a subscriber throws.
-        void this.bus.emit(GatewaySubjects.requestRouted, event).catch(() => {});
+        void this.bus.emit(this.bus.own('observer'), GatewaySubjects.requestRouted, event).catch(() => {});
       },
     });
 
@@ -332,7 +339,10 @@ export class GatewayService extends BaseService {
       return pending;
     }
 
-    const attempt = this.resolveRuntime();
+    // One attempt serves every concurrent caller and outlives the request or
+    // barrier that happened to start it, so it runs under shared work rather
+    // than any single caller's call.
+    const attempt = this.resolveRuntime(this.bus.own('shared-work'));
     this._runtime = attempt;
     attempt.catch(() => {
       if (this._runtime === attempt) this._runtime = null;
@@ -366,13 +376,14 @@ export class GatewayService extends BaseService {
    * table — so a configuration whose upstreams resolve but whose access token
    * does not yields no usable runtime at all, rather than one that would serve
    * traffic without authenticating it.
+   * @param call - Call context of the shared resolution attempt.
    * @returns The compiled routing table paired with the resolved access token.
    * @throws When any required credential is missing, empty, or unresolvable.
    */
-  private async resolveRuntime(): Promise<GatewayRuntime> {
+  private async resolveRuntime(call: CallContext): Promise<GatewayRuntime> {
     const requests = collectCredentialRequests(this.config);
-    const resolvedSecrets = await this.resolveUpstreamSecrets(requests);
-    const accessToken = await this.resolveAccessToken();
+    const resolvedSecrets = await this.resolveUpstreamSecrets(call, requests);
+    const accessToken = await this.resolveAccessToken(call);
     return { compiled: compileRules(this.config, resolvedSecrets), accessToken };
   }
 
@@ -383,12 +394,16 @@ export class GatewayService extends BaseService {
    * returned. When the resolver is absent but at least one secret is required,
    * throws immediately with a clear message. The resolved value and any
    * internal resolver detail are never included in thrown messages.
+   * @param call - Call context of the shared resolution attempt.
    * @param requests - Ordered list of upstream credential requests.
    * @returns A map from upstream name to resolved plaintext credential.
    * @throws When no resolver is provided but at least one secret is required,
    *   or when any credential resolves to `null` or an empty string.
    */
-  private async resolveUpstreamSecrets(requests: UpstreamCredentialRequest[]): Promise<ReadonlyMap<string, string>> {
+  private async resolveUpstreamSecrets(
+    call: CallContext,
+    requests: UpstreamCredentialRequest[],
+  ): Promise<ReadonlyMap<string, string>> {
     if (requests.length === 0) {
       return new Map();
     }
@@ -397,7 +412,7 @@ export class GatewayService extends BaseService {
     const resolved = new Map<string, string>();
 
     for (const { upstreamName, ref } of requests) {
-      resolved.set(upstreamName, await resolveRequiredSecret(resolver, ref, `upstream "${upstreamName}"`));
+      resolved.set(upstreamName, await resolveRequiredSecret(call, resolver, ref, `upstream "${upstreamName}"`));
     }
 
     return resolved;
@@ -410,16 +425,17 @@ export class GatewayService extends BaseService {
    * that is present in config but unresolvable must fail the whole resolution
    * rather than silently leave the proxy unauthenticated. The gateway then
    * answers `503` until the reference resolves — closed, not open.
+   * @param call - Call context of the shared resolution attempt.
    * @returns The resolved plaintext token, or `null` when none is configured.
    * @throws When a token is configured but no resolver is available, or when it
    *   resolves to `null` or an empty string.
    */
-  private async resolveAccessToken(): Promise<string | null> {
+  private async resolveAccessToken(call: CallContext): Promise<string | null> {
     const ref = this.config.accessToken;
     if (ref === undefined) {
       return null;
     }
-    return resolveRequiredSecret(this.requireResolver(), ref, 'gateway "accessToken"');
+    return resolveRequiredSecret(call, this.requireResolver(), ref, 'gateway "accessToken"');
   }
 
   /**

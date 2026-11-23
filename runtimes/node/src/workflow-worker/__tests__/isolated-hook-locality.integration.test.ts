@@ -19,7 +19,6 @@ import { describe, expect, it, vi } from 'vitest';
 import { createBusNamespace } from '@makaio/core';
 import {
   createBusInstance,
-  createBusContext,
   hostLocalRequest,
   CorrelationTracker,
   handleCorrelationResponse,
@@ -27,6 +26,7 @@ import {
   type BusRequestMessage,
   type BusTransport,
 } from '@makaio/bus-core';
+import { busContextOf, createBusContext } from '@makaio/bus-core/kernel-api';
 import { ClientHookHandleResponseSchema, RawClientHookPayloadSchema } from '@makaio/subsystem-client';
 
 // ---------------------------------------------------------------------------
@@ -198,11 +198,9 @@ describe('isolated execution host hook.handle locality', () => {
 
     // Worker knows about authority's handler — hostLocalRequest prevents
     // relay, so the authority's handler must never be reached.
-    workerBus
-      .getContext()
-      .remoteRequestHandlers.set('client:isolated-hook-test.hook.handle', [
-        { transport: pair.worker.name, priority: 1000 },
-      ]);
+    busContextOf(workerBus).remoteRequestHandlers.set('client:isolated-hook-test.hook.handle', [
+      { transport: pair.worker.name, priority: 1000 },
+    ]);
 
     try {
       // Simulate inbound request arriving at the worker (e.g. from the
@@ -263,11 +261,9 @@ describe('isolated execution host hook.handle locality', () => {
     workerBus.registerTransport(pair.worker);
 
     // Authority knows about worker's handler
-    authorityBus
-      .getContext()
-      .remoteRequestHandlers.set('client:isolated-hook-test.hook.handle', [
-        { transport: pair.authority.name, priority: 100 },
-      ]);
+    busContextOf(authorityBus).remoteRequestHandlers.set('client:isolated-hook-test.hook.handle', [
+      { transport: pair.authority.name, priority: 100 },
+    ]);
 
     try {
       // Authority sends request — routes to worker via transport.

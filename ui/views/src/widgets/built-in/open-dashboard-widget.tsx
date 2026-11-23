@@ -40,7 +40,7 @@ function OpenDashboardWidget(_props: WidgetProps): JSX.Element {
       // `windowId: null` is an allowed response shape — the host reports
       // that it could not create or focus the window. Throw so the existing
       // catch branch logs the failure and the click doesn't silently no-op.
-      const { windowId } = await bus.request(HostSubjects.window.openDashboard, {});
+      const { windowId } = await bus.request(bus.own('root'), HostSubjects.window.openDashboard, {});
       if (windowId === null) {
         throw new Error('Dashboard window could not be opened or focused.');
       }

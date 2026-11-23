@@ -1,3 +1,4 @@
+import type { CallContext } from '@makaio/core';
 import type { IMakaioBus } from '@makaio/bus-core';
 import { SessionOwnershipStorageSubjects, type SessionOwnershipClaimResult } from '@makaio/contracts';
 import { mintClaimToken } from './claim-token.js';
@@ -58,15 +59,17 @@ export interface LeadDesignationRequest {
  * Best-effort by construction: a host with no ownership storage registered gets
  * `undefined` rather than a throw, the same degradation every other session
  * storage read in these handlers already accepts.
+ * @param call - Call context of the handled message whose start or removal writes the designation.
  * @param bus - Bus the claim is issued on.
  * @param request - The designation to write.
  * @returns The claim outcome, or `undefined` when no ownership storage answered.
  */
 export async function designateSessionLead(
+  call: CallContext,
   bus: IMakaioBus,
   request: LeadDesignationRequest,
 ): Promise<SessionOwnershipClaimResult | undefined> {
-  const result = await bus.requestOptional(SessionOwnershipStorageSubjects.claim, {
+  const result = await bus.requestOptional(call, SessionOwnershipStorageSubjects.claim, {
     ...KEYLESS_DESIGNATION_KEY,
     providerSessionId: null,
     sessionId: request.sessionId,

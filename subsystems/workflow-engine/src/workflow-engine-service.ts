@@ -1,4 +1,5 @@
 import type { IMakaioBus } from '@makaio/bus-core';
+import type { CallContext } from '@makaio/core';
 import type { IWorkflowRunner } from '@makaio/contracts';
 import { BaseService } from '@makaio/service-base';
 import type { AutomationTriggerBindingRuntime } from '@makaio/services-core/automation-trigger';
@@ -143,15 +144,17 @@ export class WorkflowEngineService extends BaseService {
 
   /**
    * Accept a terminal result for a durable authority-owned runner execution.
+   * @param call - Call context of the message that delivers the result.
    * @param executionId - Durable authority-owned execution identity.
    * @param result - Correlated terminal result returned by the runner.
    * @returns The current durable status after acceptance.
    */
   public acceptAuthorityRunnerResult(
+    call: CallContext,
     executionId: string,
-    result: Parameters<WorkflowExecutor['acceptAuthorityRunnerResult']>[1],
+    result: Parameters<WorkflowExecutor['acceptAuthorityRunnerResult']>[2],
   ): ReturnType<WorkflowExecutor['acceptAuthorityRunnerResult']> {
-    return this.workflowExecutor.acceptAuthorityRunnerResult(executionId, result);
+    return this.workflowExecutor.acceptAuthorityRunnerResult(call, executionId, result);
   }
 
   /**

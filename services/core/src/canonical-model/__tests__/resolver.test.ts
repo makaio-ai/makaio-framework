@@ -1,4 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
+import { createTestCall } from '@makaio/test-utils';
 import type { ResolvableCanonicalModel } from '@makaio/contracts';
 import { CanonicalModelResolver } from '../resolver.js';
 import type { CanonicalModelResolverDeps, DefaultModelResolution } from '../resolver-deps.js';
@@ -33,7 +34,9 @@ describe('CanonicalModelResolver', () => {
       } satisfies DefaultModelResolution),
     });
 
-    await expect(new CanonicalModelResolver(deps).resolve({ kind: 'bare', model: 'sonnet' })).resolves.toEqual({
+    await expect(
+      new CanonicalModelResolver(deps).resolve({ kind: 'bare', model: 'sonnet' }, undefined, createTestCall()),
+    ).resolves.toEqual({
       kind: 'adapter',
       adapterName: 'anthropic-sdk',
       providerConfigId: 'config-1',
@@ -57,7 +60,7 @@ describe('CanonicalModelResolver', () => {
     });
 
     const error = await new CanonicalModelResolver(deps)
-      .resolve({ kind: 'bare', model: 'sonnet' })
+      .resolve({ kind: 'bare', model: 'sonnet' }, undefined, createTestCall())
       .catch((value) => value);
 
     expect(error).toBeInstanceOf(CanonicalModelResolutionError);
@@ -79,12 +82,16 @@ describe('CanonicalModelResolver', () => {
     });
 
     await expect(
-      new CanonicalModelResolver(deps).resolve({
-        kind: 'qualified',
-        segment1: 'anthropic-sdk',
-        segment2: undefined,
-        model: 'sonnet',
-      }),
+      new CanonicalModelResolver(deps).resolve(
+        {
+          kind: 'qualified',
+          segment1: 'anthropic-sdk',
+          segment2: undefined,
+          model: 'sonnet',
+        },
+        undefined,
+        createTestCall(),
+      ),
     ).resolves.toEqual({
       kind: 'adapter',
       adapterName: 'anthropic-sdk',
@@ -105,12 +112,16 @@ describe('CanonicalModelResolver', () => {
     });
 
     await expect(
-      new CanonicalModelResolver(deps).resolve({
-        kind: 'qualified',
-        segment1: 'def-1',
-        segment2: undefined,
-        model: 'claude-sonnet',
-      }),
+      new CanonicalModelResolver(deps).resolve(
+        {
+          kind: 'qualified',
+          segment1: 'def-1',
+          segment2: undefined,
+          model: 'claude-sonnet',
+        },
+        undefined,
+        createTestCall(),
+      ),
     ).resolves.toEqual({
       kind: 'adapter',
       adapterName: 'anthropic-sdk',
@@ -129,12 +140,16 @@ describe('CanonicalModelResolver', () => {
     });
 
     const error = await new CanonicalModelResolver(deps)
-      .resolve({
-        kind: 'qualified',
-        segment1: 'anthropic-sdk',
-        segment2: 'my-provider',
-        model: 'sonnet',
-      })
+      .resolve(
+        {
+          kind: 'qualified',
+          segment1: 'anthropic-sdk',
+          segment2: 'my-provider',
+          model: 'sonnet',
+        },
+        undefined,
+        createTestCall(),
+      )
       .catch((value) => value);
 
     expect(error).toBeInstanceOf(CanonicalModelResolutionError);
@@ -149,7 +164,9 @@ describe('CanonicalModelResolver', () => {
       model: 'sonnet',
     };
 
-    const error = await new CanonicalModelResolver(createStubDeps()).resolve(parsed).catch((value) => value);
+    const error = await new CanonicalModelResolver(createStubDeps())
+      .resolve(parsed, undefined, createTestCall())
+      .catch((value) => value);
 
     expect(error).toBeInstanceOf(CanonicalModelResolutionError);
     expect(error.code).toBe('adapter-not-found');

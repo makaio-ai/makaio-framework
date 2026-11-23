@@ -21,6 +21,9 @@
     "test": "vitest run",
     "test:watch": "vitest"
   },
+  "peerDependencies": {
+    "@makaio/framework": "workspace:*"
+  },
   "dependencies": {
     "@makaio/bus-core": "workspace:*",
     "@makaio/contracts": "workspace:*",

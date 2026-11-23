@@ -141,7 +141,7 @@ describe('AIAdapter.handleRehydrateAgent - caller-owned row and disposition unio
     it('writes no status, still registers and publishes, and returns the confirmed provider session', async () => {
       registerPersistedAgent('dead');
 
-      const result = await MakaioBus.request(AdapterSubjects.rehydrateAgent, {
+      const result = await MakaioBus.request(MakaioBus.own('root'), AdapterSubjects.rehydrateAgent, {
         adapterId: adapter.adapterId,
         agentId: 'cold-caller-owned',
         // Deliberately not the ID the connector will confirm: a settling caller
@@ -164,7 +164,7 @@ describe('AIAdapter.handleRehydrateAgent - caller-owned row and disposition unio
       expect(runtimeWrites).toEqual([]);
       if (result.settlementAckToken === undefined) throw new Error('caller-owned rehydrate omitted ack token');
       await expect(
-        MakaioBus.request(AdapterSubjects.acknowledgeCallerSettlement, {
+        MakaioBus.request(MakaioBus.own('root'), AdapterSubjects.acknowledgeCallerSettlement, {
           adapterId: adapter.adapterId,
           ownerInstanceId: adapter.ownerInstanceId,
           agentId: 'cold-caller-owned',
@@ -177,7 +177,7 @@ describe('AIAdapter.handleRehydrateAgent - caller-owned row and disposition unio
     it('writes idle exactly as before when the flag is absent', async () => {
       registerPersistedAgent('dead');
 
-      const result = await MakaioBus.request(AdapterSubjects.rehydrateAgent, {
+      const result = await MakaioBus.request(MakaioBus.own('root'), AdapterSubjects.rehydrateAgent, {
         adapterId: adapter.adapterId,
         agentId: 'cold-adapter-owned',
       });
@@ -202,7 +202,7 @@ describe('AIAdapter.handleRehydrateAgent - caller-owned row and disposition unio
         }),
       );
 
-      await MakaioBus.request(AdapterSubjects.rehydrateAgent, {
+      await MakaioBus.request(MakaioBus.own('root'), AdapterSubjects.rehydrateAgent, {
         adapterId: adapter.adapterId,
         agentId: 'cold-caller-settles',
         resumeAdapterSessionId: 'requested-provider-session',
@@ -222,7 +222,7 @@ describe('AIAdapter.handleRehydrateAgent - caller-owned row and disposition unio
 
       // The adapter-owned twin: nobody else settles it, so the seam must — and
       // the same adapter writes the moved identity onto the row it owns.
-      await MakaioBus.request(AdapterSubjects.rehydrateAgent, {
+      await MakaioBus.request(MakaioBus.own('root'), AdapterSubjects.rehydrateAgent, {
         adapterId: adapter.adapterId,
         agentId: 'cold-seam-settles',
       });
@@ -239,7 +239,7 @@ describe('AIAdapter.handleRehydrateAgent - caller-owned row and disposition unio
     it('refuses a disposed agent as not-dispatched instead of throwing', async () => {
       registerPersistedAgent('disposed');
 
-      const result = await MakaioBus.request(AdapterSubjects.rehydrateAgent, {
+      const result = await MakaioBus.request(MakaioBus.own('root'), AdapterSubjects.rehydrateAgent, {
         adapterId: adapter.adapterId,
         agentId: 'cold-disposed',
         callerOwnsAgentRow: true,
@@ -262,7 +262,7 @@ describe('AIAdapter.handleRehydrateAgent - caller-owned row and disposition unio
      * @returns The started agent's ID
      */
     async function startLiveAgent(sessionId: string): Promise<string> {
-      const started = await MakaioBus.request(AdapterSubjects.startAgent, {
+      const started = await MakaioBus.request(MakaioBus.own('root'), AdapterSubjects.startAgent, {
         adapterId: adapter.adapterId,
         role: 'lead' as const,
         sessionId,
@@ -279,7 +279,7 @@ describe('AIAdapter.handleRehydrateAgent - caller-owned row and disposition unio
       const agentId = await startLiveAgent('warm-caller-owned-session');
       statusWrites = [];
 
-      const owned = await MakaioBus.request(AdapterSubjects.rehydrateAgent, {
+      const owned = await MakaioBus.request(MakaioBus.own('root'), AdapterSubjects.rehydrateAgent, {
         adapterId: adapter.adapterId,
         agentId,
         model: 'override-model',
@@ -293,7 +293,7 @@ describe('AIAdapter.handleRehydrateAgent - caller-owned row and disposition unio
       // The connector swap itself is untouched by the flag.
       expect(runtimeWrites.some((write) => write.agentId === agentId)).toBe(true);
 
-      const unowned = await MakaioBus.request(AdapterSubjects.rehydrateAgent, {
+      const unowned = await MakaioBus.request(MakaioBus.own('root'), AdapterSubjects.rehydrateAgent, {
         adapterId: adapter.adapterId,
         agentId,
         model: 'override-model-2',
@@ -323,12 +323,14 @@ describe('AIAdapter.handleRehydrateAgent - caller-owned row and disposition unio
       cleanupFns.push(
         MakaioBus.on(AgentSubjects.adapterSession.moved, async (ctx) => {
           announced.push(`${ctx.payload.agentId}:${ctx.payload.adapterSessionId ?? 'none'}`);
-          liveDuringAnnouncement.push(await swapping.getAgent(ctx.payload.agentId)?.agent.getAdapterSessionId());
+          liveDuringAnnouncement.push(
+            await swapping.getAgent(ctx.payload.agentId)?.agent.getAdapterSessionId(ctx.call),
+          );
         }),
       );
 
       try {
-        const started = await MakaioBus.request(AdapterSubjects.startAgent, {
+        const started = await MakaioBus.request(MakaioBus.own('root'), AdapterSubjects.startAgent, {
           adapterId: swapping.adapterId,
           role: 'lead' as const,
           sessionId: 'warm-movement-session',
@@ -340,7 +342,7 @@ describe('AIAdapter.handleRehydrateAgent - caller-owned row and disposition unio
         announced.length = 0;
         liveDuringAnnouncement.length = 0;
 
-        const owned = await MakaioBus.request(AdapterSubjects.rehydrateAgent, {
+        const owned = await MakaioBus.request(MakaioBus.own('root'), AdapterSubjects.rehydrateAgent, {
           adapterId: swapping.adapterId,
           agentId: started.agentId,
           model: 'override-model',
@@ -361,7 +363,7 @@ describe('AIAdapter.handleRehydrateAgent - caller-owned row and disposition unio
         ]);
         if (owned.settlementAckToken === undefined) throw new Error('caller-owned rehydrate omitted ack token');
         await expect(
-          MakaioBus.request(AdapterSubjects.acknowledgeCallerSettlement, {
+          MakaioBus.request(MakaioBus.own('root'), AdapterSubjects.acknowledgeCallerSettlement, {
             adapterId: swapping.adapterId,
             ownerInstanceId: swapping.ownerInstanceId,
             agentId: started.agentId,
@@ -371,7 +373,7 @@ describe('AIAdapter.handleRehydrateAgent - caller-owned row and disposition unio
 
         // The adapter-owned twin runs only after Ack opened the host predicate:
         // nobody else settles it, so the seam must publish the next movement.
-        const unowned = await MakaioBus.request(AdapterSubjects.rehydrateAgent, {
+        const unowned = await MakaioBus.request(MakaioBus.own('root'), AdapterSubjects.rehydrateAgent, {
           adapterId: swapping.adapterId,
           agentId: started.agentId,
           model: 'override-model-2',
@@ -432,9 +434,15 @@ describe('AIAdapter.handleRehydrateAgent - caller-owned row and disposition unio
         await gate;
       });
 
-      const owning = MakaioBus.request(AdapterSubjects.rehydrateAgent, { adapterId: adapter.adapterId, agentId });
+      const owning = MakaioBus.request(MakaioBus.own('root'), AdapterSubjects.rehydrateAgent, {
+        adapterId: adapter.adapterId,
+        agentId,
+      });
       await entered;
-      const joining = MakaioBus.request(AdapterSubjects.rehydrateAgent, { adapterId: adapter.adapterId, agentId });
+      const joining = MakaioBus.request(MakaioBus.own('root'), AdapterSubjects.rehydrateAgent, {
+        adapterId: adapter.adapterId,
+        agentId,
+      });
       release();
 
       return Promise.all([owning, joining]);

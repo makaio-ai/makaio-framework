@@ -18,7 +18,7 @@ export function registerAutoLaunchCommand(program: Command): void {
     .action(async () => {
       const bus = await connectOrExit();
       try {
-        const result = await bus.requestOptional(PlatformSubjects.autoLaunch.enable, { hidden: true });
+        const result = await bus.requestOptional(bus.own('root'), PlatformSubjects.autoLaunch.enable, { hidden: true });
         if (!result.handled) {
           console.info(UNSUPPORTED_MSG);
           return;
@@ -40,7 +40,7 @@ export function registerAutoLaunchCommand(program: Command): void {
     .action(async () => {
       const bus = await connectOrExit();
       try {
-        const result = await bus.requestOptional(PlatformSubjects.autoLaunch.disable, {});
+        const result = await bus.requestOptional(bus.own('root'), PlatformSubjects.autoLaunch.disable, {});
         if (!result.handled) {
           console.info(UNSUPPORTED_MSG);
           return;
@@ -62,7 +62,7 @@ export function registerAutoLaunchCommand(program: Command): void {
     .action(async () => {
       const bus = await connectOrExit();
       try {
-        const result = await bus.requestOptional(PlatformSubjects.autoLaunch.getStatus, {});
+        const result = await bus.requestOptional(bus.own('root'), PlatformSubjects.autoLaunch.getStatus, {});
         if (!result.handled || !result.data.supported) {
           console.info(UNSUPPORTED_MSG);
         } else if (result.data.enabled) {

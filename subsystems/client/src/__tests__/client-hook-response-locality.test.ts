@@ -21,7 +21,6 @@ import { z } from 'zod';
 import { createBusNamespace, type PayloadFilter } from '@makaio/core';
 import {
   createBusInstance,
-  createBusContext,
   hostLocalRequest,
   NoHandlerError,
   CorrelationTracker,
@@ -30,6 +29,8 @@ import {
   type BusRequestMessage,
   type BusTransport,
 } from '@makaio/bus-core';
+import { busContextOf } from '@makaio/bus-core/kernel-api';
+import { createTestCall } from '@makaio/test-utils';
 import { collectContributions, type RegisteredContributor } from '../client-hook-response-collector.js';
 import { ClientHookHandleResponseSchema, RawClientHookPayloadSchema } from '../hook-subjects.js';
 
@@ -204,8 +205,8 @@ describe('Proof 1: two-runtime topology — only the local handler responds', ()
   it("a request arriving at runtime A invokes only A's handler, not B's", async () => {
     const { sideA, sideB } = createTransportPair('p1-ab');
 
-    const busA = createBusInstance({ context: createBusContext() });
-    const busB = createBusInstance({ context: createBusContext() });
+    const busA = createBusInstance();
+    const busB = createBusInstance();
     registerTestNamespace(busA, busB);
 
     // Runtime A: local handler at priority 100
@@ -235,9 +236,9 @@ describe('Proof 1: two-runtime topology — only the local handler responds', ()
 
     // Seed remote handler knowledge on busA so it could theoretically
     // route to busB — but hostLocalRequest prevents this.
-    busA
-      .getContext()
-      .remoteRequestHandlers.set('client:test-locality.hook.handle', [{ transport: sideA.name, priority: 200 }]);
+    busContextOf(busA).remoteRequestHandlers.set('client:test-locality.hook.handle', [
+      { transport: sideA.name, priority: 200 },
+    ]);
 
     try {
       // Inject an inbound request at busA (simulating a CLI connecting
@@ -271,8 +272,8 @@ describe('Proof 1: two-runtime topology — only the local handler responds', ()
   it('a bus.request originating at runtime A with only remote handlers gets NoHandler', async () => {
     const { sideA, sideB } = createTransportPair('p1-no-local');
 
-    const busA = createBusInstance({ context: createBusContext() });
-    const busB = createBusInstance({ context: createBusContext() });
+    const busA = createBusInstance();
+    const busB = createBusInstance();
     registerTestNamespace(busA, busB);
 
     // Runtime B has a handler — but A has no local handler
@@ -286,9 +287,9 @@ describe('Proof 1: two-runtime topology — only the local handler responds', ()
     busB.registerTransport(sideB);
 
     // Seed remote handler knowledge — busA knows about busB's handler
-    busA
-      .getContext()
-      .remoteRequestHandlers.set('client:test-locality.hook.handle', [{ transport: sideA.name, priority: 0 }]);
+    busContextOf(busA).remoteRequestHandlers.set('client:test-locality.hook.handle', [
+      { transport: sideA.name, priority: 0 },
+    ]);
 
     try {
       // busA requests hook.handle via bus.request — since busA has no
@@ -332,8 +333,8 @@ describe('Proof 2: remote runtime with higher priority cannot intercept', () => 
   it("inbound request at runtime A uses only A's local handler, ignoring B's higher priority", async () => {
     const { sideA, sideB } = createTransportPair('p2-priority');
 
-    const busA = createBusInstance({ context: createBusContext() });
-    const busB = createBusInstance({ context: createBusContext() });
+    const busA = createBusInstance();
+    const busB = createBusInstance();
     registerTestNamespace(busA, busB);
 
     // Runtime A: local handler at low priority
@@ -364,9 +365,9 @@ describe('Proof 2: remote runtime with higher priority cannot intercept', () => 
     // Seed busA with knowledge of busB's high-priority handler.
     // For an ordinary subject this would cause relay to busB, but
     // hostLocalRequest blocks relay at the receiver.
-    busA
-      .getContext()
-      .remoteRequestHandlers.set('client:test-locality.hook.handle', [{ transport: sideA.name, priority: 500 }]);
+    busContextOf(busA).remoteRequestHandlers.set('client:test-locality.hook.handle', [
+      { transport: sideA.name, priority: 500 },
+    ]);
 
     try {
       // Inject an inbound request at busA (simulating a CLI connecting
@@ -398,7 +399,7 @@ describe('Proof 2: remote runtime with higher priority cannot intercept', () => 
   });
 
   it('subscription propagation does not re-advertise foreign priorities for hostLocalRequest', async () => {
-    const busA = createBusInstance({ context: createBusContext() });
+    const busA = createBusInstance();
     registerTestNamespace(busA);
 
     // busA has a local handler at priority 50
@@ -411,11 +412,9 @@ describe('Proof 2: remote runtime with higher priority cannot intercept', () => 
     );
 
     // Simulate foreign priorities from a connected runtime
-    busA
-      .getContext()
-      .remoteRequestHandlers.set('client:test-locality.hook.handle', [
-        { transport: 'remote-transport', priority: 999 },
-      ]);
+    busContextOf(busA).remoteRequestHandlers.set('client:test-locality.hook.handle', [
+      { transport: 'remote-transport', priority: 999 },
+    ]);
 
     // Connect a new transport and observe what is advertised
     const subscribeSpy = vi.fn<(subject: string, filter?: PayloadFilter, priorities?: number[]) => Promise<void>>();
@@ -429,7 +428,7 @@ describe('Proof 2: remote runtime with higher priority cannot intercept', () => 
       unsubscribe: vi.fn(async () => {}),
     };
 
-    const reg = busA.getContext().transportRegistry.registerTransport('observer-transport' as never, observerTransport);
+    const reg = busA.registerTransport(observerTransport);
 
     await new Promise<void>((resolve) => setTimeout(resolve, 50));
 
@@ -459,7 +458,7 @@ describe('Proof 2: remote runtime with higher priority cannot intercept', () => 
 
 describe('Proof 3: no-handler fast path', () => {
   it('returns NoHandlerError immediately when no handler is registered', async () => {
-    const busA = createBusInstance({ context: createBusContext() });
+    const busA = createBusInstance();
     registerTestNamespace(busA);
 
     try {
@@ -480,7 +479,7 @@ describe('Proof 3: no-handler fast path', () => {
     const sentMessages: BusMessage[] = [];
     const { sideA } = createTransportPair('p3-inbound');
 
-    const busA = createBusInstance({ context: createBusContext() });
+    const busA = createBusInstance();
     registerTestNamespace(busA);
 
     // Capture outbound messages from busA back through the transport
@@ -537,6 +536,7 @@ describe('Proof 4: no-contributor fast path — collector returns without deadli
 
     const start = Date.now();
     const result = await collectContributions(
+      createTestCall(),
       emptySnapshot,
       'test-locality',
       distantDeadline,
@@ -561,6 +561,7 @@ describe('Proof 4: no-contributor fast path — collector returns without deadli
 
     const start = Date.now();
     const result = await collectContributions(
+      createTestCall(),
       emptySnapshot,
       'test-locality',
       Date.now() + 60_000,
@@ -585,8 +586,8 @@ describe('Proof 5: execution host isolation', () => {
   it('inbound request at isolated runtime stays local, never relaying to authority', async () => {
     const { sideA: authoritySide, sideB: isolatedSide } = createTransportPair('p5-isolated');
 
-    const authorityBus = createBusInstance({ context: createBusContext() });
-    const isolatedBus = createBusInstance({ context: createBusContext() });
+    const authorityBus = createBusInstance();
+    const isolatedBus = createBusInstance();
     registerTestNamespace(authorityBus, isolatedBus);
 
     // Authority: handler at very high priority — must NEVER be invoked
@@ -625,11 +626,9 @@ describe('Proof 5: execution host isolation', () => {
     // The isolated bus knows about the authority's handler (would be
     // seeded via subscribe-sync in production). Even with this knowledge,
     // hostLocalRequest prevents relay.
-    isolatedBus
-      .getContext()
-      .remoteRequestHandlers.set('client:test-locality.hook.handle', [
-        { transport: isolatedSide.name, priority: 1000 },
-      ]);
+    busContextOf(isolatedBus).remoteRequestHandlers.set('client:test-locality.hook.handle', [
+      { transport: isolatedSide.name, priority: 1000 },
+    ]);
 
     try {
       // Inject an inbound request at the isolated runtime (simulating
@@ -661,8 +660,8 @@ describe('Proof 5: execution host isolation', () => {
   it('authority dispatches request to isolated runtime, which handles it with only local handlers', async () => {
     const { sideA: authoritySide, sideB: isolatedSide } = createTransportPair('p5-inbound');
 
-    const authorityBus = createBusInstance({ context: createBusContext() });
-    const isolatedBus = createBusInstance({ context: createBusContext() });
+    const authorityBus = createBusInstance();
+    const isolatedBus = createBusInstance();
     registerTestNamespace(authorityBus, isolatedBus);
 
     // Authority has NO local handler — it only routes to the remote
@@ -690,19 +689,15 @@ describe('Proof 5: execution host isolation', () => {
     isolatedBus.registerTransport(isolatedSide);
 
     // Authority knows about isolated runtime's handler
-    authorityBus
-      .getContext()
-      .remoteRequestHandlers.set('client:test-locality.hook.handle', [
-        { transport: authoritySide.name, priority: 100 },
-      ]);
+    busContextOf(authorityBus).remoteRequestHandlers.set('client:test-locality.hook.handle', [
+      { transport: authoritySide.name, priority: 100 },
+    ]);
 
     // Isolated runtime has knowledge of a third runtime's handler at
     // higher priority — hostLocalRequest blocks relay to it
-    isolatedBus
-      .getContext()
-      .remoteRequestHandlers.set('client:test-locality.hook.handle', [
-        { transport: 'phantom-third-runtime', priority: 999 },
-      ]);
+    busContextOf(isolatedBus).remoteRequestHandlers.set('client:test-locality.hook.handle', [
+      { transport: 'phantom-third-runtime', priority: 999 },
+    ]);
 
     try {
       // Authority sends request — routed to isolated runtime via
@@ -727,9 +722,9 @@ describe('Proof 5: execution host isolation', () => {
     const pairAB = createTransportPair('p5-abc-ab');
     const pairBC = createTransportPair('p5-abc-bc');
 
-    const busAuthority = createBusInstance({ context: createBusContext() });
-    const busRelay = createBusInstance({ context: createBusContext() });
-    const busWorker = createBusInstance({ context: createBusContext() });
+    const busAuthority = createBusInstance();
+    const busRelay = createBusInstance();
+    const busWorker = createBusInstance();
     registerTestNamespace(busAuthority, busRelay, busWorker);
 
     // Worker C has a handler
@@ -747,14 +742,14 @@ describe('Proof 5: execution host isolation', () => {
     busWorker.registerTransport(pairBC.sideB);
 
     // Authority thinks relay B can handle the request
-    busAuthority
-      .getContext()
-      .remoteRequestHandlers.set('client:test-locality.hook.handle', [{ transport: pairAB.sideA.name, priority: 0 }]);
+    busContextOf(busAuthority).remoteRequestHandlers.set('client:test-locality.hook.handle', [
+      { transport: pairAB.sideA.name, priority: 0 },
+    ]);
 
     // Relay B knows about worker C's handler
-    busRelay
-      .getContext()
-      .remoteRequestHandlers.set('client:test-locality.hook.handle', [{ transport: pairBC.sideA.name, priority: 0 }]);
+    busContextOf(busRelay).remoteRequestHandlers.set('client:test-locality.hook.handle', [
+      { transport: pairBC.sideA.name, priority: 0 },
+    ]);
 
     try {
       // Authority's request should fail — relay B has no local handler

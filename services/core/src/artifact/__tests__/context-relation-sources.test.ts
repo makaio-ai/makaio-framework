@@ -6,6 +6,7 @@ import {
   type ArtifactRef,
   type ArtifactRevision,
 } from '@makaio/contracts';
+import { createTestCall } from '@makaio/test-utils';
 import { resolveArtifactContext } from '../context-resolver.js';
 
 /**
@@ -77,7 +78,7 @@ describe('resolveArtifactContext relation sources', () => {
       }),
     );
 
-    const context = await resolveArtifactContext({
+    const context = await resolveArtifactContext(createTestCall(), {
       bus,
       ref: rootRef,
       selectors: { answers: { hint: 'inline' } },
@@ -117,7 +118,7 @@ describe('resolveArtifactContext relation sources', () => {
       }),
     );
 
-    const context = await resolveArtifactContext({
+    const context = await resolveArtifactContext(createTestCall(), {
       bus,
       ref: rootRef,
       selectors: { answers: { hint: 'inline' } },

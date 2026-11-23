@@ -7,6 +7,7 @@
  */
 import type { IMakaioBus } from '@makaio/bus-core';
 import type { CliManifest } from '@makaio/contracts';
+import type { CallContext } from '@makaio/core';
 import { toCliArgManifests } from '../cli/schema-introspection.js';
 import { CliSchemas } from '../bus/cli/schemas.js';
 import type { CliContribution, OutputWriter } from '../cli/types.js';
@@ -50,24 +51,32 @@ type ExecuteRequest = z.infer<typeof CliSchemas.execute.request>;
 /** Inferred response type for `cli.execute`. */
 type ExecuteResponse = z.infer<typeof CliSchemas.execute.response>;
 
+/** A CLI contribution together with the bus instance of the extension that contributes it. */
+export interface CliExecuteTarget {
+  /** The contribution that serves the requested command. */
+  readonly contribution: CliContribution;
+  /** Carrier bus of the contributing extension, forwarded to the command's contexts. */
+  readonly bus: IMakaioBus;
+}
+
 /**
  * Execute a CLI subcommand for the `cli.execute` RPC.
  * @param payload - The validated request payload from the bus.
- * @param contributions - Collected CLI contributions from loaded packages.
- * @param bus - Bus instance forwarded to the handler's {@link CommandContext}.
+ * @param target - Contribution serving the requested command with its owner's carrier bus, or `undefined` when no active extension contributes it.
+ * @param call - Call context of the handled `cli.execute` message, forwarded to the command's contexts.
  * @returns The execution result with exit code, stdout, and stderr lines.
  */
 export async function handleExecute(
   payload: ExecuteRequest,
-  contributions: ReadonlyArray<CliContribution>,
-  bus: IMakaioBus,
+  target: CliExecuteTarget | undefined,
+  call: CallContext,
 ): Promise<ExecuteResponse> {
   const { command, subcommand, args } = payload;
 
-  const contribution = contributions.find((c) => c.name === command);
-  if (!contribution) {
+  if (!target) {
     return { exitCode: 1, stdout: [], stderr: [`Unknown command: ${command}`] };
   }
+  const { contribution, bus } = target;
 
   const entry = contribution.subcommands.find((s) => s.name === subcommand);
   if (!entry) {
@@ -88,6 +97,7 @@ export async function handleExecute(
       const gate = await contribution.beforeRun({
         subcommandName: subcommand,
         args: (parsed.data as Record<string, unknown>) ?? {},
+        call,
         bus,
       });
       if (!gate.proceed) {
@@ -118,6 +128,7 @@ export async function handleExecute(
   try {
     await entry.handler({
       args: parsed.data,
+      call,
       bus,
       output,
       signal,

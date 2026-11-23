@@ -65,12 +65,18 @@ export function createWorkerDispatchRunner(options: WorkerDispatchRunnerOptions)
   if (!hasWorkerDispatchRequirements(requirements)) return undefined;
   return {
     terminalAuthority: 'authority',
-    run: async (config, signal, manifest, runOptions) => {
+    run: async (call, config, signal, manifest, runOptions) => {
       signal.throwIfAborted();
       const runContext =
         config.source.kind === 'path'
-          ? (await bus.request(WorkflowStorageSubjects.getRunContext, { executionId: config.executionId }, { signal }))
-              .runContext
+          ? (
+              await bus.request(
+                call,
+                WorkflowStorageSubjects.getRunContext,
+                { executionId: config.executionId },
+                { signal },
+              )
+            ).runContext
           : undefined;
       signal.throwIfAborted();
       const instruction = buildWorkflowAttemptInstruction({
@@ -89,6 +95,7 @@ export function createWorkerDispatchRunner(options: WorkerDispatchRunnerOptions)
         withAttemptCreation: runOptions?.withAttemptCreation,
         dispatch: (executionAttemptId) =>
           bus.request(
+            call,
             WorkerSubjects.dispatch,
             {
               executionAttemptId,

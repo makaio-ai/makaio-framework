@@ -134,7 +134,7 @@ export async function createIsolatedWorkflowRuntime(
       username: context.username,
       machineId: context.machineId,
       tryImport,
-      credentials: new NodeCredentialProvider(),
+      credentialsFor: () => new NodeCredentialProvider(),
     },
   });
 
@@ -207,7 +207,8 @@ export async function createIsolatedWorkflowRuntime(
       await toolRegistry.register(toolset);
     }
 
-    await bus.emit(KernelSubjects.ready, { machineId: context.machineId });
+    // ORIGIN: Startup announces that the isolated runtime is ready.
+    await bus.emit(bus.own('start'), KernelSubjects.ready, { machineId: context.machineId });
     return { bus, coordinator, machineId: context.machineId, shutdown };
   } catch (error) {
     // Best-effort cleanup must not replace the actionable startup error.

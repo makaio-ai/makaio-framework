@@ -75,7 +75,7 @@ function registerAppendHandler(deps: MessageHandlerDeps): () => void {
     ctx.setResult({ message });
 
     if (emitEvent ?? true) {
-      await emitMessageSessionEvent(bus, message);
+      await emitMessageSessionEvent(ctx.call, bus, message);
     }
   });
 }
@@ -366,7 +366,7 @@ function registerUpsertByAdapterMessageId(deps: MessageHandlerDeps): () => void 
       editOf: undefined,
       origin: origin ?? undefined,
     };
-    await emitMessageSessionEvent(bus, storedMessage);
+    await emitMessageSessionEvent(ctx.call, bus, storedMessage);
   });
 }
 

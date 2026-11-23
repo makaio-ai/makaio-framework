@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { eq } from 'drizzle-orm';
-import { createBusContext, createBusInstance } from '@makaio/bus-core';
+import { createBusInstance } from '@makaio/bus-core';
 import { WorkflowNamespace } from '@makaio/contracts';
 import { WorkflowSubjects } from '../namespace.js';
 import { WorkflowStorageNamespace, WorkflowStorageSubjects } from '../storage/namespace.js';
@@ -14,7 +14,7 @@ const completedAt = 1_250;
 
 /** Create an isolated workflow bus with public and storage namespaces registered. */
 function createWorkflowTestBus(): ReturnType<typeof createBusInstance> {
-  const bus = createBusInstance({ context: createBusContext() });
+  const bus = createBusInstance();
   bus.registerNamespace(WorkflowNamespace);
   bus.registerNamespace(WorkflowStorageNamespace);
   return bus;

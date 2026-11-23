@@ -1,3 +1,4 @@
+import type { CallContext } from '@makaio/core';
 import type { IMakaioBus } from '@makaio/bus-core';
 import {
   AdapterSubjects,
@@ -155,6 +156,7 @@ function consumeConvergencePass(passes: number, sessionId: string): number {
 
 /**
  * Resolve every deferral and recovery a send encounters before routing it.
+ * @param call - Call context of the send being converged.
  * @param dependencies - Orchestrator-owned operations used by the convergence.
  * @param context - Immutable send inputs and the mutable session target list.
  * @param initialTargets - Targets materialized before any deferral pass.
@@ -164,6 +166,7 @@ function consumeConvergencePass(passes: number, sessionId: string): number {
  * @returns The safe routing targets, cumulative deferrals and recovery context.
  */
 export async function convergeDeferrals(
+  call: CallContext,
   dependencies: DeferralConvergenceDependencies,
   context: DeferralConvergenceContext,
   initialTargets: MakaioSessionAgent[],
@@ -181,7 +184,14 @@ export async function convergeDeferrals(
 
   while (pendingDeferrals.size > 0) {
     convergencePasses = consumeConvergencePass(convergencePasses, context.sessionId);
-    const retargeted = await retargetAfterDeferral(dependencies, context, targetAgents, pendingDeferrals, deferred);
+    const retargeted = await retargetAfterDeferral(
+      call,
+      dependencies,
+      context,
+      targetAgents,
+      pendingDeferrals,
+      deferred,
+    );
     targetAgents = retargeted.targetAgents;
     ({ recovering, arbitrated } = retainRecoveryProvenance(recovering, arbitrated, targetAgents));
     addAll(recovering, retargeted.recovering);
@@ -192,7 +202,7 @@ export async function convergeDeferrals(
     pendingDeferrals = targetAgentIds(retargeted.deferred, targetAgents);
   }
 
-  const recovered = await recoverDeadTargets(dependencies, context.session, targetAgents, recovering, arbitrated);
+  const recovered = await recoverDeadTargets(call, dependencies, context.session, targetAgents, recovering, arbitrated);
   addAll(deferred, recovered.deferredAgentIds);
   recoveryContext = recovered.recoveryContext ?? recoveryContext;
   recovering = new Set<string>();
@@ -201,7 +211,14 @@ export async function convergeDeferrals(
 
   while (pendingDeferrals.size > 0) {
     convergencePasses = consumeConvergencePass(convergencePasses, context.sessionId);
-    const retargeted = await retargetAfterDeferral(dependencies, context, targetAgents, pendingDeferrals, deferred);
+    const retargeted = await retargetAfterDeferral(
+      call,
+      dependencies,
+      context,
+      targetAgents,
+      pendingDeferrals,
+      deferred,
+    );
     targetAgents = retargeted.targetAgents;
     ({ recovering, arbitrated } = retainRecoveryProvenance(recovering, arbitrated, targetAgents));
     addAll(recovering, retargeted.recovering);
@@ -210,7 +227,14 @@ export async function convergeDeferrals(
     addAll(deferred, targetAgentIds(retargeted.deferred, targetAgents));
     recoveryContext = retargeted.recoveryContext ?? recoveryContext;
     if (recovering.size > 0) {
-      const adopted = await recoverDeadTargets(dependencies, context.session, targetAgents, recovering, arbitrated);
+      const adopted = await recoverDeadTargets(
+        call,
+        dependencies,
+        context.session,
+        targetAgents,
+        recovering,
+        arbitrated,
+      );
       addAll(deferred, adopted.deferredAgentIds);
       recoveryContext = adopted.recoveryContext ?? recoveryContext;
       pendingDeferrals = targetAgentIds(adopted.deferredAgentIds, targetAgents);
@@ -226,6 +250,7 @@ export async function convergeDeferrals(
 
 /**
  * Probe this send's targets and recover the ones that are gone.
+ * @param call - Call context of the send whose targets are probed.
  * @param dependencies - Bus and runtime identity used by recovery.
  * @param session - Session being sent to.
  * @param targetAgents - Targets this send materialized.
@@ -234,6 +259,7 @@ export async function convergeDeferrals(
  * @returns The injected history and agents this runtime may not drive.
  */
 async function recoverDeadTargets(
+  call: CallContext,
   dependencies: DeferralConvergenceDependencies,
   session: IMakaioSession,
   targetAgents: readonly MakaioSessionAgent[],
@@ -244,7 +270,7 @@ async function recoverDeadTargets(
     targetAgents.map(async (agent) => {
       if (agent.runtimeOwner === undefined) return undefined;
       if (recovering.has(agent.agentId) && !arbitrated.has(agent.agentId)) return undefined;
-      return dependencies.bus.requestOptional(AdapterSubjects.getAgent, {
+      return dependencies.bus.requestOptional(call, AdapterSubjects.getAgent, {
         agentId: agent.agentId,
         adapterId: agent.adapterId,
         ownerInstanceId: agent.runtimeOwner.instanceId,
@@ -269,18 +295,18 @@ async function recoverDeadTargets(
         deadAgents.push(agent);
         continue;
       }
-      await restoreProbedLiveAgent(dependencies.bus, agent.agentId);
+      await restoreProbedLiveAgent(call, dependencies.bus, agent.agentId);
       continue;
     }
     if (!liveness.handled || answered === null) deadAgents.push(agent);
   }
   if (deadAgents.length === 0) return { recoveryContext: undefined, deferredAgentIds };
   const recoveryPlan = FRESH_WITH_HISTORY_RECOVERY_PLAN;
-  const recoveryContext = await buildPlannedRecoveryContext(dependencies.bus, session, recoveryPlan);
+  const recoveryContext = await buildPlannedRecoveryContext(call, dependencies.bus, session, recoveryPlan);
   const resumeProviderSessionId = recoveryPlanResumeTarget(recoveryPlan) ?? null;
   let recoveredAgentCount = 0;
   for (const agent of deadAgents) {
-    const recovered = await recoverDeadAgentExclusively(dependencies.bus, agent, {
+    const recovered = await recoverDeadAgentExclusively(call, dependencies.bus, agent, {
       resumeProviderSessionId,
       machineId: dependencies.machineId,
     });
@@ -293,6 +319,7 @@ async function recoverDeadTargets(
 
 /**
  * Re-resolve a send's targets around agents this runtime may not drive.
+ * @param call - Call context of the handled send message.
  * @param dependencies - Orchestrator operations used to start a replacement.
  * @param context - The send's identity, target spec and start inputs.
  * @param targetAgents - Targets as this send materialized them.
@@ -302,6 +329,7 @@ async function recoverDeadTargets(
  * @throws A {@link SessionStartError} when every target deferred and no fresh start applies.
  */
 async function retargetAfterDeferral(
+  call: CallContext,
   dependencies: DeferralConvergenceDependencies,
   context: DeferralConvergenceContext,
   targetAgents: readonly MakaioSessionAgent[],
@@ -331,6 +359,7 @@ async function retargetAfterDeferral(
     arbitrated: adopted.arbitratedAgentIds,
     deferred: adopted.deferredAgentIds,
     recoveryContext: await buildPlannedRecoveryContext(
+      call,
       dependencies.bus,
       context.session,
       FRESH_WITH_HISTORY_RECOVERY_PLAN,

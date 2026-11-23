@@ -1,4 +1,5 @@
 import type { IMakaioBus } from '@makaio/bus-core';
+import type { CallContext } from '@makaio/core';
 import type { AccountUsage } from '../bus/schemas.js';
 import type { IUsageProvider } from '../interfaces/usage-provider.js';
 import { RateLimitedError, UsageAuthInvalidError } from '../interfaces/usage-provider.js';
@@ -22,6 +23,8 @@ import { applyResolvedUsage, persistUsageAuthInvalidIfCurrent, resolveUsageSafel
 import type { UsagePreparedCredential } from './usage-tracker-types.js';
 
 interface LoadUsageFetchAccountOptions {
+  /** Call context of the work this fetch belongs to. */
+  readonly call: CallContext;
   metadataStore: IAccountMetadataStore;
   credentialStore: IAccountCredentialStore;
   clientId: string;
@@ -33,7 +36,11 @@ interface LoadUsageFetchAccountOptions {
 }
 
 interface ResolveUsageFetchCredentialOptions {
-  readCredential: ((clientId: string, accountId: string) => Promise<UsagePreparedCredential | null>) | undefined;
+  /** Call context of the work this fetch belongs to. */
+  readonly call: CallContext;
+  readCredential:
+    | ((call: CallContext, clientId: string, accountId: string) => Promise<UsagePreparedCredential | null>)
+    | undefined;
   clientId: string;
   accountId: string;
   key: string;
@@ -44,6 +51,8 @@ interface ResolveUsageFetchCredentialOptions {
 export const MAX_TRANSIENT_FAILURES = 3;
 
 interface ApplyUsageFetchResultOptions {
+  /** Call context of the work this fetch belongs to. */
+  readonly call: CallContext;
   bus: IMakaioBus;
   accountMetadata: Record<string, unknown>;
   clientId: string;
@@ -69,6 +78,8 @@ interface ApplyUsageFetchResultOptions {
 }
 
 interface EscalateTransientFailureOptions {
+  /** Call context of the work this fetch belongs to. */
+  readonly call: CallContext;
   bus: IMakaioBus;
   clientId: string;
   accountId: string;
@@ -85,6 +96,8 @@ interface EscalateTransientFailureOptions {
 }
 
 interface HandleUsageFetchErrorOptions {
+  /** Call context of the work this fetch belongs to. */
+  readonly call: CallContext;
   bus: IMakaioBus;
   clientId: string;
   accountId: string;
@@ -126,7 +139,13 @@ function buildUsageFetchLogPrefix(clientId: string, accountId: string): string {
  * @returns Joined account row, or null when missing/stale
  */
 export async function loadUsageFetchAccount(opts: LoadUsageFetchAccountOptions): Promise<StoredAccount | null> {
-  const account = await getStoredAccount(opts.metadataStore, opts.credentialStore, opts.clientId, opts.accountId);
+  const account = await getStoredAccount(
+    opts.call,
+    opts.metadataStore,
+    opts.credentialStore,
+    opts.clientId,
+    opts.accountId,
+  );
   if (opts.isAccountGone(opts.key, opts.generation)) return null;
   if (account) return account;
   await opts.invalidateAccountState(opts.clientId, opts.accountId);
@@ -141,7 +160,14 @@ export async function loadUsageFetchAccount(opts: LoadUsageFetchAccountOptions):
 export async function resolveUsageFetchCredential(
   opts: ResolveUsageFetchCredentialOptions,
 ): Promise<UsagePreparedCredential> {
-  return readUsageCredential(opts.readCredential, opts.clientId, opts.accountId, opts.key, opts.account.credential);
+  return readUsageCredential(
+    opts.call,
+    opts.readCredential,
+    opts.clientId,
+    opts.accountId,
+    opts.key,
+    opts.account.credential,
+  );
 }
 
 /**
@@ -159,6 +185,7 @@ export async function applyUsageFetchResult(opts: ApplyUsageFetchResultOptions):
   if (opts.result) {
     opts.transientFailureCounts.delete(opts.key);
     await applyResolvedUsage({
+      call: opts.call,
       bus: opts.bus,
       accountMetadata: opts.accountMetadata,
       clientId: opts.clientId,
@@ -208,6 +235,7 @@ async function escalateOrCooldownTransientFailure(opts: EscalateTransientFailure
       `${buildUsageFetchLogPrefix(opts.clientId, opts.accountId)} ${failCount} consecutive transient failures, escalating to reauth-required`,
     );
     await persistUsageAuthInvalidIfCurrent({
+      call: opts.call,
       bus: opts.bus,
       clientId: opts.clientId,
       accountId: opts.accountId,
@@ -244,6 +272,7 @@ export async function executeUsageFetch(opts: ExecuteUsageFetchOptions): Promise
   if (opts.preparedCredential.status === 'invalid') {
     opts.transientFailureCounts.delete(opts.key);
     await persistUsageAuthInvalidIfCurrent({
+      call: opts.call,
       bus: opts.bus,
       clientId: opts.clientId,
       accountId: opts.accountId,
@@ -295,6 +324,7 @@ export async function handleUsageFetchError(opts: HandleUsageFetchErrorOptions):
     if (opts.isAccountGone(opts.key, opts.generation) || opts.credential === null) return;
     opts.transientFailureCounts.delete(opts.key);
     await persistUsageAuthInvalidIfCurrent({
+      call: opts.call,
       bus: opts.bus,
       clientId: opts.clientId,
       accountId: opts.accountId,

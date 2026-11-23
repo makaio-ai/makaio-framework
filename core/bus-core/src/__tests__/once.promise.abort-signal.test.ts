@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { MakaioBus } from '../bus.js';
+import { busContextOf } from '../kernel-api.js';
 import { OnceAbortError } from '../methods/once.js';
 import { oncePromiseTestSetup } from './once.promise.setup.js';
 
@@ -36,7 +37,7 @@ describe('once - Promise overload', () => {
     });
 
     it('should cleanup handler when aborted', async () => {
-      const context = MakaioBus.getContext();
+      const context = busContextOf(MakaioBus);
       const controller = new AbortController();
       const promise = MakaioBus.once(EventSubjects.message, {
         signal: controller.signal,
@@ -59,7 +60,7 @@ describe('once - Promise overload', () => {
         signal: controller.signal,
       });
 
-      await MakaioBus.emit(EventSubjects.message, {
+      await MakaioBus.emit(MakaioBus.own('root'), EventSubjects.message, {
         content: 'test',
         sessionId: 'session-1',
       });
@@ -78,7 +79,7 @@ describe('once - Promise overload', () => {
         signal: controller.signal,
       });
 
-      await MakaioBus.emit(EventSubjects.message, {
+      await MakaioBus.emit(MakaioBus.own('root'), EventSubjects.message, {
         content: 'cleanup',
         sessionId: 'session-1',
       });

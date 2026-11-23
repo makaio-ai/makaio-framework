@@ -21,7 +21,7 @@ export function useWidgetLayout(preferenceKey: PreferenceKey) {
     setError(null);
 
     try {
-      const { value } = await bus.request(PreferencesSubjects.get, {
+      const { value } = await bus.request(bus.own('root'), PreferencesSubjects.get, {
         category: LAYOUT_CATEGORY,
         key: preferenceKey,
       });

@@ -8,13 +8,14 @@
 import { mkdtempSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
-import type { IMakaioBus } from '@makaio/bus-core';
+import { MakaioBus, type IMakaioBus } from '@makaio/bus-core';
 import type { ISessionToolLedger } from '@makaio/ai-adapters-core';
 import type { ResolvedAdapterAuth } from '@makaio/ai-adapters-core/config';
 import type { ClientExecutionContext } from '@makaio/contracts/client';
 import type { AIReasoningLevel, NativeForkDirective } from '@makaio/contracts';
 import { CodexAppServerConnector } from '../connector.js';
 import { CodexAppServerNamespace } from '../namespaces/index.js';
+import { createTestCall } from '@makaio/test-utils';
 import type { IJsonlTransport, ObservedProcessExit, TransportEnd, TransportStatus } from '@makaio/subprocess';
 import type { JsonRpcClient, ServerRequestHandler, NotificationHandler } from '../utils/jsonRpcClient.js';
 import type { ServerRequest } from '../protocol/generated/index.js';
@@ -197,7 +198,8 @@ export async function createConnectorTestContext(
   options: CreateConnectorTestContextOptions = {},
 ): Promise<ConnectorTestContext> {
   const tempCwd = mkdtempSync(join(tmpdir(), 'codex-test-'));
-  const mockBus = await CodexAppServerNamespace.scopedBus();
+  const globalBus = options.globalBus ?? MakaioBus;
+  const mockBus = await CodexAppServerNamespace.scopedBus(globalBus);
   const mockJsonRpcClient = options.jsonRpcClient ?? new MockJsonRpcClient();
 
   const connector = new CodexAppServerConnector({
@@ -216,7 +218,7 @@ export async function createConnectorTestContext(
     ...(options.approvalPolicy !== undefined && { approvalPolicy: options.approvalPolicy }),
     ...(options.sandboxMode !== undefined && { sandboxMode: options.sandboxMode }),
     ...(options.toolLedger !== undefined && { toolLedger: options.toolLedger }),
-    ...(options.globalBus !== undefined && { globalBus: options.globalBus }),
+    globalBus,
     ...(options.resumeAdapterSessionId !== undefined && { resumeAdapterSessionId: options.resumeAdapterSessionId }),
     ...(options.nativeFork !== undefined && { nativeFork: options.nativeFork }),
     ...(options.transport !== undefined && { transport: options.transport }),
@@ -248,6 +250,8 @@ export function createApiKeyAdapterAuth(apiKey = 'codex-test-api-key'): Resolved
  * @param ctx - The test context to clean up
  */
 export function cleanupConnectorTestContext(ctx: ConnectorTestContext): void {
+  // Contexts built without an own bus share the process-wide one; drop what this test registered on it.
+  MakaioBus.__resetHandlers?.();
   if (ctx.tempCwd) {
     rmSync(ctx.tempCwd, { recursive: true, force: true });
   }
@@ -280,11 +284,14 @@ export async function startConnectorAndEmitThreadStarted(
   client: ThreadStartedNotificationReceiver,
   message: string = 'Test message',
 ): Promise<{ adapterSessionId: string }> {
-  const startPromise = connector.start({
-    role: 'user',
-    message,
-    blocks: [{ type: 'text', content: message }],
-  });
+  const startPromise = connector.start(
+    {
+      role: 'user',
+      message,
+      blocks: [{ type: 'text', content: message }],
+    },
+    { call: createTestCall() },
+  );
 
   // Yield to event loop to allow startThread() to set up deferred promise
   await new Promise((resolve) => setTimeout(resolve, 0));

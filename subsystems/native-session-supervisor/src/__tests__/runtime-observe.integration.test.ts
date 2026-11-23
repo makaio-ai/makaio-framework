@@ -10,6 +10,7 @@
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
+import { createTestCall } from '@makaio/test-utils';
 import type { MakaioDatabase } from '@makaio/storage-drizzle';
 import { NativeSessionSupervisorSubjects } from '@makaio/contracts/native-session-supervisor';
 import { ClientSubjects, type ClientRuntimeObserveRequest } from '@makaio/contracts';
@@ -70,7 +71,7 @@ describe('SupervisorService — client.runtime.observe on launch', () => {
     const { backend } = createMockBackend();
     const factory: PtyRuntimeFactory = (handlers) => new PtyRuntime(backend, handlers);
 
-    service = new SupervisorService(MakaioBus, factory);
+    service = new SupervisorService(MakaioBus, () => undefined, factory);
     await service.init();
   });
 
@@ -114,7 +115,7 @@ describe('SupervisorService — client.runtime.observe on launch', () => {
 
     registerObserveCapture(captured, runtimeObserveCleanups);
 
-    await MakaioBus.request(NativeSessionSupervisorSubjects.launch, {
+    await MakaioBus.request(createTestCall(), NativeSessionSupervisorSubjects.launch, {
       clientId: 'claude-code',
       cwd: '/home/user',
       command: '/bin/bash',
@@ -133,12 +134,16 @@ describe('SupervisorService — client.runtime.observe on launch', () => {
 
     registerObserveCapture(captured, runtimeObserveCleanups);
 
-    const { supervisorSessionId, pid } = await MakaioBus.request(NativeSessionSupervisorSubjects.launch, {
-      clientId: 'my-client',
-      cwd: '/tmp',
-      command: '/bin/sh',
-      args: [],
-    });
+    const { supervisorSessionId, pid } = await MakaioBus.request(
+      createTestCall(),
+      NativeSessionSupervisorSubjects.launch,
+      {
+        clientId: 'my-client',
+        cwd: '/tmp',
+        command: '/bin/sh',
+        args: [],
+      },
+    );
 
     await vi.waitFor(() => expect(captured).toHaveLength(1));
 
@@ -153,7 +158,7 @@ describe('SupervisorService — client.runtime.observe on launch', () => {
 
     registerObserveCapture(captured, runtimeObserveCleanups);
 
-    await MakaioBus.request(NativeSessionSupervisorSubjects.launch, {
+    await MakaioBus.request(createTestCall(), NativeSessionSupervisorSubjects.launch, {
       clientId: 'test-client',
       cwd: '/tmp',
       command: '/bin/sh',
@@ -172,7 +177,7 @@ describe('SupervisorService — client.runtime.observe on launch', () => {
     // No handler registered: the optional runtime observation remains
     // fire-and-forget and must not reject the launch request.
     await expect(
-      MakaioBus.request(NativeSessionSupervisorSubjects.launch, {
+      MakaioBus.request(createTestCall(), NativeSessionSupervisorSubjects.launch, {
         clientId: 'claude-code',
         cwd: '/home/user',
         command: '/bin/bash',
@@ -199,7 +204,7 @@ describe('SupervisorService — client.runtime.observe on launch', () => {
       }),
     );
 
-    await MakaioBus.request(NativeSessionSupervisorSubjects.launch, {
+    await MakaioBus.request(createTestCall(), NativeSessionSupervisorSubjects.launch, {
       clientId: 'claude-code',
       cwd: '/home/user',
       command: '/bin/bash',

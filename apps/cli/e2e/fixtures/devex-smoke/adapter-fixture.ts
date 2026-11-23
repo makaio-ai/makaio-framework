@@ -22,6 +22,7 @@ import {
   defineAdapterProviderAuth,
   type AdapterProviderRef,
   type ConnectorTeardownResult,
+  type CallContext,
 } from '@makaio/contracts';
 import { DEFAULT_TIMEOUTS } from '@makaio/utils';
 import { providerDefinition } from './provider-fixture.js';
@@ -72,23 +73,17 @@ class DevexSmokeConnector extends AIAgentConnector<DevexSmokeBus> {
     this.adapterSessionId ??= `${DEVEX_SMOKE_ADAPTER_NAME}-session`;
   }
 
-  public async start(
-    message: NormalizedMessageInput,
-    options?: ConnectorStartOptions,
-  ): Promise<AgentStartResult> {
+  public async start(message: NormalizedMessageInput, options: ConnectorStartOptions): Promise<AgentStartResult> {
     await this.initialize();
     const messageHandle = this.createCompletedHandle(message, options);
     return {
-      adapterSessionId: await this.getAdapterSessionId(),
+      adapterSessionId: await this.getAdapterSessionId(options.call),
       agentId: this.getAgentId(),
       messageHandle,
     };
   }
 
-  public async sendMessage(
-    message: NormalizedMessageInput,
-    options?: ConnectorSendMessageOptions,
-  ): Promise<MessageHandle> {
+  public async sendMessage(message: NormalizedMessageInput, options: ConnectorSendMessageOptions): Promise<MessageHandle> {
     await this.initialize();
     return this.createCompletedHandle(message, options);
   }
@@ -108,7 +103,7 @@ class DevexSmokeConnector extends AIAgentConnector<DevexSmokeBus> {
     return { evidence: 'released' };
   }
 
-  public async getAdapterSessionId(): Promise<string> {
+  public async getAdapterSessionId(_call: CallContext): Promise<string> {
     await this.initialize();
     return this.adapterSessionId!;
   }
@@ -120,13 +115,10 @@ class DevexSmokeConnector extends AIAgentConnector<DevexSmokeBus> {
   /**
    * Build a message handle that completes in the next microtask.
    * @param message - Normalized message to acknowledge and complete.
-   * @param options - Caller-assigned message identity and turn context.
+   * @param options - Caller call, message identity and turn context.
    * @returns Pre-wired message handle.
    */
-  private createCompletedHandle(
-    message: NormalizedMessageInput,
-    options?: ConnectorSendMessageOptions,
-  ): MessageHandle {
+  private createCompletedHandle(message: NormalizedMessageInput, options: ConnectorSendMessageOptions): MessageHandle {
     const handle = this.createMessageHandle(message, options);
 
     queueMicrotask(() => {
@@ -175,7 +167,7 @@ class DevexSmokeAdapter extends AIAdapter<DevexSmokeBus, DevexSmokeConnector, De
  * @returns Initialized local-only adapter instance.
  */
 export async function createDevexSmokeAdapter(options: AIAdapterRuntimeInitOptions): Promise<DevexSmokeAdapter> {
-  const scopedBus = (await DevexSmokeNamespace.scopedBus()) as DevexSmokeBus;
+  const scopedBus = (await DevexSmokeNamespace.scopedBus(MakaioBus)) as DevexSmokeBus;
   const adapter = new DevexSmokeAdapter({
     adapterId: options.adapterId,
     machineId: options.machineId,
@@ -190,6 +182,7 @@ export async function createDevexSmokeAdapter(options: AIAdapterRuntimeInitOptio
     agentFactory: (config) => new DevexSmokeAgent(config),
     configFactory: async (input) => ({
       bus: scopedBus,
+      globalBus: input.globalBus,
       agentId: input.agentId ?? 'devex-smoke-agent',
       adapterId: input.adapterId ?? 'devex-smoke-adapter-id',
       adapterName: DEVEX_SMOKE_ADAPTER_NAME,

@@ -7,7 +7,7 @@
  */
 import type { IMakaioBus } from '@makaio/bus-core';
 import type { ProviderKeyPublication } from './adapter-provider-key-publication.js';
-import type { ExtractSubjectResponse } from '@makaio/core';
+import type { CallContext, ExtractSubjectResponse } from '@makaio/core';
 import type { AdapterSubjects, MakaioSessionAgent, McpSessionContext } from '@makaio/contracts';
 import { AgentStorageSubjects } from '@makaio/services-core/session';
 import { resolveRuntimeProviderContext } from '@makaio/services-core/provider-context';
@@ -49,10 +49,12 @@ export interface ColdRehydratePreflightDeps {
   readonly globalBus: IMakaioBus;
   /**
    * Re-resolve MCP session context from persisted keys.
+   * @param call - Call context of the rehydrate this preflight serves.
    * @param sessionId - Session the agent belongs to.
    * @param profileId - Profile persisted with the agent, when there was one.
    */
   resolveMcpSessionContext: (
+    call: CallContext,
     sessionId: string,
     profileId: string | undefined,
   ) => Promise<McpSessionContext | undefined>;
@@ -92,19 +94,21 @@ export function notDispatched(message: string): RehydrateAgentRefusal {
  * session's key over an unavailable credential store — the next attempt then
  * finds its own key `occupied` by a generation that never spoke to anything.
  * The boundary lives with the steps, as on the start path.
+ * @param call - Call context of the rehydrate request this preflight serves.
  * @param deps - Bus and the MCP resolver this adapter owns.
  * @param agentId - Agent identifier being rehydrated.
  * @param runtime - Runtime overrides from the rehydrate RPC payload.
  * @returns The inputs a dispatch needs, or the refusal that stops it.
  */
 export async function prepareColdRehydrate(
+  call: CallContext,
   deps: ColdRehydratePreflightDeps,
   agentId: string,
   runtime: RehydrateRuntime,
 ): Promise<ColdRehydratePreflight | RehydrateAgentRefusal> {
   const { rpcResumeId, cwd, model } = runtime;
   try {
-    const result = await deps.globalBus.requestOptional(AgentStorageSubjects.get, { agentId });
+    const result = await deps.globalBus.requestOptional(call, AgentStorageSubjects.get, { agentId });
     if (!result.handled || !result.data.agent) {
       return notDispatched(`Agent ${agentId} not found in storage`);
     }
@@ -115,10 +119,10 @@ export async function prepareColdRehydrate(
     // Re-resolve MCP session context from persisted keys so the rehydrated agent
     // regains tool ledger and native passthrough. Best-effort: resolves to
     // undefined if the MCP service is unavailable on this process start.
-    const mcpSessionContext = await deps.resolveMcpSessionContext(persisted.sessionId, persisted.profileId);
+    const mcpSessionContext = await deps.resolveMcpSessionContext(call, persisted.sessionId, persisted.profileId);
     const providerContext =
       persisted.providerConfigId !== undefined
-        ? await resolveRuntimeProviderContext(deps.globalBus, {
+        ? await resolveRuntimeProviderContext(call, deps.globalBus, {
             adapterName: persisted.adapterName,
             providerConfigId: persisted.providerConfigId,
           })
@@ -148,7 +152,7 @@ export async function prepareColdRehydrate(
     // Restore cumulative usage baseline from persisted turn history.
     // Without this, the adapter's in-memory totals would restart from zero
     // after every process restart, making session-level usage unreliable.
-    const restoredUsage = await restoreAgentUsageFromTurns(deps.globalBus, persisted.sessionId, agentId);
+    const restoredUsage = await restoreAgentUsageFromTurns(call, deps.globalBus, persisted.sessionId, agentId);
     return { persisted, agentCreationRequest, restoredUsage };
   } catch (error) {
     return notDispatched(

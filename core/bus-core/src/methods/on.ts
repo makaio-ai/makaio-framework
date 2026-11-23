@@ -7,6 +7,7 @@ import { warnIfUnregistered } from '../utils/warn-unregistered.js';
 import {
   type EventHandler,
   type HandlerForSubjectDefinition,
+  type PartyRef,
   type RequestHandler,
   type SubjectDefinition,
   WildcardSubjectKey,
@@ -46,6 +47,7 @@ export async function waitForSubscriptionPropagation(cleanup: (() => void) | nul
 /**
  * Add a handler to a handler map with priority-based ordering.
  * @param context - Makaio bus context
+ * @param owner - Party that registers the handler (carrier of the bus instance `on` was called on)
  * @param mapKey - Which handler map to add to
  * @param fullSubjectKey - Full subject key including namespace (used for map storage/lookup)
  * @param handler - Handler to add
@@ -53,6 +55,7 @@ export async function waitForSubscriptionPropagation(cleanup: (() => void) | nul
  */
 function addToHandlerMap(
   context: MakaioBusContext,
+  owner: PartyRef,
   mapKey: HandlerMapKey,
   fullSubjectKey: string,
   handler: AnyHandler,
@@ -63,7 +66,7 @@ function addToHandlerMap(
     map.set(fullSubjectKey, []);
   }
   const entries = map.get(fullSubjectKey)!;
-  insertSorted(entries, { handler, priority } as HandlerEntry<AnyHandler>);
+  insertSorted(entries, { handler, priority, owner } as HandlerEntry<AnyHandler>);
 }
 
 /**
@@ -101,6 +104,7 @@ function removeFromHandlerMap(
  * - Message payloads use `subject` + `namespace` separately
  * - Handler maps/caching use `fullSubjectKey` for storage/lookup
  * @param context - Makaio bus context
+ * @param owner - Carrier of the bus instance registering the handler; stored as `HandlerEntry.owner`
  * @param subjectDefinition - Subject definition with subject pattern and metadata
  * @param handler - Handler function (EventHandler for events, RequestHandler for requests)
  * @param options - Optional filter and other subscription options
@@ -109,6 +113,7 @@ function removeFromHandlerMap(
  */
 export function on<T extends SubjectDefinition>(
   context: MakaioBusContext,
+  owner: PartyRef,
   subjectDefinition: T,
   handler: HandlerForSubjectDefinition<T>,
   options?: OnOptions,
@@ -154,7 +159,7 @@ export function on<T extends SubjectDefinition>(
   // Add handler to appropriate map(s) using fullSubjectKey for storage
   const priority = options?.priority ?? 0;
   for (const mapKey of maps) {
-    addToHandlerMap(context, mapKey, fullSubjectKey, effectiveHandler, priority);
+    addToHandlerMap(context, owner, mapKey, fullSubjectKey, effectiveHandler, priority);
   }
 
   // Design: Handler-level payload filters (options.filter) are applied locally

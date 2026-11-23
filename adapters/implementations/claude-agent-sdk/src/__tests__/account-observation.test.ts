@@ -13,6 +13,7 @@
 
 import { beforeEach, describe, it, expect, vi } from 'vitest';
 import type { OptionalResult } from '@makaio/core';
+import { createTestCall } from '@makaio/test-utils';
 import type { ClientSessionAccountObserveResponse } from '@makaio/contracts/client';
 import {
   ClaudeAccountObservationEmitter,
@@ -199,15 +200,12 @@ describe('normalizeClaudeAccountObservationPayload', () => {
 // ---------------------------------------------------------------------------
 
 describe('ClaudeAccountObservationEmitter', () => {
-  let requestObservation: ReturnType<typeof vi.fn>;
+  let requestObservation: ReturnType<typeof vi.fn<RequestSessionAccountObservation>>;
   let emitter: ClaudeAccountObservationEmitter;
 
   beforeEach(() => {
-    requestObservation = vi.fn(async () => handledResponse());
-    emitter = new ClaudeAccountObservationEmitter(
-      requestObservation as RequestSessionAccountObservation,
-      'claude-code',
-    );
+    requestObservation = vi.fn<RequestSessionAccountObservation>(async () => handledResponse());
+    emitter = new ClaudeAccountObservationEmitter(requestObservation, 'claude-code');
   });
 
   // -------------------------------------------------------------------------
@@ -216,11 +214,13 @@ describe('ClaudeAccountObservationEmitter', () => {
 
   describe('emitIfChanged', () => {
     it('emits client.session.account.observe after successful turn when account info is valid', async () => {
+      const call = createTestCall();
       const ctx = makeContext(makeQueryInstance(VALID_RAW_ACCOUNT_INFO), undefined, 'adapter-session-1');
-      await emitter.emitIfChanged(ctx);
+      await emitter.emitIfChanged(call, ctx);
+      expect(requestObservation.mock.calls[0]![0]).toBe(call);
       expect(requestObservation).toHaveBeenCalledTimes(1);
-      const [call] = requestObservation.mock.calls;
-      expect(call![0]).toMatchObject({
+      const [, observation] = requestObservation.mock.calls[0]!;
+      expect(observation).toMatchObject({
         clientId: 'claude-code',
         source: 'claude-agent-sdk',
         kind: 'account-info',
@@ -229,7 +229,7 @@ describe('ClaudeAccountObservationEmitter', () => {
           adapterSessionId: 'adapter-session-1',
         },
       });
-      expect(call![0]!.payload).toMatchObject({
+      expect(observation.payload).toMatchObject({
         identifiers: expect.arrayContaining([
           expect.objectContaining({ scheme: 'account-org-uuid', strength: 'strong' }),
         ]),
@@ -238,9 +238,9 @@ describe('ClaudeAccountObservationEmitter', () => {
 
     it('includes both sessionId and adapterSessionId in locator when both are present', async () => {
       const ctx = makeContext(makeQueryInstance(VALID_RAW_ACCOUNT_INFO), 'framework-session-1', 'adapter-session-1');
-      await emitter.emitIfChanged(ctx);
+      await emitter.emitIfChanged(createTestCall(), ctx);
       expect(requestObservation).toHaveBeenCalledTimes(1);
-      expect(requestObservation.mock.calls[0]![0]!.locator).toEqual({
+      expect(requestObservation.mock.calls[0]![1].locator).toEqual({
         kind: 'both',
         sessionId: 'framework-session-1',
         adapterSessionId: 'adapter-session-1',
@@ -249,8 +249,8 @@ describe('ClaudeAccountObservationEmitter', () => {
 
     it('uses sessionId-only locator when adapterSessionId is absent', async () => {
       const ctx = makeContext(makeQueryInstance(VALID_RAW_ACCOUNT_INFO), 'framework-session-2');
-      await emitter.emitIfChanged(ctx);
-      expect(requestObservation.mock.calls[0]![0]!.locator).toEqual({
+      await emitter.emitIfChanged(createTestCall(), ctx);
+      expect(requestObservation.mock.calls[0]![1].locator).toEqual({
         kind: 'session',
         sessionId: 'framework-session-2',
       });
@@ -258,16 +258,16 @@ describe('ClaudeAccountObservationEmitter', () => {
 
     it('skips emit when neither sessionId nor adapterSessionId is set', async () => {
       const ctx = makeContext(makeQueryInstance(VALID_RAW_ACCOUNT_INFO));
-      await emitter.emitIfChanged(ctx);
+      await emitter.emitIfChanged(createTestCall(), ctx);
       expect(requestObservation).not.toHaveBeenCalled();
     });
 
     it('stamps observedAt as a number on the emitted observation', async () => {
       const before = Date.now();
       const ctx = makeContext(makeQueryInstance(VALID_RAW_ACCOUNT_INFO), undefined, 'adapter-session-ts');
-      await emitter.emitIfChanged(ctx);
+      await emitter.emitIfChanged(createTestCall(), ctx);
       const after = Date.now();
-      const { observedAt } = requestObservation.mock.calls[0]![0]!;
+      const { observedAt } = requestObservation.mock.calls[0]![1];
       expect(observedAt).toBeGreaterThanOrEqual(before);
       expect(observedAt).toBeLessThanOrEqual(after);
     });
@@ -282,30 +282,30 @@ describe('ClaudeAccountObservationEmitter', () => {
       const instance = makeQueryInstance(VALID_RAW_ACCOUNT_INFO);
       const ctx = makeContext(instance, 'session-dedup', 'adapter-dedup');
 
-      await emitter.emitIfChanged(ctx);
+      await emitter.emitIfChanged(createTestCall(), ctx);
       expect(requestObservation).toHaveBeenCalledTimes(1);
 
       // Second call with the same data — should be suppressed
-      await emitter.emitIfChanged(ctx);
+      await emitter.emitIfChanged(createTestCall(), ctx);
       expect(requestObservation).toHaveBeenCalledTimes(1);
     });
 
     it('re-emits when the payload changes between calls', async () => {
       const ctx1 = makeContext(makeQueryInstance(VALID_RAW_ACCOUNT_INFO), 'session-change', 'adapter-change');
-      await emitter.emitIfChanged(ctx1);
+      await emitter.emitIfChanged(createTestCall(), ctx1);
       expect(requestObservation).toHaveBeenCalledTimes(1);
 
       const ctx2 = makeContext(makeQueryInstance(UPDATED_RAW_ACCOUNT_INFO), 'session-change', 'adapter-change');
-      await emitter.emitIfChanged(ctx2);
+      await emitter.emitIfChanged(createTestCall(), ctx2);
       expect(requestObservation).toHaveBeenCalledTimes(2);
     });
 
     it('does not re-emit when only the locator changes (sessionId rotation)', async () => {
       const ctx1 = makeContext(makeQueryInstance(VALID_RAW_ACCOUNT_INFO), 'session-a', 'adapter-x');
-      await emitter.emitIfChanged(ctx1);
+      await emitter.emitIfChanged(createTestCall(), ctx1);
 
       const ctx2 = makeContext(makeQueryInstance(VALID_RAW_ACCOUNT_INFO), 'session-b', 'adapter-x');
-      await emitter.emitIfChanged(ctx2);
+      await emitter.emitIfChanged(createTestCall(), ctx2);
 
       expect(requestObservation).toHaveBeenCalledTimes(1);
     });
@@ -314,9 +314,9 @@ describe('ClaudeAccountObservationEmitter', () => {
       requestObservation.mockResolvedValueOnce(unhandledDataResponse());
       const ctx = makeContext(makeQueryInstance(VALID_RAW_ACCOUNT_INFO), undefined, 'adapter-unhandled');
 
-      await emitter.emitIfChanged(ctx);
+      await emitter.emitIfChanged(createTestCall(), ctx);
       // Not cached — second call should attempt again
-      await emitter.emitIfChanged(ctx);
+      await emitter.emitIfChanged(createTestCall(), ctx);
       expect(requestObservation).toHaveBeenCalledTimes(2);
     });
 
@@ -324,8 +324,8 @@ describe('ClaudeAccountObservationEmitter', () => {
       requestObservation.mockResolvedValueOnce(noHandlerResponse());
       const ctx = makeContext(makeQueryInstance(VALID_RAW_ACCOUNT_INFO), undefined, 'adapter-no-handler');
 
-      await emitter.emitIfChanged(ctx);
-      await emitter.emitIfChanged(ctx);
+      await emitter.emitIfChanged(createTestCall(), ctx);
+      await emitter.emitIfChanged(createTestCall(), ctx);
       expect(requestObservation).toHaveBeenCalledTimes(2);
     });
   });
@@ -337,7 +337,7 @@ describe('ClaudeAccountObservationEmitter', () => {
   describe('missing or unsupported accountInfo()', () => {
     it('returns without emitting when queryInstance is undefined', async () => {
       const ctx = makeContext(undefined, undefined, 'adapter-no-instance');
-      await emitter.emitIfChanged(ctx);
+      await emitter.emitIfChanged(createTestCall(), ctx);
       expect(requestObservation).not.toHaveBeenCalled();
     });
 
@@ -347,7 +347,7 @@ describe('ClaudeAccountObservationEmitter', () => {
         adapterSessionId: 'adapter-no-method',
         getQueryInstance: () => ({}) as ReturnType<typeof makeQueryInstance>,
       };
-      await emitter.emitIfChanged(ctx);
+      await emitter.emitIfChanged(createTestCall(), ctx);
       expect(requestObservation).not.toHaveBeenCalled();
     });
 
@@ -358,14 +358,14 @@ describe('ClaudeAccountObservationEmitter', () => {
         }),
       };
       const ctx = makeContext(failingInstance, undefined, 'adapter-fail');
-      await expect(emitter.emitIfChanged(ctx)).resolves.toBeUndefined();
+      await expect(emitter.emitIfChanged(createTestCall(), ctx)).resolves.toBeUndefined();
       expect(requestObservation).not.toHaveBeenCalled();
     });
 
     it('does not throw when requestObservation itself rejects', async () => {
       requestObservation.mockRejectedValueOnce(new Error('bus unavailable'));
       const ctx = makeContext(makeQueryInstance(VALID_RAW_ACCOUNT_INFO), undefined, 'adapter-bus-fail');
-      await expect(emitter.emitIfChanged(ctx)).resolves.toBeUndefined();
+      await expect(emitter.emitIfChanged(createTestCall(), ctx)).resolves.toBeUndefined();
     });
   });
 
@@ -385,11 +385,12 @@ describe('ClaudeAccountObservationEmitter', () => {
       const ctx = makeContext(makeQueryInstance(VALID_RAW_ACCOUNT_INFO), undefined, 'adapter-overlap');
 
       // Start first call — it is now in-flight
-      const firstCall = emitter.emitIfChanged(ctx);
+      const call = createTestCall();
+      const firstCall = emitter.emitIfChanged(call, ctx);
 
       // Start second call while first is still in-flight — the key is in-flight
       // so it enqueues a pending retry and returns immediately
-      const secondCall = emitter.emitIfChanged(ctx);
+      const secondCall = emitter.emitIfChanged(createTestCall(), ctx);
       await secondCall;
 
       // Resolve the first in-flight call (not handled → triggers retry)
@@ -399,15 +400,17 @@ describe('ClaudeAccountObservationEmitter', () => {
       // The retry is fired asynchronously after firstCall settles; wait for it
       // rather than relying on a fixed wall-clock delay.
       await vi.waitFor(() => expect(requestObservation).toHaveBeenCalledTimes(2));
+      expect(requestObservation.mock.calls[0]![0]).toBe(call);
+      expect(requestObservation.mock.calls[1]![0]).toBe(call);
     });
 
     it('does not retry when the pending retry key is absent after the in-flight call settles', async () => {
       // Both calls succeed independently — no overlap scenario
       const ctx = makeContext(makeQueryInstance(VALID_RAW_ACCOUNT_INFO), undefined, 'adapter-no-retry');
-      await emitter.emitIfChanged(ctx);
+      await emitter.emitIfChanged(createTestCall(), ctx);
       // Second call is a different payload to bypass dedup
       const ctx2 = makeContext(makeQueryInstance(UPDATED_RAW_ACCOUNT_INFO), undefined, 'adapter-no-retry');
-      await emitter.emitIfChanged(ctx2);
+      await emitter.emitIfChanged(createTestCall(), ctx2);
       // Exactly two observations sent — one per distinct key, no extra retries
       expect(requestObservation).toHaveBeenCalledTimes(2);
     });

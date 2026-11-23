@@ -32,14 +32,14 @@ export function registerCompressHandler(bus: IMakaioBus): () => void {
     const { sessionId, pipeline } = ctx.payload;
 
     // 1. Load all messages from session
-    const { messages } = await bus.request(MessageStorageSubjects.getBySession, {
+    const { messages } = await bus.request(ctx.call, MessageStorageSubjects.getBySession, {
       sessionId,
       limit: 10000,
     });
 
     // 2. Execute pipeline (sessionId is injected into each step's options so
     //    bus-dependent actions like llm-extract can use it for resolution context)
-    const result = await executePipeline(messages, pipeline, { sessionId });
+    const result = await executePipeline(ctx.call, messages, pipeline, { sessionId });
 
     if (!result.contextJson) {
       throw new Error(`[compress-handler] Compress pipeline must produce context JSON (sessionId=${sessionId})`);
@@ -53,7 +53,7 @@ export function registerCompressHandler(bus: IMakaioBus): () => void {
 
     // 5. Insert squash event
     const eventId = crypto.randomUUID();
-    await bus.request(SessionEventStorageSubjects.append, {
+    await bus.request(ctx.call, SessionEventStorageSubjects.append, {
       event: {
         sessionId,
         eventId,
@@ -69,7 +69,7 @@ export function registerCompressHandler(bus: IMakaioBus): () => void {
     });
 
     // 6. Emit compressed event (for ContextWindowTracker and other listeners)
-    await bus.emit(SessionSubjects.compressed, { sessionId, eventId });
+    await bus.emit(ctx.call, SessionSubjects.compressed, { sessionId, eventId });
 
     ctx.setResult({
       eventId,

@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
+import { createTestCall } from '@makaio/test-utils';
 import type { SessionMessage, IMakaioSession, SessionContext } from '@makaio/contracts';
 import { assembleForkContext } from '../assemble-fork-context.js';
 import {
@@ -37,7 +38,7 @@ describe('assembleForkContext', () => {
 
       const originalContext: SessionContext = {};
 
-      const result = await assembleForkContext(MakaioBus, session, 'session-1', originalContext);
+      const result = await assembleForkContext(createTestCall(), MakaioBus, session, 'session-1', originalContext);
 
       expect(result).toBe(originalContext); // Same reference, unchanged
     });
@@ -54,7 +55,14 @@ describe('assembleForkContext', () => {
 
       const originalContext: SessionContext = {};
 
-      const result = await assembleForkContext(MakaioBus, session, 'session-1', originalContext, true);
+      const result = await assembleForkContext(
+        createTestCall(),
+        MakaioBus,
+        session,
+        'session-1',
+        originalContext,
+        true,
+      );
 
       expect(result).toBe(originalContext);
     });
@@ -73,7 +81,7 @@ describe('assembleForkContext', () => {
         messageHistory: [{ role: 'user', blocks: [{ type: 'text', content: 'existing' }] }],
       };
 
-      const result = await assembleForkContext(MakaioBus, session, 'session-1', originalContext);
+      const result = await assembleForkContext(createTestCall(), MakaioBus, session, 'session-1', originalContext);
 
       expect(result).toBe(originalContext); // Same reference, unchanged
     });
@@ -116,7 +124,7 @@ describe('assembleForkContext', () => {
     it('should assemble context for fork session with no turns', async () => {
       const forkSession = setupFirstTurnFork({ sessionId: 'child' });
 
-      const result = await assembleForkContext(MakaioBus, forkSession, 'child', undefined, true);
+      const result = await assembleForkContext(createTestCall(), MakaioBus, forkSession, 'child', undefined, true);
 
       expect(result).not.toBeUndefined();
       expect(result?.messageHistory).toHaveLength(1);
@@ -129,7 +137,7 @@ describe('assembleForkContext', () => {
         forkTransforms: { removedMessageIds: [] },
       });
 
-      const result = await assembleForkContext(MakaioBus, forkSession, 'fork', undefined, true);
+      const result = await assembleForkContext(createTestCall(), MakaioBus, forkSession, 'fork', undefined, true);
 
       expect(result?.hasNewTransforms).toBe(true);
     });
@@ -141,7 +149,7 @@ describe('assembleForkContext', () => {
         hasCompression: true,
       };
 
-      const result = await assembleForkContext(MakaioBus, forkSession, 'fork', originalContext, true);
+      const result = await assembleForkContext(createTestCall(), MakaioBus, forkSession, 'fork', originalContext, true);
 
       expect(result?.hasCompression).toBe(true);
       expect(result?.messageHistory).toBeDefined();
@@ -152,7 +160,7 @@ describe('assembleForkContext', () => {
 
       const originalContext: SessionContext = {};
 
-      const result = await assembleForkContext(MakaioBus, forkSession, 'fork', originalContext);
+      const result = await assembleForkContext(createTestCall(), MakaioBus, forkSession, 'fork', originalContext);
 
       expect(result).toBe(originalContext);
     });
@@ -164,7 +172,7 @@ describe('assembleForkContext', () => {
         contextInheritance: 'none',
       });
 
-      const result = await assembleForkContext(MakaioBus, forkSession, 'child', undefined, true);
+      const result = await assembleForkContext(createTestCall(), MakaioBus, forkSession, 'child', undefined, true);
 
       expect(result).toBeUndefined();
     });
@@ -176,7 +184,7 @@ describe('assembleForkContext', () => {
         contextInheritance: 'parent-history',
       });
 
-      const result = await assembleForkContext(MakaioBus, forkSession, 'child', undefined, true);
+      const result = await assembleForkContext(createTestCall(), MakaioBus, forkSession, 'child', undefined, true);
 
       expect(result?.messageHistory).toEqual(
         expect.arrayContaining([
@@ -208,7 +216,14 @@ describe('assembleForkContext', () => {
       const originalContext: SessionContext = {};
 
       // isNewTurn=false because this is a subsequent turn (turn already exists in production)
-      const result = await assembleForkContext(MakaioBus, forkSession, 'fork', originalContext, false);
+      const result = await assembleForkContext(
+        createTestCall(),
+        MakaioBus,
+        forkSession,
+        'fork',
+        originalContext,
+        false,
+      );
 
       expect(result).toBe(originalContext); // Unchanged — not a new turn
     });
@@ -251,7 +266,7 @@ describe('assembleForkContext', () => {
       mockGetEvents(cleanup, 'fork', []);
       mockGetTurnsBySession(cleanup, 'fork', []);
 
-      const result = await assembleForkContext(MakaioBus, forkSession, 'fork', undefined, true);
+      const result = await assembleForkContext(createTestCall(), MakaioBus, forkSession, 'fork', undefined, true);
 
       expect(result?.messageHistory).toHaveLength(1);
       const convertedMsg = result?.messageHistory?.[0];

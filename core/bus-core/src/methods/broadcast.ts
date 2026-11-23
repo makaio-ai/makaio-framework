@@ -1,8 +1,18 @@
 import type { BusBroadcastMessage, RequestOptions, MakaioBusContext, WithReceiveContext } from '../types/index.js';
-import type { RequestContext, RequestHandler, SubjectDefinition, TransportReceiveContext } from '@makaio/core';
+import type {
+  CallContext,
+  PartyRef,
+  RequestContext,
+  RequestHandler,
+  SubjectDefinition,
+  TransportReceiveContext,
+} from '@makaio/core';
 import { nanoid } from 'nanoid';
-import { LOCAL_ORIGIN, REMOTE_ORIGIN } from '../utils/transport-helpers.js';
-import { getMatchingHandlers } from './request/getMatchingHandlers.js';
+import { getMatchingHandlerEntries } from './request/getMatchingHandlers.js';
+import { hostPartyOf } from '../call-context/carrier.js';
+import { trackOpenHandlerCall } from '../call-context/own-work.js';
+import { enterSend } from '../call-context/send-entry.js';
+import { wireMetadataOf } from '../call-context/wire.js';
 import { getFullSubjectForSubjectDefinition } from '../utils/subject-transformation.js';
 import { getReadyTransports } from '../utils/transport.js';
 import { isExplicitLocalOnlyTransportSpec, normalizeTransportTargets } from './request/normalizeTransportTargets.js';
@@ -53,6 +63,7 @@ export interface BroadcastContext<Request, Response> extends RequestContext<Requ
  * @param messageId - Unique message identifier
  * @param correlationId - Correlation ID for tracing
  * @param onResult - Callback invoked when a handler sets its result
+ * @param call - Call context of the handled message (the sent context)
  * @param transport - Trusted context supplied by the receiving transport
  * @returns A request context for broadcast handlers
  */
@@ -61,13 +72,12 @@ function createBroadcastContext<P, R>(
   messageId: string,
   correlationId: string,
   onResult: (nodeId: string, result: R) => void,
+  call: CallContext,
   transport?: TransportReceiveContext,
 ): RequestContext<P, R> {
   let nodeId = 'anonymous';
   let resultSet = false;
   let resultValue: R | undefined;
-
-  const origin = transport ? REMOTE_ORIGIN : LOCAL_ORIGIN;
 
   const context: BroadcastContext<P, R> = {
     isRequest: true,
@@ -75,7 +85,7 @@ function createBroadcastContext<P, R>(
     messageId,
     correlationId,
     transport,
-    origin,
+    call,
     get result() {
       return resultValue;
     },
@@ -124,6 +134,10 @@ interface LocalBroadcastHandlerOptions<Request> {
   correlationId: string;
   subjectKey: string;
   fullSubjectKey: string;
+  /** Call context of the handled message; the handler sees it as `ctx.call`. */
+  call: CallContext;
+  /** Party that registered the handler; its open-call counter covers the handler run. */
+  owner: PartyRef;
   transport?: TransportReceiveContext;
   validationCtx: RequestValidationContext;
 }
@@ -146,11 +160,12 @@ async function executeLocalBroadcastHandler<Request, Response>(
     (nodeId, result) => {
       handlerResults.push({ nodeId, payload: result });
     },
+    options.call,
     options.transport,
   );
 
   try {
-    await handler(handlerContext as RequestContext<unknown, unknown>);
+    await trackOpenHandlerCall(options.owner, () => handler(handlerContext as RequestContext<unknown, unknown>));
   } catch (error) {
     console.error(
       `[${options.correlationId}][${options.messageId}] Broadcast handler error for "${options.subjectKey}":`,
@@ -176,7 +191,15 @@ async function executeLocalBroadcastHandler<Request, Response>(
  * **Handler Usage:**
  * Handlers should call `ctx.identify(nodeId)` before `ctx.setResult()` to tag their response.
  * If `identify()` is not called, the response is tagged as 'anonymous'.
+ *
+ * **Entry for sends.** This is the entry for a message sent by a bus instance: it enters
+ * through {@link enterSend}, which derives the sent context from the carrier and the passed
+ * `call` and reports the use of an own context, and delivers with the sent context. Messages
+ * that arrive from a transport carry an already minted context and enter through
+ * {@link broadcastWithCall} instead.
  * @param context - Makaio bus context
+ * @param carrier - Carrier of the sending bus instance; becomes the caller of the sent context
+ * @param call - Call context the sender passed (own context of the carrier, or a received `ctx.call`)
  * @param subjectDefinition - Request subject (must be a request-type subject, not event)
  * @param payload - Request payload (typed from subject definition)
  * @param options - Request options (timeout, correlationId, transports)
@@ -190,7 +213,7 @@ async function executeLocalBroadcastHandler<Request, Response>(
  * \});
  *
  * // Broadcast collects all responses from local handlers AND remote transports
- * const results = await MakaioBus.broadcast(FileSystemSubjects.listSources, \{\});
+ * const results = await broadcast(context, carrier, call, FileSystemSubjects.listSources, \{\});
  * // results: [
  * //   \{ nodeId: 'local', payload: \{ sources: [...] \} \},
  * //   \{ nodeId: 'remote', payload: \{ sources: [...] \} \},
@@ -200,13 +223,44 @@ async function executeLocalBroadcastHandler<Request, Response>(
  * const allSources = results.flatMap(r => r.payload.sources);
  * ```
  */
-// eslint-disable-next-line max-lines-per-function -- notifyMessageObservers() adds 5 lines to a function that already used its budget
 export async function broadcast<
   T extends SubjectDefinition,
   Request extends T['$meta']['payload']['request'],
   Response extends T['$meta']['payload']['response'],
 >(
   context: MakaioBusContext,
+  carrier: PartyRef,
+  call: CallContext,
+  subjectDefinition: T,
+  payload: Request,
+  options?: InternalBroadcastOptions,
+): Promise<BroadcastResult<Response>[]> {
+  const sent = enterSend(call, context, carrier, getFullSubjectForSubjectDefinition(subjectDefinition));
+  return broadcastWithCall<T, Request, Response>(context, sent, subjectDefinition, payload, options);
+}
+
+/**
+ * Execute a broadcast whose call context is already minted.
+ *
+ * **Entry for already-minted (received) contexts.** Used by the receive path, where
+ * `callFromReceive` built the context from the transport and the wire metadata, and by
+ * {@link broadcast} after it derived the sent context. Does not derive, check the
+ * carrier, or report own-context use: the context is delivered as given.
+ * @param context - Makaio bus context
+ * @param call - Minted call context of the message; handlers see it as `ctx.call`
+ * @param subjectDefinition - Request subject (must be a request-type subject, not event)
+ * @param payload - Request payload (typed from subject definition)
+ * @param options - Request options (timeout, correlationId, transports)
+ * @returns Array of \{ nodeId, payload \} responses from all handlers and transports
+ */
+// eslint-disable-next-line max-lines-per-function -- notifyMessageObservers() adds 5 lines to a function that already used its budget
+export async function broadcastWithCall<
+  T extends SubjectDefinition,
+  Request extends T['$meta']['payload']['request'],
+  Response extends T['$meta']['payload']['response'],
+>(
+  context: MakaioBusContext,
+  call: CallContext,
   subjectDefinition: T,
   payload: Request,
   options?: InternalBroadcastOptions,
@@ -250,6 +304,8 @@ export async function broadcast<
     messageId,
     correlationId,
     transport: options?.transport,
+    caller: { kind: call.caller.kind, id: call.caller.id },
+    principal: { kind: call.principal.kind, id: call.principal.id },
     localOnly,
   });
 
@@ -257,10 +313,11 @@ export async function broadcast<
   const results: BroadcastResult<Response>[] = [];
 
   // Find all local handlers matching this subject
-  const handlers = getMatchingHandlers(context, fullSubjectKey);
+  const handlerEntries = getMatchingHandlerEntries(context, fullSubjectKey);
 
   // Build the outbound broadcast message once so the same object is used for
   // both transport-selection (canSend gate) and the actual wire send.
+  const metadata = wireMetadataOf(call, hostPartyOf(context));
   const broadcastMessage: BusBroadcastMessage = {
     type: 'broadcast',
     subject: subjectKey,
@@ -269,6 +326,7 @@ export async function broadcast<
     correlationId,
     messageId,
     timeout,
+    ...(metadata === undefined ? {} : { metadata }),
   };
 
   // Unfiltered by default — subscription filtering can silently exclude valid
@@ -290,13 +348,15 @@ export async function broadcast<
         : getReadyTransports(context, undefined, broadcastMessage).map(({ transport }) => transport)
       : normalizeTransportTargets(context, effectiveTransports, subjectDefinition, broadcastMessage);
 
-  const localPromises = handlers.map(async (handler) => {
+  const localPromises = handlerEntries.map(async ({ handler, owner }) => {
     const handlerResults = await executeLocalBroadcastHandler<Request, Response>(handler, {
       payload,
       messageId,
       correlationId,
       subjectKey,
       fullSubjectKey,
+      call,
+      owner,
       transport: options?.transport,
       validationCtx,
     });

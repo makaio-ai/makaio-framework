@@ -1,4 +1,5 @@
 import type { IMakaioBus } from '@makaio/bus-core';
+import type { CallContext } from '@makaio/core';
 import {
   AdapterSubjects,
   SessionSubjects,
@@ -138,19 +139,21 @@ export class StartClaimTokens {
  *
  * Failures are logged and swallowed: a release that does not land must never
  * mask the start failure that caused it.
+ * @param call - Call context of the handled message this start serves.
  * @param bus - Bus the release is issued on.
  * @param agentId - Agent whose claim is given up.
  * @param disposition - The caller's evidence, never inferred here.
  * @param claimToken - The one generation the act is scoped to.
  */
 async function releaseClaim(
+  call: CallContext,
   bus: IMakaioBus,
   agentId: string,
   disposition: AdapterSessionClaimDisposition,
   claimToken: string,
 ): Promise<void> {
   try {
-    await bus.requestOptional(SessionSubjects.ownership.release, { agentId, disposition, claimToken });
+    await bus.requestOptional(call, SessionSubjects.ownership.release, { agentId, disposition, claimToken });
   } catch (error) {
     console.debug(`[session.start] release for agent ${agentId} failed:`, error);
   }
@@ -162,18 +165,20 @@ async function releaseClaim(
  * Sequential rather than concurrent: each release is its own storage
  * transaction on the same agent, and issuing them in parallel would have them
  * contend for the row this attempt is trying to leave in a clean state.
+ * @param call - Call context of the handled message this start serves.
  * @param bus - Bus the releases are issued on.
  * @param agentId - Agent whose claims are given up.
  * @param disposition - The caller's evidence, never inferred here.
  * @param claimTokens - The generations this attempt is answerable for.
  */
 async function releaseNamedClaims(
+  call: CallContext,
   bus: IMakaioBus,
   agentId: string,
   disposition: AdapterSessionClaimDisposition,
   claimTokens: StartClaimTokens,
 ): Promise<void> {
-  for (const claimToken of claimTokens.toArray()) await releaseClaim(bus, agentId, disposition, claimToken);
+  for (const claimToken of claimTokens.toArray()) await releaseClaim(call, bus, agentId, disposition, claimToken);
 }
 
 /**
@@ -185,15 +190,17 @@ async function releaseNamedClaims(
  * *inside* the reserving transaction and is the only value a rollback may
  * restore — a lead read before the call is one another start may already have
  * replaced.
+ * @param call - Call context of the handled message this start serves.
  * @param bus - Bus the designation is written on.
  * @param designation - The reservation-derived designation being rolled back.
  */
 async function restoreLeadDesignation(
+  call: CallContext,
   bus: IMakaioBus,
   designation: Pick<SessionOwnershipReservation, 'sessionId' | 'agentId' | 'previousLeadAgentId'>,
 ): Promise<void> {
   const previous = designation.previousLeadAgentId;
-  const result = await designateSessionLead(bus, {
+  const result = await designateSessionLead(call, bus, {
     sessionId: designation.sessionId,
     // With no previous lead there is nothing to point the designation at, so the
     // restore is the sanctioned clear — which names the departing agent as its
@@ -228,17 +235,19 @@ async function restoreLeadDesignation(
  * Takes the reservation rather than the policy, so the one caller that has a
  * reservation without a policy uses the same guarded form instead of reaching
  * past it.
+ * @param call - Call context of the handled message this start serves.
  * @param bus - Bus the designation is written on.
  * @param reservation - The reservation whose designation is undone, when there is one.
  */
 async function clearReservedDesignation(
+  call: CallContext,
   bus: IMakaioBus,
   reservation: SessionOwnershipReservation | undefined,
 ): Promise<void> {
   if (reservation === undefined) return;
   try {
     if (!reservation.leadDesignated) return;
-    await restoreLeadDesignation(bus, reservation);
+    await restoreLeadDesignation(call, bus, reservation);
   } catch (error) {
     console.debug(`[session.start] clearing the designation of agent ${reservation.agentId} failed:`, error);
   }
@@ -251,16 +260,18 @@ async function clearReservedDesignation(
  * the reservation rolled back, or another writer has already moved the lead,
  * this is a no-op. It deliberately uses the same clear/restore mutation as a
  * returned reservation so every designation reversal has one marker contract.
+ * @param call - Call context of the handled message this start serves.
  * @param bus - Bus the designation is written on.
  * @param designation - Request evidence reconstructed after a lost response.
  */
 async function clearUncertainKeylessDesignation(
+  call: CallContext,
   bus: IMakaioBus,
   designation: UncertainKeylessDesignation | undefined,
 ): Promise<void> {
   if (designation === undefined) return;
   try {
-    await restoreLeadDesignation(bus, {
+    await restoreLeadDesignation(call, bus, {
       sessionId: designation.sessionId,
       agentId: designation.agentId,
       previousLeadAgentId: designation.transition === 'replace' ? designation.expectedLeadAgentId : null,
@@ -278,6 +289,7 @@ async function clearUncertainKeylessDesignation(
  * only cleanup that gives the ownership key back cleanly and deletes the agent
  * row, because it is the only one that can prove there is nothing live behind
  * either.
+ * @param call - Call context of the handled message this start serves.
  * @param bus - Bus the cleanup is issued on.
  * @param agentId - Agent whose row is removed.
  * @param reservation - The committed reservation, when one was taken.
@@ -285,6 +297,7 @@ async function clearUncertainKeylessDesignation(
  * @returns Whether the caller-owned row was deleted or verified absent.
  */
 export async function rollbackReservedStart(
+  call: CallContext,
   bus: IMakaioBus,
   agentId: string,
   reservation: SessionOwnershipReservation | undefined,
@@ -295,29 +308,32 @@ export async function rollbackReservedStart(
     // no-op — issued anyway rather than branched on, because "the reservation's
     // own generation, and nothing else" is one rule at both ends.
     if (reservation.claim !== null) {
-      await releaseClaim(bus, agentId, 'released', reservation.claim.claimToken);
+      await releaseClaim(call, bus, agentId, 'released', reservation.claim.claimToken);
     }
-    await clearReservedDesignation(bus, reservation);
+    await clearReservedDesignation(call, bus, reservation);
   }
-  await clearUncertainKeylessDesignation(bus, uncertainDesignation);
+  await clearUncertainKeylessDesignation(call, bus, uncertainDesignation);
   try {
-    const deletion = await bus.requestOptional(AgentStorageSubjects.delete, { agentId });
-    return { rowDeleted: deletion.handled && deletion.data.success ? true : await isRollbackRowAbsent(bus, agentId) };
+    const deletion = await bus.requestOptional(call, AgentStorageSubjects.delete, { agentId });
+    return {
+      rowDeleted: deletion.handled && deletion.data.success ? true : await isRollbackRowAbsent(call, bus, agentId),
+    };
   } catch (error) {
     console.debug(`[session.start] deleting agent ${agentId} during rollback failed:`, error);
-    return { rowDeleted: await isRollbackRowAbsent(bus, agentId) };
+    return { rowDeleted: await isRollbackRowAbsent(call, bus, agentId) };
   }
 }
 
 /**
  * Verify whether a deletion that threw nevertheless committed.
+ * @param call - Call context of the handled message this start serves.
  * @param bus - Bus the exact agent row is read on.
  * @param agentId - Caller-minted agent identity expected to be gone.
  * @returns Whether storage confirmed that the row is absent.
  */
-async function isRollbackRowAbsent(bus: IMakaioBus, agentId: string): Promise<boolean> {
+async function isRollbackRowAbsent(call: CallContext, bus: IMakaioBus, agentId: string): Promise<boolean> {
   try {
-    const result = await bus.requestOptional(AgentStorageSubjects.get, { agentId });
+    const result = await bus.requestOptional(call, AgentStorageSubjects.get, { agentId });
     return result.handled && result.data.agent === null;
   } catch (error) {
     console.debug(`[session.start] verifying rollback deletion of agent ${agentId} failed:`, error);
@@ -334,18 +350,20 @@ async function isRollbackRowAbsent(bus: IMakaioBus, agentId: string): Promise<bo
  * unless the policy names the reservation that made it: the agent row survives
  * as `dead`, so a session whose lead this attempt did *not* designate still
  * names an agent it legitimately has.
+ * @param call - Call context of the handled message this start serves.
  * @param bus - Bus the cleanup is issued on.
  * @param agentId - Agent whose claims are retired.
  * @param policy - What this cleanup may write on the start's behalf.
  * @param claimTokens - The generations this attempt is answerable for.
  */
 export async function abandonDispatchedStart(
+  call: CallContext,
   bus: IMakaioBus,
   agentId: string,
   policy: StartCleanupPolicy,
   claimTokens: StartClaimTokens,
 ): Promise<void> {
-  await giveBackStart(bus, agentId, 'abandoned', policy, claimTokens);
+  await giveBackStart(call, bus, agentId, 'abandoned', policy, claimTokens);
 }
 
 /**
@@ -357,18 +375,20 @@ export async function abandonDispatchedStart(
  * it to protect. The agent row is **not** deleted — this caller found the row,
  * it did not create it, so unwinding its own `starting` transition is all it
  * may undo.
+ * @param call - Call context of the handled message this start serves.
  * @param bus - Bus the cleanup is issued on.
  * @param agentId - Agent whose claims are given back.
  * @param policy - What this cleanup may write on the start's behalf.
  * @param claimTokens - The generations this attempt is answerable for.
  */
 export async function releaseUndispatchedStart(
+  call: CallContext,
   bus: IMakaioBus,
   agentId: string,
   policy: StartCleanupPolicy,
   claimTokens: StartClaimTokens,
 ): Promise<void> {
-  await giveBackStart(bus, agentId, 'released', policy, claimTokens);
+  await giveBackStart(call, bus, agentId, 'released', policy, claimTokens);
 }
 
 /**
@@ -376,6 +396,7 @@ export async function releaseUndispatchedStart(
  *
  * The disposition is the caller's evidence and is never inferred here — it is
  * the whole difference between the two exported forms.
+ * @param call - Call context of the handled message this start serves.
  * @param bus - Bus the cleanup is issued on.
  * @param agentId - Agent whose claims are given up.
  * @param disposition - The caller's evidence about how far the start got.
@@ -383,19 +404,20 @@ export async function releaseUndispatchedStart(
  * @param claimTokens - The generations this attempt is answerable for.
  */
 async function giveBackStart(
+  call: CallContext,
   bus: IMakaioBus,
   agentId: string,
   disposition: AdapterSessionClaimDisposition,
   policy: StartCleanupPolicy,
   claimTokens: StartClaimTokens,
 ): Promise<void> {
-  await releaseNamedClaims(bus, agentId, disposition, claimTokens);
+  await releaseNamedClaims(call, bus, agentId, disposition, claimTokens);
   // Before the status write, never after: a designation clear demands the agent
   // still be a member of the session, and the row is only ever kept here — but
   // stating the order once keeps it true if a caller ever removes the row.
-  await clearReservedDesignation(bus, policy.reservation);
+  await clearReservedDesignation(call, bus, policy.reservation);
   if (!policy.writesAgentStatus) return;
-  await markFailedStartDead(bus, agentId);
+  await markFailedStartDead(call, bus, agentId);
 }
 
 /**
@@ -416,12 +438,13 @@ async function giveBackStart(
  * `transitioned: false` is accepted silently for the same reason: another
  * runtime already claimed this row's recovery, which is a better outcome than
  * the one being written.
+ * @param call - Call context of the handled message this start serves.
  * @param bus - Bus the compare-and-swap is issued on.
  * @param agentId - Agent whose failed start is marked.
  */
-async function markFailedStartDead(bus: IMakaioBus, agentId: string): Promise<void> {
+async function markFailedStartDead(call: CallContext, bus: IMakaioBus, agentId: string): Promise<void> {
   try {
-    await bus.requestOptional(AgentStorageSubjects.updateStatus, {
+    await bus.requestOptional(call, AgentStorageSubjects.updateStatus, {
       agentId,
       status: 'dead',
       expectedStatus: ['starting'],
@@ -489,6 +512,7 @@ function classifyRefusedSettlement(
  * forbids. A throw is logged and swallowed, because this runs on the way out of
  * a start that has already failed and a cleanup that threw would replace the
  * error the caller is about to see with one about the cleanup.
+ * @param call - Call context of the handled message this start serves.
  * @param bus - Bus the stop is issued on.
  * @param adapterId - Adapter instance the connector lives on.
  * @param agentId - Agent whose connector is stopped.
@@ -496,6 +520,7 @@ function classifyRefusedSettlement(
  * @param connectorOnly - Whether teardown must leave the caller-owned row untouched.
  */
 export async function stopStartedConnector(
+  call: CallContext,
   bus: IMakaioBus,
   adapterId: string,
   agentId: string,
@@ -503,7 +528,7 @@ export async function stopStartedConnector(
   connectorOnly = false,
 ): Promise<void> {
   try {
-    await bus.requestOptional(AdapterSubjects.stopAgent, {
+    await bus.requestOptional(call, AdapterSubjects.stopAgent, {
       adapterId,
       agentId,
       ownerInstanceId,
@@ -525,6 +550,7 @@ export async function stopStartedConnector(
  * straight away. That is the point of the ordering: a settlement can hand back
  * a generation the attempt did not reserve, and a later failure that could not
  * name it would strand it `held` on the key.
+ * @param call - Call context of the handled message this start serves.
  * @param bus - Bus the cleanup is issued on.
  * @param adapterId - Adapter instance the connector lives on.
  * @param agentId - Agent the start was for.
@@ -534,6 +560,7 @@ export async function stopStartedConnector(
  * @param claimTokens - The generations this attempt is answerable for.
  */
 export async function applySettlementOutcome(
+  call: CallContext,
   bus: IMakaioBus,
   adapterId: string,
   agentId: string,
@@ -546,14 +573,14 @@ export async function applySettlementOutcome(
   const cleanup = classifyRefusedSettlement(result.outcome);
   if (cleanup === undefined) return;
 
-  if (cleanup.disposition !== null) await releaseNamedClaims(bus, agentId, cleanup.disposition, claimTokens);
+  if (cleanup.disposition !== null) await releaseNamedClaims(call, bus, agentId, cleanup.disposition, claimTokens);
   // Part of this helper's own cleaning, not a second layer on top of it: this is
   // the one place that knows a *dispatched* start has failed for good, so it is
   // the only place a designation made for that start can honestly be undone.
-  await clearReservedDesignation(bus, policy.reservation);
+  await clearReservedDesignation(call, bus, policy.reservation);
   if (cleanup.stopConnector)
-    await stopStartedConnector(bus, adapterId, agentId, ownerInstanceId, policy.connectorOnlyTeardown);
-  if (cleanup.markDead && policy.writesAgentStatus) await markFailedStartDead(bus, agentId);
+    await stopStartedConnector(call, bus, adapterId, agentId, ownerInstanceId, policy.connectorOnlyTeardown);
+  if (cleanup.markDead && policy.writesAgentStatus) await markFailedStartDead(call, bus, agentId);
 
   // The classification is what this helper exists to produce, and the teardown
   // above must not take it away: every step of it is best-effort, so the refusal

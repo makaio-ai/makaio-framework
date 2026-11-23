@@ -1,35 +1,50 @@
 import type { UnknownRecord } from 'type-fest';
 
-/**
- * Host-agnostic principal attached by a trusted local transport.
- *
- * The framework treats this as opaque metadata. Host code decides what
- * principal kinds and claims mean.
- */
-export interface PrincipalContext {
-  /** Principal kind, such as `user`, `device`, `machine`, or host-defined values. */
-  readonly kind: string;
-  /** Optional stable principal identifier in the principal namespace. */
-  readonly id?: string;
-  /** Optional opaque claims supplied by the authenticating transport or host policy. */
-  readonly claims?: Readonly<Record<string, unknown>>;
-}
+import type { CallContext } from './call-context.js';
+import type { Party } from './party.js';
 
 /**
- * Authenticated peer metadata supplied by a transport connection.
+ * Connection facts of a received message, without any identity.
+ *
+ * Who sent the message is carried by {@link TransportReceiveContext.caller}
+ * and, once the core has stamped it, by `BaseMessageContext.call`.
  */
-export interface TransportPeerContext {
-  /** Peer kind, such as `browser`, `machine`, `worker`, or host-defined values. */
-  readonly kind: string;
-  /** Optional transport-level peer identifier. */
-  readonly id?: string;
-  /** Whether the receiving transport authenticated the peer. */
+export interface TransportConnectionInfo {
+  /** Registered bus transport name that received the message. */
+  readonly transportName: string;
+  /** Optional connection/session identifier local to the transport. */
+  readonly connectionId?: string;
+  /** Whether the receiving transport authenticated the connection. */
   readonly authenticated?: boolean;
   /** Whether the receiving transport established encrypted payload transport. */
   readonly encrypted?: boolean;
-  /** Optional opaque peer claims. */
-  readonly claims?: Readonly<Record<string, unknown>>;
 }
+
+/** Direction, relative to this host, of a connection trusted to attest principal claims. */
+export type ConnectionAttestation = 'inbound' | 'outbound';
+
+/** Connection roles authorized to attest principal claims, with their receive direction. */
+export const ATTESTING_CONNECTION_ROLES = {
+  /** Trusted client uplink to the core host. */
+  'core-uplink': 'outbound',
+  /** Authenticated workflow job run connected to the core host. */
+  'job-run': 'inbound',
+  /** Authenticated local CLI connected to the core host. */
+  'local-cli': 'inbound',
+} as const satisfies Record<string, ConnectionAttestation>;
+
+/** Role of a connection authorized to attest principal claims. */
+export type AttestingConnectionRole = keyof typeof ATTESTING_CONNECTION_ROLES;
+
+type AttestingRoleIn<Direction extends ConnectionAttestation> = {
+  [Role in AttestingConnectionRole]: (typeof ATTESTING_CONNECTION_ROLES)[Role] extends Direction ? Role : never;
+}[AttestingConnectionRole];
+
+/** Attesting roles for connections accepted by the core host. */
+export type InboundAttestingConnectionRole = AttestingRoleIn<'inbound'>;
+
+/** Attesting roles for connections to the core host. */
+export type OutboundAttestingConnectionRole = AttestingRoleIn<'outbound'>;
 
 /**
  * Trusted context derived locally by the receiving transport.
@@ -37,28 +52,15 @@ export interface TransportPeerContext {
  * This context is never serialized into `BusMessage`; each receiving node must
  * derive its own context from its own transport/session state.
  */
-export interface TransportReceiveContext {
-  /** Registered bus transport name that received the message. */
-  readonly transportName: string;
-  /** Optional connection/session identifier local to the transport. */
-  readonly connectionId?: string;
-  /** Optional authenticated transport peer. */
-  readonly peer?: TransportPeerContext;
-  /** Optional host-agnostic principal resolved for this connection. */
-  readonly principal?: PrincipalContext;
-}
-
-/**
- * Describes the call origin of a bus message.
- *
- * Set on every context before handlers run; never serialized to wire.
- * Derivation: `local` is `true` when no transport received the message
- * (the call originated in this process), `false` when it arrived over
- * a transport from a remote peer.
- */
-export interface MessageOrigin {
-  /** Whether the message originated locally (not from a remote transport). */
-  readonly local: boolean;
+export interface TransportReceiveContext extends TransportConnectionInfo {
+  /**
+   * Caller verified or declared by the transport.
+   *
+   * When absent, the core uses the transport's declared caller or assigns the anonymous caller.
+   */
+  readonly caller?: Party;
+  /** Direction of an attesting connection. Omit when the connection cannot attest principal claims. */
+  readonly attests?: ConnectionAttestation;
 }
 
 /**
@@ -110,21 +112,16 @@ export interface BaseMessageContext {
   /**
    * Trusted context supplied by the local receiving transport.
    *
-   * Undefined for local calls and for transports that do not supply connection
-   * context. Never trust similarly named fields in payloads or wire messages.
+   * Undefined for an in-process send. Read the stamped sender identity from
+   * `call`. Ignore similarly named fields in payloads and wire messages.
    */
   transport?: TransportReceiveContext;
 
   /**
-   * Where this message originated.
-   *
-   * `local: true` — emitted in this process.
-   * `local: false` — arrived via a transport from a remote caller.
-   *
-   * Always present; never serialized to the wire. Location-sensitive handlers
-   * check this before executing local side-effects.
+   * Call context of the handled message: `caller` is the sender, plus
+   * `principal` and `attestedBy`.
    */
-  origin: MessageOrigin;
+  readonly call: CallContext;
 
   isRequest: boolean;
 }

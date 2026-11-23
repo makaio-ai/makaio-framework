@@ -174,7 +174,7 @@ describe('registerNativeClientCommand — launch', () => {
 
     await program.parseAsync(['node', 'makaio', 'client', 'launch', 'claude-code']);
 
-    expect(request).toHaveBeenCalledWith(NativeSessionSupervisorSubjects.launch, {
+    expect(request).toHaveBeenCalledWith(bus.own('root'), NativeSessionSupervisorSubjects.launch, {
       clientId: 'claude-code',
       cwd: process.cwd(),
       command: 'claude',
@@ -246,7 +246,7 @@ describe('registerNativeClientCommand — top-level client shortcut', () => {
 
     await program.parseAsync(['node', 'makaio', 'claude-code']);
 
-    expect(request).toHaveBeenCalledWith(NativeSessionSupervisorSubjects.launch, {
+    expect(request).toHaveBeenCalledWith(bus.own('root'), NativeSessionSupervisorSubjects.launch, {
       clientId: 'claude-code',
       cwd: process.cwd(),
       command: 'claude',
@@ -263,7 +263,9 @@ describe('registerNativeClientCommand — top-level client shortcut', () => {
 
     await program.parseAsync(['node', 'makaio', 'claude-code', 'attach', '--session', 'sess-123']);
 
-    expect(request).toHaveBeenCalledWith(NativeSessionSupervisorSubjects.attach, { sessionId: 'sess-123' });
+    expect(request).toHaveBeenCalledWith(bus.own('root'), NativeSessionSupervisorSubjects.attach, {
+      sessionId: 'sess-123',
+    });
   });
 });
 
@@ -295,7 +297,9 @@ describe('registerNativeClientCommand — attach', () => {
 
     await program.parseAsync(['node', 'makaio', 'client', 'attach', 'sup-abc']);
 
-    expect(request).toHaveBeenCalledWith(NativeSessionSupervisorSubjects.attach, { supervisorSessionId: 'sup-abc' });
+    expect(request).toHaveBeenCalledWith(bus.own('root'), NativeSessionSupervisorSubjects.attach, {
+      supervisorSessionId: 'sup-abc',
+    });
   });
 
   it('attaches by --session flag', async () => {
@@ -307,7 +311,9 @@ describe('registerNativeClientCommand — attach', () => {
 
     await program.parseAsync(['node', 'makaio', 'client', 'attach', '--session', 'sess-123']);
 
-    expect(request).toHaveBeenCalledWith(NativeSessionSupervisorSubjects.attach, { sessionId: 'sess-123' });
+    expect(request).toHaveBeenCalledWith(bus.own('root'), NativeSessionSupervisorSubjects.attach, {
+      sessionId: 'sess-123',
+    });
   });
 
   it('attaches by --adapter-session flag', async () => {
@@ -319,7 +325,9 @@ describe('registerNativeClientCommand — attach', () => {
 
     await program.parseAsync(['node', 'makaio', 'client', 'attach', '--adapter-session', 'adapter-xyz']);
 
-    expect(request).toHaveBeenCalledWith(NativeSessionSupervisorSubjects.attach, { adapterSessionId: 'adapter-xyz' });
+    expect(request).toHaveBeenCalledWith(bus.own('root'), NativeSessionSupervisorSubjects.attach, {
+      adapterSessionId: 'adapter-xyz',
+    });
   });
 
   it('sets exitCode=1 and writes to stderr when no locator is supplied', async () => {
@@ -418,7 +426,7 @@ describe('registerNativeClientCommand — stop', () => {
 
     await program.parseAsync(['node', 'makaio', 'client', 'stop', 'sup-abc']);
 
-    expect(request).toHaveBeenCalledWith(NativeSessionSupervisorSubjects.stop, {
+    expect(request).toHaveBeenCalledWith(bus.own('root'), NativeSessionSupervisorSubjects.stop, {
       supervisorSessionId: 'sup-abc',
     });
   });
@@ -432,7 +440,7 @@ describe('registerNativeClientCommand — stop', () => {
 
     await program.parseAsync(['node', 'makaio', 'client', 'stop', 'sup-abc', '--signal', 'SIGKILL']);
 
-    expect(request).toHaveBeenCalledWith(NativeSessionSupervisorSubjects.stop, {
+    expect(request).toHaveBeenCalledWith(bus.own('root'), NativeSessionSupervisorSubjects.stop, {
       supervisorSessionId: 'sup-abc',
       signal: 'SIGKILL',
     });
@@ -518,7 +526,7 @@ describe('registerNativeClientCommand — status', () => {
 
     await program.parseAsync(['node', 'makaio', 'client', 'status']);
 
-    expect(request).toHaveBeenCalledWith(NativeSessionSupervisorSubjects.status, {});
+    expect(request).toHaveBeenCalledWith(bus.own('root'), NativeSessionSupervisorSubjects.status, {});
   });
 
   it('sends a filtered status request when a supervisor session ID is given', async () => {
@@ -530,7 +538,7 @@ describe('registerNativeClientCommand — status', () => {
 
     await program.parseAsync(['node', 'makaio', 'client', 'status', 'sup-abc']);
 
-    expect(request).toHaveBeenCalledWith(NativeSessionSupervisorSubjects.status, {
+    expect(request).toHaveBeenCalledWith(bus.own('root'), NativeSessionSupervisorSubjects.status, {
       supervisorSessionId: 'sup-abc',
     });
   });

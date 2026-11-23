@@ -395,7 +395,7 @@ describe('built-in authentication failure categories', () => {
     const server = new HmacAuth({
       secret: 'global-secret',
       resolveSecret: () => 'identity-secret',
-      resolvePeer: () => ({ kind: 'device', id: 'client', authenticated: true }),
+      resolveParty: () => ({ kind: 'test.device', id: 'client' }),
     });
     const client = new HmacAuth({ secret: 'identity-secret', identityId: 'client' });
     cleanups.push(

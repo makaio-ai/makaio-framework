@@ -14,7 +14,13 @@ import { createAdapterNamespace } from '../../factory/create-adapter-namespace.j
 import { AIAgent } from '../../agent/ai-agent.js';
 import { AIAgentConnector } from '../../connector/agent-connector.js';
 import { MessageHandle } from '../../message-handle/index.js';
-import type { AIAgentConfig, AgentStartResult, BaseAgentConnectorConfig } from '../../agent/types.js';
+import type {
+  AIAgentConfig,
+  AgentStartResult,
+  BaseAgentConnectorConfig,
+  ConnectorSendMessageOptions,
+  ConnectorStartOptions,
+} from '../../agent/types.js';
 import type { ConfigFactoryInput } from '../ai-adapter-config.js';
 import type { AIAdapterConfig } from '../types.js';
 import type { NormalizedMessageInput } from '../../utils/normalizeMessageInput.js';
@@ -64,16 +70,31 @@ export class MockConnector extends AIAgentConnector implements ConfiguredClose, 
     return runConfiguredInitialize(this);
   }
 
-  public async start(message: NormalizedMessageInput): Promise<AgentStartResult> {
+  /**
+   * Start a test turn with the handled message's call.
+   * @param message - Normalized user message.
+   * @param options - Start options carrying the call for this turn.
+   * @returns Mock session identity and message handle.
+   */
+  public async start(message: NormalizedMessageInput, options: ConnectorStartOptions): Promise<AgentStartResult> {
     return {
       adapterSessionId: 'mock-adapter-session-id',
       agentId: this.getAgentId(),
-      messageHandle: new MessageHandle('mock-message-id', message, 'enqueue'),
+      messageHandle: new MessageHandle(options.call, 'mock-message-id', message, 'enqueue'),
     };
   }
 
-  public async sendMessage(message: NormalizedMessageInput): Promise<MessageHandle> {
-    return new MessageHandle('mock-message-id', message, 'enqueue');
+  /**
+   * Create a test message handle with the handled message's call.
+   * @param message - Normalized user message.
+   * @param options - Send options carrying the call for this turn.
+   * @returns Mock message handle.
+   */
+  public async sendMessage(
+    message: NormalizedMessageInput,
+    options: ConnectorSendMessageOptions,
+  ): Promise<MessageHandle> {
+    return new MessageHandle(options.call, 'mock-message-id', message, 'enqueue');
   }
 
   public abort(): void {}
@@ -149,6 +170,7 @@ export function createTestAdapter(
       options?.configFactory ??
       (async (input: ConfigFactoryInput<TestBus>) => ({
         bus: scopedBus,
+        globalBus: input.globalBus,
         agentId: input.agentId ?? 'test-agent',
         adapterId: input.adapterId ?? 'test-adapter-id',
         adapterName,

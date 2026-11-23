@@ -19,6 +19,7 @@
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
+import { createTestCall } from '@makaio/test-utils';
 import { AgentSubjects, ClientSubjects, SessionSubjects } from '@makaio/contracts';
 import type { IMakaioSession, SessionMessage, Turn, TurnIngestionMarker } from '@makaio/contracts';
 import { SessionStorageSubjects } from '../storage/namespace.js';
@@ -122,7 +123,7 @@ function stubLogImportService(unsubs: UnsubscribeFunction[], transcript: Transcr
     }),
     MakaioBus.on(LogImportTriggerSubjects.importFile, async (ctx) => {
       importFileRequests.push(ctx.payload);
-      const { sessionId } = await MakaioBus.request(SessionStorageSubjects.importUpsert, {
+      const { sessionId } = await MakaioBus.request(ctx.call, SessionStorageSubjects.importUpsert, {
         kind: 'root',
         parentAdapterSessionId: null,
         forkPointMessageId: null,
@@ -132,7 +133,7 @@ function stubLogImportService(unsubs: UnsubscribeFunction[], transcript: Transcr
         logFilePath: ctx.payload.filePath,
       });
       for (const turn of transcript) {
-        await ingestCompletedTurn(MakaioBus, {
+        await ingestCompletedTurn(ctx.call, MakaioBus, {
           sessionId,
           turnAnchorId: turn.anchorId,
           startedAt: turn.startedAt,
@@ -189,9 +190,9 @@ function collectContractSnapshots(unsubs: UnsubscribeFunction[]): ContractSnapsh
     MakaioBus.on(SessionSubjects.turn.completed, async (ctx) => {
       const { sessionId, turnId, turnNumber, success, ingestionMarker } = ctx.payload;
       const [{ session }, { turns }, { messages }] = await Promise.all([
-        MakaioBus.request(SessionStorageSubjects.get, { sessionId }),
-        MakaioBus.request(TurnStorageSubjects.getBySession, { sessionId }),
-        MakaioBus.request(MessageStorageSubjects.getByTurn, { turnId }),
+        MakaioBus.request(ctx.call, SessionStorageSubjects.get, { sessionId }),
+        MakaioBus.request(ctx.call, TurnStorageSubjects.getBySession, { sessionId }),
+        MakaioBus.request(ctx.call, MessageStorageSubjects.getByTurn, { turnId }),
       ]);
       snapshots.push({
         payload: { sessionId, turnId, turnNumber, success, ingestionMarker },
@@ -225,7 +226,8 @@ function countSessionCreated(unsubs: UnsubscribeFunction[]): { count: number } {
  * @param adapterSessionId - External session id of the observed session
  */
 async function emitObservedTurnFlow(adapterSessionId = ADAPTER_SESSION_ID): Promise<void> {
-  await MakaioBus.emit(ClientSubjects.session.started, {
+  const call = createTestCall();
+  await MakaioBus.emit(call, ClientSubjects.session.started, {
     clientId: CLIENT_ID,
     source: 'native-hook',
     observedAt: 1_000,
@@ -233,7 +235,7 @@ async function emitObservedTurnFlow(adapterSessionId = ADAPTER_SESSION_ID): Prom
     transcriptPath: TRANSCRIPT_PATH,
     metadata: { consumer: 'v' },
   });
-  await MakaioBus.emit(ClientSubjects.session.turn.completed, {
+  await MakaioBus.emit(call, ClientSubjects.session.turn.completed, {
     clientId: CLIENT_ID,
     source: 'native-hook',
     observedAt: 2_000,
@@ -313,7 +315,7 @@ describe('observed-session ingestion end-to-end (integration)', () => {
     const started = collectTurnStartedEvents(unsubs);
     const completed = collectTurnCompletedEvents(unsubs);
 
-    await MakaioBus.emit(ClientSubjects.runtime.started, {
+    await MakaioBus.emit(createTestCall(), ClientSubjects.runtime.started, {
       clientRuntimeId: 'rt-ext-2',
       clientId: CLIENT_ID,
       status: 'started',
@@ -324,7 +326,7 @@ describe('observed-session ingestion end-to-end (integration)', () => {
     await emitObservedTurnFlow('ext-2');
     await waitForAsync();
 
-    const { sessions } = await MakaioBus.request(SessionStorageSubjects.listImported, {});
+    const { sessions } = await MakaioBus.request(createTestCall(), SessionStorageSubjects.listImported, {});
     expect(sessions).toEqual([]);
     expect(importFileRequests).toEqual([]);
     expect(started.received).toEqual([]);
@@ -336,7 +338,7 @@ describe('observed-session ingestion end-to-end (integration)', () => {
 
     await emitObservedTurnFlow();
 
-    const { session } = await MakaioBus.request(SessionStorageSubjects.getByAdapterSessionId, {
+    const { session } = await MakaioBus.request(createTestCall(), SessionStorageSubjects.getByAdapterSessionId, {
       adapterSessionId: ADAPTER_SESSION_ID,
       source: ADAPTER_NAME,
     });
@@ -360,11 +362,12 @@ describe('observed-session ingestion end-to-end (integration)', () => {
     manager.registerCompletionHandlers(manager.completeTurn.bind(manager));
     bridge = new SessionBridge(MakaioBus);
 
+    const call = createTestCall();
     const sessionId = 'managed-session';
-    const turn = await manager.createTurn(sessionId, ['agent-1']);
+    const turn = await manager.createTurn(call, sessionId, ['agent-1']);
     turn.addMessage('msg-user-1');
     // Prime SessionBridge turn tracking (normally emitted by the orchestrator).
-    await MakaioBus.emit(SessionSubjects.turn.started, {
+    await MakaioBus.emit(call, SessionSubjects.turn.started, {
       sessionId,
       turnId: turn.turnId,
       turnNumber: turn.turnNumber,
@@ -372,7 +375,7 @@ describe('observed-session ingestion end-to-end (integration)', () => {
       agentIds: ['agent-1'],
       ingestionMarker: 'live',
     });
-    await MakaioBus.emit(AgentSubjects.message, {
+    await MakaioBus.emit(call, AgentSubjects.message, {
       agentId: 'agent-1',
       adapterId: 'adapter-agent-1',
       adapterName: 'test-adapter',
@@ -381,7 +384,7 @@ describe('observed-session ingestion end-to-end (integration)', () => {
       messageId: 'msg-user-1',
       content: 'hello from the managed agent',
     });
-    await MakaioBus.emit(AgentSubjects.complete, {
+    await MakaioBus.emit(call, AgentSubjects.complete, {
       agentId: 'agent-1',
       adapterId: 'adapter-agent-1',
       adapterName: 'test-adapter',
@@ -413,7 +416,7 @@ describe('observed-session ingestion end-to-end (integration)', () => {
 
     // Second identical Stop-hook observation: the stub re-parses the same
     // transcript and re-feeds both turns through the ingest seam.
-    await MakaioBus.emit(ClientSubjects.session.turn.completed, {
+    await MakaioBus.emit(createTestCall(), ClientSubjects.session.turn.completed, {
       clientId: CLIENT_ID,
       source: 'native-hook',
       observedAt: 3_000,
@@ -426,11 +429,11 @@ describe('observed-session ingestion end-to-end (integration)', () => {
     expect(started.received).toEqual([]);
     expect(completed.received).toEqual([]);
 
-    const { session } = await MakaioBus.request(SessionStorageSubjects.getByAdapterSessionId, {
+    const { session } = await MakaioBus.request(createTestCall(), SessionStorageSubjects.getByAdapterSessionId, {
       adapterSessionId: ADAPTER_SESSION_ID,
       source: ADAPTER_NAME,
     });
-    const { turns } = await MakaioBus.request(TurnStorageSubjects.getBySession, {
+    const { turns } = await MakaioBus.request(createTestCall(), TurnStorageSubjects.getBySession, {
       sessionId: session?.sessionId ?? '',
     });
     expect(turns.map(({ turnId, turnNumber }: Turn) => ({ turnId, turnNumber }))).toEqual(firstRun);

@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import type { CallContext } from '@makaio/core';
 import type {
   IWorkflowRunner,
   WorkerContributionManifest,
@@ -38,11 +39,16 @@ export interface WorkerRunnerOptions {
   /**
    * Read portable owner input before creating a path-backed Attempt.
    * Self-contained source and definition configs need no storage lookup.
+   * @param call - Handled workflow run's call forwarded to the owner-context read.
    * @param executionId - Workflow execution whose executable source is being frozen.
    * @param signal - Cancellation signal for the owner-context read.
    * @returns The portable owner context, or null when none was persisted.
    */
-  readonly readRunContext?: (executionId: string, signal: AbortSignal) => Promise<WorkflowRunContext | null>;
+  readonly readRunContext?: (
+    call: CallContext,
+    executionId: string,
+    signal: AbortSignal,
+  ) => Promise<WorkflowRunContext | null>;
   /**
    * Extension contribution manifest forwarded to dispatched workers.
    *
@@ -91,6 +97,7 @@ export class WorkerRunner implements IWorkflowRunner {
    *
    * When `manifest` is supplied it takes precedence over the manifest baked into
    * the runner at construction time, enabling per-call contribution sets.
+   * @param call - Handled workflow run's call forwarded to owner-context reads and dispatch.
    * @param config - Full workflow worker configuration including source, inputs, and bus info.
    * @param signal - AbortSignal for cooperative cancellation forwarded to the dispatch function.
    * @param manifest - Optional per-call contribution manifest. Overrides the runner's default.
@@ -98,6 +105,7 @@ export class WorkerRunner implements IWorkflowRunner {
    * @returns Explicitly accepted completion after the outcome RPC converges.
    */
   public async run(
+    call: CallContext,
     config: WorkflowWorkerConfig,
     signal: AbortSignal,
     manifest?: WorkerContributionManifest,
@@ -116,7 +124,7 @@ export class WorkerRunner implements IWorkflowRunner {
     const dispatchMetadata = options?.dispatchMetadata;
     signal.throwIfAborted();
     const runContext =
-      config.source.kind === 'path' ? await this.options.readRunContext?.(config.executionId, signal) : undefined;
+      config.source.kind === 'path' ? await this.options.readRunContext?.(call, config.executionId, signal) : undefined;
     // A custom reader may finish after cancellation without observing its signal.
     signal.throwIfAborted();
     const instruction = buildWorkflowAttemptInstruction({
@@ -136,6 +144,7 @@ export class WorkerRunner implements IWorkflowRunner {
       withAttemptCreation: options?.withAttemptCreation,
       dispatch: (executionAttemptId) =>
         this.options.dispatch(
+          call,
           {
             executionAttemptId,
             config: authorityCommittedConfig,

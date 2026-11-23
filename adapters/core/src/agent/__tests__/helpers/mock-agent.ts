@@ -1,6 +1,6 @@
 import { vi } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
-import { createMockScopedBus } from '@makaio/test-utils';
+import { createMockScopedBus, createTestCall } from '@makaio/test-utils';
 import { AIAgent } from '../../ai-agent.js';
 import type {
   AgentStartResult,
@@ -15,6 +15,7 @@ import type { ProcessingState } from '../../../message-handle/types.js';
 import type { AIModel, AIReasoningLevel, ReasoningLevelMap } from '../../../types/ai-model.js';
 import type { NormalizedMessageInput } from '../../../utils/index.js';
 import type {
+  CallContext,
   ConnectorTeardownResult,
   McpSessionContext,
   NativeForkDirective,
@@ -240,12 +241,15 @@ export class MockConnector implements Partial<AIAgentConnector>, ConfiguredClose
   /**
    * Start a mock session and return an acknowledged message handle.
    * @param message - Normalized user message
-   * @param options - Optional connector start options
+   * @param options - Connector start options; defaults to a new test call
    * @returns Mock start result
    */
-  public async start(message: NormalizedMessageInput, options?: ConnectorStartOptions): Promise<AgentStartResult> {
+  public async start(
+    message: NormalizedMessageInput,
+    options: ConnectorStartOptions = { call: createTestCall() },
+  ): Promise<AgentStartResult> {
     this.startedMessages.push(message);
-    const messageHandle = this.createMessageHandle(message, options);
+    const messageHandle = this.createMessageHandle(options.call, message, options);
     this.startedHandles.push(messageHandle);
     return {
       adapterSessionId: 'test-session-id',
@@ -257,27 +261,33 @@ export class MockConnector implements Partial<AIAgentConnector>, ConfiguredClose
   /**
    * Send a mock follow-up message and return an acknowledged handle.
    * @param message - Normalized user message
-   * @param options - Optional connector send options
+   * @param options - Connector send options; defaults to a new test call
    * @returns Mock message handle
    */
   public async sendMessage(
     message: NormalizedMessageInput,
-    options?: ConnectorSendMessageOptions,
+    options: ConnectorSendMessageOptions = { call: createTestCall() },
   ): Promise<MessageHandle> {
     this.sentMessages.push(message);
-    const messageHandle = this.createMessageHandle(message, options);
+    const messageHandle = this.createMessageHandle(options.call, message, options);
     this.sentHandles.push(messageHandle);
     return messageHandle;
   }
 
   /**
    * Create a mock message handle with adapter session and acknowledgement set.
+   * @param call - Call context of the message the handle serves
    * @param message - Normalized user message
    * @param options - Optional connector send options
    * @returns Prepared message handle
    */
-  private createMessageHandle(message: NormalizedMessageInput, options?: ConnectorSendMessageOptions): MessageHandle {
+  private createMessageHandle(
+    call: CallContext,
+    message: NormalizedMessageInput,
+    options?: ConnectorSendMessageOptions,
+  ): MessageHandle {
     const handle = new MessageHandle(
+      call,
       options?.messageId ?? 'mock-message-id',
       message,
       options?.deliveryMode ?? 'enqueue',
@@ -370,9 +380,10 @@ export class TestableAgent extends AIAgent {
    * Allows tests to verify the consume-on-read behavior of
    * {@link AIAgent.pendingStartMode} without going through the
    * full connector lifecycle.
+   * @param call - Call context of the simulated message; defaults to a new test call
    */
-  public testEmitStart(): Promise<void> {
-    return this.emitStart();
+  public testEmitStart(call: CallContext = createTestCall()): Promise<void> {
+    return this.emitStart(call);
   }
 
   /** Return the connector currently published as the agent primary. */
@@ -482,6 +493,7 @@ export function createTestableAgent(options: CreateTestableAgentOptions): Testab
       onConfigFactoryInput?.(input);
       return {
         bus: mockBus,
+        globalBus: MakaioBus,
         agentId,
         adapterId: 'test-adapter',
         adapterName: 'test',

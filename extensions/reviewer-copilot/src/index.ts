@@ -42,10 +42,10 @@ export const reviewerCopilotPackage: MakaioNodeExtension<IMakaioBus> = {
   create(ctx) {
     return {
       async init() {
-        await registerReviewerProcessor(ctx.bus, copilotProcessor);
+        await registerReviewerProcessor(ctx.bus.own('start'), ctx.bus, copilotProcessor);
       },
       async destroy() {
-        await unregisterReviewerProcessor(ctx.bus, copilotProcessor.id);
+        await unregisterReviewerProcessor(ctx.bus.own('stop'), ctx.bus, copilotProcessor.id);
       },
     };
   },

@@ -1,4 +1,4 @@
-import type { IMakaioBus, ScopedBus } from '@makaio/bus-core';
+import type { IFilteredBus, IMakaioBus, ScopedBus } from '@makaio/bus-core';
 import type {
   CacheStrategy,
   JsonValue,
@@ -22,12 +22,23 @@ import type { AIAgentConnector } from '../connector/agent-connector.js';
 import type { AgentTeardownArbiter } from './agent-teardown-arbiter.js';
 import type { ConfigFactoryInput } from '../adapter/ai-adapter-config.js';
 import { AgentSchemas, AgentSubjects } from '@makaio/contracts';
-import type { ExtractSubjectPayload, ExtractSubjectResponse } from '@makaio/core';
+import type { CallContext, ExtractSubjectPayload, ExtractSubjectResponse, SubjectRecord } from '@makaio/core';
 import type { MessageHandle, ProcessingState, SendMessageOptions } from '../message-handle/index.js';
 import type { AdapterProviderDefinition } from '../types/provider-definition.js';
 import type { ClientExecutionContext } from '@makaio/contracts/client';
 import type { ResolvedAdapterAuth } from '../config/resolve-adapter-auth.js';
 import type { AdapterAuthRuntimePreparer } from '../config/adapter-auth-runtime.js';
+
+export type Forbid<T, K extends PropertyKey> = Omit<T, K> & { [P in K]?: never };
+export type ForbiddenKeys = 'agentId' | 'adapterId' | 'adapterSessionId' | 'adapterName' | 'sessionId';
+/** Extract Subjects type parameter from a ScopedBus */
+export type ExtractScopedBusSubjects<T> = T extends {
+  withFilter: (...args: unknown[]) => IFilteredBus<string, infer S>;
+}
+  ? S
+  : T extends ScopedBus<string, infer S>
+    ? S
+    : SubjectRecord;
 
 // ============================================================================
 // Base Types - DRY foundations for agent identity and runtime options
@@ -93,7 +104,8 @@ export type ExecutionContext = AgentContext;
 
 export interface MinimalAgentConnectorConfig<TBus extends ScopedBus<string> = ScopedBus<string>> {
   bus: TBus;
-  globalBus?: IMakaioBus;
+  /** Bus of the carrier that owns the connector; its `own('observer')` context sends observations. */
+  globalBus: IMakaioBus;
 }
 
 /**
@@ -196,8 +208,9 @@ export interface BaseAgentConnectorConfig<
    * Injected by the owning agent, so the announcement routes through its
    * `ConfirmedAdapterSessionTracker` and inherits the seam's retry anchor
    * (duties 3 and 4) instead of emitting one unrecoverable event.
+   * @param call - Call context of the message whose turn caused the move
    */
-  onAdapterSessionMoved?: () => Promise<void>;
+  onAdapterSessionMoved?: (call: CallContext) => Promise<void>;
 
   /**
    * Directory restrictions for file-system tool execution.
@@ -267,8 +280,8 @@ export interface AIAgentConfig<
   clientProfileName?: string;
   /** Trusted non-serializable auth preparation strategy injected by the host. */
   prepareAuthRuntime?: AdapterAuthRuntimePreparer<TBus>;
-  /** Global bus instance (defaults to MakaioBus singleton) */
-  globalBus?: IMakaioBus;
+  /** Global bus for cross-namespace communication; the carrier bus is passed in, never defaulted. */
+  globalBus: IMakaioBus;
   /** Scoped bus for adapter-specific events */
   adapterBus: TBus;
   /**
@@ -410,6 +423,11 @@ export type StartAgentOptions = AgentSendMessageOptions;
  * Inherits responseSchema from AgentSendMessageOptions.
  */
 export interface ConnectorSendMessageOptions extends AgentSendMessageOptions {
+  /**
+   * Call context of the call that triggers this turn. Everything the call causes
+   * (start, turn state, completion) is sent with it, also after an `await`.
+   */
+  call: CallContext;
   /**
    * Content-free provider transport correlation. This is carried on the
    * message handle and never materialized into the LLM-facing message.

@@ -1,4 +1,5 @@
 import type { IMakaioBus } from '@makaio/bus-core';
+import type { CallContext } from '@makaio/core';
 import { MessageStorageSubjects, SessionSubjects, type MessagePageCursor } from '@makaio/contracts';
 import type {
   ForkSessionOptions,
@@ -56,12 +57,17 @@ const toSessionMessage = (message: {
 
 /**
  * List sessions from the framework session service.
+ * @param call - Call context forwarded to session requests.
  * @param bus - The bus instance to communicate with the session service.
  * @param options - Optional filters for status and pagination limit.
  * @returns Array of SDK session info objects.
  */
-export async function listSessions(bus: IMakaioBus, options?: ListSessionsOptions): Promise<SDKSessionInfo[]> {
-  const { sessions } = await bus.request(SessionSubjects.list, {
+export async function listSessions(
+  call: CallContext,
+  bus: IMakaioBus,
+  options?: ListSessionsOptions,
+): Promise<SDKSessionInfo[]> {
+  const { sessions } = await bus.request(call, SessionSubjects.list, {
     status: options?.status ?? 'all',
     limit: options?.limit,
   });
@@ -70,12 +76,17 @@ export async function listSessions(bus: IMakaioBus, options?: ListSessionsOption
 
 /**
  * Get info for a single session by ID. Returns undefined when not found.
+ * @param call - Call context forwarded to session requests.
  * @param bus - The bus instance to communicate with the session service.
  * @param sessionId - The session ID to retrieve.
  * @returns SDK session info, or undefined if the session does not exist.
  */
-export async function getSessionInfo(bus: IMakaioBus, sessionId: string): Promise<SDKSessionInfo | undefined> {
-  const { session } = await bus.request(SessionSubjects.get, { sessionId });
+export async function getSessionInfo(
+  call: CallContext,
+  bus: IMakaioBus,
+  sessionId: string,
+): Promise<SDKSessionInfo | undefined> {
+  const { session } = await bus.request(call, SessionSubjects.get, { sessionId });
   return session !== null ? toSDKSessionInfo(session) : undefined;
 }
 
@@ -84,17 +95,22 @@ export async function getSessionInfo(bus: IMakaioBus, sessionId: string): Promis
  *
  * Fetches pages until no next cursor is returned, accumulating all messages
  * in ascending timestamp order.
+ * @param call - Call context forwarded to session requests.
  * @param bus - The bus instance to communicate with the message storage service.
  * @param sessionId - The session whose messages should be retrieved.
  * @returns Ordered array of SDK session messages.
  */
-export async function getSessionMessages(bus: IMakaioBus, sessionId: string): Promise<SessionMessage[]> {
+export async function getSessionMessages(
+  call: CallContext,
+  bus: IMakaioBus,
+  sessionId: string,
+): Promise<SessionMessage[]> {
   const accumulated: SessionMessage[] = [];
   let cursor: MessagePageCursor | undefined;
 
   do {
     // Spread cursor conditionally to avoid passing `after: undefined` on the first request.
-    const response = await bus.request(MessageStorageSubjects.getBySession, {
+    const response = await bus.request(call, MessageStorageSubjects.getBySession, {
       sessionId,
       order: 'asc' as const,
       ...(cursor !== undefined ? { after: cursor } : {}),
@@ -110,17 +126,19 @@ export async function getSessionMessages(bus: IMakaioBus, sessionId: string): Pr
 
 /**
  * Fork a session from an optional branch point.
+ * @param call - Call context forwarded to session requests.
  * @param bus - The bus instance to communicate with the session service.
  * @param sessionId - Source session to fork from.
  * @param options - Optional fork options including message branch point.
  * @returns The new session ID created by the fork.
  */
 export async function forkSession(
+  call: CallContext,
   bus: IMakaioBus,
   sessionId: string,
   options?: ForkSessionOptions,
 ): Promise<ForkSessionResult> {
-  const { sessionId: newSessionId } = await bus.request(SessionSubjects.fork, {
+  const { sessionId: newSessionId } = await bus.request(call, SessionSubjects.fork, {
     sourceSessionId: sessionId,
     ...(options?.messageId !== undefined ? { fromMessageId: options.messageId } : {}),
   });
@@ -134,14 +152,15 @@ export async function forkSession(
  * request failures from those steps are surfaced so callers can distinguish
  * lifecycle refusal from transport or storage failure. Purge is the terminal
  * step and throws on failure.
+ * @param call - Call context forwarded to session requests.
  * @param bus - The bus instance to communicate with the session service.
  * @param sessionId - The session ID to permanently delete.
  */
-export async function deleteSession(bus: IMakaioBus, sessionId: string): Promise<void> {
-  await bus.request(SessionSubjects.close, { sessionId });
-  await bus.request(SessionSubjects.archive, { sessionId });
+export async function deleteSession(call: CallContext, bus: IMakaioBus, sessionId: string): Promise<void> {
+  await bus.request(call, SessionSubjects.close, { sessionId });
+  await bus.request(call, SessionSubjects.archive, { sessionId });
 
-  const purgeResult = await bus.request(SessionSubjects.purge, { sessionId });
+  const purgeResult = await bus.request(call, SessionSubjects.purge, { sessionId });
   if (!purgeResult.success) {
     throw new Error(`Failed to purge session '${sessionId}': ${purgeResult.error ?? 'unknown error'}`);
   }
@@ -149,12 +168,18 @@ export async function deleteSession(bus: IMakaioBus, sessionId: string): Promise
 
 /**
  * Rename a session by updating its title.
+ * @param call - Call context forwarded to session requests.
  * @param bus - The bus instance to communicate with the session service.
  * @param sessionId - The session ID to rename.
  * @param title - New display title for the session.
  */
-export async function renameSession(bus: IMakaioBus, sessionId: string, title: string): Promise<void> {
-  const { success } = await bus.request(SessionSubjects.update, { sessionId, title });
+export async function renameSession(
+  call: CallContext,
+  bus: IMakaioBus,
+  sessionId: string,
+  title: string,
+): Promise<void> {
+  const { success } = await bus.request(call, SessionSubjects.update, { sessionId, title });
   if (!success) {
     throw new Error(`Failed to rename session '${sessionId}'`);
   }

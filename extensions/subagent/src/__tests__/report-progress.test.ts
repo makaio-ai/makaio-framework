@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { createMakaioContext } from '@makaio/core';
 import { SubagentErrorCode, SubagentSubjects } from '@makaio/contracts';
+import { createTestCall } from '@makaio/test-utils';
 import { reportProgressTool } from '../tools/child/index.js';
 import { createMockBus, createChildContext } from './test-helpers.js';
 
@@ -84,6 +85,7 @@ describe('report_progress tool', () => {
     const tool = reportProgressTool();
     const nonSubagentContext = {
       ...createMakaioContext({ cwd: '/test' }),
+      call: createTestCall(),
       sessionId: 'parent-1',
       subagentDepth: 0,
       bus: mockBus.bus,

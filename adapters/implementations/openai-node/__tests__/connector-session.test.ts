@@ -1,10 +1,12 @@
 import os from 'node:os';
 import fs from 'node:fs';
 import OpenAI from 'openai';
+import { Stream } from 'openai/core/streaming';
 import type { Message } from '@makaio/contracts/shared';
 import type { AgentToolApproveResponse } from '@makaio/contracts';
 import { describe, expect, it, vi } from 'vitest';
-import { OnceAbortError } from '@makaio/bus-core';
+import { createTestBusInstance, createTestCall } from '@makaio/test-utils';
+import { OnceAbortError, type IMakaioBus } from '@makaio/bus-core';
 import { MessageHandle, normalizeMessageInput } from '@makaio/ai-adapters-core';
 import { OpenAINodeConnector } from '../src/connector.js';
 import * as streamBridge from '../src/stream-bridge.js';
@@ -16,20 +18,23 @@ import {
   type SdkEvent,
 } from '../src/namespaces/index.js';
 import { OpenAIConnectorSession } from '../src/session.js';
-import type { OpenAISessionConfig } from '../src/types/index.js';
+import type { OpenAINodeAgentConfig, OpenAISessionConfig } from '../src/types/index.js';
 
 /**
  * Create a connector session with shared defaults for session-focused tests.
  * @param bus - Scoped connector bus used by the session.
+ * @param globalBus - Host bus used for tool execution.
  * @param overrides - Per-test config fields that differ from the defaults.
  * @returns A configured OpenAI connector session.
  */
 function createSession(
   bus: OpenAINodeConnectorBus,
+  globalBus: IMakaioBus,
   overrides: Partial<OpenAISessionConfig> = {},
 ): OpenAIConnectorSession {
   return new OpenAIConnectorSession({
     bus,
+    globalBus,
     adapterId: 'adapter-test',
     adapterName: 'openai-node',
     agentId: 'agent-test',
@@ -48,19 +53,39 @@ function createSession(
   });
 }
 
+/**
+ * Create a connector with shared defaults for session-focused tests.
+ * @param bus - Scoped connector bus.
+ * @param globalBus - Host bus used by the connector.
+ * @param overrides - Per-test connector configuration.
+ * @returns A configured connector.
+ */
+function createConnector(
+  bus: OpenAINodeConnectorBus,
+  globalBus: IMakaioBus,
+  overrides: Partial<OpenAINodeAgentConfig> = {},
+): OpenAINodeConnector {
+  return new OpenAINodeConnector({
+    bus,
+    globalBus,
+    adapterId: 'adapter-test',
+    adapterName: 'openai-node',
+    agentId: 'agent-test',
+    model: 'gpt-4o-mini',
+    cwd: os.tmpdir(),
+    env: {},
+    providerConfig: {},
+    ...overrides,
+  });
+}
+
 describe('openai-node connector/session', () => {
   it('does not mutate connector cwd when changeCwdInPlace runs before session init', async () => {
-    const bus = await OpenAINodeConnectorNamespace.scopedBus();
+    const globalBus = createTestBusInstance();
+    const bus = await OpenAINodeConnectorNamespace.scopedBus(globalBus);
     const initialCwd = os.tmpdir();
-    const connector = new OpenAINodeConnector({
-      bus,
-      adapterId: 'adapter-test',
-      adapterName: 'openai-node',
-      agentId: 'agent-test',
-      model: 'gpt-4o-mini',
+    const connector = createConnector(bus, globalBus, {
       cwd: initialCwd,
-      env: {},
-      providerConfig: {},
     });
 
     const updatedCwd = process.cwd();
@@ -71,17 +96,11 @@ describe('openai-node connector/session', () => {
   });
 
   it('does not mutate connector model when changeModelInPlace runs before session init', async () => {
-    const bus = await OpenAINodeConnectorNamespace.scopedBus();
+    const globalBus = createTestBusInstance();
+    const bus = await OpenAINodeConnectorNamespace.scopedBus(globalBus);
     const initialModel = 'gpt-4o-mini';
-    const connector = new OpenAINodeConnector({
-      bus,
-      adapterId: 'adapter-test',
-      adapterName: 'openai-node',
-      agentId: 'agent-test',
+    const connector = createConnector(bus, globalBus, {
       model: initialModel,
-      cwd: os.tmpdir(),
-      env: {},
-      providerConfig: {},
     });
 
     const updatedModel = 'gpt-4o';
@@ -92,8 +111,9 @@ describe('openai-node connector/session', () => {
   });
 
   it('aborts message_complete wait when signal is already aborted', async () => {
-    const bus = await OpenAINodeConnectorNamespace.scopedBus();
-    const session = createSession(bus);
+    const globalBus = createTestBusInstance();
+    const bus = await OpenAINodeConnectorNamespace.scopedBus(globalBus);
+    const session = createSession(bus, globalBus);
 
     const createMessageCompletePromise = Reflect.get(session, 'createMessageCompletePromise') as
       | ((abortSignal: AbortSignal, adapterSessionId: string) => Promise<{ payload: SdkEvent }>)
@@ -108,8 +128,9 @@ describe('openai-node connector/session', () => {
   });
 
   it('filters message_complete wait by event type and connector identity', async () => {
-    const bus = await OpenAINodeConnectorNamespace.scopedBus();
-    const session = createSession(bus);
+    const globalBus = createTestBusInstance();
+    const bus = await OpenAINodeConnectorNamespace.scopedBus(globalBus);
+    const session = createSession(bus, globalBus);
 
     const onceSpy = vi.spyOn(bus, 'once');
     const createMessageCompletePromise = Reflect.get(session, 'createMessageCompletePromise') as
@@ -138,23 +159,17 @@ describe('openai-node connector/session', () => {
   });
 
   it('syncs session cwd without mutating connector cwd directly', async () => {
-    const bus = await OpenAINodeConnectorNamespace.scopedBus();
+    const globalBus = createTestBusInstance();
+    const bus = await OpenAINodeConnectorNamespace.scopedBus(globalBus);
     const tempRoot = fs.mkdtempSync(`${os.tmpdir()}/openai-node-connector-session-`);
     const initialCwd = `${tempRoot}/initial`;
     const updatedCwd = `${tempRoot}/updated`;
     fs.mkdirSync(initialCwd, { recursive: true });
     fs.mkdirSync(updatedCwd, { recursive: true });
-    const connector = new OpenAINodeConnector({
-      bus,
-      adapterId: 'adapter-test',
-      adapterName: 'openai-node',
-      agentId: 'agent-test',
-      model: 'gpt-4o-mini',
+    const connector = createConnector(bus, globalBus, {
       cwd: initialCwd,
-      env: {},
-      providerConfig: {},
     });
-    const session = createSession(bus, { cwd: initialCwd });
+    const session = createSession(bus, globalBus, { cwd: initialCwd });
 
     Reflect.set(connector, 'session', session);
     await connector.changeCwdInPlace(updatedCwd);
@@ -164,15 +179,9 @@ describe('openai-node connector/session', () => {
   });
 
   it('captures systemPrompt from initialize options', async () => {
-    const bus = await OpenAINodeConnectorNamespace.scopedBus();
-    const connector = new OpenAINodeConnector({
-      bus,
-      adapterId: 'adapter-test',
-      adapterName: 'openai-node',
-      agentId: 'agent-test',
-      model: 'gpt-4o-mini',
-      cwd: os.tmpdir(),
-      env: {},
+    const globalBus = createTestBusInstance();
+    const bus = await OpenAINodeConnectorNamespace.scopedBus(globalBus);
+    const connector = createConnector(bus, globalBus, {
       adapterAuth: {
         processEnv: {},
         connectorDeliveries: [
@@ -183,27 +192,18 @@ describe('openai-node connector/session', () => {
         ],
         configInheritance: 'empty',
       },
-      providerConfig: {},
     });
 
-    await connector.initialize({ systemPrompt: 'You are a test assistant.' });
+    await connector.initialize({ call: createTestCall(), systemPrompt: 'You are a test assistant.' });
 
     const systemPrompt = Reflect.get(connector, 'systemPrompt');
     expect(systemPrompt).toBe('You are a test assistant.');
   });
 
   it('captures empty-string systemPrompt without treating it as unset', async () => {
-    const bus = await OpenAINodeConnectorNamespace.scopedBus();
-    const connector = new OpenAINodeConnector({
-      bus,
-      adapterId: 'adapter-test',
-      adapterName: 'openai-node',
-      agentId: 'agent-test',
-      model: 'gpt-4o-mini',
-      cwd: os.tmpdir(),
-      env: {},
-      providerConfig: {},
-    });
+    const globalBus = createTestBusInstance();
+    const bus = await OpenAINodeConnectorNamespace.scopedBus(globalBus);
+    const connector = createConnector(bus, globalBus);
 
     const captureSystemPrompt = Reflect.get(connector, 'captureSystemPrompt') as
       | ((prompt: string | undefined) => void)
@@ -215,17 +215,9 @@ describe('openai-node connector/session', () => {
   });
 
   it('captures systemPrompt from start options', async () => {
-    const bus = await OpenAINodeConnectorNamespace.scopedBus();
-    const connector = new OpenAINodeConnector({
-      bus,
-      adapterId: 'adapter-test',
-      adapterName: 'openai-node',
-      agentId: 'agent-test',
-      model: 'gpt-4o-mini',
-      cwd: os.tmpdir(),
-      env: {},
-      providerConfig: {},
-    });
+    const globalBus = createTestBusInstance();
+    const bus = await OpenAINodeConnectorNamespace.scopedBus(globalBus);
+    const connector = createConnector(bus, globalBus);
 
     const systemPromptBefore = Reflect.get(connector, 'systemPrompt');
     expect(systemPromptBefore).toBeUndefined();
@@ -233,7 +225,10 @@ describe('openai-node connector/session', () => {
     // Note: This will fail to send a message because we don't have a real API key,
     // but we can verify systemPrompt was captured before the error
     await connector
-      .start(normalizeMessageInput('Hello'), { systemPrompt: { mode: 'append', content: 'Additional context.' } })
+      .start(normalizeMessageInput('Hello'), {
+        call: createTestCall(),
+        systemPrompt: { mode: 'append', content: 'Additional context.' },
+      })
       .catch(() => {
         // Ignore network errors
       });
@@ -243,8 +238,9 @@ describe('openai-node connector/session', () => {
   });
 
   it('prepends system message to messages array when systemPrompt is set', async () => {
-    const bus = await OpenAINodeConnectorNamespace.scopedBus();
-    const session = createSession(bus, { systemPrompt: 'You are a helpful assistant.' });
+    const globalBus = createTestBusInstance();
+    const bus = await OpenAINodeConnectorNamespace.scopedBus(globalBus);
+    const session = createSession(bus, globalBus, { systemPrompt: 'You are a helpful assistant.' });
 
     const buildMessages = Reflect.get(session, 'buildMessages') as
       | ((handle: MessageHandle, mergedContent?: string[]) => void)
@@ -253,7 +249,7 @@ describe('openai-node connector/session', () => {
     expect(buildMessages).toBeTypeOf('function');
 
     // Create a message handle
-    const handle = new MessageHandle(crypto.randomUUID(), normalizeMessageInput('Hello'), 'enqueue');
+    const handle = new MessageHandle(createTestCall(), crypto.randomUUID(), normalizeMessageInput('Hello'), 'enqueue');
 
     buildMessages?.call(session, handle);
 
@@ -264,15 +260,16 @@ describe('openai-node connector/session', () => {
   });
 
   it('prepends empty-string system message when explicitly configured', async () => {
-    const bus = await OpenAINodeConnectorNamespace.scopedBus();
-    const session = createSession(bus, { systemPrompt: '' });
+    const globalBus = createTestBusInstance();
+    const bus = await OpenAINodeConnectorNamespace.scopedBus(globalBus);
+    const session = createSession(bus, globalBus, { systemPrompt: '' });
 
     const buildMessages = Reflect.get(session, 'buildMessages') as
       | ((handle: MessageHandle, mergedContent?: string[]) => void)
       | undefined;
     expect(buildMessages).toBeTypeOf('function');
 
-    const handle = new MessageHandle(crypto.randomUUID(), normalizeMessageInput('Hello'), 'enqueue');
+    const handle = new MessageHandle(createTestCall(), crypto.randomUUID(), normalizeMessageInput('Hello'), 'enqueue');
     buildMessages?.call(session, handle);
 
     const messages = Reflect.get(session, 'messages') as Array<{ role: string; content: string }>;
@@ -282,8 +279,9 @@ describe('openai-node connector/session', () => {
   });
 
   it('moves history system message to index 0, updates it, and preserves non-system order', async () => {
-    const bus = await OpenAINodeConnectorNamespace.scopedBus();
-    const session = createSession(bus, { systemPrompt: 'Configured system prompt' });
+    const globalBus = createTestBusInstance();
+    const bus = await OpenAINodeConnectorNamespace.scopedBus(globalBus);
+    const session = createSession(bus, globalBus, { systemPrompt: 'Configured system prompt' });
 
     const buildMessages = Reflect.get(session, 'buildMessages') as
       | ((handle: MessageHandle, mergedContent?: string[]) => void)
@@ -295,7 +293,13 @@ describe('openai-node connector/session', () => {
       { role: 'system', blocks: { type: 'text', content: 'History system' } },
       { role: 'assistant', blocks: { type: 'text', content: 'Earlier assistant' } },
     ];
-    const handle = new MessageHandle(crypto.randomUUID(), normalizeMessageInput('Current user'), 'enqueue', history);
+    const handle = new MessageHandle(
+      createTestCall(),
+      crypto.randomUUID(),
+      normalizeMessageInput('Current user'),
+      'enqueue',
+      history,
+    );
 
     buildMessages?.call(session, handle);
 
@@ -308,8 +312,9 @@ describe('openai-node connector/session', () => {
   });
 
   it('updates existing system message at index 0 without adding a duplicate', async () => {
-    const bus = await OpenAINodeConnectorNamespace.scopedBus();
-    const session = createSession(bus, { systemPrompt: 'Configured system prompt' });
+    const globalBus = createTestBusInstance();
+    const bus = await OpenAINodeConnectorNamespace.scopedBus(globalBus);
+    const session = createSession(bus, globalBus, { systemPrompt: 'Configured system prompt' });
 
     const buildMessages = Reflect.get(session, 'buildMessages') as
       | ((handle: MessageHandle, mergedContent?: string[]) => void)
@@ -320,7 +325,13 @@ describe('openai-node connector/session', () => {
       { role: 'system', blocks: { type: 'text', content: 'Old system' } },
       { role: 'user', blocks: { type: 'text', content: 'Earlier user' } },
     ];
-    const handle = new MessageHandle(crypto.randomUUID(), normalizeMessageInput('Current user'), 'enqueue', history);
+    const handle = new MessageHandle(
+      createTestCall(),
+      crypto.randomUUID(),
+      normalizeMessageInput('Current user'),
+      'enqueue',
+      history,
+    );
 
     buildMessages?.call(session, handle);
 
@@ -332,10 +343,11 @@ describe('openai-node connector/session', () => {
   });
 
   it('does not feed reasoning-only completion back as assistant content', async () => {
-    const bus = await OpenAINodeConnectorNamespace.scopedBus();
-    const session = createSession(bus);
+    const globalBus = createTestBusInstance();
+    const bus = await OpenAINodeConnectorNamespace.scopedBus(globalBus);
+    const session = createSession(bus, globalBus);
 
-    const handle = new MessageHandle(crypto.randomUUID(), normalizeMessageInput('Hello'), 'enqueue');
+    const handle = new MessageHandle(createTestCall(), crypto.randomUUID(), normalizeMessageInput('Hello'), 'enqueue');
     const buildMessages = Reflect.get(session, 'buildMessages') as ((handle: MessageHandle) => void) | undefined;
     const createTurn = Reflect.get(session, 'createTurn') as ((handle: MessageHandle) => unknown) | undefined;
     const applyMessageComplete = Reflect.get(session, 'applyMessageComplete') as
@@ -372,13 +384,15 @@ describe('openai-node connector/session', () => {
   });
 
   it('accepts block-only user input when content contains non-text parts', async () => {
-    const bus = await OpenAINodeConnectorNamespace.scopedBus();
-    const session = createSession(bus);
+    const globalBus = createTestBusInstance();
+    const bus = await OpenAINodeConnectorNamespace.scopedBus(globalBus);
+    const session = createSession(bus, globalBus);
 
     const buildMessages = Reflect.get(session, 'buildMessages') as ((handle: MessageHandle) => void) | undefined;
     expect(buildMessages).toBeTypeOf('function');
 
     const handle = new MessageHandle(
+      createTestCall(),
       crypto.randomUUID(),
       normalizeMessageInput({
         role: 'user',
@@ -405,14 +419,17 @@ describe('openai-node connector/session', () => {
   });
 
   it('passes the real agentId (not adapterId) to stream metadata', async () => {
-    const bus = await OpenAINodeConnectorNamespace.scopedBus();
-    const createSpy = vi.fn().mockResolvedValue({});
+    const globalBus = createTestBusInstance();
+    const bus = await OpenAINodeConnectorNamespace.scopedBus(globalBus);
+    const mockClient = new OpenAI({ apiKey: 'test-api-key' });
+    const createSpy = vi.spyOn(mockClient.chat.completions, 'create').mockResolvedValue(
+      new Stream(async function* () {
+        yield* [];
+      }, new AbortController()),
+    );
     const processStreamSpy = vi.spyOn(streamBridge, 'processStream').mockResolvedValue(undefined);
 
-    // @ts-expect-error -- partial platform shim; OpenAI has private fields and many more members not needed here
-    const mockClient: OpenAI = { chat: { completions: { create: createSpy } } };
-
-    const session = createSession(bus, {
+    const session = createSession(bus, globalBus, {
       agentId: 'agent-real',
       client: mockClient,
     });
@@ -429,7 +446,7 @@ describe('openai-node connector/session', () => {
         ) => Promise<void>)
       | undefined;
     expect(executeApiCall).toBeTypeOf('function');
-    const handle = new MessageHandle('message-1', normalizeMessageInput('hello'), 'enqueue');
+    const handle = new MessageHandle(createTestCall(), 'message-1', normalizeMessageInput('hello'), 'enqueue');
 
     try {
       await executeApiCall?.call(
@@ -445,7 +462,7 @@ describe('openai-node connector/session', () => {
 
       expect(createSpy).toHaveBeenCalledOnce();
       expect(processStreamSpy).toHaveBeenCalledOnce();
-      const metadata = processStreamSpy.mock.calls[0]?.[1];
+      const metadata = processStreamSpy.mock.calls[0]?.[2];
       expect(metadata).toMatchObject({
         agentId: 'agent-real',
         adapterId: 'adapter-test',

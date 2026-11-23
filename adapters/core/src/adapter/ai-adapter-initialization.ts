@@ -168,7 +168,8 @@ export async function publishInitializedAdapter(
   bus: IMakaioBus,
   publication: InitializedAdapterPublication,
 ): Promise<void> {
-  await bus.emit(AdapterSubjects.initialized, publication);
+  // ORIGIN: The adapter lifecycle announces a newly initialized generation.
+  await bus.emit(bus.own('start'), AdapterSubjects.initialized, publication);
 }
 
 /**
@@ -177,7 +178,8 @@ export async function publishInitializedAdapter(
  * @param adapter - Live adapter identity that is being withdrawn.
  */
 export async function publishDeinitializedAdapter(bus: IMakaioBus, adapter: LiveAdapterIdentitySource): Promise<void> {
-  await bus.emit(AdapterSubjects.deinitialized, {
+  // ORIGIN: Adapter shutdown or rollback withdraws the generation's publication.
+  await bus.emit(bus.own('stop'), AdapterSubjects.deinitialized, {
     adapterId: adapter.adapterId,
     adapterName: adapter.name,
     machineId: adapter.machineId,

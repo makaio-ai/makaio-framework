@@ -4,7 +4,8 @@ import type { MakaioNodeExtension } from '@makaio/contracts';
 import { ClientsCoreToken } from '@makaio/subsystem-client';
 import { ClaudeCodeClientService } from './claude-code-client-service.js';
 export { CLAUDE_CODE_HOOK_RESPONSE_CAPABILITIES } from '../definition.js';
-export { ClaudeCodeClientSubjects } from './namespace.js';
+export { ClaudeCodeClientSubjects, ClaudeCodeClientNamespace } from './namespace.js';
+import { ClaudeCodeClientNamespace } from './namespace.js';
 export { ClaudeCodeClientService } from './claude-code-client-service.js';
 export {
   CLAUDE_CODE_HOOK_SESSION_START,
@@ -68,6 +69,7 @@ export const claudeCodeClientRuntimePackage: MakaioNodeExtension<IMakaioBus> = {
   displayName: 'Claude Code Client Runtime',
   version: '0.1.0',
   dependencies: [dep('makaio.clients-core')],
+  namespaces: [ClaudeCodeClientNamespace],
   /**
    * Create the Claude Code client service bound to the runtime bus.
    *

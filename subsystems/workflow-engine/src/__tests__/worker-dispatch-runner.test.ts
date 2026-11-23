@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { createBusInstance } from '@makaio/bus-core';
+import { createTestCall } from '@makaio/test-utils';
 import { WorkerNamespace, WorkerSubjects, WorkflowRunContextSchema } from '@makaio/contracts';
 import type { ProviderAllocationRef, WorkerRequirements, WorkflowRunResult } from '@makaio/contracts';
 import { ExecutionAttemptAuthority } from '../execution-attempt-authority.js';
@@ -14,7 +15,7 @@ import { parseWorkflowAttemptInstruction } from '../workflow-attempt-instruction
 import { WorkflowStorageNamespace, WorkflowStorageSubjects } from '../storage/namespace.js';
 import { createWorkflowExecution } from './shared.js';
 
-function makeWorkerConfig(): Parameters<NonNullable<ReturnType<typeof createWorkerDispatchRunner>>['run']>[0] {
+function makeWorkerConfig(): Parameters<NonNullable<ReturnType<typeof createWorkerDispatchRunner>>['run']>[1] {
   return {
     source: { kind: 'definition', workflowId: 'workflow-1' },
     definition: {
@@ -62,6 +63,7 @@ describe('hasWorkerDispatchRequirements', () => {
       await submitAttemptOutcome(
         { authority, convergence: { converge: async () => 'recorded-only' } },
         {
+          call: ctx.call,
           executionAttemptId: ctx.payload.executionAttemptId,
           executionId: config.executionId,
           outcome,
@@ -71,7 +73,7 @@ describe('hasWorkerDispatchRequirements', () => {
     });
     try {
       const runner = createWorkerDispatchRunner({ bus, authority, requirements: { recoverableAllocation: true } });
-      const completion = await runner!.run(config, new AbortController().signal);
+      const completion = await runner!.run(createTestCall(), config, new AbortController().signal);
       expect(completion).toEqual({
         state: 'authority-recorded-only',
         executionId: config.executionId,
@@ -98,7 +100,7 @@ describe('hasWorkerDispatchRequirements', () => {
     });
     if (runner === undefined) throw new Error('Expected dispatch-capable runner');
     await expect(
-      runner.run(makeWorkerConfig(), new AbortController().signal, undefined, {
+      runner.run(createTestCall(), makeWorkerConfig(), new AbortController().signal, undefined, {
         withAttemptCreation: async () => {
           throw new Error('Owner already cancelled');
         },
@@ -173,6 +175,7 @@ describe('createWorkerDispatchRunner', () => {
     const controller = new AbortController();
     try {
       const result = runner!.run(
+        createTestCall(),
         { ...makeWorkerConfig(), source: { kind: 'path', path: '/host/workflow.ts' } },
         controller.signal,
       );
@@ -251,7 +254,7 @@ describe('createWorkerDispatchRunner', () => {
     });
     try {
       const runner = createWorkerDispatchRunner({ bus, authority, requirements: { recoverableAllocation: true } });
-      await expect(runner!.run(config, new AbortController().signal)).resolves.toMatchObject({
+      await expect(runner!.run(createTestCall(), config, new AbortController().signal)).resolves.toMatchObject({
         state: 'authority-committed',
       });
     } finally {
@@ -297,7 +300,7 @@ describe('createWorkerDispatchRunner', () => {
       authority,
     });
 
-    await expect(runner!.run(makeWorkerConfig(), new AbortController().signal)).rejects.toThrow();
+    await expect(runner!.run(createTestCall(), makeWorkerConfig(), new AbortController().signal)).rejects.toThrow();
 
     const [attempt] = repository.attempts.values();
     expect(attempt).toMatchObject({
@@ -327,7 +330,7 @@ describe('createWorkerDispatchRunner', () => {
         authority,
       });
 
-      await expect(runner!.run(makeWorkerConfig(), new AbortController().signal)).rejects.toThrow(
+      await expect(runner!.run(createTestCall(), makeWorkerConfig(), new AbortController().signal)).rejects.toThrow(
         'provider cleanup requires recovery',
       );
 
@@ -383,7 +386,9 @@ describe('createWorkerDispatchRunner', () => {
         authority,
       });
 
-      await expect(runner!.run(makeWorkerConfig(), new AbortController().signal)).resolves.toMatchObject({
+      await expect(
+        runner!.run(createTestCall(), makeWorkerConfig(), new AbortController().signal),
+      ).resolves.toMatchObject({
         state: 'authority-committed',
         result: { status: 'completed' },
       });
@@ -422,7 +427,7 @@ describe('createWorkerDispatchRunner', () => {
 
       let thrown: unknown;
       try {
-        await runner!.run(makeWorkerConfig(), new AbortController().signal);
+        await runner!.run(createTestCall(), makeWorkerConfig(), new AbortController().signal);
       } catch (error) {
         thrown = error;
       }
@@ -457,7 +462,7 @@ describe('createWorkerDispatchRunner', () => {
         authority,
       });
 
-      await expect(runner!.run(makeWorkerConfig(), new AbortController().signal)).rejects.toThrow();
+      await expect(runner!.run(createTestCall(), makeWorkerConfig(), new AbortController().signal)).rejects.toThrow();
 
       const [attempt] = repository.attempts.values();
       expect(attempt).toMatchObject({
@@ -509,7 +514,7 @@ describe('createWorkerDispatchRunner', () => {
       });
       expect(runner).toBeDefined();
 
-      const completion = await runner!.run(makeWorkerConfig(), new AbortController().signal);
+      const completion = await runner!.run(createTestCall(), makeWorkerConfig(), new AbortController().signal);
 
       expect(capturedAttemptId).toBeTruthy();
       expect(completion.state).toBe('authority-committed');
@@ -560,6 +565,7 @@ describe('createWorkerDispatchRunner', () => {
       });
 
       await runner!.run(
+        createTestCall(),
         makeWorkerConfig(),
         new AbortController().signal,
         { contributionRefs: [] },
@@ -612,7 +618,7 @@ describe('createWorkerDispatchRunner', () => {
       });
       expect(runner).toBeDefined();
 
-      const completion = await runner!.run(makeWorkerConfig(), new AbortController().signal);
+      const completion = await runner!.run(createTestCall(), makeWorkerConfig(), new AbortController().signal);
       expect(completion.state).toBe('authority-committed');
       if (completion.state !== 'authority-committed') throw new Error('Expected projected completion');
       expect(capturedRequirements).toEqual({ recoverableAllocation: true });
@@ -658,7 +664,7 @@ describe('createWorkerDispatchRunner', () => {
       });
       expect(runner).toBeDefined();
 
-      const completion = await runner!.run(makeWorkerConfig(), new AbortController().signal);
+      const completion = await runner!.run(createTestCall(), makeWorkerConfig(), new AbortController().signal);
       expect(completion.state).toBe('authority-committed');
       if (completion.state !== 'authority-committed') throw new Error('Expected projected completion');
       expect(capturedRequirements).toEqual({
@@ -707,7 +713,7 @@ describe('createWorkerDispatchRunner', () => {
         authority,
       });
 
-      await runner!.run(makeWorkerConfig(), new AbortController().signal);
+      await runner!.run(createTestCall(), makeWorkerConfig(), new AbortController().signal);
 
       expect(capturedRequirements).toEqual({
         customCapabilities: ['workflow.remote', 'workflow.github-actions'],
@@ -826,7 +832,7 @@ describe('launchDefinitionExecutionTask requirements threading', () => {
     };
 
     try {
-      await launchDefinitionExecutionTask(deps, params);
+      await launchDefinitionExecutionTask(createTestCall(), deps, params);
 
       expect(dispatchCalled).toBe(true);
       expect(capturedRequirements).toEqual({
@@ -887,8 +893,9 @@ describe('launchDefinitionExecutionTask requirements threading', () => {
       scope: { type: 'global' },
     };
 
-    await launchDefinitionExecutionTask(deps, params);
+    const call = createTestCall();
+    await launchDefinitionExecutionTask(call, deps, params);
 
-    expect(fallbackRunner).toHaveBeenCalledWith('wfx-no-req');
+    expect(fallbackRunner).toHaveBeenCalledWith(call, 'wfx-no-req');
   });
 });

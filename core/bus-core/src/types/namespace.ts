@@ -1,4 +1,4 @@
-import type { MakaioBusContext } from './bus.js';
+import type { IMakaioBus } from './bus.js';
 import type { BusSubjects, FlatSubjectDefinitions } from '../utils/subject-transformation.js';
 import type { ScopedBus } from '../scoped-bus.js';
 import type { SubjectRecord, SubjectSchema } from '@makaio/core';
@@ -19,7 +19,11 @@ export type BusNamespace<
   name: Domain;
   subjects: BusSubjects<FlatSubjectDefinitions<Domain, Schemas>, Domain>;
 
-  scopedBus(context?: MakaioBusContext): Promise<ScopedBus<Domain, Subjects, FilterPayload>>;
+  /**
+   * Creates a scoped bus for this namespace on the given bus instance.
+   * @param bus - The bus (carrier) the scoped view sends and receives through
+   */
+  scopedBus(bus: IMakaioBus): Promise<ScopedBus<Domain, Subjects, FilterPayload>>;
 
   /**
    * Phantom property for type extraction. Never accessed at runtime.

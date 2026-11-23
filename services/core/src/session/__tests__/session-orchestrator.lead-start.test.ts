@@ -10,12 +10,14 @@
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
+import { createTestCall } from '@makaio/test-utils';
 import {
   AdapterSubjects,
   AgentSubjects,
   SessionOwnershipStorageSubjects,
   SessionSubjects,
   type AdapterSessionClaimRecord,
+  type CallContext,
   type IMakaioSession,
   type MakaioSessionAgent,
 } from '@makaio/contracts';
@@ -70,7 +72,7 @@ interface StartAgentStub {
   /** Throw instead of answering. */
   throwWith?: string;
   /** Runs while the dispatch is in flight, before the adapter answers. */
-  duringDispatch?: (agentId: string, ownerInstanceId: string | undefined) => Promise<void>;
+  duringDispatch?: (call: CallContext, agentId: string, ownerInstanceId: string | undefined) => Promise<void>;
   /** Owner echoed by the response; defaults to the exactly targeted owner. */
   responseOwnerInstanceId?: string;
   /** Agent identity echoed by the response; defaults to the minted request ID. */
@@ -161,7 +163,7 @@ describe('reserved fresh lead start', () => {
     cleanups.push(
       MakaioBus.on(AdapterSubjects.startAgent, async (ctx) => {
         const agentId = ctx.payload.agentId ?? 'adapter-minted-agent';
-        await stub.duringDispatch?.(agentId, ctx.payload.ownerInstanceId);
+        await stub.duringDispatch?.(ctx.call, agentId, ctx.payload.ownerInstanceId);
         if (stub.throwWith !== undefined) throw new Error(stub.throwWith);
         if (stub.refuseWith !== undefined) {
           ctx.setResult({ success: false as const, dispatch: stub.refuseWith, message: 'refused by stub' });
@@ -180,7 +182,7 @@ describe('reserved fresh lead start', () => {
       }),
       MakaioBus.on(AdapterSubjects.acknowledgeCallerSettlement, async (ctx) => {
         acknowledgedAgentIds.push(ctx.payload.agentId);
-        const transitioned = await MakaioBus.requestOptional(AgentStorageSubjects.updateStatus, {
+        const transitioned = await MakaioBus.requestOptional(ctx.call, AgentStorageSubjects.updateStatus, {
           agentId: ctx.payload.agentId,
           status: 'idle',
           expectedStatus: ['starting', 'dead'],
@@ -196,16 +198,18 @@ describe('reserved fresh lead start', () => {
 
   /**
    * Create an empty session.
+   * @param call - Call context of the simulated message.
    * @param sessionId - Session to create.
    * @returns The created session ID.
    */
-  async function seedSession(sessionId: string): Promise<string> {
-    await MakaioBus.request(SessionSubjects.create, { sessionId });
+  async function seedSession(call: CallContext, sessionId: string): Promise<string> {
+    await MakaioBus.request(call, SessionSubjects.create, { sessionId });
     return sessionId;
   }
 
   /**
    * Run one fresh lead start against the composed authority.
+   * @param call - Call context of the simulated message.
    * @param sessionId - Session to start into.
    * @param runtime - Runtime facts to put on the composed start request.
    * @param expectedLeadAgentId - Designation the caller observed; defaults to none.
@@ -213,12 +217,13 @@ describe('reserved fresh lead start', () => {
    * @returns Whatever the start decided.
    */
   function start(
+    call: CallContext,
     sessionId: string,
     runtime?: LeadStartRuntimeFields,
     expectedLeadAgentId: string | null = null,
     leadTransition: LeadTransition = { kind: 'fresh' },
   ) {
-    return startLeadAgent(MakaioBus, {
+    return startLeadAgent(call, MakaioBus, {
       sessionId,
       instance: {
         adapterId: ADAPTER_ID,
@@ -234,12 +239,13 @@ describe('reserved fresh lead start', () => {
 
   /**
    * Seed an idle lead that a replacement attempt must restore on failure.
+   * @param call - Call context of the simulated message.
    * @param sessionId - Session whose existing lead is created.
    * @returns Existing lead identity.
    */
-  async function seedExistingLead(sessionId: string): Promise<string> {
+  async function seedExistingLead(call: CallContext, sessionId: string): Promise<string> {
     const agentId = `old-${sessionId}`;
-    await MakaioBus.request(AgentStorageSubjects.set, {
+    await MakaioBus.request(call, AgentStorageSubjects.set, {
       agentId,
       agent: {
         agentId,
@@ -252,7 +258,7 @@ describe('reserved fresh lead start', () => {
         lastActivityAt: 1,
       },
     });
-    const designated = await designateSessionLead(MakaioBus, {
+    const designated = await designateSessionLead(call, MakaioBus, {
       sessionId,
       agentId,
       expectedLeadAgentId: null,
@@ -263,47 +269,52 @@ describe('reserved fresh lead start', () => {
 
   /**
    * Read a stored agent row.
+   * @param call - Call context of the simulated message.
    * @param agentId - Agent to read.
    * @returns The row, or `null` when it is gone.
    */
-  async function loadAgent(agentId: string): Promise<MakaioSessionAgent | null> {
-    const { agent } = await MakaioBus.request(AgentStorageSubjects.get, { agentId });
+  async function loadAgent(call: CallContext, agentId: string): Promise<MakaioSessionAgent | null> {
+    const { agent } = await MakaioBus.request(call, AgentStorageSubjects.get, { agentId });
     return agent;
   }
 
   /**
    * Read a stored session row.
+   * @param call - Call context of the simulated message.
    * @param sessionId - Session to read.
    * @returns The row, or `null` when it is gone.
    */
-  async function loadSession(sessionId: string): Promise<IMakaioSession | null> {
-    const { session } = await MakaioBus.request(SessionStorageSubjects.get, { sessionId });
+  async function loadSession(call: CallContext, sessionId: string): Promise<IMakaioSession | null> {
+    const { session } = await MakaioBus.request(call, SessionStorageSubjects.get, { sessionId });
     return session;
   }
 
   /**
    * List every claim on the test machine.
+   * @param call - Call context of the simulated message.
    * @returns The claims, in storage order.
    */
-  async function loadClaims(): Promise<AdapterSessionClaimRecord[]> {
-    const { claims } = await MakaioBus.request(SessionOwnershipStorageSubjects.listClaims, { machineId: MACHINE_ID });
+  async function loadClaims(call: CallContext): Promise<AdapterSessionClaimRecord[]> {
+    const { claims } = await MakaioBus.request(call, SessionOwnershipStorageSubjects.listClaims, {
+      machineId: MACHINE_ID,
+    });
     return claims;
   }
 
   it('designates the lead in storage before the adapter is dispatched to (case 28)', async () => {
-    const sessionId = await seedSession('lead-start-order');
+    const sessionId = await seedSession(createTestCall(), 'lead-start-order');
     let leadAtDispatch: string | null | undefined;
     let dispatchedAgentId: string | undefined;
     let targetedOwnerInstanceId: string | undefined;
     registerStartAgent({
-      duringDispatch: async (agentId, ownerInstanceId) => {
+      duringDispatch: async (call, agentId, ownerInstanceId) => {
         dispatchedAgentId = agentId;
         targetedOwnerInstanceId = ownerInstanceId;
-        leadAtDispatch = (await loadSession(sessionId))?.leadAgentId ?? null;
+        leadAtDispatch = (await loadSession(call, sessionId))?.leadAgentId ?? null;
       },
     });
 
-    const result = await start(sessionId);
+    const result = await start(createTestCall(), sessionId);
 
     expect(result.outcome).toBe('started');
     if (result.outcome !== 'started') return;
@@ -318,8 +329,11 @@ describe('reserved fresh lead start', () => {
     { label: 'fresh lead', existingLead: false },
     { label: 'replacement lead', existingLead: true },
   ])('reverses a committed keyless $label reservation when its response is lost', async ({ existingLead }) => {
-    const sessionId = await seedSession(`lead-start-lost-keyless-${existingLead ? 'replace' : 'fresh'}`);
-    const previousLeadAgentId = existingLead ? await seedExistingLead(sessionId) : null;
+    const sessionId = await seedSession(
+      createTestCall(),
+      `lead-start-lost-keyless-${existingLead ? 'replace' : 'fresh'}`,
+    );
+    const previousLeadAgentId = existingLead ? await seedExistingLead(createTestCall(), sessionId) : null;
     cleanups.push(
       MakaioBus.on(
         SessionSubjects.ownership.reserveStart,
@@ -333,23 +347,29 @@ describe('reserved fresh lead start', () => {
     registerStartAgent();
 
     await expect(
-      start(sessionId, undefined, previousLeadAgentId, existingLead ? { kind: 'replace' } : { kind: 'fresh' }),
+      start(
+        createTestCall(),
+        sessionId,
+        undefined,
+        previousLeadAgentId,
+        existingLead ? { kind: 'replace' } : { kind: 'fresh' },
+      ),
     ).rejects.toThrow('keyless reservation response was lost');
 
-    expect((await loadSession(sessionId))?.leadAgentId).toBe(previousLeadAgentId ?? undefined);
-    expect((await loadSession(sessionId))?.agents.map((agent) => agent.agentId)).toEqual(
+    expect((await loadSession(createTestCall(), sessionId))?.leadAgentId).toBe(previousLeadAgentId ?? undefined);
+    expect((await loadSession(createTestCall(), sessionId))?.agents.map((agent) => agent.agentId)).toEqual(
       previousLeadAgentId === null ? [] : [previousLeadAgentId],
     );
   });
 
   it('does not overwrite a newer lead while reversing a response-lost keyless reservation', async () => {
-    const sessionId = await seedSession('lead-start-lost-keyless-cas-loser');
+    const sessionId = await seedSession(createTestCall(), 'lead-start-lost-keyless-cas-loser');
     cleanups.push(
       MakaioBus.on(
         SessionSubjects.ownership.reserveStart,
         async (context) => {
           await context.next();
-          await MakaioBus.request(AgentStorageSubjects.set, {
+          await MakaioBus.request(context.call, AgentStorageSubjects.set, {
             agentId: 'newer-lead',
             agent: {
               agentId: 'newer-lead',
@@ -362,7 +382,7 @@ describe('reserved fresh lead start', () => {
               lastActivityAt: 1,
             },
           });
-          await designateSessionLead(MakaioBus, {
+          await designateSessionLead(context.call, MakaioBus, {
             sessionId,
             agentId: 'newer-lead',
             expectedLeadAgentId: context.payload.agentId,
@@ -374,17 +394,17 @@ describe('reserved fresh lead start', () => {
     );
     registerStartAgent();
 
-    await expect(start(sessionId)).rejects.toThrow('keyless reservation response was lost');
+    await expect(start(createTestCall(), sessionId)).rejects.toThrow('keyless reservation response was lost');
 
-    expect((await loadSession(sessionId))?.leadAgentId).toBe('newer-lead');
+    expect((await loadSession(createTestCall(), sessionId))?.leadAgentId).toBe('newer-lead');
   });
 
   it('clears a response-lost fresh start instead of restoring a stale unmaterialized designation', async () => {
-    const sessionId = await seedSession('lead-start-lost-keyless-stale-designation');
-    const session = await loadSession(sessionId);
+    const sessionId = await seedSession(createTestCall(), 'lead-start-lost-keyless-stale-designation');
+    const session = await loadSession(createTestCall(), sessionId);
     if (session === null) throw new Error('expected session');
-    await MakaioBus.request(SessionStorageSubjects.delete, { sessionId });
-    await MakaioBus.request(SessionStorageSubjects.set, {
+    await MakaioBus.request(createTestCall(), SessionStorageSubjects.delete, { sessionId });
+    await MakaioBus.request(createTestCall(), SessionStorageSubjects.set, {
       sessionId,
       session: { ...session, leadAgentId: 'stale-unmaterialized-lead' },
     });
@@ -400,19 +420,19 @@ describe('reserved fresh lead start', () => {
     );
     registerStartAgent();
 
-    await expect(start(sessionId, undefined, 'stale-unmaterialized-lead')).rejects.toThrow(
+    await expect(start(createTestCall(), sessionId, undefined, 'stale-unmaterialized-lead')).rejects.toThrow(
       'keyless reservation response was lost',
     );
 
-    expect((await loadSession(sessionId))?.leadAgentId).toBeUndefined();
+    expect((await loadSession(createTestCall(), sessionId))?.leadAgentId).toBeUndefined();
   });
 
   it('does not clear a stale designation when a fresh keyless reservation fails before commit', async () => {
-    const sessionId = await seedSession('lead-start-keyless-precommit-stale-designation');
-    const session = await loadSession(sessionId);
+    const sessionId = await seedSession(createTestCall(), 'lead-start-keyless-precommit-stale-designation');
+    const session = await loadSession(createTestCall(), sessionId);
     if (session === null) throw new Error('expected session');
-    await MakaioBus.request(SessionStorageSubjects.delete, { sessionId });
-    await MakaioBus.request(SessionStorageSubjects.set, {
+    await MakaioBus.request(createTestCall(), SessionStorageSubjects.delete, { sessionId });
+    await MakaioBus.request(createTestCall(), SessionStorageSubjects.set, {
       sessionId,
       session: { ...session, leadAgentId: 'stale-unmaterialized-lead' },
     });
@@ -427,20 +447,20 @@ describe('reserved fresh lead start', () => {
     );
     registerStartAgent();
 
-    await expect(start(sessionId, undefined, 'stale-unmaterialized-lead')).rejects.toThrow(
+    await expect(start(createTestCall(), sessionId, undefined, 'stale-unmaterialized-lead')).rejects.toThrow(
       'keyless reservation failed before commit',
     );
 
-    expect((await loadSession(sessionId))?.leadAgentId).toBe('stale-unmaterialized-lead');
+    expect((await loadSession(createTestCall(), sessionId))?.leadAgentId).toBe('stale-unmaterialized-lead');
   });
 
   it('retires and stops a start answered by a different runtime incarnation', async () => {
-    const sessionId = await seedSession('lead-start-owner-mismatch');
+    const sessionId = await seedSession(createTestCall(), 'lead-start-owner-mismatch');
     registerStartAgent({ responseOwnerInstanceId: 'foreign-owner-instance' });
 
-    await expect(start(sessionId)).rejects.toThrow('adapter owner mismatch');
+    await expect(start(createTestCall(), sessionId)).rejects.toThrow('adapter owner mismatch');
 
-    const session = await loadSession(sessionId);
+    const session = await loadSession(createTestCall(), sessionId);
     expect(session?.agents).toHaveLength(1);
     expect(session?.agents[0]?.status).toBe('dead');
     expect(stoppedAgentTargets).toEqual([
@@ -453,7 +473,7 @@ describe('reserved fresh lead start', () => {
   });
 
   it('never lets a malicious response redirect cleanup or adoption to another agent', async () => {
-    const sessionId = await seedSession('lead-start-response-victim');
+    const sessionId = await seedSession(createTestCall(), 'lead-start-response-victim');
     const victim = {
       agentId: 'unrelated-live-agent',
       adapterId: ADAPTER_ID,
@@ -464,33 +484,36 @@ describe('reserved fresh lead start', () => {
       createdAt: 1,
       lastActivityAt: 1,
     };
-    await MakaioBus.request(AgentStorageSubjects.set, { agentId: victim.agentId, agent: victim });
+    await MakaioBus.request(createTestCall(), AgentStorageSubjects.set, { agentId: victim.agentId, agent: victim });
     registerStartAgent({ responseAgentId: victim.agentId });
 
-    await expect(start(sessionId)).rejects.toThrow('adapter response identity mismatch');
+    await expect(start(createTestCall(), sessionId)).rejects.toThrow('adapter response identity mismatch');
 
-    const storedVictim = await loadAgent(victim.agentId);
+    const storedVictim = await loadAgent(createTestCall(), victim.agentId);
     expect(storedVictim).toMatchObject(victim);
     expect(stoppedAgentIds).toHaveLength(1);
     expect(stoppedAgentIds[0]).not.toBe(victim.agentId);
     expect(acknowledgedAgentIds).toEqual([]);
-    expect(await loadClaims()).toEqual([]);
+    expect(await loadClaims(createTestCall())).toEqual([]);
   });
 
   it.each([
     { label: 'adapter', stub: { responseAdapterId: 'foreign-adapter' } },
     { label: 'session', stub: { responseSessionId: 'foreign-session' } },
   ])('rejects a successful response with a mismatched $label before settlement', async ({ stub }) => {
-    const sessionId = await seedSession(`lead-start-response-${stub.responseAdapterId ?? stub.responseSessionId}`);
+    const sessionId = await seedSession(
+      createTestCall(),
+      `lead-start-response-${stub.responseAdapterId ?? stub.responseSessionId}`,
+    );
     registerStartAgent(stub);
 
-    await expect(start(sessionId)).rejects.toThrow('adapter response identity mismatch');
+    await expect(start(createTestCall(), sessionId)).rejects.toThrow('adapter response identity mismatch');
 
-    const session = await loadSession(sessionId);
+    const session = await loadSession(createTestCall(), sessionId);
     expect(session?.agents[0]?.status).toBe('dead');
     expect(stoppedAgentIds).toEqual([session?.agents[0]?.agentId]);
     expect(acknowledgedAgentIds).toEqual([]);
-    expect(await loadClaims()).toEqual([]);
+    expect(await loadClaims(createTestCall())).toEqual([]);
   });
 
   it.each([
@@ -499,8 +522,8 @@ describe('reserved fresh lead start', () => {
     'malformed',
     'settlement-throw',
   ] as const)('restores the old lead when a replacement ends with %s after dispatch', async (failure) => {
-    const sessionId = await seedSession(`lead-replacement-${failure}`);
-    const oldLeadAgentId = await seedExistingLead(sessionId);
+    const sessionId = await seedSession(createTestCall(), `lead-replacement-${failure}`);
+    const oldLeadAgentId = await seedExistingLead(createTestCall(), sessionId);
     if (failure === 'throw') registerStartAgent({ throwWith: 'replacement response lost' });
     if (failure === 'uncertain') registerStartAgent({ refuseWith: 'dispatch-uncertain' });
     if (failure === 'malformed') registerStartAgent({ responseAgentId: oldLeadAgentId });
@@ -517,11 +540,11 @@ describe('reserved fresh lead start', () => {
       );
     }
 
-    await expect(start(sessionId, undefined, oldLeadAgentId, { kind: 'replace' })).rejects.toThrow();
+    await expect(start(createTestCall(), sessionId, undefined, oldLeadAgentId, { kind: 'replace' })).rejects.toThrow();
 
-    const storedSession = await loadSession(sessionId);
+    const storedSession = await loadSession(createTestCall(), sessionId);
     expect(storedSession?.leadAgentId).toBe(oldLeadAgentId);
-    expect((await loadAgent(oldLeadAgentId))?.status).toBe('idle');
+    expect((await loadAgent(createTestCall(), oldLeadAgentId))?.status).toBe('idle');
     expect(stoppedAgentTargets).toHaveLength(1);
     const failedAgentId = stoppedAgentTargets[0]?.agentId;
     expect(failedAgentId).toBeDefined();
@@ -530,16 +553,16 @@ describe('reserved fresh lead start', () => {
       ownerInstanceId: service.requireOwnershipInstanceId(),
       teardown: 'connector-only',
     });
-    expect((await loadAgent(failedAgentId ?? ''))?.status).toBe('dead');
+    expect((await loadAgent(createTestCall(), failedAgentId ?? ''))?.status).toBe('dead');
   });
 
   it('retires and stops a dispatch whose response was lost at the selected runtime', async () => {
-    const sessionId = await seedSession('lead-start-response-lost');
+    const sessionId = await seedSession(createTestCall(), 'lead-start-response-lost');
     registerStartAgent({ throwWith: 'response lost after start' });
 
-    await expect(start(sessionId)).rejects.toThrow('response lost after start');
+    await expect(start(createTestCall(), sessionId)).rejects.toThrow('response lost after start');
 
-    const session = await loadSession(sessionId);
+    const session = await loadSession(createTestCall(), sessionId);
     expect(stoppedAgentTargets).toEqual([
       {
         agentId: session?.agents[0]?.agentId ?? '',
@@ -550,12 +573,12 @@ describe('reserved fresh lead start', () => {
   });
 
   it('retires and stops an uncertain dispatch result at the selected runtime', async () => {
-    const sessionId = await seedSession('lead-start-dispatch-uncertain');
+    const sessionId = await seedSession(createTestCall(), 'lead-start-dispatch-uncertain');
     registerStartAgent({ refuseWith: 'dispatch-uncertain' });
 
-    await expect(start(sessionId)).rejects.toThrow('refused by stub');
+    await expect(start(createTestCall(), sessionId)).rejects.toThrow('refused by stub');
 
-    const session = await loadSession(sessionId);
+    const session = await loadSession(createTestCall(), sessionId);
     expect(stoppedAgentTargets).toEqual([
       {
         agentId: session?.agents[0]?.agentId ?? '',
@@ -566,20 +589,20 @@ describe('reserved fresh lead start', () => {
   });
 
   it('keeps the row `starting` through the adapter return and settles it to `idle` (case 30)', async () => {
-    const sessionId = await seedSession('lead-start-status');
+    const sessionId = await seedSession(createTestCall(), 'lead-start-status');
     let statusAtDispatch: string | undefined;
     registerStartAgent({
-      duringDispatch: async (agentId) => {
-        statusAtDispatch = (await loadAgent(agentId))?.status;
+      duringDispatch: async (call, agentId) => {
+        statusAtDispatch = (await loadAgent(call, agentId))?.status;
       },
     });
 
-    const result = await start(sessionId);
+    const result = await start(createTestCall(), sessionId);
 
     expect(statusAtDispatch).toBe('starting');
     expect(result.outcome).toBe('started');
     if (result.outcome !== 'started') return;
-    const stored = await loadAgent(result.agent.agentId);
+    const stored = await loadAgent(createTestCall(), result.agent.agentId);
     expect(stored?.status).toBe('idle');
     expect(stored?.adapterSessionId).toBe('provider-1');
     expect(stored?.currentAdapterSessionId).toBe('provider-1');
@@ -587,10 +610,10 @@ describe('reserved fresh lead start', () => {
   });
 
   it('settles a movement announced while the start is still dispatching (case 29)', async () => {
-    const sessionId = await seedSession('lead-start-movement');
+    const sessionId = await seedSession(createTestCall(), 'lead-start-movement');
     registerStartAgent({
-      duringDispatch: async (agentId) => {
-        await MakaioBus.emit(AgentSubjects.adapterSession.moved, {
+      duringDispatch: async (call, agentId) => {
+        await MakaioBus.emit(call, AgentSubjects.adapterSession.moved, {
           agentId,
           adapterId: ADAPTER_ID,
           adapterName: ADAPTER_NAME,
@@ -604,41 +627,41 @@ describe('reserved fresh lead start', () => {
       },
     });
 
-    const result = await start(sessionId);
+    const result = await start(createTestCall(), sessionId);
 
     expect(result.outcome).toBe('started');
     if (result.outcome !== 'started') return;
-    const stored = await loadAgent(result.agent.agentId);
+    const stored = await loadAgent(createTestCall(), result.agent.agentId);
     expect(stored?.currentAdapterSessionId).toBe('provider-1');
     expect(stored?.status).toBe('idle');
     // The start's own settlement recognized the generation the movement took
     // rather than minting a second one for the same key.
-    const claims = await loadClaims();
+    const claims = await loadClaims(createTestCall());
     expect(claims).toHaveLength(1);
     expect(claims[0]?.agentId).toBe(result.agent.agentId);
   });
 
   it('rolls a `not-dispatched` refusal back to no row and no designation (case 31)', async () => {
-    const sessionId = await seedSession('lead-start-refused');
+    const sessionId = await seedSession(createTestCall(), 'lead-start-refused');
     registerStartAgent({ refuseWith: 'not-dispatched' });
 
-    await expect(start(sessionId)).rejects.toThrow(SessionStartError);
+    await expect(start(createTestCall(), sessionId)).rejects.toThrow(SessionStartError);
 
-    const session = await loadSession(sessionId);
+    const session = await loadSession(createTestCall(), sessionId);
     expect(session?.agents).toEqual([]);
     // The reservation designated no previous lead, so the compare-and-swap
     // restore is the sanctioned clear.
     expect(session?.leadAgentId ?? null).toBeNull();
-    expect(await loadClaims()).toEqual([]);
+    expect(await loadClaims(createTestCall())).toEqual([]);
   });
 
   it('retires an uncertain dispatch without giving the key back (case 31, uncertain half)', async () => {
-    const sessionId = await seedSession('lead-start-uncertain');
+    const sessionId = await seedSession(createTestCall(), 'lead-start-uncertain');
     registerStartAgent({ throwWith: 'connector exploded' });
 
-    await expect(start(sessionId)).rejects.toThrow('connector exploded');
+    await expect(start(createTestCall(), sessionId)).rejects.toThrow('connector exploded');
 
-    const session = await loadSession(sessionId);
+    const session = await loadSession(createTestCall(), sessionId);
     expect(session?.agents).toHaveLength(1);
     // The row survives as `dead` and keeps the designation: the session's lead
     // still names an agent it legitimately has.
@@ -647,20 +670,20 @@ describe('reserved fresh lead start', () => {
     // And the teardown left no generation blocking a key. A fresh start is
     // keyless, so the fan-out has nothing to file here — asserted rather than
     // assumed, because a start that *did* settle before failing would.
-    expect(await loadClaims()).toEqual([]);
+    expect(await loadClaims(createTestCall())).toEqual([]);
   });
 
   it('resolves two concurrent fresh starts through the designation CAS (case 32)', async () => {
-    const sessionId = await seedSession('lead-start-race');
+    const sessionId = await seedSession(createTestCall(), 'lead-start-race');
     registerStartAgent();
 
-    const [first, second] = await Promise.all([start(sessionId), start(sessionId)]);
+    const [first, second] = await Promise.all([start(createTestCall(), sessionId), start(createTestCall(), sessionId)]);
 
     const outcomes = [first.outcome, second.outcome].sort();
     expect(outcomes).toEqual(['lead-conflict', 'started']);
     const winner = first.outcome === 'started' ? first : second;
     if (winner.outcome !== 'started') return;
-    const session = await loadSession(sessionId);
+    const session = await loadSession(createTestCall(), sessionId);
     // The loser left nothing behind: no second agent, and the winner's
     // designation standing.
     expect(session?.agents).toHaveLength(1);
@@ -668,12 +691,12 @@ describe('reserved fresh lead start', () => {
   });
 
   it('does not report a clean lead-conflict when the loser row cannot be deleted', async () => {
-    const sessionId = await seedSession('lead-start-conflict-rollback-unresolved');
+    const sessionId = await seedSession(createTestCall(), 'lead-start-conflict-rollback-unresolved');
     cleanups.push(
       MakaioBus.on(
         SessionSubjects.ownership.reserveStart,
         async (context) => {
-          await MakaioBus.request(AgentStorageSubjects.set, {
+          await MakaioBus.request(context.call, AgentStorageSubjects.set, {
             agentId: 'conflict-winner',
             agent: {
               agentId: 'conflict-winner',
@@ -686,7 +709,7 @@ describe('reserved fresh lead start', () => {
               lastActivityAt: 1,
             },
           });
-          await designateSessionLead(MakaioBus, {
+          await designateSessionLead(context.call, MakaioBus, {
             sessionId,
             agentId: 'conflict-winner',
             expectedLeadAgentId: null,
@@ -705,17 +728,17 @@ describe('reserved fresh lead start', () => {
     );
     registerStartAgent();
 
-    const failure = await start(sessionId).catch((error: unknown) => error);
+    const failure = await start(createTestCall(), sessionId).catch((error: unknown) => error);
 
     expect(failure).toMatchObject({ code: 'start-unresolved' });
-    const session = await loadSession(sessionId);
+    const session = await loadSession(createTestCall(), sessionId);
     expect(session?.agents.map((agent) => agent.status).sort()).toEqual(['idle', 'starting']);
   });
 
   it('claims a crashed start for recovery through the status CAS (case 33)', async () => {
-    const sessionId = await seedSession('lead-start-crashed');
+    const sessionId = await seedSession(createTestCall(), 'lead-start-crashed');
     const agentId = 'crashed-agent';
-    await MakaioBus.request(AgentStorageSubjects.set, {
+    await MakaioBus.request(createTestCall(), AgentStorageSubjects.set, {
       agentId,
       agent: {
         agentId,
@@ -728,21 +751,21 @@ describe('reserved fresh lead start', () => {
         lastActivityAt: Date.now(),
       },
     });
-    const session = await loadSession(sessionId);
+    const session = await loadSession(createTestCall(), sessionId);
     if (session === null) throw new Error('seeded session is missing');
 
-    const resolution = await resolveInFlightStarts(MakaioBus, session);
+    const resolution = await resolveInFlightStarts(createTestCall(), MakaioBus, session);
 
     // No entry in this process: the attempt belonged to one that is gone, so
     // this send claims the recovery instead of joining anything.
     expect([...resolution.recoveringAgentIds]).toEqual([agentId]);
-    expect((await loadAgent(agentId))?.status).toBe('dead');
+    expect((await loadAgent(createTestCall(), agentId))?.status).toBe('dead');
     // P1 held no claim, so a crashed reservation leaves no ownership debris.
-    expect(await loadClaims()).toEqual([]);
+    expect(await loadClaims(createTestCall())).toEqual([]);
   });
 
   it('joins an in-flight start instead of rehydrating behind it (case 34)', async () => {
-    const sessionId = await seedSession('lead-start-join');
+    const sessionId = await seedSession(createTestCall(), 'lead-start-join');
     let releaseDispatch: (() => void) | undefined;
     const dispatchReached = new Promise<void>((resolve) => {
       registerStartAgent({
@@ -755,15 +778,15 @@ describe('reserved fresh lead start', () => {
       });
     });
 
-    const pending = start(sessionId);
+    const pending = start(createTestCall(), sessionId);
     await dispatchReached;
     // The `starting` row is visible, which is exactly the window a concurrent
     // send used to walk into a second lifecycle through.
-    const observed = await loadSession(sessionId);
+    const observed = await loadSession(createTestCall(), sessionId);
     if (observed === null) throw new Error('seeded session is missing');
     expect(observed.agents[0]?.status).toBe('starting');
 
-    const joining = resolveInFlightStarts(MakaioBus, observed);
+    const joining = resolveInFlightStarts(createTestCall(), MakaioBus, observed);
     releaseDispatch?.();
     const resolution = await joining;
     const result = await pending;
@@ -789,7 +812,7 @@ describe('reserved fresh lead start', () => {
     // detail: a fresh start's reservation is keyless and hides an absent machine,
     // its settlement is keyed and does not — so the instance it dispatches to
     // arrives with its machine or the start never runs (case 208).
-    const sessionId = await seedSession(`lead-start-machine-${machineId ?? 'own'}`);
+    const sessionId = await seedSession(createTestCall(), `lead-start-machine-${machineId ?? 'own'}`);
     const named: Array<string | undefined> = [];
     cleanups.push(
       MakaioBus.on(
@@ -811,7 +834,7 @@ describe('reserved fresh lead start', () => {
     );
     registerStartAgent();
 
-    const result = await startLeadAgent(MakaioBus, {
+    const result = await startLeadAgent(createTestCall(), MakaioBus, {
       sessionId,
       instance: { adapterId: ADAPTER_ID, machineId, ownerInstanceId: service.requireOwnershipInstanceId() },
       adapterName: ADAPTER_NAME,
@@ -831,7 +854,7 @@ describe('reserved fresh lead start', () => {
     // misreports where its conversation began — and every later native resume
     // reads it. A refusal is one of the two failure forms; the throw is pinned
     // by the case below, and both land in the same region.
-    const sessionId = await seedSession('lead-start-origin-refused');
+    const sessionId = await seedSession(createTestCall(), 'lead-start-origin-refused');
     cleanups.push(
       MakaioBus.on(
         AgentStorageSubjects.updateRuntime,
@@ -843,10 +866,10 @@ describe('reserved fresh lead start', () => {
     );
     registerStartAgent();
 
-    await expect(start(sessionId)).rejects.toMatchObject({ code: 'settlement-unresolved' });
+    await expect(start(createTestCall(), sessionId)).rejects.toMatchObject({ code: 'settlement-unresolved' });
 
     // The settle ran first, so this failure has a real generation to retire.
-    const claims = await loadClaims();
+    const claims = await loadClaims(createTestCall());
     expect(claims).not.toHaveLength(0);
     expect(claims.every((claim) => claim.status === 'abandoned')).toBe(true);
     expect(stoppedAgentIds).toHaveLength(1);
@@ -859,12 +882,12 @@ describe('reserved fresh lead start', () => {
     // consumer branches on, and the rehydrate path has always classified it
     // correctly. One table for every caller-owned teardown, or the three paths
     // answer one fact three ways.
-    const sessionId = await seedSession('lead-start-removed-under-completion');
+    const sessionId = await seedSession(createTestCall(), 'lead-start-removed-under-completion');
     cleanups.push(
       MakaioBus.on(
         AgentStorageSubjects.updateRuntime,
         async (ctx) => {
-          await MakaioBus.request(AgentStorageSubjects.delete, { agentId: ctx.payload.agentId });
+          await MakaioBus.request(ctx.call, AgentStorageSubjects.delete, { agentId: ctx.payload.agentId });
           return ctx.next();
         },
         { priority: 1000 },
@@ -872,15 +895,15 @@ describe('reserved fresh lead start', () => {
     );
     registerStartAgent();
 
-    await expect(start(sessionId)).rejects.toMatchObject({ code: 'agent-unavailable' });
+    await expect(start(createTestCall(), sessionId)).rejects.toMatchObject({ code: 'agent-unavailable' });
 
     // Classified differently, torn down the same way: the connector nobody
     // proved closed is stopped. Nothing is left to retire — deleting the row
     // cascades its claims away, which is the removal's own doing and the reason
     // this failure has a name other than an unresolved settlement.
     expect(stoppedAgentIds).toHaveLength(1);
-    expect(await loadClaims()).toHaveLength(0);
-    expect(await loadAgent(stoppedAgentIds[0] ?? '')).toBeNull();
+    expect(await loadClaims(createTestCall())).toHaveLength(0);
+    expect(await loadAgent(createTestCall(), stoppedAgentIds[0] ?? '')).toBeNull();
   });
 
   it('claims the confirmed key before the bookkeeping that can fail on it', async () => {
@@ -889,7 +912,7 @@ describe('reserved fresh lead start', () => {
     // could fail and take the claim with it — leaving the confirmed provider
     // session unclaimed under a connector nobody proved closed, and no
     // generation for the failure path to give back.
-    const sessionId = await seedSession('lead-start-origin-after-settle');
+    const sessionId = await seedSession(createTestCall(), 'lead-start-origin-after-settle');
     cleanups.push(
       MakaioBus.on(
         AgentStorageSubjects.updateRuntime,
@@ -901,13 +924,13 @@ describe('reserved fresh lead start', () => {
     );
     registerStartAgent();
 
-    await expect(start(sessionId)).rejects.toMatchObject({ code: 'settlement-unresolved' });
+    await expect(start(createTestCall(), sessionId)).rejects.toMatchObject({ code: 'settlement-unresolved' });
 
     // The key was claimed before the write that failed, so the failure has a
     // real generation to retire — `abandoned`, which keeps the key blocked for a
     // provider session nobody has proven closed, rather than free for a second
     // driver.
-    const claims = await loadClaims();
+    const claims = await loadClaims(createTestCall());
     expect(claims).not.toHaveLength(0);
     expect(claims.every((claim) => claim.status === 'abandoned')).toBe(true);
     expect(stoppedAgentIds).toHaveLength(1);
@@ -920,31 +943,31 @@ describe('reserved fresh lead start', () => {
     // (I15) with nothing designated is one `resolveTargetAgents` raises for.
     // Kept, the lead names an agent the session has, and the next send's own
     // consumer rule recovers it.
-    const sessionId = await seedSession('lead-start-recoverable-after-failure');
+    const sessionId = await seedSession(createTestCall(), 'lead-start-recoverable-after-failure');
     registerStartAgent({ throwWith: 'provider start exploded' });
 
-    await expect(start(sessionId)).rejects.toThrow('provider start exploded');
+    await expect(start(createTestCall(), sessionId)).rejects.toThrow('provider start exploded');
 
-    const session = await loadSession(sessionId);
+    const session = await loadSession(createTestCall(), sessionId);
     if (session === null) throw new Error('seeded session is missing');
     expect(session.leadAgentId).toBe(session.agents[0]?.agentId);
     // The default target still resolves, and resolves to the dead row — which is
     // exactly what the send path's recovery step is for.
     expect(resolveTargetAgents(session, undefined).map((agent) => agent.status)).toEqual(['dead']);
-    const resolution = await resolveInFlightStarts(MakaioBus, session);
+    const resolution = await resolveInFlightStarts(createTestCall(), MakaioBus, session);
     expect([...resolution.droppedAgentIds]).toEqual([]);
   });
 
   it('keeps a healthy start whose row a peer stomped to dead (cases 35, 98a)', async () => {
-    const sessionId = await seedSession('lead-start-peer-dead');
+    const sessionId = await seedSession(createTestCall(), 'lead-start-peer-dead');
     registerStartAgent({
-      duringDispatch: async (agentId) => {
+      duringDispatch: async (call, agentId) => {
         // A peer applying the in-flight consumer rule compare-and-swaps
         // `starting → dead` to claim this recovery. Under Wave 3 it then
         // reserves, is told `occupied` and degrades — it never touches the
         // provider session. The status write says nothing about ownership, and
         // reading it as a lost start would stop a live connector (I21′).
-        await MakaioBus.request(AgentStorageSubjects.updateStatus, {
+        await MakaioBus.request(call, AgentStorageSubjects.updateStatus, {
           agentId,
           status: 'dead',
           expectedStatus: ['starting'],
@@ -952,25 +975,25 @@ describe('reserved fresh lead start', () => {
       },
     });
 
-    const result = await start(sessionId);
+    const result = await start(createTestCall(), sessionId);
 
     expect(result.outcome).toBe('started');
     if (result.outcome !== 'started') return;
     // `dead` is in the commit's expectation precisely so the owner restores it.
-    expect((await loadAgent(result.agent.agentId))?.status).toBe('idle');
+    expect((await loadAgent(createTestCall(), result.agent.agentId))?.status).toBe('idle');
     expect(stoppedAgentIds).toEqual([]);
   });
 
   it('refuses Ack when a peer wrote idle before this start could commit (case 98b)', async () => {
-    const sessionId = await seedSession('lead-start-peer-idle');
+    const sessionId = await seedSession(createTestCall(), 'lead-start-peer-idle');
     registerStartAgent({
-      duringDispatch: async (agentId) => {
+      duringDispatch: async (call, agentId) => {
         // What an *unreserved* attempt joining the same agent writes.
-        await MakaioBus.request(AgentStorageSubjects.updateStatus, { agentId, status: 'idle' });
+        await MakaioBus.request(call, AgentStorageSubjects.updateStatus, { agentId, status: 'idle' });
       },
     });
 
-    await expect(start(sessionId)).rejects.toMatchObject({ code: 'settlement-unresolved' });
+    await expect(start(createTestCall(), sessionId)).rejects.toMatchObject({ code: 'settlement-unresolved' });
 
     expect(stoppedAgentIds).toHaveLength(1);
   });
@@ -979,34 +1002,34 @@ describe('reserved fresh lead start', () => {
     { label: 'disposed', dispose: true },
     { label: 'deleted', dispose: false },
   ])('reports a start whose row was $label under it as unavailable (case 98c, Path A)', async ({ dispose }) => {
-    const sessionId = await seedSession(`lead-start-removed-${dispose ? 'disposed' : 'deleted'}`);
+    const sessionId = await seedSession(createTestCall(), `lead-start-removed-${dispose ? 'disposed' : 'deleted'}`);
     registerStartAgent({
-      duringDispatch: async (agentId) => {
+      duringDispatch: async (call, agentId) => {
         // A removal landing between the dispatch and the commit. It is terminal
         // and owner-independent, so reading it cannot be raced — and it is the
         // one refusal that means this attempt's connector has no generation.
         if (dispose) {
-          await MakaioBus.request(AgentStorageSubjects.updateStatus, { agentId, status: 'disposed' });
+          await MakaioBus.request(call, AgentStorageSubjects.updateStatus, { agentId, status: 'disposed' });
           return;
         }
-        await MakaioBus.request(AgentStorageSubjects.delete, { agentId });
+        await MakaioBus.request(call, AgentStorageSubjects.delete, { agentId });
       },
     });
 
-    const failure = await start(sessionId).catch((error: unknown) => error);
+    const failure = await start(createTestCall(), sessionId).catch((error: unknown) => error);
 
     expect(failure).toBeInstanceOf(SessionStartError);
     if (!(failure instanceof SessionStartError)) return;
     expect(failure.code).toBe('agent-unavailable');
     expect(stoppedAgentIds).toHaveLength(1);
-    const claims = await loadClaims();
+    const claims = await loadClaims(createTestCall());
     expect(claims.every((claim) => claim.status !== 'held')).toBe(true);
   });
 
   it('applies the join-result table to a start that deleted its row (case 36)', async () => {
-    const sessionId = await seedSession('lead-start-join-deleted');
+    const sessionId = await seedSession(createTestCall(), 'lead-start-join-deleted');
     const agentId = 'joined-agent';
-    await MakaioBus.request(AgentStorageSubjects.set, {
+    await MakaioBus.request(createTestCall(), AgentStorageSubjects.set, {
       agentId,
       agent: {
         agentId,
@@ -1019,7 +1042,7 @@ describe('reserved fresh lead start', () => {
         lastActivityAt: Date.now(),
       },
     });
-    const session = await loadSession(sessionId);
+    const session = await loadSession(createTestCall(), sessionId);
     if (session === null) throw new Error('seeded session is missing');
 
     let releaseAttempt: (() => void) | undefined;
@@ -1029,7 +1052,7 @@ describe('reserved fresh lead start', () => {
         await new Promise<void>((release) => {
           releaseAttempt = release;
         });
-        await MakaioBus.request(AgentStorageSubjects.delete, { agentId });
+        await MakaioBus.request(createTestCall(), AgentStorageSubjects.delete, { agentId });
         // A pre-dispatch failure both deletes the row and rejects the attempt.
         // The verdict never arrives, which is the point: the row is what the
         // resolution reads.
@@ -1038,7 +1061,7 @@ describe('reserved fresh lead start', () => {
     });
     await attemptStarted;
 
-    const joining = resolveInFlightStarts(MakaioBus, session);
+    const joining = resolveInFlightStarts(createTestCall(), MakaioBus, session);
     releaseAttempt?.();
     const resolution = await joining;
 
@@ -1051,9 +1074,9 @@ describe('reserved fresh lead start', () => {
     { status: 'disposed' as const, dropped: true },
     { status: 'dead' as const, dropped: false },
   ])('applies the join-result table to a $status row (case 36)', async ({ status, dropped }) => {
-    const sessionId = await seedSession(`lead-start-join-${status}`);
+    const sessionId = await seedSession(createTestCall(), `lead-start-join-${status}`);
     const agentId = `joined-${status}-agent`;
-    await MakaioBus.request(AgentStorageSubjects.set, {
+    await MakaioBus.request(createTestCall(), AgentStorageSubjects.set, {
       agentId,
       agent: {
         agentId,
@@ -1066,7 +1089,7 @@ describe('reserved fresh lead start', () => {
         lastActivityAt: Date.now(),
       },
     });
-    const session = await loadSession(sessionId);
+    const session = await loadSession(createTestCall(), sessionId);
     if (session === null) throw new Error('seeded session is missing');
 
     let releaseAttempt: (() => void) | undefined;
@@ -1076,7 +1099,7 @@ describe('reserved fresh lead start', () => {
         await new Promise<void>((release) => {
           releaseAttempt = release;
         });
-        await MakaioBus.request(AgentStorageSubjects.updateStatus, { agentId, status });
+        await MakaioBus.request(createTestCall(), AgentStorageSubjects.updateStatus, { agentId, status });
         // Immaterial here: this resolution is about the identity's state, which
         // only the row can answer.
         return 'connected';
@@ -1084,7 +1107,7 @@ describe('reserved fresh lead start', () => {
     });
     await attemptStarted;
 
-    const joining = resolveInFlightStarts(MakaioBus, session);
+    const joining = resolveInFlightStarts(createTestCall(), MakaioBus, session);
     releaseAttempt?.();
     const resolution = await joining;
 
@@ -1093,9 +1116,9 @@ describe('reserved fresh lead start', () => {
   });
 
   it('fails the send when a row stays `starting` past the bounded re-read (case 36)', async () => {
-    const sessionId = await seedSession('lead-start-unresolved');
+    const sessionId = await seedSession(createTestCall(), 'lead-start-unresolved');
     const agentId = 'stuck-agent';
-    await MakaioBus.request(AgentStorageSubjects.set, {
+    await MakaioBus.request(createTestCall(), AgentStorageSubjects.set, {
       agentId,
       agent: {
         agentId,
@@ -1119,10 +1142,10 @@ describe('reserved fresh lead start', () => {
         { priority: 100 },
       ),
     );
-    const session = await loadSession(sessionId);
+    const session = await loadSession(createTestCall(), sessionId);
     if (session === null) throw new Error('seeded session is missing');
 
-    const failure = await resolveInFlightStarts(MakaioBus, session).catch((error: unknown) => error);
+    const failure = await resolveInFlightStarts(createTestCall(), MakaioBus, session).catch((error: unknown) => error);
 
     expect(failure).toBeInstanceOf(SessionStartError);
     if (!(failure instanceof SessionStartError)) return;
@@ -1131,9 +1154,9 @@ describe('reserved fresh lead start', () => {
 
   it('stops the connector when the settlement is refused on ownership grounds (case 37)', async () => {
     // A live incumbent on another session holds the key the start will report.
-    const incumbentSession = await seedSession('lead-start-incumbent');
+    const incumbentSession = await seedSession(createTestCall(), 'lead-start-incumbent');
     const incumbentId = 'incumbent-agent';
-    await MakaioBus.request(AgentStorageSubjects.set, {
+    await MakaioBus.request(createTestCall(), AgentStorageSubjects.set, {
       agentId: incumbentId,
       agent: {
         agentId: incumbentId,
@@ -1146,7 +1169,7 @@ describe('reserved fresh lead start', () => {
         lastActivityAt: Date.now(),
       },
     });
-    const reserved = await MakaioBus.request(SessionSubjects.ownership.reserveStart, {
+    const reserved = await MakaioBus.request(createTestCall(), SessionSubjects.ownership.reserveStart, {
       sessionId: incumbentSession,
       agentId: incumbentId,
       adapterId: ADAPTER_ID,
@@ -1158,19 +1181,19 @@ describe('reserved fresh lead start', () => {
     });
     expect(reserved.outcome).toBe('reserved');
 
-    const sessionId = await seedSession('lead-start-refused-settle');
+    const sessionId = await seedSession(createTestCall(), 'lead-start-refused-settle');
     registerStartAgent({ adapterSessionId: 'provider-1' });
 
-    const failure = await start(sessionId).catch((error: unknown) => error);
+    const failure = await start(createTestCall(), sessionId).catch((error: unknown) => error);
 
     expect(failure).toBeInstanceOf(SessionStartError);
     if (!(failure instanceof SessionStartError)) return;
     expect(failure.code).toBe('ownership-refused');
     expect(stoppedAgentIds).toHaveLength(1);
-    const session = await loadSession(sessionId);
+    const session = await loadSession(createTestCall(), sessionId);
     // Never `idle`: the transition is permitted only after an accepted settlement.
     expect(session?.agents[0]?.status).toBe('dead');
-    const claims = await loadClaims();
+    const claims = await loadClaims(createTestCall());
     expect(claims.map((claim) => [claim.agentId, claim.status])).toEqual([[incumbentId, 'held']]);
   });
 
@@ -1180,7 +1203,7 @@ describe('reserved fresh lead start', () => {
     // lost, and a rollback region that began after it would leave a `starting`
     // row with no reservation, no owner and no connector — a phantom every later
     // send has to arbitrate over.
-    const sessionId = await seedSession('lead-start-lost-row-write');
+    const sessionId = await seedSession(createTestCall(), 'lead-start-lost-row-write');
     let rowDeletes = 0;
     cleanups.push(
       MakaioBus.on(
@@ -1203,17 +1226,17 @@ describe('reserved fresh lead start', () => {
     );
     registerStartAgent({ adapterSessionId: 'provider-lost-write' });
 
-    const failure = await start(sessionId).catch((error: unknown) => error);
+    const failure = await start(createTestCall(), sessionId).catch((error: unknown) => error);
 
     expect(failure).toBeInstanceOf(Error);
     // Nothing was dispatched, and the row the write may have stored is gone.
     expect(rowDeletes).toBe(1);
-    const session = await loadSession(sessionId);
+    const session = await loadSession(createTestCall(), sessionId);
     expect(session?.agents ?? []).toEqual([]);
   });
 
   it('keeps the not-dispatched start failure when rollback deletion throws', async () => {
-    const sessionId = await seedSession('lead-start-rollback-delete-throws');
+    const sessionId = await seedSession(createTestCall(), 'lead-start-rollback-delete-throws');
     cleanups.push(
       MakaioBus.on(
         AgentStorageSubjects.delete,
@@ -1226,7 +1249,7 @@ describe('reserved fresh lead start', () => {
     );
     registerStartAgent({ refuseWith: 'not-dispatched' });
 
-    const failure = await start(sessionId).catch((error: unknown) => error);
+    const failure = await start(createTestCall(), sessionId).catch((error: unknown) => error);
 
     expect(failure).toBeInstanceOf(SessionStartError);
     expect((failure as SessionStartError).code).toBe('start-failed');
@@ -1239,9 +1262,9 @@ describe('reserved fresh lead start', () => {
     // in-flight rule, which is what the `settlement-unresolved` outcome relies
     // on by design. So a storage failure in that write must not replace the
     // refusal the authority named with an error about the cleanup.
-    const incumbentSession = await seedSession('lead-start-incumbent-throwing');
+    const incumbentSession = await seedSession(createTestCall(), 'lead-start-incumbent-throwing');
     const incumbentId = 'incumbent-agent-throwing';
-    await MakaioBus.request(AgentStorageSubjects.set, {
+    await MakaioBus.request(createTestCall(), AgentStorageSubjects.set, {
       agentId: incumbentId,
       agent: {
         agentId: incumbentId,
@@ -1254,7 +1277,7 @@ describe('reserved fresh lead start', () => {
         lastActivityAt: Date.now(),
       },
     });
-    const reserved = await MakaioBus.request(SessionSubjects.ownership.reserveStart, {
+    const reserved = await MakaioBus.request(createTestCall(), SessionSubjects.ownership.reserveStart, {
       sessionId: incumbentSession,
       agentId: incumbentId,
       adapterId: ADAPTER_ID,
@@ -1279,10 +1302,10 @@ describe('reserved fresh lead start', () => {
       ),
     );
 
-    const sessionId = await seedSession('lead-start-refused-settle-throwing');
+    const sessionId = await seedSession(createTestCall(), 'lead-start-refused-settle-throwing');
     registerStartAgent({ adapterSessionId: 'provider-throwing' });
 
-    const failure = await start(sessionId).catch((error: unknown) => error);
+    const failure = await start(createTestCall(), sessionId).catch((error: unknown) => error);
 
     expect(failure).toBeInstanceOf(SessionStartError);
     if (!(failure instanceof SessionStartError)) return;
@@ -1290,29 +1313,29 @@ describe('reserved fresh lead start', () => {
     // And the teardown ran once, not twice: the connector was stopped exactly
     // once and the incumbent's generation is untouched.
     expect(stoppedAgentIds).toHaveLength(1);
-    const claims = await loadClaims();
+    const claims = await loadClaims(createTestCall());
     expect(claims.map((claim) => [claim.agentId, claim.status])).toEqual([[incumbentId, 'held']]);
   });
 
   it('refuses every later ownership act for an agent removed mid-start (case 38)', async () => {
-    const sessionId = await seedSession('lead-start-removed');
+    const sessionId = await seedSession(createTestCall(), 'lead-start-removed');
     let removedAgentId: string | undefined;
     registerStartAgent({
-      duringDispatch: async (agentId) => {
+      duringDispatch: async (call, agentId) => {
         removedAgentId = agentId;
-        await MakaioBus.request(AgentStorageSubjects.updateStatus, { agentId, status: 'disposed' });
+        await MakaioBus.request(call, AgentStorageSubjects.updateStatus, { agentId, status: 'disposed' });
       },
     });
 
-    const failure = await start(sessionId).catch((error: unknown) => error);
+    const failure = await start(createTestCall(), sessionId).catch((error: unknown) => error);
 
     expect(failure).toBeInstanceOf(SessionStartError);
     if (!(failure instanceof SessionStartError) || removedAgentId === undefined) return;
     expect(failure.code).toBe('agent-unavailable');
     expect(stoppedAgentIds).toEqual([removedAgentId]);
     // The `idle` transition never ran, and ownership stays absorbing.
-    expect((await loadAgent(removedAgentId))?.status).toBe('disposed');
-    const retry = await MakaioBus.request(SessionSubjects.ownership.reserveStart, {
+    expect((await loadAgent(createTestCall(), removedAgentId))?.status).toBe('disposed');
+    const retry = await MakaioBus.request(createTestCall(), SessionSubjects.ownership.reserveStart, {
       sessionId,
       agentId: removedAgentId,
       adapterId: ADAPTER_ID,
@@ -1330,10 +1353,10 @@ describe('reserved fresh lead start', () => {
     // there is. Anything the adapter's suppressed write used to persist has to
     // be persisted here, or it never reaches storage at all and every reader of
     // `session.agents` sees an agent with no model and no working directory.
-    const sessionId = await seedSession('lead-start-runtime-fields');
+    const sessionId = await seedSession(createTestCall(), 'lead-start-runtime-fields');
     registerStartAgent({ adapterSessionId: 'provider-runtime-fields' });
 
-    const result = await start(sessionId, {
+    const result = await start(createTestCall(), sessionId, {
       model: 'sonnet',
       cwd: '/repo/worktree',
       allowedDirectories: ['/repo/worktree', '/tmp'],
@@ -1345,7 +1368,7 @@ describe('reserved fresh lead start', () => {
 
     expect(result.outcome).toBe('started');
     if (result.outcome !== 'started') return;
-    const stored = await loadAgent(result.agent.agentId);
+    const stored = await loadAgent(createTestCall(), result.agent.agentId);
     expect(stored).toMatchObject({
       model: 'sonnet',
       cwd: '/repo/worktree',
@@ -1366,9 +1389,9 @@ describe('reserved fresh lead start', () => {
     // lead it may have been standing. Claiming "I observed no lead" would then
     // lose a compare-and-swap against a name nothing can clear, and that session
     // could never start a lead again.
-    const sessionId = await seedSession('lead-start-stale-designation');
+    const sessionId = await seedSession(createTestCall(), 'lead-start-stale-designation');
     const departed = 'agent-departed';
-    await MakaioBus.request(AgentStorageSubjects.set, {
+    await MakaioBus.request(createTestCall(), AgentStorageSubjects.set, {
       agentId: departed,
       agent: {
         agentId: departed,
@@ -1383,7 +1406,7 @@ describe('reserved fresh lead start', () => {
     });
     // Designated through the one writer, then deleted without a clear — the
     // shape a removal leaves when the row is already gone.
-    await MakaioBus.request(SessionOwnershipStorageSubjects.claim, {
+    await MakaioBus.request(createTestCall(), SessionOwnershipStorageSubjects.claim, {
       machineId: MACHINE_ID,
       adapterId: ADAPTER_ID,
       adapterName: ADAPTER_NAME,
@@ -1393,15 +1416,15 @@ describe('reserved fresh lead start', () => {
       claimToken: crypto.randomUUID(),
       designateLead: { expectedLeadAgentId: null },
     });
-    await MakaioBus.request(AgentStorageSubjects.delete, { agentId: departed });
-    expect((await loadSession(sessionId))?.leadAgentId).toBe(departed);
+    await MakaioBus.request(createTestCall(), AgentStorageSubjects.delete, { agentId: departed });
+    expect((await loadSession(createTestCall(), sessionId))?.leadAgentId).toBe(departed);
 
     registerStartAgent();
-    const result = await start(sessionId, undefined, departed);
+    const result = await start(createTestCall(), sessionId, undefined, departed);
 
     expect(result.outcome).toBe('started');
     if (result.outcome !== 'started') return;
-    const session = await loadSession(sessionId);
+    const session = await loadSession(createTestCall(), sessionId);
     expect(session?.leadAgentId).toBe(result.agent.agentId);
   });
 
@@ -1410,7 +1433,7 @@ describe('reserved fresh lead start', () => {
     // the row written a moment earlier is the only thing to take back. Leaving
     // it would strand a `starting` agent that every later send has to arbitrate
     // over — on a host whose ownership storage is missing, forever.
-    const sessionId = await seedSession('lead-start-reservation-throws');
+    const sessionId = await seedSession(createTestCall(), 'lead-start-reservation-throws');
     registerStartAgent();
     const broken = MakaioBus.on(
       SessionSubjects.ownership.reserveStart,
@@ -1420,20 +1443,20 @@ describe('reserved fresh lead start', () => {
       { priority: 100 },
     );
     try {
-      await expect(start(sessionId)).rejects.toThrow('ownership storage is not registered');
+      await expect(start(createTestCall(), sessionId)).rejects.toThrow('ownership storage is not registered');
     } finally {
       broken();
     }
 
     // Nothing dispatched, nothing left behind — not the row, and not a
     // designation pointing at it.
-    const session = await loadSession(sessionId);
+    const session = await loadSession(createTestCall(), sessionId);
     expect(session?.agents).toEqual([]);
     expect(session?.leadAgentId).toBeUndefined();
   });
 
   it('does not dispatch when close wins after the caller-owned row is written (admission race)', async () => {
-    const sessionId = await seedSession('lead-start-close-before-reservation');
+    const sessionId = await seedSession(createTestCall(), 'lead-start-close-before-reservation');
     let dispatched = 0;
     registerStartAgent({
       duringDispatch: async () => {
@@ -1444,28 +1467,31 @@ describe('reserved fresh lead start', () => {
       MakaioBus.on(
         SessionSubjects.ownership.reserveStart,
         async (ctx) => {
-          await MakaioBus.request(SessionSubjects.close, { sessionId });
+          await MakaioBus.request(ctx.call, SessionSubjects.close, { sessionId });
           await ctx.next();
         },
         { priority: 1_000 },
       ),
     );
 
-    await expect(start(sessionId)).rejects.toMatchObject({ code: 'session-not-active', sessionStatus: 'closed' });
+    await expect(start(createTestCall(), sessionId)).rejects.toMatchObject({
+      code: 'session-not-active',
+      sessionStatus: 'closed',
+    });
 
     expect(dispatched).toBe(0);
-    expect((await loadSession(sessionId))?.agents).toEqual([]);
-    expect(await loadClaims()).toEqual([]);
+    expect((await loadSession(createTestCall(), sessionId))?.agents).toEqual([]);
+    expect(await loadClaims(createTestCall())).toEqual([]);
   });
 
   it('preserves admission failure when cleanup cannot re-read the agent row', async () => {
-    const sessionId = await seedSession('lead-start-close-cleanup-read-fails');
+    const sessionId = await seedSession(createTestCall(), 'lead-start-close-cleanup-read-fails');
     registerStartAgent();
     cleanups.push(
       MakaioBus.on(
         AdapterSubjects.startAgent,
         async (context) => {
-          await MakaioBus.request(SessionSubjects.close, { sessionId });
+          await MakaioBus.request(context.call, SessionSubjects.close, { sessionId });
           return context.next();
         },
         { priority: 1000 },
@@ -1479,11 +1505,14 @@ describe('reserved fresh lead start', () => {
       ),
     );
 
-    await expect(start(sessionId)).rejects.toMatchObject({ code: 'session-not-active', sessionStatus: 'closed' });
+    await expect(start(createTestCall(), sessionId)).rejects.toMatchObject({
+      code: 'session-not-active',
+      sessionStatus: 'closed',
+    });
   });
 
   it('retires an adapter-owned connector when close wins after reservation but before start dispatch', async () => {
-    const sessionId = await seedSession('lead-start-close-after-reservation');
+    const sessionId = await seedSession(createTestCall(), 'lead-start-close-after-reservation');
     let connector: MockConnector | undefined;
     let adapter: TestAdapter | undefined;
     const created = createTestAdapter(ADAPTER_NAME, {
@@ -1503,20 +1532,23 @@ describe('reserved fresh lead start', () => {
       MakaioBus.on(
         AdapterSubjects.startAgent,
         async (ctx) => {
-          await MakaioBus.request(SessionSubjects.close, { sessionId });
+          await MakaioBus.request(ctx.call, SessionSubjects.close, { sessionId });
           await ctx.next();
         },
         { priority: 1_000 },
       ),
     );
 
-    await expect(start(sessionId)).rejects.toMatchObject({ code: 'session-not-active', sessionStatus: 'closed' });
+    await expect(start(createTestCall(), sessionId)).rejects.toMatchObject({
+      code: 'session-not-active',
+      sessionStatus: 'closed',
+    });
 
-    const stored = await loadSession(sessionId);
+    const stored = await loadSession(createTestCall(), sessionId);
     const agentId = stored?.agents[0]?.agentId;
     expect(agentId).toBeDefined();
     expect(stored?.agents[0]?.status).toBe('dead');
-    expect(await loadClaims()).toEqual([]);
+    expect(await loadClaims(createTestCall())).toEqual([]);
     expect(connector?.closeCount).toBe(1);
     expect(adapter.getAgent(agentId ?? '')).toBeUndefined();
   });
@@ -1529,7 +1561,7 @@ describe('reserved fresh lead start', () => {
     // opens a second lifecycle against a start that is still running. The winner
     // here belongs to another process, so this runtime's registry cannot see it
     // and only the status compare-and-swap can arbitrate.
-    const sessionId = await seedSession('lead-start-adopted-starting');
+    const sessionId = await seedSession(createTestCall(), 'lead-start-adopted-starting');
     const winner = 'winner-agent';
 
     // The winner lands *between* this send's session read and its reservation,
@@ -1542,7 +1574,7 @@ describe('reserved fresh lead start', () => {
         async (ctx) => {
           if (!winnerLanded) {
             winnerLanded = true;
-            await MakaioBus.request(AgentStorageSubjects.set, {
+            await MakaioBus.request(ctx.call, AgentStorageSubjects.set, {
               agentId: winner,
               agent: {
                 agentId: winner,
@@ -1557,7 +1589,7 @@ describe('reserved fresh lead start', () => {
                 lastActivityAt: Date.now(),
               },
             });
-            await MakaioBus.request(SessionOwnershipStorageSubjects.claim, {
+            await MakaioBus.request(ctx.call, SessionOwnershipStorageSubjects.claim, {
               machineId: MACHINE_ID,
               adapterId: ADAPTER_ID,
               adapterName: ADAPTER_NAME,
@@ -1587,7 +1619,7 @@ describe('reserved fresh lead start', () => {
       }),
     );
 
-    await MakaioBus.request(SessionSubjects.sendMessage, {
+    await MakaioBus.request(createTestCall(), SessionSubjects.sendMessage, {
       sessionId,
       message: 'adopts the winner',
       agent: { kind: 'adapter', adapterName: ADAPTER_NAME },
@@ -1596,11 +1628,11 @@ describe('reserved fresh lead start', () => {
     // The adopted agent went through the arbitration instead of past it: its row
     // left `starting` by compare-and-swap, and the send recovered it rather than
     // dispatching a bare probe-driven rehydrate beside a live start.
-    const stored = await loadAgent(winner);
+    const stored = await loadAgent(createTestCall(), winner);
     expect(stored?.status).not.toBe('starting');
     expect(rehydratedAgentIds).toEqual([winner]);
     // No second lead was started beside the winner, and the send routed to it.
-    const session = await loadSession(sessionId);
+    const session = await loadSession(createTestCall(), sessionId);
     expect(session?.agents.map((agent) => agent.agentId)).toEqual([winner]);
     expect(session?.leadAgentId).toBe(winner);
     expect(routed).toEqual([winner]);
@@ -1689,20 +1721,20 @@ describe('reserved fresh lead start', () => {
       routed: readonly string[],
     ): Promise<void> {
       expect(dispatched).toEqual([]);
-      const session = await loadSession(sessionId);
+      const session = await loadSession(createTestCall(), sessionId);
       expect(session?.agents).toEqual([]);
       expect(session?.leadAgentId ?? null).toBeNull();
-      expect(await loadClaims()).toEqual([]);
+      expect(await loadClaims(createTestCall())).toEqual([]);
       expect(routed).toEqual([]);
     }
 
     it('refuses a send that names agents an empty session does not have, before any start', async () => {
-      const sessionId = await seedSession('send-explicit-empty');
+      const sessionId = await seedSession(createTestCall(), 'send-explicit-empty');
       const dispatched = observeDispatchedStarts();
       registerStartAgent();
       const routed = composeOrchestrator();
 
-      const refusal = await MakaioBus.request(SessionSubjects.sendMessage, {
+      const refusal = await MakaioBus.request(createTestCall(), SessionSubjects.sendMessage, {
         sessionId,
         message: 'to an agent that never existed',
         agentIds: ['ghost-agent'],
@@ -1725,12 +1757,12 @@ describe('reserved fresh lead start', () => {
     });
 
     it('refuses an explicit `all` send on an empty session, before any start', async () => {
-      const sessionId = await seedSession('send-all-empty');
+      const sessionId = await seedSession(createTestCall(), 'send-all-empty');
       const dispatched = observeDispatchedStarts();
       registerStartAgent();
       const routed = composeOrchestrator();
 
-      const refusal = await MakaioBus.request(SessionSubjects.sendMessage, {
+      const refusal = await MakaioBus.request(createTestCall(), SessionSubjects.sendMessage, {
         sessionId,
         message: 'to all of nobody',
         agentIds: 'all',
@@ -1749,17 +1781,17 @@ describe('reserved fresh lead start', () => {
     });
 
     it('still bootstraps the lead for a send that names no target', async () => {
-      const sessionId = await seedSession('send-default-empty');
+      const sessionId = await seedSession(createTestCall(), 'send-default-empty');
       registerStartAgent();
       const routed = composeOrchestrator();
 
-      await MakaioBus.request(SessionSubjects.sendMessage, {
+      await MakaioBus.request(createTestCall(), SessionSubjects.sendMessage, {
         sessionId,
         message: 'first message of the session',
         agent: { kind: 'adapter', adapterName: ADAPTER_NAME },
       });
 
-      const session = await loadSession(sessionId);
+      const session = await loadSession(createTestCall(), sessionId);
       expect(session?.agents).toHaveLength(1);
       const leadAgentId = session?.agents[0]?.agentId;
       expect(session?.leadAgentId).toBe(leadAgentId);
@@ -1767,20 +1799,20 @@ describe('reserved fresh lead start', () => {
     });
 
     it('leaves an explicit send against an agent the session has untouched', async () => {
-      const sessionId = await seedSession('send-explicit-existing');
+      const sessionId = await seedSession(createTestCall(), 'send-explicit-existing');
       registerStartAgent();
       const routed = composeOrchestrator();
       // The session earns its agent the only way the admission still allows.
-      await MakaioBus.request(SessionSubjects.sendMessage, {
+      await MakaioBus.request(createTestCall(), SessionSubjects.sendMessage, {
         sessionId,
         message: 'first message of the session',
         agent: { kind: 'adapter', adapterName: ADAPTER_NAME },
       });
-      const leadAgentId = (await loadSession(sessionId))?.agents[0]?.agentId;
+      const leadAgentId = (await loadSession(createTestCall(), sessionId))?.agents[0]?.agentId;
       expect(leadAgentId).toBeDefined();
       if (leadAgentId === undefined) return;
 
-      await MakaioBus.request(SessionSubjects.sendMessage, {
+      await MakaioBus.request(createTestCall(), SessionSubjects.sendMessage, {
         sessionId,
         message: 'follow-up, addressed by id',
         agentIds: [leadAgentId],
@@ -1788,7 +1820,7 @@ describe('reserved fresh lead start', () => {
 
       expect(routed).toEqual([leadAgentId, leadAgentId]);
       // The named agent was reached without a second lead appearing beside it.
-      const session = await loadSession(sessionId);
+      const session = await loadSession(createTestCall(), sessionId);
       expect(session?.agents.map((agent) => agent.agentId)).toEqual([leadAgentId]);
     });
   });

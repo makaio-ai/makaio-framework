@@ -1,10 +1,11 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
+import { busContextOf } from '@makaio/bus-core/kernel-api';
 import { GitSubjects } from '../namespace.js';
 
 describe('Git Namespace', () => {
   beforeEach(() => {
-    MakaioBus.getContext().namespaceRegistry.__resetNamespaces?.();
+    busContextOf(MakaioBus).namespaceRegistry.__resetNamespaces?.();
   });
 
   describe('Query subjects', () => {

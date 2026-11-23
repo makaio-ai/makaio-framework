@@ -256,7 +256,7 @@ async function waitForServiceBoot(bus: IMakaioBus, logPrefix: string, signal?: A
   const { promise, resolve } = createBootPromise(bus, logPrefix, signal);
 
   void bus
-    .request(BootSubjects.getState, {})
+    .request(bus.own('start'), BootSubjects.getState, {})
     .then((state) => {
       if (signal?.aborted) {
         return;
@@ -375,6 +375,7 @@ export async function bootstrapRenderer(options: RendererBootstrapOptions): Prom
 
   const transport = new WebSocketClientTransport({
     url: config.busUrl,
+    attestingRole: 'core-uplink',
     createWebSocket: createBrowserWebSocket,
   });
 

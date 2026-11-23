@@ -438,11 +438,13 @@ export const WidgetGrid: FC<WidgetGridProps> = ({
   const executeActivation = (definition: WidgetDefinition, placement: WidgetPlacement): void => {
     const { activate } = definition;
     if (!activate) return;
+    // ORIGIN: User activation starts a call on the bus also supplied to the custom handler.
+    const call = bus?.own('root');
 
     // Emit the activation event for observability.
-    if (bus) {
+    if (bus && call) {
       bus
-        .emit(WidgetSubjects.activated, {
+        .emit(call, WidgetSubjects.activated, {
           instanceId: placement.instanceId,
           widgetId: placement.widgetId,
         })
@@ -457,18 +459,18 @@ export const WidgetGrid: FC<WidgetGridProps> = ({
     }
 
     void (async () => {
-      if (activate.windowId && bus) {
+      if (activate.windowId && bus && call) {
         try {
-          await bus.request(HostSubjects.window.create, { registrationId: activate.windowId });
+          await bus.request(call, HostSubjects.window.create, { registrationId: activate.windowId });
         } catch (error: unknown) {
           console.error('[WidgetGrid] Failed to create window:', error);
         }
       }
 
       // Custom handler — runs after declarative steps.
-      if (activate.onActivate && bus) {
+      if (activate.onActivate && bus && call) {
         try {
-          await activate.onActivate({
+          await activate.onActivate(call, {
             bus,
             instanceId: placement.instanceId,
             widgetId: placement.widgetId,

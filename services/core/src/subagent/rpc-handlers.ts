@@ -1,4 +1,5 @@
 import type { IMakaioBus } from '@makaio/bus-core';
+import type { CallContext } from '@makaio/core';
 import {
   SubagentSubjects,
   SubagentError,
@@ -32,7 +33,7 @@ export interface RpcHandlerContext {
   manager: SubagentManager;
   bus: IMakaioBus;
   executionOwnerId?: string;
-  onCompletionCandidate?: (subagentId: string) => Promise<void>;
+  onCompletionCandidate?: (call: CallContext, subagentId: string) => Promise<void>;
 }
 
 interface GetStatusResponse {
@@ -79,11 +80,13 @@ export function handleGetStatusRpc(ctx: RpcHandlerContext, payload: { subagentId
 
 /**
  * Handle spawn RPC - validates constraints, tracks subagent, emits spawned event.
+ * @param call - Call context of the handled spawn request
  * @param ctx - Handler context with manager and bus
  * @param payload - Spawn request with parentSessionId, config, depth
  * @returns Spawn response with subagentId and status
  */
 export async function handleSpawnRpc(
+  call: CallContext,
   ctx: RpcHandlerContext,
   payload: SpawnSubagentRpcRequest,
 ): Promise<SpawnSubagentRpcResponse> {
@@ -109,7 +112,7 @@ export async function handleSpawnRpc(
     );
   }
 
-  const adapterName = await resolveInheritedAdapterName(ctx.bus, parentSessionId, config.adapterName);
+  const adapterName = await resolveInheritedAdapterName(call, ctx.bus, parentSessionId, config.adapterName);
 
   if (!adapterName) {
     throw new SubagentError(
@@ -139,7 +142,7 @@ export async function handleSpawnRpc(
     depth,
   });
 
-  await ctx.bus.emit(SubagentSubjects.spawned, {
+  await ctx.bus.emit(call, SubagentSubjects.spawned, {
     subagentId,
     parentSessionId,
     task: normalizedConfig.task,
@@ -231,11 +234,13 @@ export async function handleAwaitRpc(
 
 /**
  * Handle send RPC - sends message to subagent.
+ * @param call - Call context of the handled send request
  * @param ctx - Handler context with manager and bus
  * @param payload - Send request with subagentId, content, optional inResponseTo
  * @returns Send response indicating success
  */
 export async function handleSendRpc(
+  call: CallContext,
   ctx: RpcHandlerContext,
   payload: SendToSubagentRequest,
 ): Promise<SendToSubagentResponse> {
@@ -261,7 +266,7 @@ export async function handleSendRpc(
   }
 
   // Emit toChild for message routing
-  await ctx.bus.emit(SubagentSubjects.toChild, {
+  await ctx.bus.emit(call, SubagentSubjects.toChild, {
     subagentId,
     messageId: crypto.randomUUID(),
     content,
@@ -273,11 +278,13 @@ export async function handleSendRpc(
 
 /**
  * Handle kill RPC - terminates a running subagent.
+ * @param call - Call context of the handled kill request
  * @param ctx - Handler context with manager and bus
  * @param payload - Kill request with subagentId
  * @returns Kill response indicating success
  */
 export async function handleKillRpc(
+  call: CallContext,
   ctx: RpcHandlerContext,
   payload: KillSubagentRequest,
 ): Promise<KillSubagentResponse> {
@@ -285,7 +292,7 @@ export async function handleKillRpc(
   const killed = ctx.manager.markCancelled(subagentId);
 
   if (killed) {
-    await ctx.bus.emit(SubagentSubjects.cancelled, {
+    await ctx.bus.emit(call, SubagentSubjects.cancelled, {
       subagentId,
       reason: reason ?? 'Killed by parent',
     });
@@ -296,11 +303,13 @@ export async function handleKillRpc(
 
 /**
  * Handle reportProgress RPC - child reports progress update.
+ * @param call - Call context of the handled reportProgress request
  * @param ctx - Handler context with manager and bus
  * @param payload - Progress report with subagentId, update, optional percentComplete
  * @returns Response indicating success
  */
 export async function handleReportProgressRpc(
+  call: CallContext,
   ctx: RpcHandlerContext,
   payload: ReportProgressRequest,
 ): Promise<ReportProgressResponse> {
@@ -316,7 +325,7 @@ export async function handleReportProgressRpc(
   ctx.manager.addProgress(subagentId, formattedUpdate);
 
   // Emit progress event for parent to observe
-  await ctx.bus.emit(SubagentSubjects.toParent, {
+  await ctx.bus.emit(call, SubagentSubjects.toParent, {
     subagentId,
     messageId: crypto.randomUUID(),
     type: 'progress' as const,
@@ -329,11 +338,13 @@ export async function handleReportProgressRpc(
 /**
  * Handle requestInput RPC - child requests input from parent.
  * Blocks until parent responds or timeout.
+ * @param call - Call context of the handled requestInput request
  * @param ctx - Handler context with manager and bus
  * @param payload - Input request with subagentId, question, optional context and timeout
  * @returns Response with parent's answer or timeout indicator
  */
 export async function handleRequestInputRpc(
+  call: CallContext,
   ctx: RpcHandlerContext,
   payload: RequestInputRpcRequest,
 ): Promise<RequestInputRpcResponse> {
@@ -377,7 +388,7 @@ export async function handleRequestInputRpc(
     }, timeout);
   }
   const publication = ctx.bus
-    .emit(SubagentSubjects.toParent, {
+    .emit(call, SubagentSubjects.toParent, {
       subagentId,
       messageId,
       type: 'request_input' as const,
@@ -400,11 +411,13 @@ export async function handleRequestInputRpc(
 
 /**
  * Handle completeTask RPC - child signals task completion.
+ * @param call - Call context of the handled completeTask request
  * @param ctx - Handler context with manager and bus
  * @param payload - Completion with managed child session, optional turn hint, result, and optional summary
  * @returns Response indicating success
  */
 export async function handleCompleteTaskRpc(
+  call: CallContext,
   ctx: RpcHandlerContext,
   payload: CompleteTaskRequest,
 ): Promise<CompleteTaskResponse> {
@@ -426,7 +439,7 @@ export async function handleCompleteTaskRpc(
     throw new SubagentError(SubagentErrorCode.INVALID_STATE, 'Completion turn does not match the active child turn');
   }
   ctx.manager.recordCompletionCandidate(subagent.subagentId, activeTurnId, result, summary, 'tool');
-  await ctx.onCompletionCandidate?.(subagent.subagentId);
+  await ctx.onCompletionCandidate?.(call, subagent.subagentId);
 
   return { completed: true };
 }

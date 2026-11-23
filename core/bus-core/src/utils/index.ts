@@ -1,4 +1,3 @@
-export { LOCAL_ORIGIN, REMOTE_ORIGIN } from './transport-helpers.js';
 export { mergeSortedHandlerArrays } from './handler-merging.js';
 export {
   deserializeTransportError,

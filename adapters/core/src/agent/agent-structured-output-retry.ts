@@ -68,6 +68,7 @@ export function createStructuredOutputTerminalTransform(
       // structured-output turns from the validated agent.complete.message
       // so invalid attempt blocks cannot be flushed as the assistant turn.
       retryHandle = await connector.sendMessage(messageHandle.message, {
+        call: messageHandle.call,
         deliveryMode: 'enqueue',
         internalRetry: true,
         messageId: `${messageHandle.messageId}:structured-output-retry:${attemptNumber}`,
@@ -94,7 +95,7 @@ export function createStructuredOutputTerminalTransform(
 
     let validated: ValidateTerminalResultOutput;
     try {
-      validated = await structuredOutputManager.validateTerminalResult({
+      validated = await structuredOutputManager.validateTerminalResult(messageHandle.call, {
         responseSchema,
         message: result.result?.message,
         sessionId,

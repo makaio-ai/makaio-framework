@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { normalizeMessageInput, type AgentStartResult } from '@makaio/ai-adapters-core';
 import type { ResponseSchemaDescriptor } from '@makaio/contracts';
+import { createTestCall } from '@makaio/test-utils';
 import { getAdapterUnderTest, getAgentTestContext, updateMeta } from './shared.js';
 
 const adapterName = getAdapterUnderTest();
@@ -44,6 +45,7 @@ describeIfNativeStructuredOutput('Structured Output', async () => {
   it(
     'returns JSON matching responseSchema for adapters with native structured output',
     async ({ task }) => {
+      const call = createTestCall();
       const agent = await testContext.createConnector({ reasoningEffort: 'none' });
       let startResult: AgentStartResult | undefined;
       try {
@@ -53,6 +55,7 @@ describeIfNativeStructuredOutput('Structured Output', async () => {
         startResult = await agent.start(
           normalizeMessageInput('Return exactly this JSON object: {"status":"ok","answer":"blue"}'),
           {
+            call,
             systemPrompt: testContext.conformanceSystemPrompt,
             responseSchema,
           },
@@ -70,7 +73,7 @@ describeIfNativeStructuredOutput('Structured Output', async () => {
           answer: 'blue',
         });
       } finally {
-        await agent.close();
+        await agent.close(call);
       }
     },
     defaultTimeout,

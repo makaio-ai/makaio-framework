@@ -1,5 +1,8 @@
-import { emit } from '../methods/emit.js';
-import { broadcast as executeBroadcast } from '../methods/broadcast.js';
+import { hostPartyOf } from '../call-context/carrier.js';
+import { callFromReceive, wireMetadataOf } from '../call-context/wire.js';
+import type { WireReport } from '../call-context/wire.js';
+import { emitReceived } from '../methods/emit.js';
+import { broadcastWithCall } from '../methods/broadcast.js';
 import { LocalSubjectError, NoHandlerError } from '../errors/index.js';
 import type {
   BusBroadcastMessage,
@@ -13,7 +16,7 @@ import type {
 } from '../types/index.js';
 import type { TransportRegistration } from '../types/bus.js';
 import { getSubjectFromBusMessage, getReadyTransports, serializeError, sendErrorResponse } from '../utils/index.js';
-import type { MessagePayload, SubjectDefinition, TransportReceiveContext } from '@makaio/core';
+import type { CallContext, MessagePayload, SubjectDefinition, TransportReceiveContext } from '@makaio/core';
 import { dispatch } from '../methods/request/dispatch.js';
 import { resolveInboundRequestBudget } from '../methods/request/request-budget.js';
 import { DEFAULT_REQUEST_TIMEOUT_MS } from '../types/options.js';
@@ -43,6 +46,18 @@ interface RegisteredTransport {
   /** Aborted on unregister to cancel the in-flight initial subject sync. */
   syncAbort: AbortController;
 }
+
+/**
+ * Warn-level sink of the receive path.
+ *
+ * `callFromReceive` reports a downgraded caller and dropped wire metadata here, once per
+ * connection and reason. The reports are warnings, not debug output: nothing about a
+ * downgrade may happen silently.
+ * @param message - One formatted report line
+ */
+const reportWire: WireReport = (message) => {
+  console.warn(message);
+};
 
 const resolveSubjectDefinition = (
   message: BusEventMessage | BusRequestMessage | BusBroadcastMessage,
@@ -87,6 +102,25 @@ const getRelayTargets = (
 };
 
 /**
+ * Build the next hop's envelope from the call derived on this host.
+ * @param call - The context derived from the incoming message
+ * @param context - Bus context of the relaying host
+ * @param message - The incoming event or broadcast
+ * @returns The relay envelope with only the metadata derived for this hop
+ */
+function restampRelay<T extends BusEventMessage | BusBroadcastMessage>(
+  call: CallContext,
+  context: MakaioBusContext,
+  message: T,
+): T {
+  const metadata = wireMetadataOf(call, hostPartyOf(context));
+  const relayed = { ...message };
+  if (metadata === undefined) delete relayed.metadata;
+  else relayed.metadata = metadata;
+  return relayed;
+}
+
+/**
  * Handle an event received from a transport.
  *
  * Relays events to other transports (excluding source), except collector-only
@@ -95,12 +129,14 @@ const getRelayTargets = (
  * no handlers or schema exist for the subject.
  * @param context - Bus context
  * @param sourceTransportName - Name of the transport the event arrived from
+ * @param transport - Transport instance the event arrived from (source of its declared caller)
  * @param message - The event message
  * @param receiveContext - Trusted context supplied by the receiving transport
  */
 const handleEventMessage = async (
   context: MakaioBusContext,
   sourceTransportName: BusTransportKeys,
+  transport: BusTransport,
   message: BusEventMessage,
   receiveContext?: TransportReceiveContext,
 ): Promise<void> => {
@@ -121,14 +157,17 @@ const handleEventMessage = async (
     return;
   }
 
+  const call = callFromReceive(receiveContext, transport.declaredCaller, message.metadata, reportWire);
+
   // PHASE 1: RELAY — forward to other transports (excluding source)
   // This happens unless the subject is collector-only, even when no schema exists (SharedWorker relay case).
   // Uses readiness filtering (not subscription filtering) — see getRelayTargets.
   // The message is passed so relay codecs with canSend can pass control-plane frames
   // before their E2E session key is established (e.g. relay.connection.stateChanged).
   if (!context.namespaceRegistry.isCollectorOnlySubject(fullSubject)) {
-    const relayTargets = getRelayTargets(context, sourceTransportName, message);
-    const relayResults = await Promise.allSettled(relayTargets.map(async ({ transport }) => transport.send(message)));
+    const relayed = restampRelay(call, context, message);
+    const relayTargets = getRelayTargets(context, sourceTransportName, relayed);
+    const relayResults = await Promise.allSettled(relayTargets.map(async ({ transport }) => transport.send(relayed)));
     for (const [index, result] of relayResults.entries()) {
       if (result.status === 'rejected') {
         console.error(
@@ -143,7 +182,7 @@ const handleEventMessage = async (
   // emit() gracefully no-ops when no handlers match or no schema exists
   // (validateEventPayload returns early if schema is missing).
   const definition = resolveSubjectDefinition(message, false);
-  await emit(context, definition, message.payload as MessagePayload, {
+  await emitReceived(context, call, definition, message.payload as MessagePayload, {
     messageId: message.messageId,
     correlationId: message.correlationId,
     transports: [], // Local-only, relay already happened above
@@ -215,6 +254,7 @@ const handleRequestMessage = async (
   const definition = resolveSubjectDefinition(message, true);
 
   try {
+    const call = callFromReceive(receiveContext, transport.declaredCaller, message.metadata, reportWire);
     // Timeout enforcement for local handlers is intentionally omitted here.
     // The caller's time budget is enforced at the transport layer (correlation
     // tracker) and by the caller's AbortSignal. dispatch() enforces timeouts
@@ -222,6 +262,7 @@ const handleRequestMessage = async (
     // is a handler bug, not a dispatch bug — adding timeout wrapping here
     // would mask the real issue and add complexity to the hot path.
     const outcome = await dispatch(context, definition, message.payload as MessagePayload, {
+      call,
       correlationId: message.correlationId,
       messageId: message.messageId,
       timeout: relayTimeout,
@@ -294,7 +335,7 @@ const deliverBroadcastResults = async (
  * Executes local handlers and relays to all other transports in parallel,
  * then merges and returns all collected results.
  *
- * - Phase 1 (local): calls `executeBroadcast(..., { transports: [] })` so
+ * - Phase 1 (local): calls `broadcastWithCall(..., { transports: [] })` so
  *   only local handlers run — transport dispatch is suppressed because relay
  *   is handled explicitly below.
  * - Phase 2 (relay): uses {@link getRelayTargets}, which excludes only the
@@ -345,10 +386,11 @@ const handleBroadcastMessage = async (
     const allResults: Array<{ nodeId: string; payload: unknown }> = [];
     let localError: BusTransportError | undefined;
 
-    // PHASE 1: Execute local handlers unconditionally — executeBroadcast calls
+    // PHASE 1: Execute local handlers unconditionally — broadcastWithCall calls
     // getMatchingHandlers internally and returns [] when no handlers exist.
+    const call = callFromReceive(receiveContext, transport.declaredCaller, message.metadata, reportWire);
     const definition = resolveSubjectDefinition(message, true);
-    const localPromise = executeBroadcast(context, definition, message.payload as MessagePayload, {
+    const localPromise = broadcastWithCall(context, call, definition, message.payload as MessagePayload, {
       messageId: message.messageId,
       correlationId: message.correlationId,
       timeout: relayTimeout,
@@ -366,10 +408,11 @@ const handleBroadcastMessage = async (
     // Uses unfiltered RPC relay (same as requests) because subscription filtering
     // can silently drop valid respondents, producing incomplete result arrays
     // with no error signal.
-    const relayTargets = getRelayTargets(context, sourceTransportName, message);
+    const relayed = restampRelay(call, context, message);
+    const relayTargets = getRelayTargets(context, sourceTransportName, relayed);
     const relayPromises = relayTargets.map(async ({ name: targetName, transport: targetTransport }) => {
       try {
-        allResults.push(...(await targetTransport.send(message, relayTimeout)));
+        allResults.push(...(await targetTransport.send(relayed, relayTimeout)));
       } catch (error) {
         console.error(
           `[TransportRegistry] Failed to relay broadcast '${fullSubject}' to transport '${String(targetName)}':`,
@@ -493,16 +536,15 @@ const createTransportRegistry = (context: MakaioBusContext) => {
         return;
       }
 
-      // Synthesize a guaranteed TransportReceiveContext so that ctx.transport is
-      // always populated for all inbound transport messages, making
-      // origin.local = !ctx.transport correct everywhere. The transport name is
-      // filled in from the registration key when the auth layer omits it.
+      // Every inbound transport message carries ctx.transport. Use the registration
+      // key when the transport omits its name. The receive path stamps the caller
+      // separately on ctx.call.
       const effectiveReceiveContext: TransportReceiveContext = receiveContext
         ? { ...receiveContext, transportName: receiveContext.transportName || String(transportName) }
         : { transportName: String(transportName) };
 
       if (message.type === 'event') {
-        await handleEventMessage(context, transportName, message, effectiveReceiveContext);
+        await handleEventMessage(context, transportName, transport, message, effectiveReceiveContext);
       } else if (message.type === 'request') {
         await handleRequestMessage(context, transportName, transport, message, effectiveReceiveContext);
       } else if (message.type === 'broadcast') {

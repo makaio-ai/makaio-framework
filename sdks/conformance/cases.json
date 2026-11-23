@@ -50,6 +50,64 @@
       ]
     },
     {
+      "id": "request-with-principal-metadata",
+      "title": "Request with metadata.principal",
+      "description": "A request carries metadata.principal as a kind and id. The receiver takes the declared principal from metadata, sets the connection as the caller and attests the principal through that caller. Only kind and id travel, never claims.",
+      "wire": [
+        {
+          "direction": "client->server",
+          "messageRef": "request.approval.request.with-principal"
+        }
+      ],
+      "assertions": [
+        {
+          "kind": "principal-declared",
+          "messageRef": "request.approval.request.with-principal",
+          "principal": {
+            "kind": "makaio.extension",
+            "id": "fixture-extension"
+          },
+          "caller": "connection"
+        }
+      ]
+    },
+    {
+      "id": "request-unknown-envelope-field-ignored",
+      "title": "Unknown envelope field ignored",
+      "description": "A request carrying an envelope field the receiver does not know is handled as if the field were absent. The unknown field never reaches the handler or the call context.",
+      "wire": [
+        {
+          "direction": "client->server",
+          "messageRef": "request.approval.request.unknown-envelope-field"
+        }
+      ],
+      "assertions": [
+        {
+          "kind": "envelope-field-ignored",
+          "messageRef": "request.approval.request.unknown-envelope-field",
+          "field": "futureEnvelopeField"
+        }
+      ]
+    },
+    {
+      "id": "request-without-metadata-is-connector-call",
+      "title": "Request without metadata is the connector's own call",
+      "description": "A request without metadata is the call of the connector itself: caller and principal are both the connection, and no attestation applies. This is the shape older clients and the Python and Rust SDKs send.",
+      "wire": [
+        {
+          "direction": "client->server",
+          "messageRef": "request.approval.request"
+        }
+      ],
+      "assertions": [
+        {
+          "kind": "principal-is-caller",
+          "messageRef": "request.approval.request",
+          "caller": "connection"
+        }
+      ]
+    },
+    {
       "id": "no-handler-response-tool-execute",
       "title": "No-handler response",
       "description": "A request with no available handler returns a structured NO_HANDLER error.",

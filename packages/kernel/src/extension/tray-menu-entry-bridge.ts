@@ -1,19 +1,25 @@
 import type { IMakaioBus } from '@makaio/bus-core';
+import type { CallContext } from '@makaio/core';
 import { TrayMenuSubjects, type TrayMenuEntry } from '@makaio/services-core/tray-menu';
 import type { KernelMakaioExtension } from './types.js';
 
 /**
  * Bridge a static extension tray manifest through the tray menu bus contract.
+ * @param call - Call responsible for registering the tray entry
  * @param bus - Bus instance that owns the tray menu service request
  * @param pkg - Extension that declares a tray manifest
  * @returns A promise that resolves when the registration RPC completes, or
  *   resolves immediately when the extension has no tray manifest.
  */
-export async function registerPackageTrayMenuEntry(bus: IMakaioBus, pkg: KernelMakaioExtension): Promise<void> {
+export async function registerPackageTrayMenuEntry(
+  call: CallContext,
+  bus: IMakaioBus,
+  pkg: KernelMakaioExtension,
+): Promise<void> {
   if (!pkg.tray) return;
 
   const entry = buildTrayMenuEntry(pkg);
-  await bus.request(TrayMenuSubjects.register, { entry });
+  await bus.request(call, TrayMenuSubjects.register, { entry });
 }
 
 /**
@@ -24,15 +30,20 @@ export async function registerPackageTrayMenuEntry(bus: IMakaioBus, pkg: KernelM
  * no longer running. Uses
  * the same `entryId` derivation as registration so the two calls always
  * target the same tray menu service entry.
+ * @param call - Call responsible for unregistering the tray entry
  * @param bus - Bus instance that owns the tray menu service request
  * @param pkg - Extension that declares a tray manifest
  * @returns A promise that resolves when the unregistration RPC completes, or
  *   resolves immediately when the extension has no tray manifest.
  */
-export async function unregisterPackageTrayMenuEntry(bus: IMakaioBus, pkg: KernelMakaioExtension): Promise<void> {
+export async function unregisterPackageTrayMenuEntry(
+  call: CallContext,
+  bus: IMakaioBus,
+  pkg: KernelMakaioExtension,
+): Promise<void> {
   if (!pkg.tray) return;
 
-  await bus.request(TrayMenuSubjects.unregister, { packageName: pkg.name, entryId: trayEntryId(pkg.tray) });
+  await bus.request(call, TrayMenuSubjects.unregister, { packageName: pkg.name, entryId: trayEntryId(pkg.tray) });
 }
 
 /**

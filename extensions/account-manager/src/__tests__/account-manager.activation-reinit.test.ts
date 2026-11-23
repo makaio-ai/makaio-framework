@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { createBusInstance } from '@makaio/bus-core';
 import { CredentialSubjects, type ResolvedProviderContext } from '@makaio/contracts';
+import { createTestCall } from '@makaio/test-utils';
 import { AccountManager } from '../account-manager.js';
 import { createDeferredValue } from '../activation-transaction-state.js';
 import { InMemoryAccountStore } from './testing/in-memory-store.js';
@@ -50,14 +51,16 @@ describe('AccountManager activation lifecycle', () => {
 
     try {
       await manager.init();
-      const stale = bus.request(CredentialSubjects.activation.prepare, { providerContext });
+      const stale = bus.request(createTestCall(), CredentialSubjects.activation.prepare, { providerContext });
       await entered.promise;
       await manager.destroy();
       await manager.init();
       release.resolve(undefined);
 
       await expect(stale).resolves.toEqual({ success: false, code: 'activation-failed' });
-      await expect(bus.request(CredentialSubjects.activation.prepare, { providerContext })).resolves.toEqual({
+      await expect(
+        bus.request(createTestCall(), CredentialSubjects.activation.prepare, { providerContext }),
+      ).resolves.toEqual({
         success: false,
         code: 'account-not-found',
       });

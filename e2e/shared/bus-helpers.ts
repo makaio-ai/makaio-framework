@@ -196,7 +196,7 @@ async function raceEventAndProbe<
   // Probe to check whether the condition is already satisfied.
   let probeResult: ExtractSubjectResponse<TProbeSubject> | null = null;
   try {
-    probeResult = (await bus.request(probeSubject as never, probePayload as never, {
+    probeResult = (await bus.request(bus.own('root'), probeSubject as never, probePayload as never, {
       timeout: timeoutMs,
     })) as ExtractSubjectResponse<TProbeSubject>;
   } catch (err: unknown) {

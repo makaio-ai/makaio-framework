@@ -1,5 +1,5 @@
 import type { IMakaioBus } from '@makaio/bus-core';
-import { ToolSubjects } from '@makaio/contracts';
+import { ToolSubjects, type CallContext } from '@makaio/contracts';
 import type {
   ReadTextFileRequest,
   ReadTextFileResponse,
@@ -29,15 +29,17 @@ function toOptionalNumber(value: number | null | undefined): number | undefined 
 
 /**
  * Execute ACP read_text_file via Makaio's tool registry.
+ * @param call - Call context of the turn that issued the read
  * @param params - ACP read request
  * @param context - Connector execution context
  * @returns ACP-compatible read response
  */
 export async function executeAcpReadTextFile(
+  call: CallContext,
   params: ReadTextFileRequest,
   context: AcpToolExecutionContext,
 ): Promise<ReadTextFileResponse> {
-  const result = await context.bus.request(ToolSubjects.execute, {
+  const result = await context.bus.request(call, ToolSubjects.execute, {
     toolName: 'read_file',
     input: {
       path: params.path,
@@ -78,15 +80,17 @@ export async function executeAcpReadTextFile(
 
 /**
  * Execute ACP write_text_file via Makaio's tool registry.
+ * @param call - Call context of the turn that issued the write
  * @param params - ACP write request
  * @param context - Connector execution context
  * @returns ACP-compatible write response
  */
 export async function executeAcpWriteTextFile(
+  call: CallContext,
   params: WriteTextFileRequest,
   context: AcpToolExecutionContext,
 ): Promise<WriteTextFileResponse> {
-  const result = await context.bus.request(ToolSubjects.execute, {
+  const result = await context.bus.request(call, ToolSubjects.execute, {
     toolName: 'write_file',
     input: {
       path: params.path,

@@ -1,4 +1,5 @@
 import type { SessionMessage } from '@makaio/contracts';
+import type { CallContext } from '@makaio/core';
 import type { SessionEditorAction } from '../../../session-editor/types.js';
 
 /**
@@ -22,10 +23,11 @@ export const llmSummarizeAction: SessionEditorAction = {
 
   /**
    * Eager summarization has already happened in the UI before pipeline execution.
+   * @param _call - Call context of the pipeline's operation (unused: this action sends nothing)
    * @param messages - Messages that would be summarized in a lazy pipeline model
    * @returns Unchanged messages (pipeline no-op)
    */
-  async execute(messages: SessionMessage[]) {
+  async execute(_call: CallContext, messages: SessionMessage[]) {
     // Summarization is eager (runs before fork creation via adapter.infer in the UI).
     // In pipelines this action intentionally passes through without modifying messages.
     return { kind: 'messages' as const, messages };

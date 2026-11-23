@@ -10,6 +10,7 @@
 
 import { resolveDisabledNativeTools, type GenerationRetirementLedger } from '@makaio/ai-adapters-core';
 import type { IMakaioBus } from '@makaio/bus-core';
+import type { CallContext } from '@makaio/contracts';
 import type { ClientExecutionContext } from '@makaio/contracts/client';
 import { describeTransportEnd, notifyObserver, type IJsonlTransport, type TransportEnd } from '@makaio/subprocess';
 import type { InitializeParams } from '../protocol/generated/index.js';
@@ -333,16 +334,17 @@ export async function resetClient(ctx: ConnectionManagerContext): Promise<void> 
  * the selected API-key login before publishing the connection as ready.
  * On any error the client is torn down via {@link resetClient} before re-throwing
  * so the next call starts from a clean state.
+ * @param call - Call context of the start that triggered the handshake; sent with the harness lookup
  * @param ctx - Connection manager context
  */
-async function performConnectionInit(ctx: ConnectionManagerContext): Promise<void> {
+async function performConnectionInit(call: CallContext, ctx: ConnectionManagerContext): Promise<void> {
   try {
     await createClient(ctx);
 
     // Harness lookups remain global-bus scoped because harness subjects live
     // in the global namespace.
     ctx.setDisabledNativeTools(
-      new Set(await resolveDisabledNativeTools(ctx.globalBus, ctx.adapterName, ctx.harnessId, ctx.clientId)),
+      new Set(await resolveDisabledNativeTools(call, ctx.globalBus, ctx.adapterName, ctx.harnessId, ctx.clientId)),
     );
 
     // Superset of generated InitializeParams — adds experimentalApi capability for item/tool/call.
@@ -376,16 +378,18 @@ async function performConnectionInit(ctx: ConnectionManagerContext): Promise<voi
  *
  * Concurrent callers share the same in-flight promise so the subprocess is spawned
  * exactly once. Resolves immediately when already connected.
+ * @param call - Call context of the start that triggers the handshake; the first caller's context is used
  * @param ctx - Connection manager context
  * @param inflight - Mutable holder for the in-flight promise; updated by this function
  * @returns Promise that resolves when the connection is established
  */
 export function initializeConnection(
+  call: CallContext,
   ctx: ConnectionManagerContext,
   inflight: { promise: Promise<void> | undefined },
 ): Promise<void> {
   if (ctx.getIsConnected()) return Promise.resolve();
-  inflight.promise ??= performConnectionInit(ctx).finally(() => {
+  inflight.promise ??= performConnectionInit(call, ctx).finally(() => {
     inflight.promise = undefined;
   });
   return inflight.promise;

@@ -86,7 +86,7 @@ async function createSetupController(
  * @param packageName - Extension package name to simulate being installed.
  */
 function setupFullInstallResponses(mockBus: MockBusResult, packageName: string): void {
-  mockBus.request.mockImplementation((subject: unknown) => {
+  mockBus.request.mockImplementation((_call: unknown, subject: unknown) => {
     if (subject === PackageSubjects.list) {
       return Promise.resolve({ packages: [] });
     }
@@ -589,7 +589,7 @@ describe('installSelectedClients()', () => {
       toggleSelection(controller, firstEntry.clientId);
     }
 
-    mockBus.request.mockImplementation((subject: unknown) => {
+    mockBus.request.mockImplementation((_call: unknown, subject: unknown) => {
       if (subject === PackageSubjects.install) {
         return Promise.resolve({
           success: true,
@@ -625,7 +625,7 @@ describe('installSelectedClients()', () => {
     });
     const freshBus = createMockBus();
 
-    mockBus.request.mockImplementation((subject: unknown) => {
+    mockBus.request.mockImplementation((_call: unknown, subject: unknown) => {
       if (subject === PackageSubjects.install) {
         return Promise.resolve({
           success: true,
@@ -635,7 +635,7 @@ describe('installSelectedClients()', () => {
       }
       return Promise.resolve({});
     });
-    freshBus.request.mockImplementation((subject: unknown) => {
+    freshBus.request.mockImplementation((_call: unknown, subject: unknown) => {
       if (subject === ClientSubjects.scan) {
         return Promise.resolve({ results: [] });
       }
@@ -671,13 +671,14 @@ describe('installSelectedClients()', () => {
 
     await controller.actions.installSelectedClients();
 
-    expect(mockBus.request).not.toHaveBeenCalledWith(ClientSubjects.scan, expect.anything());
-    expect(mockBus.request).not.toHaveBeenCalledWith(ClientSubjects.list, expect.anything());
-    expect(freshBus.request).toHaveBeenCalledWith(ClientSubjects.scan, {
+    expect(mockBus.request).not.toHaveBeenCalledWith(expect.anything(), ClientSubjects.scan, expect.anything());
+    expect(mockBus.request).not.toHaveBeenCalledWith(expect.anything(), ClientSubjects.list, expect.anything());
+    const freshCall = freshBus.bus.own('root');
+    expect(freshBus.request).toHaveBeenCalledWith(freshCall, ClientSubjects.scan, {
       targets: [{ clientId: 'claude-code', binaryName: 'claude' }],
     });
-    expect(freshBus.request).toHaveBeenCalledWith(ClientSubjects.list, {});
-    expect(freshBus.request).toHaveBeenCalledWith(ClientSubjects.setActive, {
+    expect(freshBus.request).toHaveBeenCalledWith(freshCall, ClientSubjects.list, {});
+    expect(freshBus.request).toHaveBeenCalledWith(freshCall, ClientSubjects.setActive, {
       clientId: 'claude-code',
       version: '1.0.0',
     });
@@ -693,7 +694,7 @@ describe('installSelectedClients()', () => {
     const restartAndReconnect = vi.fn(async () => {
       throw new Error('restart should not be called');
     });
-    mockBus.request.mockImplementation((subject: unknown) => {
+    mockBus.request.mockImplementation((_call: unknown, subject: unknown) => {
       if (subject === PackageSubjects.install) {
         return Promise.resolve({
           success: true,
@@ -725,7 +726,7 @@ describe('installSelectedClients()', () => {
 
     expect(restartAndReconnect).not.toHaveBeenCalled();
     expect(controller.state.restartRequested).toBe(false);
-    expect(mockBus.request).toHaveBeenCalledWith(ClientSubjects.scan, {
+    expect(mockBus.request).toHaveBeenCalledWith(expect.anything(), ClientSubjects.scan, {
       targets: [{ clientId: 'claude-code', binaryName: 'claude' }],
     });
   });
@@ -754,7 +755,7 @@ describe('installSelectedClients()', () => {
       }
     }
 
-    mockBus.request.mockImplementation((subject: unknown) => {
+    mockBus.request.mockImplementation((_call: unknown, subject: unknown) => {
       if (subject === PackageSubjects.install) {
         return Promise.resolve({
           success: true,
@@ -796,9 +797,9 @@ describe('installSelectedClients()', () => {
 
     await controller.actions.installSelectedClients();
 
-    const setActiveCalls = mockBus.request.mock.calls.filter(([subject]) => subject === ClientSubjects.setActive);
+    const setActiveCalls = mockBus.request.mock.calls.filter(([, subject]) => subject === ClientSubjects.setActive);
     expect(setActiveCalls).toHaveLength(1);
-    expect(setActiveCalls[0][1]).toEqual({ clientId: selectedEntry.clientId, version: '1.0.0' });
+    expect(setActiveCalls[0][2]).toEqual({ clientId: selectedEntry.clientId, version: '1.0.0' });
   });
 });
 
@@ -909,7 +910,7 @@ describe('manifest step', () => {
 
   beforeEach(async () => {
     mockBus = createMockBus();
-    mockBus.request.mockImplementation((subject: unknown) => {
+    mockBus.request.mockImplementation((_call: unknown, subject: unknown) => {
       if (subject === PackageSubjects.list) {
         return Promise.resolve({ packages: [] });
       }
@@ -1035,7 +1036,7 @@ describe('manifest step', () => {
       documentHash: hash,
       documentVersion: '2026-05-17',
     });
-    mockBus.request.mockImplementation((subject: unknown) => {
+    mockBus.request.mockImplementation((_call: unknown, subject: unknown) => {
       if (subject === PackageSubjects.list) {
         return Promise.resolve({
           packages: [{ name: '@makaio/extension-workflow', version: '0.1.0', hasDescriptor: true }],
@@ -1069,7 +1070,7 @@ describe('manifest step', () => {
       documentHash: hash,
       documentVersion: '2026-05-17',
     });
-    mockBus.request.mockImplementation((subject: unknown) => {
+    mockBus.request.mockImplementation((_call: unknown, subject: unknown) => {
       if (subject === PackageSubjects.list) {
         return Promise.resolve({
           packages: [{ name: '@makaio/extension-workflow', version: '0.2.0', hasDescriptor: true }],
@@ -1170,7 +1171,7 @@ describe('manifest step', () => {
       documentVersion: '2026-05-17',
     });
     const installedPackages: string[] = [];
-    mockBus.request.mockImplementation((subject: unknown, payload?: unknown) => {
+    mockBus.request.mockImplementation((_call: unknown, subject: unknown, payload?: unknown) => {
       if (subject === PackageSubjects.list) {
         return Promise.resolve({ packages: [] });
       }

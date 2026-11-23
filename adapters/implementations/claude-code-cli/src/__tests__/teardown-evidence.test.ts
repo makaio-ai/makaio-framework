@@ -8,6 +8,7 @@
 import os from 'node:os';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
+import { createTestCall } from '@makaio/test-utils';
 import { CONNECTOR_EXIT_OBSERVATION_MS, MessageHandle, UserMessageQueue } from '@makaio/ai-adapters-core';
 import { TERMINAL_RESULT_DRAIN_TIMEOUT_MS } from '@makaio/ai-adapters-claude-shared';
 import type { SDKMessage } from '@makaio/client-claude-code';
@@ -94,6 +95,7 @@ function terminalResult(): SDKMessage {
 /** Build one enqueued user message. */
 function makeHandle(): MessageHandle {
   return new MessageHandle(
+    createTestCall(),
     'message-teardown',
     { role: 'user', blocks: [{ type: 'text', content: 'hello' }], message: 'hello' },
     'enqueue',
@@ -107,7 +109,7 @@ function makeHandle(): MessageHandle {
  */
 async function makeSession(onTurnComplete?: OnTurnCompleteCallback): Promise<ClaudeCliSession> {
   return new ClaudeCliSession({
-    bus: await ClaudeCodeCliConnectorNamespace.scopedBus(),
+    bus: await ClaudeCodeCliConnectorNamespace.scopedBus(MakaioBus),
     adapterId: 'adapter-1',
     adapterName: 'claude-code-cli',
     agentId: 'agent-1',

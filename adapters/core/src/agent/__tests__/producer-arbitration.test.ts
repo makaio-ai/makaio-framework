@@ -22,6 +22,7 @@ import os from 'node:os';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
 import { AgentSubjects, CredentialSubjects, type ProviderContext } from '@makaio/contracts';
+import { createTestCall } from '@makaio/test-utils';
 import { DeferredPromise } from '@makaio/utils';
 import { ActiveAgentRegistry } from '../../adapter/agent-registry.js';
 import { AgentTeardownArbiter } from '../agent-teardown-arbiter.js';
@@ -132,7 +133,7 @@ beforeEach(async () => {
       return connector;
     },
   });
-  await agent.init();
+  await agent.init(createTestCall());
   registry.set(AGENT_ID, {
     agent,
     sessionId: SESSION_ID,
@@ -155,7 +156,7 @@ function installTeardownFlight(): { release: () => Promise<void> } {
   const incumbent = built[0];
   if (incumbent === undefined) throw new Error('the agent built no connector');
   incumbent.closeGate = closeGate.getPromise();
-  const teardown = registry.evictSilently(AGENT_ID);
+  const teardown = registry.evictSilently(createTestCall(), AGENT_ID);
   return {
     release: async () => {
       closeGate.resolve();
@@ -228,7 +229,7 @@ async function withTeardownAfterProducer<T>(
   // teardown that arrived before the prologue and a producer that was refused.
   expect(built).toHaveLength(2);
 
-  const teardown = registry.evictSilently(AGENT_ID);
+  const teardown = registry.evictSilently(createTestCall(), AGENT_ID);
   await drain();
   initGate.resolve();
 
@@ -266,7 +267,9 @@ describe('case 204f-b: each producer is refused at the same door', () => {
 
   it('(b) coordinator path: refuses and rolls its own prepared activation back', async () => {
     const refusal = await withTeardownBeforeProducer(() =>
-      agent.swapConnector({ providerContext: MANAGED_PROVIDER_CONTEXT }).catch((error: unknown) => error),
+      agent
+        .swapConnector(createTestCall(), { providerContext: MANAGED_PROVIDER_CONTEXT })
+        .catch((error: unknown) => error),
     );
 
     expect(refusal).toBeInstanceOf(ConnectorSwapVetoedError);
@@ -435,7 +438,7 @@ describe('case 204f-b: each account-carrying producer commits a transition that 
 
   it('(b) coordinator path: the activation it committed stands', async () => {
     const { answer, teardown } = await withTeardownAfterProducer(() =>
-      agent.swapConnector({ providerContext: MANAGED_PROVIDER_CONTEXT }).then(
+      agent.swapConnector(createTestCall(), { providerContext: MANAGED_PROVIDER_CONTEXT }).then(
         () => 'resolved',
         (error: unknown) => error,
       ),

@@ -1,26 +1,22 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type OpenAI from 'openai';
+import OpenAI from 'openai';
 import type { ChatCompletionChunk } from 'openai/resources/index.js';
 import { FactoryUsageCorrelationHeaders, MessageHandle } from '@makaio/ai-adapters-core';
-import { MakaioBus } from '@makaio/bus-core';
+import { MakaioBus, type IMakaioBus } from '@makaio/bus-core';
+import { createTestCall } from '@makaio/test-utils';
 import { OpenAIConnectorSession } from '../session.js';
 import type { OpenAISessionConfig } from '../types/index.js';
-import type { OpenAIConnectorTurn } from '../turn.js';
 import { OpenAINodeConnectorNamespace, OpenAINodeConnectorSubjects, type UsageEvent } from '../namespaces/index.js';
 
 class ExposedOpenAISession extends OpenAIConnectorSession {
   public async invokeProvider(handle: MessageHandle): Promise<void> {
-    const turn = {
-      getMessageHandle: () => handle,
-      markStepStarted: async () => {},
-      markStepFinished: async () => {},
-    } as OpenAIConnectorTurn;
+    const turn = this.createTurn(handle);
     await super.executeApiCall(turn, new AbortController().signal, 'adapter-session-1');
   }
 }
 
-async function* completionStream(): AsyncGenerator<ChatCompletionChunk> {
-  yield {
+function createClient(): OpenAI {
+  const chunk: ChatCompletionChunk = {
     id: 'completion-1',
     object: 'chat.completion.chunk',
     created: 1,
@@ -28,6 +24,10 @@ async function* completionStream(): AsyncGenerator<ChatCompletionChunk> {
     choices: [],
     usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 },
   };
+  return new OpenAI({
+    apiKey: 'test-key',
+    fetch: async () => new Response(`data: ${JSON.stringify(chunk)}\n\ndata: [DONE]\n\n`),
+  });
 }
 
 afterEach(() => {
@@ -36,14 +36,16 @@ afterEach(() => {
 
 describe('OpenAI Factory Gateway request correlation', () => {
   it('sends the allowlisted headers and emits the same per-request LLM call ID on usage', async () => {
-    const bus = await OpenAINodeConnectorNamespace.scopedBus();
-    const create = vi.fn(async (_body: unknown, _options?: unknown) => completionStream());
+    const bus = await OpenAINodeConnectorNamespace.scopedBus(MakaioBus);
+    const client = createClient();
+    const create = vi.spyOn(client.chat.completions, 'create');
     const usages: UsageEvent[] = [];
     bus.on(OpenAINodeConnectorSubjects.sdk.event, ({ payload }) => {
       if (payload.event.eventType === 'usage') usages.push(payload.event);
     });
-    const config: OpenAISessionConfig = {
+    const config: OpenAISessionConfig & { globalBus: IMakaioBus } = {
       bus,
+      globalBus: MakaioBus,
       adapterId: 'adapter-1',
       adapterName: 'openai-node',
       agentId: 'agent-1',
@@ -51,7 +53,7 @@ describe('OpenAI Factory Gateway request correlation', () => {
       cwd: '/tmp',
       model: 'gpt-test',
       env: {},
-      client: { chat: { completions: { create } } } as unknown as OpenAI,
+      client,
       openAITools: [],
       requestCorrelationHeaders: 'factory-v1',
       supportsResponseFormatWithTools: true,
@@ -62,6 +64,7 @@ describe('OpenAI Factory Gateway request correlation', () => {
     };
     const session = new ExposedOpenAISession(config);
     const handle = new MessageHandle(
+      createTestCall(),
       'message-runtime',
       { role: 'user', message: 'hello', blocks: [{ type: 'text', content: 'hello' }] },
       'enqueue',
@@ -94,17 +97,19 @@ describe('OpenAI Factory Gateway request correlation', () => {
   });
 
   it('does not send internal identifiers without explicit Factory Gateway opt-in', async () => {
-    const bus = await OpenAINodeConnectorNamespace.scopedBus();
-    const create = vi.fn(async (_body: unknown, _options?: unknown) => completionStream());
+    const bus = await OpenAINodeConnectorNamespace.scopedBus(MakaioBus);
+    const client = createClient();
+    const create = vi.spyOn(client.chat.completions, 'create');
     const session = new ExposedOpenAISession({
       bus,
+      globalBus: MakaioBus,
       adapterId: 'adapter-1',
       adapterName: 'openai-node',
       agentId: 'agent-1',
       cwd: '/tmp',
       model: 'gpt-test',
       env: {},
-      client: { chat: { completions: { create } } } as unknown as OpenAI,
+      client,
       openAITools: [],
       supportsResponseFormatWithTools: true,
       supportsStructuredOutputStrict: true,
@@ -113,6 +118,7 @@ describe('OpenAI Factory Gateway request correlation', () => {
       requestToolApproval: async () => ({ action: 'allow' }),
     });
     const handle = new MessageHandle(
+      createTestCall(),
       'message-1',
       { role: 'user', message: 'hello', blocks: [{ type: 'text', content: 'hello' }] },
       'enqueue',

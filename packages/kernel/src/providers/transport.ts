@@ -10,7 +10,7 @@ export interface TransportProvider {
    * For server transports, the HTTP server and Hono app are passed via
    * constructor options — the provider only wires the WebSocket upgrade
    * handler onto them.
-   * @param bus - Bus instance to attach transport to.
+   * @param bus - Bus instance of the carrier that contributes this provider (never the host bus).
    * @param machineId - Machine identifier for transport identification.
    */
   connect(bus: IMakaioBus, machineId: string): Promise<void>;

@@ -15,7 +15,7 @@
  */
 import type { IMakaioBus } from '@makaio/bus-core';
 import type { ProviderKeyPublication } from './adapter-provider-key-publication.js';
-import type { ExtractSubjectResponse } from '@makaio/core';
+import type { CallContext, ExtractSubjectResponse } from '@makaio/core';
 import type { StartAgentRequestPayload } from './types.js';
 import {
   AdapterSubjects,
@@ -99,9 +99,10 @@ export interface StartAcquisitionRegistry {
    * The reported class is unconstrained here: a give-back has nothing to decide on
    * it, and pinning the shape would couple this structural dependency to the
    * teardown taxonomy for no consumer.
+   * @param call - Call context of the start this teardown gives up for.
    * @param agentId - Agent to evict
    */
-  evictSilently(agentId: string): Promise<unknown>;
+  evictSilently(call: CallContext, agentId: string): Promise<unknown>;
 }
 
 /**
@@ -219,11 +220,13 @@ function describeReservationRefusal(
  * unchanged from before this seam existed, since neither key was claimed then.
  * It is not the case ownership forbids, which is dispatching *after* storage has
  * named a foreign owner.
+ * @param call - Call context of the start request this reservation serves
  * @param bus - Global bus carrying the session namespace
  * @param request - Agent, session, live adapter identity and resume target
  * @returns The reservation, or the reason the start must not dispatch
  */
 export async function reserveAdapterOwnedStart(
+  call: CallContext,
   bus: IMakaioBus,
   request: {
     readonly agentId: string;
@@ -237,7 +240,7 @@ export async function reserveAdapterOwnedStart(
   const claimToken = crypto.randomUUID();
   let reserved;
   try {
-    reserved = await reserveStartFor(bus, {
+    reserved = await reserveStartFor(call, bus, {
       sessionId: request.sessionId,
       agentId: request.agentId,
       adapterName: request.adapterName,
@@ -251,7 +254,7 @@ export async function reserveAdapterOwnedStart(
     });
   } catch (error) {
     await bus
-      .requestOptional(SessionSubjects.ownership.release, {
+      .requestOptional(call, SessionSubjects.ownership.release, {
         agentId: request.agentId,
         claimToken,
         disposition: 'released',
@@ -286,7 +289,7 @@ export async function reserveAdapterOwnedStart(
     };
   }
   if (ownerInstanceId !== request.ownerInstanceId || claim.ownerInstanceId !== ownerInstanceId) {
-    await bus.requestOptional(SessionSubjects.ownership.release, {
+    await bus.requestOptional(call, SessionSubjects.ownership.release, {
       agentId: request.agentId,
       claimToken: claim.claimToken,
       disposition: 'released',
@@ -314,19 +317,21 @@ export async function reserveAdapterOwnedStart(
  * Failures are logged and swallowed: this runs on the way out of a failed
  * start, and a cleanup that threw would replace the error the caller is about
  * to see with one about the cleanup.
+ * @param call - Call context of the start whose acquisitions are given back
  * @param bus - Bus the release is issued on
  * @param agentId - Agent whose claim is given up
  * @param claimToken - The one generation this attempt took
  * @param disposition - The caller's evidence, never inferred here
  */
 async function releaseReservedGeneration(
+  call: CallContext,
   bus: IMakaioBus,
   agentId: string,
   claimToken: string,
   disposition: AdapterSessionClaimDisposition,
 ): Promise<void> {
   try {
-    await bus.requestOptional(SessionSubjects.ownership.release, { agentId, claimToken, disposition });
+    await bus.requestOptional(call, SessionSubjects.ownership.release, { agentId, claimToken, disposition });
   } catch (error) {
     console.debug(`[adapter.startAgent] release for agent ${agentId} failed:`, error);
   }
@@ -340,21 +345,27 @@ async function releaseReservedGeneration(
  * not bookkeeping: deleting the row cascades its claims away, which **frees the
  * ownership key** for a provider session that may still be live behind a
  * connector this adapter can no longer account for.
+ * @param call - Call context of the start whose row is settled
  * @param bus - Bus the write is issued on
  * @param agentId - Agent whose row is settled
  * @param dispatched - Whether the provider-touching call was entered
  */
-async function settleFailedStartRow(bus: IMakaioBus, agentId: string, dispatched: boolean): Promise<void> {
+async function settleFailedStartRow(
+  call: CallContext,
+  bus: IMakaioBus,
+  agentId: string,
+  dispatched: boolean,
+): Promise<void> {
   try {
     if (dispatched) {
-      await bus.requestOptional(AgentStorageSubjects.updateStatus, {
+      await bus.requestOptional(call, AgentStorageSubjects.updateStatus, {
         agentId,
         status: 'dead',
         expectedStatus: ['starting'],
       });
       return;
     }
-    await bus.requestOptional(AgentStorageSubjects.delete, { agentId });
+    await bus.requestOptional(call, AgentStorageSubjects.delete, { agentId });
   } catch (error) {
     console.debug(`[adapter.startAgent] settling the row of failed start ${agentId} failed:`, error);
   }
@@ -374,31 +385,41 @@ async function settleFailedStartRow(bus: IMakaioBus, agentId: string, dispatched
  * far its own dispatch got, and the safe direction is to over-report reach: an
  * unnecessary `abandoned` costs one blocked key, whereas an unwarranted
  * `released` frees a key for a live connector.
+ * @param call - Call context of the start whose acquisitions are given back
  * @param deps - Bus, registry and everything acquired so far
  */
-export async function releaseStartAcquisitions(deps: {
-  /** Bus every durable step is issued on. */
-  readonly globalBus: IMakaioBus;
-  /** Registry holding this start's process-local claims. */
-  readonly registry: StartAcquisitionRegistry;
-  /** Agent the start was for. */
-  readonly agentId: string;
-  /** Whether this start holds an unsettled agent-identity claim. */
-  readonly claimedIdentity: boolean;
-  /** Provider session this start claimed locally, when it claimed one. */
-  readonly resumeAdapterSessionId: string | undefined;
-  /** The durable reservation, when one was committed. */
-  readonly reservation: AdapterStartReservation | undefined;
-  /** When the pre-dispatch agent row was created, when the write was issued. */
-  readonly agentRowCreatedAt: number | undefined;
-  /** Whether the provider-touching call was entered. */
-  readonly dispatched: boolean;
-}): Promise<void> {
+export async function releaseStartAcquisitions(
+  call: CallContext,
+  deps: {
+    /** Bus every durable step is issued on. */
+    readonly globalBus: IMakaioBus;
+    /** Registry holding this start's process-local claims. */
+    readonly registry: StartAcquisitionRegistry;
+    /** Agent the start was for. */
+    readonly agentId: string;
+    /** Whether this start holds an unsettled agent-identity claim. */
+    readonly claimedIdentity: boolean;
+    /** Provider session this start claimed locally, when it claimed one. */
+    readonly resumeAdapterSessionId: string | undefined;
+    /** The durable reservation, when one was committed. */
+    readonly reservation: AdapterStartReservation | undefined;
+    /** When the pre-dispatch agent row was created, when the write was issued. */
+    readonly agentRowCreatedAt: number | undefined;
+    /** Whether the provider-touching call was entered. */
+    readonly dispatched: boolean;
+  },
+): Promise<void> {
   const { globalBus, registry, agentId, reservation, dispatched } = deps;
   if (reservation !== undefined) {
-    await releaseReservedGeneration(globalBus, agentId, reservation.claimToken, dispatched ? 'abandoned' : 'released');
+    await releaseReservedGeneration(
+      call,
+      globalBus,
+      agentId,
+      reservation.claimToken,
+      dispatched ? 'abandoned' : 'released',
+    );
   }
-  if (deps.agentRowCreatedAt !== undefined) await settleFailedStartRow(globalBus, agentId, dispatched);
+  if (deps.agentRowCreatedAt !== undefined) await settleFailedStartRow(call, globalBus, agentId, dispatched);
   if (deps.resumeAdapterSessionId !== undefined) registry.releaseAdapterSessionClaim(deps.resumeAdapterSessionId);
   if (deps.claimedIdentity) registry.releaseAgentIdentityClaim(agentId);
 }
@@ -415,6 +436,7 @@ type StartAcquisitionDeps = PersistEmitDeps & {
  *
  * Gives back everything acquired so far first, so a caller that reads
  * `not-dispatched` finds no row, no generation and no claim behind it.
+ * @param call - Call context of the start request this refusal answers
  * @param deps - Bus and registry the acquisitions are given back through
  * @param agentId - Agent the start was for
  * @param acquisitions - What the attempt took before it refused
@@ -422,12 +444,18 @@ type StartAcquisitionDeps = PersistEmitDeps & {
  * @returns The refusal to answer with
  */
 export async function refuseUndispatchedStart(
+  call: CallContext,
   deps: StartAcquisitionDeps,
   agentId: string,
   acquisitions: StartAcquisitions,
   message: string,
 ): Promise<StartAgentRefusal> {
-  await releaseStartAcquisitions({ globalBus: deps.globalBus, registry: deps.registry, agentId, ...acquisitions });
+  await releaseStartAcquisitions(call, {
+    globalBus: deps.globalBus,
+    registry: deps.registry,
+    agentId,
+    ...acquisitions,
+  });
   return { success: false, dispatch: 'not-dispatched', message };
 }
 
@@ -442,6 +470,7 @@ export async function refuseUndispatchedStart(
  * The connector is stopped through `evictSilently` rather than a disposal:
  * disposal writes `disposed`, which is terminal, and would contradict the `dead`
  * row this cleanup just wrote.
+ * @param call - Call context of the start request this refusal answers
  * @param deps - Bus and registry the acquisitions are given back through
  * @param agentId - Agent the start was for
  * @param acquisitions - What the attempt took, with `dispatched` already set
@@ -449,13 +478,19 @@ export async function refuseUndispatchedStart(
  * @returns The refusal to answer with
  */
 export async function failStartAfterRegistration(
+  call: CallContext,
   deps: StartAcquisitionDeps,
   agentId: string,
   acquisitions: StartAcquisitions,
   message: string,
 ): Promise<StartAgentRefusal> {
-  await releaseStartAcquisitions({ globalBus: deps.globalBus, registry: deps.registry, agentId, ...acquisitions });
-  await deps.registry.evictSilently(agentId);
+  await releaseStartAcquisitions(call, {
+    globalBus: deps.globalBus,
+    registry: deps.registry,
+    agentId,
+    ...acquisitions,
+  });
+  await deps.registry.evictSilently(call, agentId);
   return { success: false, dispatch: 'dispatch-uncertain', message };
 }
 
@@ -480,6 +515,7 @@ export async function failStartAfterRegistration(
  * Refused rather than reserved: reserving would mean writing the pre-dispatch
  * agent row for an agent whose contract is that no such row exists, which trades
  * one broken invariant for another.
+ * @param call - Call context of the start request this refusal answers
  * @param deps - Bus and registry the acquisitions are given back through
  * @param agentId - Agent the start was for
  * @param acquisitions - What the attempt took before it refused
@@ -487,12 +523,14 @@ export async function failStartAfterRegistration(
  * @returns The refusal to answer with
  */
 async function refuseEphemeralResume(
+  call: CallContext,
   deps: StartAcquisitionDeps,
   agentId: string,
   acquisitions: StartAcquisitions,
   adapterSessionId: string,
 ): Promise<StartAgentRefusal> {
   return refuseUndispatchedStart(
+    call,
     deps,
     agentId,
     acquisitions,
@@ -515,11 +553,13 @@ async function refuseEphemeralResume(
  * **ephemeral** start, whose whole definition is that it touches neither session
  * nor agent storage, is refused rather than exempted once it does name one: see
  * {@link refuseEphemeralResume}.
+ * @param call - Call context of the start request
  * @param deps - Adapter identity, bus and registry
  * @param params - The start being run, and its acquisition state
  * @returns The refusal to answer with, or `undefined` once the start may dispatch
  */
 export async function acquireStartOwnership(
+  call: CallContext,
   deps: StartAcquisitionDeps,
   params: {
     payload: ResolvedStartPayload;
@@ -535,11 +575,11 @@ export async function acquireStartOwnership(
   if (!deps.registry.claimAdapterSession(adapterSessionId)) {
     // Fires before the connector is created, so nothing exists provider-side.
     const message = `Provider session ${adapterSessionId} is already claimed by another in-flight start`;
-    return refuseUndispatchedStart(deps, agentId, acquisitions, message);
+    return refuseUndispatchedStart(call, deps, agentId, acquisitions, message);
   }
   acquisitions.resumeAdapterSessionId = adapterSessionId;
   if (payload.ephemeral === true) {
-    return refuseEphemeralResume(deps, agentId, acquisitions, adapterSessionId);
+    return refuseEphemeralResume(call, deps, agentId, acquisitions, adapterSessionId);
   }
   if (callerOwnsAgentRow(payload)) return undefined;
 
@@ -549,8 +589,12 @@ export async function acquireStartOwnership(
   // mint a new one.
   const agentRowCreatedAt = Date.now();
   acquisitions.agentRowCreatedAt = agentRowCreatedAt;
-  await writePreDispatchAgentRow({ agentId, sessionId, adapterSessionId, payload, createdAt: agentRowCreatedAt }, deps);
-  const outcome = await reserveAdapterOwnedStart(deps.globalBus, {
+  await writePreDispatchAgentRow(
+    call,
+    { agentId, sessionId, adapterSessionId, payload, createdAt: agentRowCreatedAt },
+    deps,
+  );
+  const outcome = await reserveAdapterOwnedStart(call, deps.globalBus, {
     agentId,
     sessionId,
     adapterId: deps.adapterId,
@@ -559,7 +603,7 @@ export async function acquireStartOwnership(
     resumeProviderSessionId: adapterSessionId,
   });
   if (outcome.kind === 'refused') {
-    return refuseUndispatchedStart(deps, agentId, acquisitions, outcome.message);
+    return refuseUndispatchedStart(call, deps, agentId, acquisitions, outcome.message);
   }
   acquisitions.reservation = outcome.reservation;
   return undefined;

@@ -9,8 +9,11 @@
 
 import { describe, it, expect, beforeEach } from 'vitest';
 import { MakaioBus } from '../bus.js';
+import { channelSubject } from '../index.js';
+import type { EmitSubject, IMakaioBus } from '../index.js';
 import { z } from 'zod';
 import { createBusNamespace } from '@makaio/core';
+import type { CallContext, SubjectDefinition } from '@makaio/core';
 
 // Register test subjects
 const { subjects: _TestSubjects } = MakaioBus.registerNamespace(
@@ -21,6 +24,7 @@ const { subjects: _TestSubjects } = MakaioBus.registerNamespace(
       request: z.object({ id: z.string() }),
       response: z.object({ data: z.string() }),
     },
+    channelEvent: channelSubject(z.object({ message: z.string() })),
   }),
 );
 
@@ -46,7 +50,7 @@ describe('Wildcard Method Signatures', () => {
         received.push({ message: context.payload.message });
       });
 
-      await MakaioBus.emit(_TestSubjects.log, { message: 'test' });
+      await MakaioBus.emit(MakaioBus.own('root'), _TestSubjects.log, { message: 'test' });
 
       expect(received).toHaveLength(1);
       expect(received[0].message).toBe('test');
@@ -60,7 +64,7 @@ describe('Wildcard Method Signatures', () => {
         context.setResult({ data: `info-${id}` });
       });
 
-      const result = await MakaioBus.request(_TestSubjects.getInfo, { id: '123' });
+      const result = await MakaioBus.request(MakaioBus.own('root'), _TestSubjects.getInfo, { id: '123' });
 
       expect(result.data).toBe('info-123');
     });
@@ -76,8 +80,8 @@ describe('Wildcard Method Signatures', () => {
         received.push(context.payload);
       });
 
-      await MakaioBus.emit(_TestSubjects.log, { message: 'test1' });
-      await MakaioBus.emit(_TestSubjects.error, { error: 'test2' });
+      await MakaioBus.emit(MakaioBus.own('root'), _TestSubjects.log, { message: 'test1' });
+      await MakaioBus.emit(MakaioBus.own('root'), _TestSubjects.error, { error: 'test2' });
 
       expect(received).toHaveLength(2);
     });
@@ -93,7 +97,7 @@ describe('Wildcard Method Signatures', () => {
         received.push(context.payload);
       });
 
-      await MakaioBus.emit(_TestSubjects.log, { message: 'test1' });
+      await MakaioBus.emit(MakaioBus.own('root'), _TestSubjects.log, { message: 'test1' });
 
       expect(received).toHaveLength(2);
     });
@@ -115,7 +119,7 @@ describe('Wildcard Method Signatures', () => {
         context.setResult({ data: 'test' });
       });
 
-      await MakaioBus.request(_TestSubjects.getInfo, { id: 'test1' });
+      await MakaioBus.request(MakaioBus.own('root'), _TestSubjects.getInfo, { id: 'test1' });
 
       expect(received).toHaveLength(3);
     });
@@ -137,10 +141,10 @@ describe('Wildcard Method Signatures', () => {
       });
 
       // Emit an event - should trigger the handler
-      await MakaioBus.emit(_TestSubjects.log, { message: 'test event' });
+      await MakaioBus.emit(MakaioBus.own('root'), _TestSubjects.log, { message: 'test event' });
 
       // Make a request - should trigger the handler
-      const result = await MakaioBus.request(_TestSubjects.getInfo, { id: 'test' });
+      const result = await MakaioBus.request(MakaioBus.own('root'), _TestSubjects.getInfo, { id: 'test' });
 
       // Verify handler was called correctly for both
       expect(eventPayloads).toEqual([{ message: 'test event' }]); // Handler got the event
@@ -161,7 +165,7 @@ describe('Wildcard Method Signatures', () => {
       });
 
       // ✅ Concrete subject works
-      await MakaioBus.emit(_TestSubjects.log, { message: 'concrete' });
+      await MakaioBus.emit(MakaioBus.own('root'), _TestSubjects.log, { message: 'concrete' });
 
       expect(received).toEqual(['concrete']);
     });
@@ -170,7 +174,7 @@ describe('Wildcard Method Signatures', () => {
       // TypeScript prevents emitting to wildcards at compile time
       // The following line would be a type error if uncommented:
       // @ts-expect-error - Type error: emit() doesn't accept wildcards
-      await expect(MakaioBus.emit(_TestSubjects.$all, {})).rejects.toThrow(
+      await expect(MakaioBus.emit(MakaioBus.own('root'), _TestSubjects.$all, {})).rejects.toThrow(
         'Emitting wildcard subjects is not allowed. Use concrete subject keys only.',
       );
     });
@@ -183,7 +187,7 @@ describe('Wildcard Method Signatures', () => {
       });
 
       // ✅ Concrete subject works
-      const result = await MakaioBus.request(_TestSubjects.getInfo, { id: '789' });
+      const result = await MakaioBus.request(MakaioBus.own('root'), _TestSubjects.getInfo, { id: '789' });
 
       expect(result.data).toBe('result-789');
     });
@@ -192,9 +196,55 @@ describe('Wildcard Method Signatures', () => {
       // TypeScript prevents requesting via wildcards at compile time
       // The following line would be a type error if uncommented:
       // @ts-expect-error - Type error: request() doesn't accept wildcards
-      await expect(MakaioBus.request(_TestSubjects.$all, {})).rejects.toThrow(
+      await expect(MakaioBus.request(MakaioBus.own('root'), _TestSubjects.$all, {})).rejects.toThrow(
         'No handler registered for request subject "wildcardSignatureTest.*"',
       );
+    });
+  });
+
+  describe('EmitSubject', () => {
+    /**
+     * Generic forwarding helper typed with `EmitSubject`.
+     * @param bus - Bus to emit on
+     * @param call - Call context of the handled message
+     * @param subject - Concrete event subject
+     * @param payload - Event payload
+     */
+    async function forward<S extends SubjectDefinition>(
+      bus: IMakaioBus,
+      call: CallContext,
+      subject: EmitSubject<S>,
+      payload: S['$meta']['payload'],
+    ): Promise<void> {
+      await bus.emit<S>(call, subject, payload);
+    }
+
+    it('should forward a concrete event subject', async () => {
+      const received: string[] = [];
+      MakaioBus.on(_TestSubjects.log, (context) => {
+        received.push(context.payload.message);
+      });
+
+      await forward(MakaioBus, MakaioBus.own('root'), _TestSubjects.log, { message: 'forwarded' });
+
+      expect(received).toEqual(['forwarded']);
+    });
+
+    it('should reject request, wildcard and channel subjects at compile time', () => {
+      const call = MakaioBus.own('root');
+      const rejected = [
+        // @ts-expect-error - request subjects are not emit subjects
+        forward(MakaioBus, call, _TestSubjects.getInfo, { id: '1' }),
+        // @ts-expect-error - wildcard subjects are not emit subjects
+        forward(MakaioBus, call, _TestSubjects.$all, {}),
+        // @ts-expect-error - channel subjects are not emit subjects
+        forward(MakaioBus, call, _TestSubjects.channelEvent, { message: 'x' }),
+      ];
+      // Only the compile-time rejection is under test; the calls fail at run time and are not awaited.
+      for (const promise of rejected) {
+        promise.catch(() => undefined);
+      }
+      expect(rejected).toHaveLength(3);
     });
   });
 });

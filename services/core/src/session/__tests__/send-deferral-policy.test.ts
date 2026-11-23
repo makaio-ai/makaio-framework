@@ -2,6 +2,7 @@
 /* eslint max-lines: ["error", { "max": 480 }] */
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
+import { createTestCall } from '@makaio/test-utils';
 import { SessionOwnershipStorageSubjects, SessionSubjects, type MakaioSessionAgent } from '@makaio/contracts';
 import { AgentStorageSubjects } from '../storage/agent-namespace.js';
 import { FRESH_WITH_HISTORY_RECOVERY_PLAN } from '../recovery-plan.js';
@@ -59,7 +60,7 @@ describe('deferred agents in a send', () => {
     const sessionId = 'session-fresh-adapter';
     await harness.seedSession(sessionId, ['agent-fresh']);
 
-    await MakaioBus.request(SessionSubjects.sendMessage, { sessionId, message: 'hello' });
+    await MakaioBus.request(createTestCall(), SessionSubjects.sendMessage, { sessionId, message: 'hello' });
 
     expect(dispatched).toEqual([
       expect.objectContaining({
@@ -79,7 +80,10 @@ describe('deferred agents in a send', () => {
     const [lead] = await harness.seedSession(sessionId, ['agent-lead']);
     harness.occupyAgentKey(lead as MakaioSessionAgent);
 
-    const result = await MakaioBus.request(SessionSubjects.sendMessage, { sessionId, message: 'continue please' });
+    const result = await MakaioBus.request(createTestCall(), SessionSubjects.sendMessage, {
+      sessionId,
+      message: 'continue please',
+    });
 
     // A deferred lead is always total: the default send has exactly one target.
     // Fresh-with-history against an agent owned elsewhere means a fresh *agent*,
@@ -91,12 +95,14 @@ describe('deferred agents in a send', () => {
     // The session now speaks through the replacement. The old row survives —
     // this runtime may not drive that agent, which is not the same as removing
     // it — but it no longer leads and nothing was routed to it.
-    const { session } = await MakaioBus.request(SessionSubjects.get, { sessionId });
+    const { session } = await MakaioBus.request(createTestCall(), SessionSubjects.get, { sessionId });
     expect(session?.leadAgentId).toBe(routed[0]);
     // The replacement inherits the *containment* the agent it stands in for
     // had. Omitting it is not "less configured": it is a connector with no
     // directory restriction at all, which nobody asked for.
-    const { agent: replacement } = await MakaioBus.request(AgentStorageSubjects.get, { agentId: routed[0] as string });
+    const { agent: replacement } = await MakaioBus.request(createTestCall(), AgentStorageSubjects.get, {
+      agentId: routed[0] as string,
+    });
     expect(replacement?.allowedDirectories).toEqual(['/work/repo']);
     expect(replacement?.cwd).toBe(lead?.cwd);
     // Credentials and endpoint resolve from this and nothing else: a
@@ -120,13 +126,18 @@ describe('deferred agents in a send', () => {
     });
     harness.occupyAgentKey(lead as MakaioSessionAgent);
 
-    await MakaioBus.request(SessionSubjects.sendMessage, { sessionId, message: 'continue please' });
+    await MakaioBus.request(createTestCall(), SessionSubjects.sendMessage, {
+      sessionId,
+      message: 'continue please',
+    });
 
     // The tool grant and refusal are containment like the directories: a
     // replacement without them runs under a policy nobody chose. `[]` stays
     // `[]` and an absent list stays absent.
     expect(routed).toHaveLength(1);
-    const { agent: replacement } = await MakaioBus.request(AgentStorageSubjects.get, { agentId: routed[0] as string });
+    const { agent: replacement } = await MakaioBus.request(createTestCall(), AgentStorageSubjects.get, {
+      agentId: routed[0] as string,
+    });
     expect(replacement?.agentId).not.toBe('agent-lead-tools');
     expect(replacement?.allowedTools).toEqual(lists.allowedTools);
     expect(replacement?.disallowedTools).toEqual(lists.disallowedTools);
@@ -136,7 +147,10 @@ describe('deferred agents in a send', () => {
     const sessionId = 'session-legacy-lead-default';
     const [legacyLead] = await harness.seedSession(sessionId, ['legacy-lead'], { legacy: true });
 
-    const result = await MakaioBus.request(SessionSubjects.sendMessage, { sessionId, message: 'continue please' });
+    const result = await MakaioBus.request(createTestCall(), SessionSubjects.sendMessage, {
+      sessionId,
+      message: 'continue please',
+    });
 
     expect(probedAgentIds).toEqual([]);
     expect(dispatched).toEqual([]);
@@ -151,7 +165,7 @@ describe('deferred agents in a send', () => {
     liveAgentIds.add((lead as MakaioSessionAgent).agentId);
     harness.occupyAgentKey(member as MakaioSessionAgent);
 
-    const result = await MakaioBus.request(SessionSubjects.sendMessage, {
+    const result = await MakaioBus.request(createTestCall(), SessionSubjects.sendMessage, {
       sessionId,
       message: 'to everyone',
       agentIds: 'all',
@@ -171,7 +185,7 @@ describe('deferred agents in a send', () => {
     const agents = await harness.seedSession(sessionId, ['agent-a', 'agent-b']);
     for (const agent of agents) harness.occupyAgentKey(agent);
 
-    const failure = await MakaioBus.request(SessionSubjects.sendMessage, {
+    const failure = await MakaioBus.request(createTestCall(), SessionSubjects.sendMessage, {
       sessionId,
       message: 'to everyone',
       agentIds: 'all',
@@ -187,7 +201,7 @@ describe('deferred agents in a send', () => {
     const sessionId = 'session-legacy-all';
     const [legacyAgent] = await harness.seedSession(sessionId, ['legacy-all'], { legacy: true });
 
-    const failure = await MakaioBus.request(SessionSubjects.sendMessage, {
+    const failure = await MakaioBus.request(createTestCall(), SessionSubjects.sendMessage, {
       sessionId,
       message: 'to everyone',
       agentIds: 'all',
@@ -205,7 +219,7 @@ describe('deferred agents in a send', () => {
     liveAgentIds.add((lead as MakaioSessionAgent).agentId);
     harness.occupyAgentKey(member as MakaioSessionAgent);
 
-    const result = await MakaioBus.request(SessionSubjects.sendMessage, {
+    const result = await MakaioBus.request(createTestCall(), SessionSubjects.sendMessage, {
       sessionId,
       message: 'to the two of you',
       agentIds: ['agent-named-usable', 'agent-named-held'],
@@ -221,7 +235,7 @@ describe('deferred agents in a send', () => {
     liveAgentIds.add((lead as MakaioSessionAgent).agentId);
     harness.occupyAgentKey(member as MakaioSessionAgent);
 
-    const failure = await MakaioBus.request(SessionSubjects.sendMessage, {
+    const failure = await MakaioBus.request(createTestCall(), SessionSubjects.sendMessage, {
       sessionId,
       message: 'only you',
       agentIds: ['agent-named-only'],
@@ -237,7 +251,7 @@ describe('deferred agents in a send', () => {
     const sessionId = 'session-legacy-explicit';
     const [legacyAgent] = await harness.seedSession(sessionId, ['legacy-explicit'], { legacy: true });
 
-    const failure = await MakaioBus.request(SessionSubjects.sendMessage, {
+    const failure = await MakaioBus.request(createTestCall(), SessionSubjects.sendMessage, {
       sessionId,
       message: 'only you',
       agentIds: [legacyAgent?.agentId as string],
@@ -254,14 +268,19 @@ describe('deferred agents in a send', () => {
     const [lead] = await harness.seedSession(sessionId, ['agent-pinned']);
     harness.occupyAgentKey(lead as MakaioSessionAgent);
 
-    await MakaioBus.request(SessionSubjects.sendMessage, { sessionId, message: 'continue please' });
+    await MakaioBus.request(createTestCall(), SessionSubjects.sendMessage, {
+      sessionId,
+      message: 'continue please',
+    });
 
     // Pinned to an instance this runtime did not resolve, and the replacement
     // does **not** inherit it: an instance ID is a one-way hash of
     // `(machineId, adapterName)`, so inheriting names an instance without its
     // owning machine and rebuilds the mixed key. The substitution is deliberate.
     expect(lead?.adapterId).toBe('stale-adapter');
-    const { agent: replacement } = await MakaioBus.request(AgentStorageSubjects.get, { agentId: routed[0] as string });
+    const { agent: replacement } = await MakaioBus.request(createTestCall(), AgentStorageSubjects.get, {
+      agentId: routed[0] as string,
+    });
     expect(replacement).toMatchObject({ adapterId: DEFERRAL_LIVE_ADAPTER_ID, adapterName: lead?.adapterName });
   });
 
@@ -294,8 +313,8 @@ describe('deferred agents in a send', () => {
             status: 'starting',
             runtimeOwner: { machineId: 'deferral-machine', instanceId: harness.service.requireOwnershipInstanceId() },
           });
-          await MakaioBus.request(AgentStorageSubjects.set, { agentId: winner, agent });
-          await MakaioBus.emit(SessionSubjects.agent.added, {
+          await MakaioBus.request(ctx.call, AgentStorageSubjects.set, { agentId: winner, agent });
+          await MakaioBus.emit(ctx.call, SessionSubjects.agent.added, {
             sessionId,
             agentId: winner,
             adapterId: 'stale-adapter',
@@ -309,7 +328,10 @@ describe('deferred agents in a send', () => {
       ),
     );
 
-    await MakaioBus.request(SessionSubjects.sendMessage, { sessionId, message: 'continue please' });
+    await MakaioBus.request(createTestCall(), SessionSubjects.sendMessage, {
+      sessionId,
+      message: 'continue please',
+    });
 
     // The adopted agent is rebuilt before anything is routed to it. Discarding
     // the adoption would route this turn at a lead whose connector never existed.
@@ -324,12 +346,12 @@ describe('deferred agents in a send', () => {
 
     // Consumer 1 — the restart handler reports the deferred plan and dispatches
     // nothing.
-    const restart = await MakaioBus.request(SessionSubjects.restartAgents, { sessionId });
+    const restart = await MakaioBus.request(createTestCall(), SessionSubjects.restartAgents, { sessionId });
     expect(restart.results).toEqual([{ agentId: 'agent-parity', adapterId: 'stale-adapter', success: true }]);
 
     // Consumer 2 — the liveness-verification helper, which the product recovery
     // path drives. It names the agent and decides nothing with it.
-    const verified = await verifyAndRecoverAgents(MakaioBus, [agent as MakaioSessionAgent], {
+    const verified = await verifyAndRecoverAgents(createTestCall(), MakaioBus, [agent as MakaioSessionAgent], {
       plan: FRESH_WITH_HISTORY_RECOVERY_PLAN,
     });
     expect([...verified.deferredAgentIds]).toEqual(['agent-parity']);
@@ -338,13 +360,13 @@ describe('deferred agents in a send', () => {
 
     // Consumer 3 — the send path, which drops the agent and speaks through a
     // replacement instead of failing.
-    await MakaioBus.request(SessionSubjects.sendMessage, { sessionId, message: 'anything' });
+    await MakaioBus.request(createTestCall(), SessionSubjects.sendMessage, { sessionId, message: 'anything' });
 
     // No consumer dispatched, and none took a generation for the agent it was
     // told it may not drive. The replacement lead the send minted has one of its
     // own, which is a different agent entirely.
     expect(dispatched).toEqual([]);
-    const { claims } = await MakaioBus.request(SessionOwnershipStorageSubjects.listClaims, {
+    const { claims } = await MakaioBus.request(createTestCall(), SessionOwnershipStorageSubjects.listClaims, {
       machineId: 'deferral-machine',
     });
     expect(claims.filter((claim) => claim.agentId === 'agent-parity')).toEqual([]);

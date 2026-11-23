@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { MakaioBus } from '../bus.js';
+import { busContextOf } from '../kernel-api.js';
 import { oncePromiseTestSetup } from './once.promise.setup.js';
 
 const setup = oncePromiseTestSetup();
@@ -17,11 +18,11 @@ describe('once - Promise overload', () => {
       });
 
       // Emit non-matching events
-      await MakaioBus.emit(EventSubjects.message, {
+      await MakaioBus.emit(MakaioBus.own('root'), EventSubjects.message, {
         content: 'wrong1',
         sessionId: 'session-1',
       });
-      await MakaioBus.emit(EventSubjects.message, {
+      await MakaioBus.emit(MakaioBus.own('root'), EventSubjects.message, {
         content: 'wrong2',
         sessionId: 'session-2',
       });
@@ -34,7 +35,7 @@ describe('once - Promise overload', () => {
       expect(resultBefore).toBe('pending');
 
       // Emit matching event
-      await MakaioBus.emit(EventSubjects.message, {
+      await MakaioBus.emit(MakaioBus.own('root'), EventSubjects.message, {
         content: 'correct',
         sessionId: 'target-session',
       });
@@ -45,7 +46,7 @@ describe('once - Promise overload', () => {
     });
 
     it('should cleanup handler after filter match', async () => {
-      const context = MakaioBus.getContext();
+      const context = busContextOf(MakaioBus);
       const promise = MakaioBus.once(EventSubjects.message, {
         filter: { sessionId: 'target' },
       });
@@ -54,14 +55,14 @@ describe('once - Promise overload', () => {
       expect(context.eventHandlers.has(fullSubject)).toBe(true);
 
       // Emit non-matching event - handler should still exist
-      await MakaioBus.emit(EventSubjects.message, {
+      await MakaioBus.emit(MakaioBus.own('root'), EventSubjects.message, {
         content: 'wrong',
         sessionId: 'other',
       });
       expect(context.eventHandlers.has(fullSubject)).toBe(true);
 
       // Emit matching event
-      await MakaioBus.emit(EventSubjects.message, {
+      await MakaioBus.emit(MakaioBus.own('root'), EventSubjects.message, {
         content: 'right',
         sessionId: 'target',
       });

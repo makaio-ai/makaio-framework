@@ -104,6 +104,7 @@ describe('runHeadlessWorkflowWorker attempt-control — R7: cancel during regist
     });
     let settled: AttemptControlDeliveryResult | undefined;
     const reconciling = reconcileAttemptCancellation(
+      authoritySide.bus.own('root'),
       { bus: authoritySide.bus, authority },
       { executionId, executionAttemptId, timeoutMs: 10_000 },
     ).then((result) => {

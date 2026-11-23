@@ -20,6 +20,7 @@ import type {
   CorrelationTracker,
 } from '@makaio/bus-core';
 import { deserializeTransportError, getSubjectFromBusMessage, matchesSubscription } from '@makaio/bus-core';
+import { callFromReceive } from '@makaio/bus-core/kernel-api';
 import { isRecord } from '@makaio/utils';
 import type { TransportAuth, WebSocketLike } from './types.js';
 import type { BroadcastAggregator } from './broadcast-aggregator.js';
@@ -261,11 +262,10 @@ function handleCorrelationMessage(message: BusMessage, deps: MessageHandlerDeps,
 
 /**
  * Resolve the current subject restriction for an inbound socket.
- * @param receiveContext - Authentication-derived receive context.
+ * @param peerId - Identity verified by the socket's authentication strategy.
  * @returns The peer restriction, or `null` when neither subject direction is restricted.
  */
-function resolveSubjectRestriction(receiveContext: TransportReceiveContext | undefined): SubjectRestriction | null {
-  const peerId = receiveContext?.peer?.id;
+function resolveSubjectRestriction(peerId: string | undefined): SubjectRestriction | null {
   if (peerId === undefined) return null;
 
   const allowedMessageSubjects = resolveHmacIdentityAllowedMessageSubjects(peerId);
@@ -390,6 +390,21 @@ async function routeSubscriptionMessage(
 }
 
 /**
+ * Restamp metadata before forwarding to clients on this transport.
+ * @param message - Inbound event or broadcast.
+ * @param receiveContext - Authentication-derived receive context.
+ * @returns A copy carrying only the principal accepted on this host.
+ */
+function restampForClientFanout<T extends BusEventMessage | BusBroadcastMessage>(
+  message: T,
+  receiveContext: TransportReceiveContext | undefined,
+): T {
+  const { principal } = callFromReceive(receiveContext, undefined, message.metadata, console.warn);
+  // A client-originated principal cannot equal this host party.
+  return { ...message, metadata: { principal: { kind: principal.kind, id: principal.id } } };
+}
+
+/**
  * Forward a client broadcast and deliver it to server-local handlers.
  * @param message - Inbound bus message.
  * @param socket - Socket that sent the message.
@@ -414,7 +429,8 @@ async function routeBroadcastMessage(
   const subject = getSubjectFromBusMessage(broadcastMessage) ?? undefined;
   const targetClients = deps.registry.getInterestedClients(subject, broadcastMessage.payload, socket);
   const timeout = deps.normalizeBroadcastTimeout(broadcastMessage.timeout);
-  deps.broadcastAggregator.startClientBroadcast(socket, broadcastMessage, targetClients, deps.sendSafely, timeout);
+  const outgoing = restampForClientFanout(broadcastMessage, receiveContext);
+  deps.broadcastAggregator.startClientBroadcast(socket, outgoing, targetClients, deps.sendSafely, timeout);
   await invokeHandlers(message, deps.handlers, { debug: deps.debug, receiveContext });
   return true;
 }
@@ -438,7 +454,7 @@ export async function routeMessage(
   if (handleCorrelationMessage(message, deps, socket)) return;
 
   const receiveContext = deps.auth?.getReceiveContext?.(socket);
-  const restriction = resolveSubjectRestriction(receiveContext);
+  const restriction = resolveSubjectRestriction(deps.auth?.getAuthenticatedIdentityId?.(socket));
 
   if (rejectDisallowedSubject(message, socket, deps, restriction)) return;
   if (message.type === 'subscribe' || message.type === 'unsubscribe') {
@@ -455,7 +471,7 @@ export async function routeMessage(
   // the source (ServerTransport) to prevent loops. Cross-client forwarding
   // within the same ServerTransport must happen here.
   if (message.type === 'event') {
-    deps.registry.forwardEventToClients(socket, message, deps.sendSafely);
+    deps.registry.forwardEventToClients(socket, restampForClientFanout(message, receiveContext), deps.sendSafely);
   }
 
   if (message.type === 'request') {

@@ -1,3 +1,4 @@
+import type { CallContext, OwnWorkPurpose } from '@makaio/core';
 import { describe, expectTypeOf, it } from 'vitest';
 import type { ExtensionContext, MakaioExtension, NodeExtensionContext } from '../index.js';
 
@@ -17,6 +18,31 @@ describe('ExtensionContext host-specific fields', () => {
     expectTypeOf<NodeExtensionContext['makaioHome']>().toEqualTypeOf<string>();
     expectTypeOf<NodeExtensionContext['username']>().toEqualTypeOf<string>();
     expectTypeOf<NodeExtensionContext['busUrl']>().toEqualTypeOf<string | undefined>();
+  });
+
+  it('offers the own call context only through bus.own(purpose)', () => {
+    type Bus = ExtensionContext['bus'];
+
+    expectTypeOf<Bus['own']>().toBeFunction();
+    expectTypeOf<Bus['own']>().parameters.toEqualTypeOf<[purpose: OwnWorkPurpose]>();
+    expectTypeOf<Bus['own']>().returns.toEqualTypeOf<CallContext>();
+    expectTypeOf<Parameters<Bus['own']>[0]>().toEqualTypeOf<OwnWorkPurpose>();
+  });
+
+  it('has no call field on the extension context or the Node context', () => {
+    expectTypeOf<HasKey<ExtensionContext, 'call'>>().toEqualTypeOf<false>();
+    expectTypeOf<HasKey<NodeExtensionContext, 'call'>>().toEqualTypeOf<false>();
+    expectTypeOf<HasKey<ExtensionContext, 'bus'>>().toEqualTypeOf<true>();
+  });
+
+  it('rejects an unknown purpose and a missing purpose for bus.own', () => {
+    const bus = {} as ExtensionContext['bus'];
+
+    // @ts-expect-error -- only the named purposes are accepted
+    void (() => bus.own('unknown-purpose'));
+    // @ts-expect-error -- the purpose is required
+    void (() => bus.own());
+    void (() => bus.own('start'));
   });
 
   it('allows host-agnostic extensions to opt into the generic base context', () => {

@@ -18,7 +18,7 @@ export interface StorageProvider {
   /**
    * Register storage handlers on the bus.
    * Called before app.start() in the composition root.
-   * @param bus - Bus instance to register handlers on
+   * @param bus - Bus instance of the carrier that contributes this provider (never the host bus)
    * @param machineId - Machine identifier for storage scoping
    */
   registerHandlers(bus: IMakaioBus, machineId: string): Promise<StorageCleanup>;

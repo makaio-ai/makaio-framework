@@ -4,12 +4,21 @@ import type { Party, PartyRef } from './party.js';
 import { PartyRefSchema, PartySchema } from './party.js';
 
 /**
- * Nominal stamp that makes `CallContext` unforgeable at the type level.
+ * Nominal stamp that blocks an object literal or a spread of a `CallContext`
+ * at the type level.
  *
  * The private field gives the class a nominal identity: an object literal or a
  * spread of a `CallContext` lacks the private member and is rejected by the
  * compiler. The class is only declared, never emitted, so it has no runtime
  * constructor and nothing can instantiate it.
+ *
+ * The stamp is a compile-time property only: `Object.assign({}, ctx, { principal: other })`
+ * and `structuredClone(ctx)` both produce a value whose shape still matches
+ * `CallContext` and pass `tsc --strict` without a cast. The stamp does not
+ * defend against either path; only the runtime check (the minted-context
+ * `WeakSet` in `@makaio/bus-core`'s `call-context/mint.ts`, consulted by
+ * `isMintedCallContext` / `assertCallCarrier`) rejects a value that was not
+ * returned by `mintCallContext`.
  */
 declare class CallContextStamp {
   private readonly stamped: true;
@@ -23,13 +32,11 @@ declare class CallContextStamp {
  * - `attestedBy`: the party that vouches for the claim, when someone does.
  *
  * Created by the core only: minting copies the fields, deep-freezes the result
- * and registers it in a `WeakSet`. A `CallContext` can be read and passed on,
- * but not built by literal or spread; obtain one from `bus.own(purpose)` or
+ * and registers it in a `WeakSet`. The type rejects a literal or a spread, but
+ * only that `WeakSet` membership (checked at the carrier boundary, not by the
+ * type) rejects a value assembled another way, such as `Object.assign` or
+ * `structuredClone` over a real context. Obtain one from `bus.own(purpose)` or
  * from the context of a handled message (`ctx.call`).
- *
- * This release declares the type and its schemas only: the minting described
- * above and its two entry points ship with the release that puts caller and
- * principal on the bus. Until then nothing produces a `CallContext`.
  */
 export type CallContext = CallContextStamp & {
   readonly caller: Party;

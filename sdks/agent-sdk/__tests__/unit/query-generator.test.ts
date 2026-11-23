@@ -129,8 +129,8 @@ describe('createQueryGenerator', () => {
       sessionId: SESSION_ID,
       agentId: AGENT_ID,
       config: FAKE_CONFIG,
-      onSetMcpServers: async (identity, servers) => {
-        calls.push({ identity, servers });
+      onSetMcpServers: async (call, identity, servers) => {
+        calls.push({ call, identity, servers });
         return { added: ['local'], removed: [], errors: {} };
       },
     });
@@ -151,6 +151,7 @@ describe('createQueryGenerator', () => {
 
     expect(calls).toEqual([
       {
+        call: MakaioBus.own('root'),
         identity: {
           agentId: AGENT_ID,
           adapterId: 'adapter-1',

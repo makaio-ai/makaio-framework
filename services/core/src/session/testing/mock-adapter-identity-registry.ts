@@ -73,7 +73,8 @@ export function createMockAdapterIdentityRegistry(currentMachineId?: string): Mo
 
     async registerKnownAdapter(adapterName: string, adapterId?: string, machineId?: string): Promise<void> {
       const resolvedAdapterId = adapterId ?? registry.resolveId({ adapterName });
-      await MakaioBus.emit(AdapterSubjects.initialized, {
+      // ORIGIN: Test fixture registration starts an adapter initialization event.
+      await MakaioBus.emit(MakaioBus.own('root'), AdapterSubjects.initialized, {
         adapterName,
         adapterId: resolvedAdapterId,
         machineId: machineId ?? currentMachineId ?? DEFAULT_TEST_MACHINE_ID,

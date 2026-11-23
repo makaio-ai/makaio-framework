@@ -1,4 +1,5 @@
 import type { IMakaioBus } from '@makaio/bus-core';
+import type { CallContext } from '@makaio/core';
 import type { ProviderContext, ResolvedAgentConfig } from '@makaio/contracts';
 import { resolveRuntimeProviderContext, RuntimeProviderContextResolutionError } from '../../provider-context/index.js';
 
@@ -8,6 +9,7 @@ import { resolveRuntimeProviderContext, RuntimeProviderContextResolutionError } 
  * Converts public provider config IDs into runtime provider execution contexts,
  * while preserving already resolved contexts from local framework-internal
  * startup paths.
+ * @param call - Call context of the handled attach message, forwarded to provider resolution
  * @param bus - Bus instance for provider resolution
  * @param adapterName - Adapter selected for the attach-time execution
  * @param explicitProviderConfigId - Provider config selected explicitly on the agent selection
@@ -16,6 +18,7 @@ import { resolveRuntimeProviderContext, RuntimeProviderContextResolutionError } 
  * @returns Merged provider ID plus the resolved runtime provider context
  */
 export async function resolveAttachProviderSelection(
+  call: CallContext,
   bus: IMakaioBus,
   adapterName: string,
   explicitProviderConfigId: string | undefined,
@@ -43,7 +46,7 @@ export async function resolveAttachProviderSelection(
   }
   const providerContext =
     providerConfigId !== undefined
-      ? await resolveRuntimeProviderContext(bus, { adapterName, providerConfigId })
+      ? await resolveRuntimeProviderContext(call, bus, { adapterName, providerConfigId })
       : undefined;
   return { providerConfigId, providerContext };
 }

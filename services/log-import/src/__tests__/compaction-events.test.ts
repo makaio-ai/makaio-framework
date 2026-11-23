@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
 import { SessionEventStorageSubjects } from '@makaio/services-core/session';
+import { createTestCall } from '@makaio/test-utils';
 import { appendSessionCompactedEvent } from '../compaction-events.js';
 
 describe('appendSessionCompactedEvent', () => {
@@ -28,7 +29,7 @@ describe('appendSessionCompactedEvent', () => {
       }),
     );
 
-    await appendSessionCompactedEvent(MakaioBus, {
+    await appendSessionCompactedEvent(createTestCall(), MakaioBus, {
       sessionId: 'parent',
       eventId: 'session-compacted:parent:child',
       timestamp: 123,
@@ -65,7 +66,7 @@ describe('appendSessionCompactedEvent', () => {
       }),
     );
 
-    await appendSessionCompactedEvent(MakaioBus, {
+    await appendSessionCompactedEvent(createTestCall(), MakaioBus, {
       sessionId: 'parent',
       eventId: 'session-compacted:parent:child',
       timestamp: 123,
@@ -109,7 +110,7 @@ describe('appendSessionCompactedEvent', () => {
     );
 
     await expect(
-      appendSessionCompactedEvent(MakaioBus, {
+      appendSessionCompactedEvent(createTestCall(), MakaioBus, {
         sessionId: 'parent',
         eventId: 'session-compacted:parent:child',
         timestamp: 123,

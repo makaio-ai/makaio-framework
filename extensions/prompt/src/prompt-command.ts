@@ -207,16 +207,17 @@ function subscribeAgentEvents(
  */
 async function enableFullAccessApprovalPolicy(ctx: CommandContext<PromptArgs>, sessionId: string): Promise<void> {
   const bus = requireBus(ctx);
-  const { session } = await bus.request(SessionSubjects.get, { sessionId }, { signal: ctx.signal });
+  const { session } = await bus.request(ctx.call, SessionSubjects.get, { sessionId }, { signal: ctx.signal });
   if (session && session.status !== 'active') {
     throw new Error(`Session is not active: ${sessionId}`);
   }
 
   if (!session) {
-    await bus.request(SessionSubjects.create, { sessionId }, { signal: ctx.signal });
+    await bus.request(ctx.call, SessionSubjects.create, { sessionId }, { signal: ctx.signal });
   }
 
   const update = await bus.request(
+    ctx.call,
     SessionStorageSubjects.update,
     {
       sessionId,
@@ -321,6 +322,7 @@ export async function handlePrompt(ctx: CommandContext<PromptArgs>): Promise<voi
     completionPromise.catch(() => undefined);
 
     await bus.request(
+      ctx.call,
       SessionSubjects.sendMessage,
       {
         sessionId,

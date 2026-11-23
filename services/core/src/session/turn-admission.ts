@@ -1,3 +1,4 @@
+import type { CallContext } from '@makaio/core';
 import type { TurnCompletionResult } from './turn-completion.js';
 import type {
   PreparedTurnMessageAdmissionLease,
@@ -10,8 +11,16 @@ export interface TurnAdmissionHooks {
   completePreparation(lease: TurnPreparationLease): void;
   failPreparation(lease: TurnPreparationLease, error: Error): void;
   beginSetupFailure(admission: TurnMessageAdmissionLease, result: TurnCompletionResult): void;
-  finalizeSetupFailure(admission: TurnMessageAdmissionLease, result: TurnCompletionResult): Promise<void>;
-  finalizeCompletedLedger(admission: TurnMessageAdmissionLease, result: TurnCompletionResult): Promise<void>;
+  finalizeSetupFailure(
+    call: CallContext,
+    admission: TurnMessageAdmissionLease,
+    result: TurnCompletionResult,
+  ): Promise<void>;
+  finalizeCompletedLedger(
+    call: CallContext,
+    admission: TurnMessageAdmissionLease,
+    result: TurnCompletionResult,
+  ): Promise<void>;
 }
 
 /**
@@ -33,19 +42,19 @@ export function composePreparedTurnAdmission(
       admission.commit();
       if (preparation.isOwner) hooks.completePreparation(preparation);
     },
-    rollback: async (errorCode = `message-setup-failed:${admission.messageId}`) => {
+    rollback: async (call: CallContext, errorCode = `message-setup-failed:${admission.messageId}`) => {
       const rollback = admission.rollback();
       if (preparation.isOwner) {
         const result = { success: false, errors: [errorCode] };
         hooks.beginSetupFailure(admission, result);
         hooks.failPreparation(preparation, new Error(`Message ${admission.messageId} setup failed`));
         await rollback;
-        await hooks.finalizeSetupFailure(admission, result);
+        await hooks.finalizeSetupFailure(call, admission, result);
         return;
       }
       await rollback;
       if (admission.turn.isComplete()) {
-        await hooks.finalizeCompletedLedger(admission, admission.turn.getResult());
+        await hooks.finalizeCompletedLedger(call, admission, admission.turn.getResult());
       }
     },
   };

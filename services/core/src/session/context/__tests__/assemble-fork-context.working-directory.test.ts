@@ -3,6 +3,7 @@
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
+import { createTestCall } from '@makaio/test-utils';
 import type { IMakaioSession, SessionContext } from '@makaio/contracts';
 import { assembleForkContext } from '../assemble-fork-context.js';
 import {
@@ -64,7 +65,7 @@ describe('assembleForkContext - context field preservation', () => {
       hasCompression: true,
     };
 
-    const result = await assembleForkContext(MakaioBus, forkSession, 'fork', originalContext, true);
+    const result = await assembleForkContext(createTestCall(), MakaioBus, forkSession, 'fork', originalContext, true);
 
     expect(result).not.toBeUndefined();
     expect(result?.hasCompression).toBe(true);
@@ -85,7 +86,7 @@ describe('assembleForkContext - context field preservation', () => {
       },
     };
 
-    const result = await assembleForkContext(MakaioBus, forkSession, 'fork', originalContext, true);
+    const result = await assembleForkContext(createTestCall(), MakaioBus, forkSession, 'fork', originalContext, true);
 
     expect(result).not.toBeUndefined();
     expect(result?.hasCompression).toBe(true);

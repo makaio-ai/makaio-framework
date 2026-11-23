@@ -1,4 +1,5 @@
 import type { IMakaioBus, ScopedBus } from '@makaio/bus-core';
+import type { CallContext } from '@makaio/core';
 import {
   type BaseAgentConnectorConfig,
   type MessageHandle,
@@ -137,12 +138,23 @@ export interface AnthropicSdkSessionConfig {
    * Forwarded as `constraints.allowedDirectories` in every tool call.
    */
   allowedDirectories?: string[];
-  /** Emit a typed SDK event to the connector bus */
-  emitSdkEvent: (event: SdkEventMessage) => Promise<void>;
+  /**
+   * Emit a typed SDK event to the connector bus
+   * @param call - Call context of the turn the event belongs to
+   * @param event - SDK event to emit
+   */
+  emitSdkEvent: (call: CallContext, event: SdkEventMessage) => Promise<void>;
   /** Handle a connector-level error */
   handleError: (error: Error, rethrow: boolean) => void;
-  /** Request tool approval via bus RPC */
-  requestToolApproval: (payload: AnthropicToolApprovalPayload) => Promise<AnthropicToolApprovalResponse>;
+  /**
+   * Request tool approval via bus RPC
+   * @param call - Call context of the turn the approval belongs to
+   * @param payload - Approval payload
+   */
+  requestToolApproval: (
+    call: CallContext,
+    payload: AnthropicToolApprovalPayload,
+  ) => Promise<AnthropicToolApprovalResponse>;
   logLowLevelEvent?: (event: unknown) => void;
   onTurnStart?: (handle: MessageHandle) => void;
   onTurnComplete?: (handle: MessageHandle, result: MessageResult) => void;

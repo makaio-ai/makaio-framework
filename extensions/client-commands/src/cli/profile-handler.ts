@@ -14,6 +14,7 @@
 
 import { execFile } from 'node:child_process';
 import type { IMakaioBus } from '@makaio/bus-core';
+import type { CallContext } from '@makaio/core';
 import { type ClientProfile, ClientSubjects } from '@makaio/contracts/client';
 import { requireBus, type CommandContext } from '@makaio/kernel/cli';
 
@@ -95,6 +96,8 @@ export interface ProfileOpenArgs {
 export interface ProfileCommandContext<TArgs> {
   /** Parsed CLI arguments. */
   readonly args: TArgs;
+  /** Call context of the command invocation, forwarded to its bus requests. */
+  readonly call: CallContext;
   /** Bus façade used to dispatch profile requests. */
   readonly bus: Pick<IMakaioBus, 'request'>;
   /** Output channel for writing results or errors. */
@@ -168,13 +171,13 @@ export async function handleProfileList(ctx: CommandContext<ProfileListArgs>): P
  * Requests all profiles for the given client and prints one line per profile.
  * The default profile is indicated with a `*` prefix. On bus failure, writes a
  * diagnostic message and sets exit code 1.
- * @param ctx - Narrow command context (args + bus + output + setExitCode).
+ * @param ctx - Narrow command context (args + call + bus + output + setExitCode).
  */
 export async function runProfileListCommand(ctx: ProfileListCommandContext): Promise<void> {
   const { client: clientId } = ctx.args;
 
   try {
-    const result = await ctx.bus.request(ClientSubjects.profile.list, { clientId });
+    const result = await ctx.bus.request(ctx.call, ClientSubjects.profile.list, { clientId });
 
     if (result.profiles.length === 0) {
       ctx.output.write(`No profiles found for client '${clientId}'.\n`);
@@ -207,13 +210,13 @@ export async function handleProfileCreate(ctx: CommandContext<ProfileCreateArgs>
  * Dispatches `client.profile.create` via the bus and reports the created
  * profile's name and config directory. On failure, writes a diagnostic message
  * and sets exit code 1.
- * @param ctx - Narrow command context (args + bus + output + setExitCode).
+ * @param ctx - Narrow command context (args + call + bus + output + setExitCode).
  */
 export async function runProfileCreateCommand(ctx: ProfileCreateCommandContext): Promise<void> {
   const { client: clientId, name, description } = ctx.args;
 
   try {
-    const result = await ctx.bus.request(ClientSubjects.profile.create, {
+    const result = await ctx.bus.request(ctx.call, ClientSubjects.profile.create, {
       clientId,
       name,
       description,
@@ -243,13 +246,13 @@ export async function handleProfileDelete(ctx: CommandContext<ProfileDeleteArgs>
  *
  * Dispatches `client.profile.delete` via the bus and confirms deletion. On
  * failure, writes a diagnostic message and sets exit code 1.
- * @param ctx - Narrow command context (args + bus + output + setExitCode).
+ * @param ctx - Narrow command context (args + call + bus + output + setExitCode).
  */
 export async function runProfileDeleteCommand(ctx: ProfileDeleteCommandContext): Promise<void> {
   const { client: clientId, name } = ctx.args;
 
   try {
-    await ctx.bus.request(ClientSubjects.profile.delete, { clientId, name });
+    await ctx.bus.request(ctx.call, ClientSubjects.profile.delete, { clientId, name });
     ctx.output.write(`Deleted profile '${name}' for client '${clientId}'.\n`);
   } catch (error) {
     const reason = formatError(error);
@@ -273,13 +276,13 @@ export async function handleProfileDefault(ctx: CommandContext<ProfileDefaultArg
  *
  * Dispatches `client.profile.setDefault` via the bus and confirms the change.
  * On failure, writes a diagnostic message and sets exit code 1.
- * @param ctx - Narrow command context (args + bus + output + setExitCode).
+ * @param ctx - Narrow command context (args + call + bus + output + setExitCode).
  */
 export async function runProfileDefaultCommand(ctx: ProfileDefaultCommandContext): Promise<void> {
   const { client: clientId, name } = ctx.args;
 
   try {
-    await ctx.bus.request(ClientSubjects.profile.setDefault, { clientId, name });
+    await ctx.bus.request(ctx.call, ClientSubjects.profile.setDefault, { clientId, name });
     ctx.output.write(`Set '${name}' as the default profile for client '${clientId}'.\n`);
   } catch (error) {
     const reason = formatError(error);
@@ -304,13 +307,13 @@ export async function handleProfileShow(ctx: CommandContext<ProfileShowArgs>): P
  * Fetches a named profile via `client.profile.get` and prints its details. If
  * the profile does not exist, writes a "not found" message and sets exit code 1.
  * On bus failure, writes a diagnostic message and sets exit code 1.
- * @param ctx - Narrow command context (args + bus + output + setExitCode).
+ * @param ctx - Narrow command context (args + call + bus + output + setExitCode).
  */
 export async function runProfileShowCommand(ctx: ProfileShowCommandContext): Promise<void> {
   const { client: clientId, name } = ctx.args;
 
   try {
-    const result = await ctx.bus.request(ClientSubjects.profile.get, { clientId, name });
+    const result = await ctx.bus.request(ctx.call, ClientSubjects.profile.get, { clientId, name });
 
     if (result.profile === null) {
       ctx.output.error(`Profile '${name}' not found for client '${clientId}'.\n`);
@@ -348,14 +351,14 @@ export async function handleProfileOpen(ctx: CommandContext<ProfileOpenArgs>): P
  * directory in the platform's default file manager (`open` on macOS,
  * `xdg-open` on Linux, `explorer` on Windows). If the profile does not exist,
  * writes an error and sets exit code 1.
- * @param ctx - Narrow command context (args + bus + output + setExitCode).
+ * @param ctx - Narrow command context (args + call + bus + output + setExitCode).
  */
 export async function runProfileOpenCommand(ctx: ProfileOpenCommandContext): Promise<void> {
   const { client: clientId, name } = ctx.args;
 
   let configDir: string;
   try {
-    const result = await ctx.bus.request(ClientSubjects.profile.get, { clientId, name });
+    const result = await ctx.bus.request(ctx.call, ClientSubjects.profile.get, { clientId, name });
 
     if (result.profile === null) {
       ctx.output.error(`Profile '${name}' not found for client '${clientId}'.\n`);

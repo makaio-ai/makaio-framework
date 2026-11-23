@@ -89,11 +89,13 @@ describe('BusServerTransportProvider', () => {
     const secondContext = auth?.getReceiveContext?.(secondSocket);
     expect(firstContext).toMatchObject({
       transportName: '',
-      peer: { kind: 'makaio-loopback', authenticated: false },
+      authenticated: false,
+      caller: { kind: 'makaio.loopback', id: firstContext?.connectionId },
     });
     expect(secondContext).toMatchObject({
       transportName: '',
-      peer: { kind: 'makaio-loopback', authenticated: false },
+      authenticated: false,
+      caller: { kind: 'makaio.loopback', id: secondContext?.connectionId },
     });
     expect(firstContext?.connectionId).toEqual(expect.any(String));
     expect(secondContext?.connectionId).toEqual(expect.any(String));

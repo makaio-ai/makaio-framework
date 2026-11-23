@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
 import { AgentSubjects } from '@makaio/contracts';
 import type { McpSessionContext } from '@makaio/contracts';
+import { createTestCall } from '@makaio/test-utils';
 import {
   createAgentTestLifecycle,
   createTestableAgent,
@@ -52,7 +53,7 @@ describe('AIAgent MCP server replacement handler', () => {
       providerContext: TEST_PROVIDER_CONTEXT,
       mcpSessionContext: initialContext,
     });
-    await ctx.agent.init();
+    await ctx.agent.init(createTestCall());
     const initialConnector = ctx.createdConnectors[0]!;
 
     const response = await MakaioBus.request(AgentSubjects.mcp.servers.set, {
@@ -91,7 +92,7 @@ describe('AIAgent MCP server replacement handler', () => {
       providerContext: TEST_PROVIDER_CONTEXT,
       mcpSessionContext: initialContext,
     });
-    await ctx.agent.init();
+    await ctx.agent.init(createTestCall());
     const initialConnector = ctx.createdConnectors[0]!;
     initialConnector.setProcessingState('processing_started');
 
@@ -142,7 +143,7 @@ describe('AIAgent MCP server replacement handler', () => {
       providerContext: TEST_PROVIDER_CONTEXT,
       mcpSessionContext: initialContext,
     });
-    await ctx.agent.init();
+    await ctx.agent.init(createTestCall());
     const initialConnector = ctx.createdConnectors[0]!;
     initialConnector.setProcessingState('processing_started');
 

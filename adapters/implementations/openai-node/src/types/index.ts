@@ -8,7 +8,7 @@ import {
   type ProviderRequestCorrelation,
 } from '@makaio/ai-adapters-core';
 import type { OpenAINodeProviderSettings } from '../schemas.js';
-import { type ExtractSubjectPayload, type ExtractSubjectResponse } from '@makaio/core';
+import { type CallContext, type ExtractSubjectPayload, type ExtractSubjectResponse } from '@makaio/core';
 import { type OpenAINodeConnectorBus, OpenAINodeConnectorSubjects, type SdkEventMessage } from '../namespaces/index.js';
 import type OpenAI from 'openai';
 import type { ChatCompletionTool } from 'openai/resources/index.js';
@@ -142,9 +142,19 @@ export interface OpenAISessionConfig {
    * Forwarded as `constraints.allowedDirectories` in every tool call.
    */
   allowedDirectories?: string[];
-  emitSdkEvent: (event: SdkEventMessage) => Promise<void>;
+  /**
+   * Emit a typed SDK event to the connector bus
+   * @param call - Call context of the turn the event belongs to
+   * @param event - SDK event to emit
+   */
+  emitSdkEvent: (call: CallContext, event: SdkEventMessage) => Promise<void>;
   handleError: (error: Error, rethrow: boolean) => void;
-  requestToolApproval: (payload: ToolApprovalPayload) => Promise<ToolApprovalResponse>;
+  /**
+   * Request tool approval via bus RPC
+   * @param call - Call context of the turn the approval belongs to
+   * @param payload - Approval payload
+   */
+  requestToolApproval: (call: CallContext, payload: ToolApprovalPayload) => Promise<ToolApprovalResponse>;
   logLowLevelEvent?: (event: unknown) => void;
   onTurnStart?: (handle: MessageHandle) => void;
   onTurnComplete?: (handle: MessageHandle, result: MessageResult) => void;

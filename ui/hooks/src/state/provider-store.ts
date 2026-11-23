@@ -22,13 +22,14 @@ import type { AIModel, ModelFilterMode, ModelVisibility } from '@makaio/contract
  * @returns Array of provider information for enabled configs
  */
 async function fetchAllProviders(): Promise<ProviderInfo[]> {
+  const call = MakaioBus.own('shared-work');
   // Keep the store snapshot coherent: if any canonical read fails, reject the
   // fetch and let the caller retain its previous provider snapshot instead of
   // publishing half-empty adapter or model metadata.
   const [{ configs }, { configs: adapterConfigs }, { providers }] = await Promise.all([
-    MakaioBus.request(AdapterSubsystemSubjects.listProviderConfigs, { enabled: true }),
-    MakaioBus.request(AdapterSubsystemSubjects.listAdapterConfigs, {}),
-    MakaioBus.request(ProviderStorageSubjects.list, {}),
+    MakaioBus.request(call, AdapterSubsystemSubjects.listProviderConfigs, { enabled: true }),
+    MakaioBus.request(call, AdapterSubsystemSubjects.listAdapterConfigs, {}),
+    MakaioBus.request(call, ProviderStorageSubjects.list, {}),
   ]);
 
   const providerById = new Map(providers.map((provider) => [provider.id, provider]));

@@ -1,11 +1,12 @@
 import { ProceduralConnectorTurn } from '@makaio/ai-adapters-core';
 import type { MessageHandle, PauseResult } from '@makaio/ai-adapters-core';
+import type { CallContext } from '@makaio/contracts';
 import type { StreamSessionTurnState } from '@makaio/ai-adapters-stream-session';
 import { CursorSdkSubjects } from './namespaces/index.js';
 import type { CursorSdkBus } from './namespaces/index.js';
 
 /** Callback invoked after a live turn accepts immediate-mode pause. */
-type OnTurnPaused = (turn: CursorSdkTurn) => Promise<void> | void;
+type OnTurnPaused = (call: CallContext, turn: CursorSdkTurn) => Promise<void> | void;
 
 /**
  * Turn state machine for the Cursor SDK adapter.
@@ -64,12 +65,13 @@ export class CursorSdkTurn extends ProceduralConnectorTurn<StreamSessionTurnStat
 
   /**
    * Pause this turn and cancel its matching Cursor run.
+   * @param call - Call of the message pausing this turn.
    * @returns Pause result from the procedural turn state machine.
    */
-  public override async pause(): Promise<PauseResult<StreamSessionTurnState>> {
-    const result = await super.pause();
+  public override async pause(call: CallContext): Promise<PauseResult<StreamSessionTurnState>> {
+    const result = await super.pause(call);
     if (!result.turnEnded) {
-      await this.onPaused?.(this);
+      await this.onPaused?.(call, this);
     }
     return result;
   }

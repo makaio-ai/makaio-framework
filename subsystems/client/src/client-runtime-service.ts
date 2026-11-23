@@ -1,5 +1,5 @@
 import { versionSatisfies } from '@makaio/contracts';
-import { MakaioBus, type IMakaioBus } from '@makaio/bus-core';
+import { type IMakaioBus } from '@makaio/bus-core';
 import {
   ClientSubjects,
   type ClientAccountIdentifier,
@@ -8,7 +8,7 @@ import {
   type ClientUsageIngestRequest,
   type ClientUsageSnapshot,
 } from '@makaio/contracts/client';
-import { type ContextForSubjectDefinition } from '@makaio/core';
+import { type CallContext, type ContextForSubjectDefinition } from '@makaio/core';
 import { BaseService } from '@makaio/service-base';
 import { CLIDetectionSubjects, type CLIDetectionResult } from '@makaio/services-core/cli-detection/namespace';
 import { ClientStorageSubjects, type ClientRecord } from '@makaio/services-core/settings/storage';
@@ -63,7 +63,7 @@ export class ClientRuntimeService extends BaseService {
    * @param runtimeRegistry - Registry for client runtime instance lifecycle
    */
   public constructor(
-    bus: IMakaioBus = MakaioBus,
+    bus: IMakaioBus,
     private readonly accountRegistry: ClientAccountRegistry = new ClientAccountRegistry(),
     private readonly runtimeRegistry: ClientRuntimeRegistry = new ClientRuntimeRegistry(bus),
   ) {
@@ -74,11 +74,11 @@ export class ClientRuntimeService extends BaseService {
    * Register client runtime handlers on the bus.
    */
   protected override async onInit(): Promise<void> {
-    await this.runtimeRegistry.loadFromStorage();
+    await this.runtimeRegistry.loadFromStorage(this.bus.own('start'));
     this.registerHandler(ClientSubjects.account.observe, (ctx) => this.handleAccountObserve(ctx));
     this.registerHandler(ClientSubjects.usage.ingest, (ctx) => this.handleUsageIngest(ctx));
     this.registerHandler(ClientSubjects.scan, async (ctx) => {
-      const results = await this.scanClients(ctx.payload.targets);
+      const results = await this.scanClients(ctx.call, ctx.payload.targets);
       ctx.setResult({ results });
     });
     // Reject requests through the typed stopping contract while onDestroy drains an admitted mutation.
@@ -103,7 +103,7 @@ export class ClientRuntimeService extends BaseService {
       });
     });
     this.registerHandler(ClientSubjects.wiring.list, async (ctx) => {
-      const results = await this.listWirings(ctx.payload);
+      const results = await this.listWirings(ctx.call, ctx.payload);
       ctx.setResult({ results });
     });
     this.registerHandler(ClientSubjects.account.activate, (ctx) => {
@@ -155,7 +155,7 @@ export class ClientRuntimeService extends BaseService {
       this.latestSnapshots.set(result.clientAccountId, refreshedSnapshot);
     }
     if (refreshedSnapshot && (result.mergedAccountIds.length > 0 || refreshedSnapshot !== existingSnapshot)) {
-      await this.bus.emit(ClientSubjects.usage.snapshot, refreshedSnapshot);
+      await this.bus.emit(ctx.call, ClientSubjects.usage.snapshot, refreshedSnapshot);
     }
     ctx.setResult({
       clientAccountId: result.clientAccountId,
@@ -178,7 +178,7 @@ export class ClientRuntimeService extends BaseService {
     );
     this.latestSnapshots.set(result.clientAccountId, snapshot);
 
-    await this.bus.emit(ClientSubjects.usage.snapshot, snapshot);
+    await this.bus.emit(ctx.call, ClientSubjects.usage.snapshot, snapshot);
     ctx.setResult({
       clientAccountId: result.clientAccountId,
       snapshot,
@@ -209,7 +209,7 @@ export class ClientRuntimeService extends BaseService {
       );
     }
 
-    const { record, ...result } = await this.runtimeRegistry.upsertRuntime(payload);
+    const { record, ...result } = await this.runtimeRegistry.upsertRuntime(ctx.call, payload);
 
     if (!this.isCurrentLifecycle(lifecycleGeneration)) {
       ctx.setResult({
@@ -232,7 +232,7 @@ export class ClientRuntimeService extends BaseService {
     // TODO(FACT-360): A local listener rejection currently prevents transport fanout.
     // Use the explicit delivery policy once the bus-core contract is published.
     void this.bus
-      .emit(ClientSubjects.runtime.observed, {
+      .emit(ctx.call, ClientSubjects.runtime.observed, {
         clientRuntimeId: record.clientRuntimeId,
         clientId: record.clientId,
         status: record.status,
@@ -254,7 +254,7 @@ export class ClientRuntimeService extends BaseService {
 
     if ((result.created || result.promoted) && this.isCurrentLifecycle(lifecycleGeneration)) {
       await this.bus
-        .emit(ClientSubjects.runtime.started, {
+        .emit(ctx.call, ClientSubjects.runtime.started, {
           clientRuntimeId: record.clientRuntimeId,
           clientId: record.clientId,
           status: record.status,
@@ -281,15 +281,15 @@ export class ClientRuntimeService extends BaseService {
     });
   }
 
-  private async scanClients(targets?: readonly ClientScanTarget[]): Promise<ClientScanResult[]> {
-    const scannableClients = targets ?? (await this.listScannableStoredClients());
+  private async scanClients(call: CallContext, targets?: readonly ClientScanTarget[]): Promise<ClientScanResult[]> {
+    const scannableClients = targets ?? (await this.listScannableStoredClients(call));
 
     if (scannableClients.length === 0) {
       return [];
     }
 
     const binaries = Array.from(new Set(scannableClients.map((client) => client.binaryName)));
-    const { results: detectionResults } = await this.bus.request(CLIDetectionSubjects.scan, {
+    const { results: detectionResults } = await this.bus.request(call, CLIDetectionSubjects.scan, {
       binaries,
     });
     const detectionsByBinary = new Map<string, CLIDetectionResult>(
@@ -312,8 +312,8 @@ export class ClientRuntimeService extends BaseService {
     });
   }
 
-  private async listScannableStoredClients(): Promise<ScannableClient[]> {
-    const { clients } = await this.bus.request(ClientStorageSubjects.list, {});
+  private async listScannableStoredClients(call: CallContext): Promise<ScannableClient[]> {
+    const { clients } = await this.bus.request(call, ClientStorageSubjects.list, {});
     return clients.filter(isScannableClientRecord).map((client) => ({
       clientId: client.id,
       binaryName: client.binary.name,
@@ -334,16 +334,20 @@ export class ClientRuntimeService extends BaseService {
    * - `clientId` — when present, only the matching client is queried.
    * - `projectDir` — forwarded verbatim to each per-client handler.
    * - `makaioCommand` — forwarded verbatim to each per-client handler.
+   * @param call - Call context of the `wiring.list` request being answered
    * @param payload - Filtering options forwarded to each per-client handler.
    * @returns Aggregated wiring results for all responding enabled clients.
    */
-  private async listWirings(payload: {
-    clientId?: string;
-    projectDir?: string;
-    makaioCommand: string;
-  }): Promise<ClientWiringAggregatedResult[]> {
+  private async listWirings(
+    call: CallContext,
+    payload: {
+      clientId?: string;
+      projectDir?: string;
+      makaioCommand: string;
+    },
+  ): Promise<ClientWiringAggregatedResult[]> {
     assertAbsoluteProjectDir(payload.projectDir);
-    const { clients } = await this.bus.request(ClientStorageSubjects.list, {});
+    const { clients } = await this.bus.request(call, ClientStorageSubjects.list, {});
     const canonicalClientId =
       payload.clientId !== undefined ? canonicalizeClientId(payload.clientId, 'listWirings') : undefined;
     const targets = clients
@@ -353,7 +357,7 @@ export class ClientRuntimeService extends BaseService {
     const settled = await Promise.allSettled(
       targets.map(async (client) => {
         const subject = createClientWiringListSubjectDef(client.id);
-        const result = await this.bus.requestOptional(subject, {
+        const result = await this.bus.requestOptional(call, subject, {
           projectDir: payload.projectDir,
           makaioCommand: payload.makaioCommand,
         });

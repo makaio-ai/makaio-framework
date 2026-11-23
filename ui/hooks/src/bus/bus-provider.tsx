@@ -57,7 +57,7 @@ export function BusProvider({ bus, children }: BusProviderProps): JSX.Element {
  * ```tsx
  * function MyComponent() {
  *   const bus = useBus();
- *   const handleClick = () => void bus.emit(MySubjects.clicked, {});
+ *   const handleClick = () => void bus.emit(bus.own('root'), MySubjects.clicked, {});
  *   return <button onClick={handleClick}>Click</button>;
  * }
  * ```

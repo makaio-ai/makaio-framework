@@ -1,4 +1,4 @@
-import { makeStubNodeExtensionContext, stubExtensionIdentity } from '@makaio/test-utils';
+import { createTestCall, makeStubNodeExtensionContext, stubExtensionIdentity } from '@makaio/test-utils';
 import { createBusInstance, type IMakaioBus } from '@makaio/bus-core';
 import type { ExtensionToken } from '@makaio/contracts';
 import { defineFacetNamespace, FacetSubjects } from '@makaio/contracts/facet';
@@ -11,10 +11,7 @@ import { FacetNamespaceRegistry } from '../facet-namespace-registry.js';
 /**
  * Build a minimal extension context that shares the given bus and exposes an
  * optional registry via `getService`.
- *
- * The context must share the same bus as the registry so that RPCs emitted by
- * the contribution processor reach the handler registered by the registry.
- * @param bus - The shared bus instance used by both registry and context.
+ * @param bus - Bus instance exposed by the extension context.
  * @param registry - Registry instance to expose, or `undefined` to simulate a
  *   missing service.
  * @returns Minimal kernel extension context stub.
@@ -62,7 +59,7 @@ describe('createFacetNamespaceContributionProcessor', () => {
 
     await processor.processActivated('status-ext', pkg, makeContext(bus, registry));
 
-    const listed = await bus.request(FacetSubjects.namespace.list, {});
+    const listed = await bus.request(createTestCall(), FacetSubjects.namespace.list, {});
     expect(listed.namespaces.map((n) => n.namespace)).toEqual(['status']);
 
     await registry.destroy();
@@ -100,7 +97,7 @@ describe('createFacetNamespaceContributionProcessor', () => {
 
     await processor.processActivated('multi-ext', pkg, makeContext(bus, registry));
 
-    const listed = await bus.request(FacetSubjects.namespace.list, {});
+    const listed = await bus.request(createTestCall(), FacetSubjects.namespace.list, {});
     expect(listed.namespaces.map((n) => n.namespace).sort()).toEqual(['priority', 'status']);
 
     await registry.destroy();
@@ -189,10 +186,10 @@ describe('createFacetNamespaceContributionProcessor', () => {
 
     await processor.processActivated('status-ext', pkg, makeContext(bus, registry));
     await processor.processStopped?.('status-ext');
-    await expect(bus.request(FacetSubjects.namespace.list, {})).resolves.toEqual({ namespaces: [] });
+    await expect(bus.request(createTestCall(), FacetSubjects.namespace.list, {})).resolves.toEqual({ namespaces: [] });
 
     await processor.processActivated('status-ext', pkg, makeContext(bus, registry));
-    const listed = await bus.request(FacetSubjects.namespace.list, {});
+    const listed = await bus.request(createTestCall(), FacetSubjects.namespace.list, {});
     expect(listed.namespaces.map((entry) => entry.namespace)).toEqual(['status']);
 
     await registry.destroy();
@@ -287,7 +284,7 @@ describe('createFacetNamespaceContributionProcessor', () => {
       "Facet namespace 'priority' is already registered",
     );
 
-    const listed = await bus.request(FacetSubjects.namespace.list, {});
+    const listed = await bus.request(createTestCall(), FacetSubjects.namespace.list, {});
     expect(listed.namespaces.map((entry) => entry.namespace).sort()).toEqual(['priority']);
     expect(registry.getNamespace('status')).toBeUndefined();
     expect(registry.getNamespace('priority')?.values).toEqual(['low']);

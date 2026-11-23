@@ -30,7 +30,11 @@ export function createAutoLaunchController(options: AutoLaunchControllerOptions)
 
     async refreshStatus(): Promise<void> {
       try {
-        const result = await MakaioBus.requestOptional(PlatformSubjects.autoLaunch.getStatus, {});
+        const result = await MakaioBus.requestOptional(
+          MakaioBus.own('start'),
+          PlatformSubjects.autoLaunch.getStatus,
+          {},
+        );
         enabled = result.handled && result.data.supported ? result.data.enabled : null;
         options.refreshTrayMenu();
       } catch (err: unknown) {
@@ -48,8 +52,12 @@ export function createAutoLaunchController(options: AutoLaunchControllerOptions)
         try {
           enabled =
             enabled === true
-              ? !(await MakaioBus.request(PlatformSubjects.autoLaunch.disable, {})).disabled
-              : (await MakaioBus.request(PlatformSubjects.autoLaunch.enable, { hidden: true })).enabled;
+              ? !(await MakaioBus.request(MakaioBus.own('observer'), PlatformSubjects.autoLaunch.disable, {})).disabled
+              : (
+                  await MakaioBus.request(MakaioBus.own('observer'), PlatformSubjects.autoLaunch.enable, {
+                    hidden: true,
+                  })
+                ).enabled;
           options.refreshTrayMenu();
         } catch (err: unknown) {
           console.warn('[electrobun] Failed to toggle auto-launch:', err);

@@ -9,6 +9,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
 import { SessionSubjects } from '@makaio/contracts';
+import { createTestCall } from '@makaio/test-utils';
 import {
   appendSessionLifecycleEvent,
   registerSessionLifecycleEventWriters,
@@ -55,6 +56,7 @@ describe('session lifecycle event transform', () => {
       const sessionId = 'session-transform-test';
 
       await appendSessionLifecycleEvent(
+        createTestCall(),
         MakaioBus,
         {
           type: 'turn.started',
@@ -87,6 +89,7 @@ describe('session lifecycle event transform', () => {
       const sessionId = 'session-append-skip-test';
 
       await appendSessionLifecycleEvent(
+        createTestCall(),
         MakaioBus,
         {
           type: 'turn.started',
@@ -108,7 +111,7 @@ describe('session lifecycle event transform', () => {
       const sessionId = 'session-no-transform-test';
 
       // Emit agent.added (should not be transformed)
-      await MakaioBus.emit(SessionSubjects.agent.added, {
+      await MakaioBus.emit(createTestCall(), SessionSubjects.agent.added, {
         sessionId,
         agentId: 'agent-1',
         adapterId: 'adapter-1',
@@ -143,7 +146,7 @@ describe('session lifecycle event transform', () => {
       const sessionId = 'session-skip-test';
 
       // Emit agent.added (should be skipped)
-      await MakaioBus.emit(SessionSubjects.agent.added, {
+      await MakaioBus.emit(createTestCall(), SessionSubjects.agent.added, {
         sessionId,
         agentId: 'agent-1',
         adapterId: 'adapter-1',
@@ -152,7 +155,7 @@ describe('session lifecycle event transform', () => {
       });
 
       // Emit branch.created (should be persisted)
-      await MakaioBus.emit(SessionSubjects.branch.created, {
+      await MakaioBus.emit(createTestCall(), SessionSubjects.branch.created, {
         sessionId,
         childSessionId: 'child-1',
         parentSessionId: sessionId,
@@ -172,7 +175,7 @@ describe('session lifecycle event transform', () => {
 
       const sessionId = 'session-skip-all-test';
 
-      await MakaioBus.emit(SessionSubjects.agent.added, {
+      await MakaioBus.emit(createTestCall(), SessionSubjects.agent.added, {
         sessionId,
         agentId: 'agent-1',
         adapterId: 'adapter-1',
@@ -180,7 +183,7 @@ describe('session lifecycle event transform', () => {
         adapterSessionId: 'adapter-session-1',
       });
 
-      await MakaioBus.emit(SessionSubjects.branch.created, {
+      await MakaioBus.emit(createTestCall(), SessionSubjects.branch.created, {
         sessionId,
         childSessionId: 'child-1',
         parentSessionId: sessionId,
@@ -201,7 +204,7 @@ describe('session lifecycle event transform', () => {
       const sessionId = 'session-stop-test';
 
       // Emit event before cleanup
-      await MakaioBus.emit(SessionSubjects.agent.added, {
+      await MakaioBus.emit(createTestCall(), SessionSubjects.agent.added, {
         sessionId,
         agentId: 'agent-1',
         adapterId: 'adapter-1',
@@ -215,7 +218,7 @@ describe('session lifecycle event transform', () => {
       cleanup();
 
       // Emit event after cleanup
-      await MakaioBus.emit(SessionSubjects.agent.added, {
+      await MakaioBus.emit(createTestCall(), SessionSubjects.agent.added, {
         sessionId,
         agentId: 'agent-2',
         adapterId: 'adapter-2',

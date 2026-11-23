@@ -3,6 +3,7 @@ import type {
   AutomationTriggerActivationContext,
   AutomationTriggerCleanup,
   AutomationTriggerType,
+  CallContext,
   FindingSeverity,
   FindingTarget,
   ReviewFinding,
@@ -162,7 +163,7 @@ function activateCodeRabbitReviewPosted(
 
       const { correlationId } = eventContext;
       try {
-        await emitReviewPosted(bus, context, {
+        await emitReviewPosted(eventContext.call, bus, context, {
           target,
           sourceId,
           created,
@@ -197,6 +198,7 @@ interface ObservedFindingsArrival {
  * Re-checks the activation signal after the lookup: the activation can be retired
  * while the request is in flight, and an emit made afterwards describes a
  * repository this activation is no longer observing.
+ * @param call - Call of the findings arrival handled by this trigger.
  * @param bus - Bus used to read stored findings.
  * @param context - Activation context providing the typed emit channel.
  * @param arrival - Identity and counts carried by the observed arrival.
@@ -204,11 +206,12 @@ interface ObservedFindingsArrival {
  *   immediately when the activation was retired during the lookup.
  */
 async function emitReviewPosted(
+  call: CallContext,
   bus: IMakaioBus,
   context: AutomationTriggerActivationContext<CodeRabbitReviewPostedEvent>,
   arrival: ObservedFindingsArrival,
 ): Promise<void> {
-  const { findings } = await bus.request(ReviewSubjects.findings.list, {
+  const { findings } = await bus.request(call, ReviewSubjects.findings.list, {
     target: arrival.target,
     status: 'open',
   });
@@ -225,7 +228,7 @@ async function emitReviewPosted(
       severityCounts,
       highestSeverity: highestRepresentedSeverity(severityCounts),
     },
-    arrival.correlationId === undefined ? undefined : { correlationId: arrival.correlationId },
+    arrival.correlationId === undefined ? { call } : { call, correlationId: arrival.correlationId },
   );
 }
 

@@ -24,6 +24,7 @@ export type { BoundedShutdownStep, ShutdownSequence } from './shutdown.js';
 
 export type {
   ContributionProcessor,
+  CredentialResolverBinder,
   ExtensionConfigResolution,
   ExtensionContextBase,
   ExtensionRuntimeSurface,

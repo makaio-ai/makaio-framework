@@ -84,23 +84,19 @@ export class ServerTransport implements BusTransport {
     this.name = name;
     this.auth = auth;
     this.debug = debug;
+    const resolveForSocket =
+      <T>(resolvePolicy: (identityId: string) => T) =>
+      (client: WebSocketLike): T | null => {
+        const identityId = auth?.getAuthenticatedIdentityId?.(client);
+        return identityId === undefined ? null : resolvePolicy(identityId);
+      };
     this.registry = new ClientRegistry({
       debug,
       subscriptionSubjectRestrictionResolver: auth
-        ? (client) => {
-            const ctx = auth.getReceiveContext?.(client);
-            const peerId = ctx?.peer?.id;
-            if (peerId === undefined) return null;
-            return resolveHmacIdentityAllowedSubscriptionSubjects(peerId);
-          }
+        ? resolveForSocket(resolveHmacIdentityAllowedSubscriptionSubjects)
         : undefined,
       requiredSubscriptionFilterResolver: auth
-        ? (client) => {
-            const ctx = auth.getReceiveContext?.(client);
-            const peerId = ctx?.peer?.id;
-            if (peerId === undefined) return null;
-            return resolveHmacIdentityRequiredSubscriptionFilters(peerId);
-          }
+        ? resolveForSocket(resolveHmacIdentityRequiredSubscriptionFilters)
         : undefined,
       socketAuthChecker: auth ? (client) => auth.isSocketAuthenticated?.(client) ?? true : undefined,
     });

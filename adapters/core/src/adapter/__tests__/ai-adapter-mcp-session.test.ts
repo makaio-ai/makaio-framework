@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
 import { AdapterSubjects, type McpSessionContext } from '@makaio/contracts';
 import type { ExtractSubjectPayload } from '@makaio/core';
+import { createTestCall } from '@makaio/test-utils';
 import { createTestAdapter, MockConnector, type BaseAgentConnectorConfig, type TestBus } from './shared.js';
 import { createNoAuthTestProviderContext } from '../../testing/index.js';
 
@@ -58,6 +59,7 @@ describe('AIAdapter MCP session wiring', () => {
     ({ adapter } = createTestAdapter('test-adapter-mcp-session', {
       configFactory: async (input) => ({
         bus: input.bus,
+        globalBus: input.globalBus,
         agentId: input.agentId,
         adapterId: input.adapterId,
         adapterName: input.adapterName,
@@ -74,7 +76,7 @@ describe('AIAdapter MCP session wiring', () => {
 
     await adapter.init();
 
-    const result = await MakaioBus.request(AdapterSubjects.startAgent, {
+    const result = await MakaioBus.request(createTestCall(), AdapterSubjects.startAgent, {
       adapterId: adapter.adapterId,
       sessionId: 'session-mcp',
       role: 'lead',
@@ -97,6 +99,7 @@ describe('AIAdapter MCP session wiring', () => {
         capturedInputs.push({ providerConfig: input.providerConfig });
         return {
           bus: input.bus,
+          globalBus: input.globalBus,
           agentId: input.agentId,
           adapterId: input.adapterId,
           adapterName: input.adapterName,
@@ -124,7 +127,7 @@ describe('AIAdapter MCP session wiring', () => {
       },
     };
 
-    const result = await MakaioBus.request(AdapterSubjects.startAgent, payload);
+    const result = await MakaioBus.request(createTestCall(), AdapterSubjects.startAgent, payload);
 
     expect(result.success).toBe(true);
     expect(capturedInputs).toEqual([

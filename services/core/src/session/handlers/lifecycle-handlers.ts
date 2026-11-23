@@ -20,7 +20,11 @@ export function registerGetStatusCountsHandler(deps: SessionLifecycleDeps): () =
   const { bus } = deps;
   return bus.on(SessionSubjects.getStatusCounts, async (ctx) => {
     void ctx.payload;
-    const { all, active, closed, archived, discovered } = await bus.request(SessionStorageSubjects.getStatusCounts, {});
+    const { all, active, closed, archived, discovered } = await bus.request(
+      ctx.call,
+      SessionStorageSubjects.getStatusCounts,
+      {},
+    );
     ctx.setResult({ all, active, closed, archived, discovered });
   });
 }
@@ -34,7 +38,7 @@ export function registerCloseHandler(deps: SessionLifecycleDeps): () => void {
   const { bus, contextTracker } = deps;
   return bus.on(SessionSubjects.close, async (ctx) => {
     const { sessionId } = ctx.payload;
-    const { session } = await bus.request(SessionStorageSubjects.get, { sessionId });
+    const { session } = await bus.request(ctx.call, SessionStorageSubjects.get, { sessionId });
     if (!session) {
       ctx.setResult({ success: false });
       return;
@@ -51,8 +55,8 @@ export function registerCloseHandler(deps: SessionLifecycleDeps): () => void {
 
     session.status = 'closed';
     session.lastActivityAt = Date.now();
-    await bus.request(SessionStorageSubjects.set, { sessionId, session });
-    await bus.emit(SessionSubjects.closed, { sessionId });
+    await bus.request(ctx.call, SessionStorageSubjects.set, { sessionId, session });
+    await bus.emit(ctx.call, SessionSubjects.closed, { sessionId });
     contextTracker.clearSession(sessionId);
     ctx.setResult({ success: true });
   });
@@ -67,26 +71,26 @@ export function registerResumeHandler(deps: SessionLifecycleDeps): () => void {
   const { bus } = deps;
   return bus.on(SessionSubjects.resume, async (ctx) => {
     const { sessionId } = ctx.payload;
-    const { session } = await bus.request(SessionStorageSubjects.get, { sessionId });
+    const { session } = await bus.request(ctx.call, SessionStorageSubjects.get, { sessionId });
     if (!session || session.status !== 'closed') {
       ctx.setResult({ success: false });
       return;
     }
 
-    const resumed = await bus.requestOptional(SessionStorageSubjects.update, {
+    const resumed = await bus.requestOptional(ctx.call, SessionStorageSubjects.update, {
       sessionId,
       status: 'active',
       lastActivityAt: Date.now(),
       expectedStatus: ['closed'],
     });
     if (resumed.handled && resumed.data.success) {
-      await bus.emit(SessionSubjects.resumed, { sessionId });
+      await bus.emit(ctx.call, SessionSubjects.resumed, { sessionId });
       ctx.setResult({ success: true });
       return;
     }
     // A competing resume is idempotently successful, but this losing CAS must
     // not revive an archive or emit a second event.
-    const current = await bus.requestOptional(SessionStorageSubjects.get, { sessionId });
+    const current = await bus.requestOptional(ctx.call, SessionStorageSubjects.get, { sessionId });
     ctx.setResult({ success: current.handled && current.data.session?.status === 'active' });
   });
 }

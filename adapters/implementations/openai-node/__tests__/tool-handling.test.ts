@@ -1,7 +1,8 @@
 import { beforeEach, describe, expect, it } from 'vitest';
+import { createTestCall } from '@makaio/test-utils';
 import { createBusInstance, MakaioBus } from '@makaio/bus-core';
-import { ToolSubjects, type AgentToolApproveResponse } from '@makaio/contracts';
-import type { ExtractSubjectPayload } from '@makaio/core';
+import { ToolSubjects, type AgentToolApproveResponse, type Party } from '@makaio/contracts';
+import type { CallContext, ExtractSubjectPayload } from '@makaio/core';
 import type { ChatCompletionMessageFunctionToolCall } from 'openai/resources/index.js';
 import { executeTool, fetchToolsForOpenAI, handleToolCalls } from '../src/tool-handling.js';
 import { OpenAINodeConnectorSubjects } from '../src/namespaces/index.js';
@@ -24,8 +25,11 @@ function createToolCall(): ChatCompletionMessageFunctionToolCall {
 }
 
 describe('tool-handling turnContext forwarding', () => {
+  let call: CallContext;
+
   beforeEach(() => {
     MakaioBus.__resetHandlers?.();
+    call = createTestCall();
   });
 
   it('applies allowed tool filters before OpenAI SDK conversion', async () => {
@@ -51,7 +55,7 @@ describe('tool-handling turnContext forwarding', () => {
       });
     });
 
-    const tools = await fetchToolsForOpenAI(hostBus, 'adapter-openai-1', 'openai-node', {
+    const tools = await fetchToolsForOpenAI(call, hostBus, 'adapter-openai-1', 'openai-node', {
       allowedTools: ['allowed_tool'],
     });
 
@@ -71,9 +75,10 @@ describe('tool-handling turnContext forwarding', () => {
 
     const sdkEvents: Array<{ eventType: string }> = [];
     const result = await executeTool(
+      call,
       MakaioBus,
       createToolCall(),
-      async (event) => {
+      async (_call, event) => {
         sdkEvents.push({ eventType: event.eventType });
       },
       {
@@ -119,6 +124,7 @@ describe('tool-handling turnContext forwarding', () => {
 
     const approval: AgentToolApproveResponse = { action: 'allow' };
     const messages = await handleToolCalls(
+      call,
       [createToolCall()],
       {
         bus: MakaioBus,
@@ -170,6 +176,7 @@ describe('tool-handling turnContext forwarding', () => {
 
     const approval: AgentToolApproveResponse = { action: 'allow' };
     const messages = await handleToolCalls(
+      call,
       [createToolCall()],
       {
         bus: MakaioBus,
@@ -203,6 +210,7 @@ describe('tool-handling turnContext forwarding', () => {
     const approval: AgentToolApproveResponse = { action: 'allow', updatedInput: { limit: 5 } };
 
     await handleToolCalls(
+      call,
       [toolCall],
       {
         bus: MakaioBus,
@@ -230,11 +238,12 @@ describe('tool-handling turnContext forwarding', () => {
     let approvalPayload: ToolApprovalRequest | undefined;
     const approval: AgentToolApproveResponse = { action: 'allow' };
     await handleToolCalls(
+      call,
       [createToolCall()],
       {
         bus: MakaioBus,
         emitSdkEvent: async () => {},
-        requestToolApproval: async (payload) => {
+        requestToolApproval: async (_call, payload) => {
           approvalPayload = payload;
           return approval;
         },
@@ -247,5 +256,42 @@ describe('tool-handling turnContext forwarding', () => {
     );
 
     expect(approvalPayload?.reasoning).toBe('Need terminal output before proceeding.');
+  });
+
+  it('R1: forwards the turn call to approval, lifecycle events and tool execution after an awaited approval', async () => {
+    const personA: Party = { kind: 'acme.person', id: 'person-a' };
+    const turnCall = createTestCall({ principal: personA });
+    const approvalCalls: CallContext[] = [];
+    const eventCalls: CallContext[] = [];
+    const executePrincipals: Party[] = [];
+
+    MakaioBus.on(ToolSubjects.execute, (ctx) => {
+      executePrincipals.push(ctx.call.principal);
+      ctx.setResult({ success: true, data: { ok: true } });
+    });
+
+    const approval: AgentToolApproveResponse = { action: 'allow' };
+    await handleToolCalls(
+      turnCall,
+      [createToolCall()],
+      {
+        bus: MakaioBus,
+        emitSdkEvent: async (eventCall) => {
+          eventCalls.push(eventCall);
+        },
+        requestToolApproval: async (approvalCall) => {
+          approvalCalls.push(approvalCall);
+          await new Promise((resolve) => setTimeout(resolve, 5));
+          return approval;
+        },
+      },
+      { cwd: '/repo', env: {} },
+    );
+
+    expect(approvalCalls).toEqual([turnCall]);
+    expect(approvalCalls[0]).toBe(turnCall);
+    expect(eventCalls).toHaveLength(2);
+    expect(eventCalls.every((eventCall) => eventCall === turnCall)).toBe(true);
+    expect(executePrincipals).toEqual([personA]);
   });
 });

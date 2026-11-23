@@ -32,6 +32,7 @@ function makeContribution(overrides?: Partial<CliContribution>): CliContribution
 }
 
 const bus = createBusInstance();
+const call = bus.own('root');
 
 // ---------------------------------------------------------------------------
 // handleListContributions
@@ -93,8 +94,8 @@ describe('handleExecute', () => {
   it('returns exitCode 1 and stderr for unknown command', async () => {
     const result = await handleExecute(
       { command: 'no-such-cmd', subcommand: 'greet', args: { name: 'Alice' } },
-      [makeContribution()],
-      bus,
+      undefined,
+      call,
     );
 
     expect(result).toEqual({
@@ -107,8 +108,8 @@ describe('handleExecute', () => {
   it('returns exitCode 1 and stderr for unknown subcommand', async () => {
     const result = await handleExecute(
       { command: 'test-cmd', subcommand: 'no-such-sub', args: { name: 'Alice' } },
-      [makeContribution()],
-      bus,
+      { contribution: makeContribution(), bus },
+      call,
     );
 
     expect(result).toEqual({
@@ -122,8 +123,8 @@ describe('handleExecute', () => {
     // `name` is required (non-optional string) — omitting it triggers a validation error
     const result = await handleExecute(
       { command: 'test-cmd', subcommand: 'greet', args: {} },
-      [makeContribution()],
-      bus,
+      { contribution: makeContribution(), bus },
+      call,
     );
 
     expect(result.exitCode).toBe(1);
@@ -135,8 +136,8 @@ describe('handleExecute', () => {
   it('captures stdout and returns exitCode 0 on successful execution', async () => {
     const result = await handleExecute(
       { command: 'test-cmd', subcommand: 'greet', args: { name: 'World' } },
-      [makeContribution()],
-      bus,
+      { contribution: makeContribution(), bus },
+      call,
     );
 
     expect(result).toEqual({
@@ -155,7 +156,11 @@ describe('handleExecute', () => {
       ],
     });
 
-    const result = await handleExecute({ command: 'test-cmd', subcommand: 'warn', args: {} }, [contribution], bus);
+    const result = await handleExecute(
+      { command: 'test-cmd', subcommand: 'warn', args: {} },
+      { contribution, bus },
+      call,
+    );
 
     expect(result).toEqual({
       exitCode: 0,
@@ -173,7 +178,11 @@ describe('handleExecute', () => {
       ],
     });
 
-    const result = await handleExecute({ command: 'test-cmd', subcommand: 'exit', args: {} }, [contribution], bus);
+    const result = await handleExecute(
+      { command: 'test-cmd', subcommand: 'exit', args: {} },
+      { contribution, bus },
+      call,
+    );
 
     expect(result).toEqual({
       exitCode: 42,
@@ -191,7 +200,11 @@ describe('handleExecute', () => {
       ],
     });
 
-    const result = await handleExecute({ command: 'test-cmd', subcommand: 'boom', args: {} }, [contribution], bus);
+    const result = await handleExecute(
+      { command: 'test-cmd', subcommand: 'boom', args: {} },
+      { contribution, bus },
+      call,
+    );
 
     expect(result).toEqual({
       exitCode: 1,
@@ -212,11 +225,45 @@ describe('handleExecute', () => {
 
     const result = await handleExecute(
       { command: 'test-cmd', subcommand: 'set-then-throw', args: {} },
-      [contribution],
-      bus,
+      { contribution, bus },
+      call,
     );
 
     expect(result.exitCode).toBe(3);
     expect(result.stderr).toContain('Post-setExitCode failure');
+  });
+
+  it('hands the command the passed call and the target bus', async () => {
+    let seenCall: unknown;
+    let seenBus: unknown;
+    let seenBeforeRunCall: unknown;
+    let seenBeforeRunBus: unknown;
+    const contribution = makeContribution({
+      beforeRun: async (ctx) => {
+        seenBeforeRunCall = ctx.call;
+        seenBeforeRunBus = ctx.bus;
+        return { proceed: true };
+      },
+      subcommands: [
+        defineCliSubcommand('inspect', 'Capture the context', z.object({}), async (ctx) => {
+          seenCall = ctx.call;
+          seenBus = ctx.bus;
+        }),
+      ],
+    });
+    const targetBus = createBusInstance();
+    const passedCall = targetBus.own('root');
+
+    const result = await handleExecute(
+      { command: 'test-cmd', subcommand: 'inspect', args: {} },
+      { contribution, bus: targetBus },
+      passedCall,
+    );
+
+    expect(result.exitCode).toBe(0);
+    expect(seenCall).toBe(passedCall);
+    expect(seenBus).toBe(targetBus);
+    expect(seenBeforeRunCall).toBe(passedCall);
+    expect(seenBeforeRunBus).toBe(targetBus);
   });
 });

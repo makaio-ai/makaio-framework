@@ -8,13 +8,17 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { MakaioBus } from '@makaio/bus-core';
 import type { NativeForkDirective } from '@makaio/contracts';
+import { createTestCall } from '@makaio/test-utils';
 import {
   createConnectorTestContext,
   cleanupConnectorTestContext,
   createMockThread,
+  createMockTurn,
   startConnectorAndEmitThreadStarted,
   type ConnectorTestContext,
+  type MockTurn,
 } from './shared.js';
 import { CodexAppServerNamespace } from '../namespaces/index.js';
 
@@ -48,11 +52,10 @@ function startConnectorWithoutThreadStartedNotification(
   message = 'Hello',
 ): Promise<ConnectorStartResult> {
   return withStartupTimeout(
-    ctx.connector.start({
-      role: 'user',
-      message,
-      blocks: [{ type: 'text', content: message }],
-    }),
+    ctx.connector.start(
+      { role: 'user', message, blocks: [{ type: 'text', content: message }] },
+      { call: createTestCall() },
+    ),
     'connector.start timed out waiting for thread identity',
   );
 }
@@ -61,13 +64,14 @@ function startConnectorWithoutThreadStartedNotification(
  * Configure the JSON-RPC mock to return a custom thread ID from thread lifecycle requests.
  * @param ctx - Connector test context
  * @param threadId - Thread ID to place in thread/start, thread/resume, and thread/fork responses
+ * @param turns - Provider turns in the response snapshot
  */
-function mockThreadLifecycleResponses(ctx: ConnectorTestContext, threadId: string): void {
+function mockThreadLifecycleResponses(ctx: ConnectorTestContext, threadId: string, turns: MockTurn[] = []): void {
   vi.spyOn(ctx.mockJsonRpcClient, 'request').mockImplementation(
     async <T>(method: string, params: unknown): Promise<T> => {
       ctx.mockJsonRpcClient.sentRequests.push({ method, params });
       if (method === 'thread/start' || method === 'thread/resume' || method === 'thread/fork') {
-        return { thread: createMockThread({ id: threadId }) } as T;
+        return { thread: { ...createMockThread({ id: threadId }), turns } } as T;
       }
       return {} as T;
     },
@@ -162,6 +166,29 @@ describe('CodexAppServerConnector - Native Thread Resume', () => {
     const result = await startConnectorAndEmitThreadStarted(ctx.connector, ctx.mockJsonRpcClient, 'Hello');
 
     expect(result.adapterSessionId).toBe('thread-123');
+  });
+
+  it('observes completion of the resumed in-progress turn once and ignores completed history', async () => {
+    mockThreadLifecycleResponses(ctx, 'source-thread', [
+      createMockTurn({ id: 'historical-turn', status: 'completed' }),
+      createMockTurn({ id: 'resumed-turn' }),
+    ]);
+    const observations = vi.fn();
+    ctx.mockBus.on(CodexAppServerNamespace.subjects.agent_message, (busCtx) => {
+      observations(busCtx.payload.message, busCtx.call.principal);
+    });
+    await ctx.connector.initialize({ call: createTestCall() });
+
+    for (const id of ['historical-turn', 'resumed-turn', 'resumed-turn']) {
+      await ctx.mockJsonRpcClient.receiveNotification('turn/completed', {
+        threadId: 'source-thread',
+        turn: { id, status: 'completed', items: [{ type: 'agentMessage', id: `message-${id}`, text: id }] },
+      });
+    }
+    await ctx.connector['notificationQueue'];
+
+    expect(observations.mock.calls).toEqual([['resumed-turn', MakaioBus.own('observer').principal]]);
+    await expect(ctx.connector.complete()).resolves.toBeNull();
   });
 
   it('sets adapterSessionId from thread/resume response before thread/started notification', async () => {
@@ -307,7 +334,7 @@ describe('CodexAppServerConnector - useNativeResume: false suppresses thread/res
     await withStartupTimeout(
       ctx.connector.start(
         { role: 'user', message: 'Hello', blocks: [{ type: 'text', content: 'Hello' }] },
-        { useNativeResume: false },
+        { call: createTestCall(), useNativeResume: false },
       ),
       'connector.start timed out',
     );
@@ -319,7 +346,10 @@ describe('CodexAppServerConnector - useNativeResume: false suppresses thread/res
 
   it('sends thread/resume when useNativeResume is not set (resumeAdapterSessionId honoured by default)', async () => {
     await withStartupTimeout(
-      ctx.connector.start({ role: 'user', message: 'Hello', blocks: [{ type: 'text', content: 'Hello' }] }),
+      ctx.connector.start(
+        { role: 'user', message: 'Hello', blocks: [{ type: 'text', content: 'Hello' }] },
+        { call: createTestCall() },
+      ),
       'connector.start timed out',
     );
 
@@ -342,7 +372,7 @@ describe('CodexAppServerConnector - useNativeResume: false suppresses thread/res
     await withStartupTimeout(
       ctx.connector.start(
         { role: 'user', message: 'Hello', blocks: [{ type: 'text', content: 'Hello' }] },
-        { useNativeResume: false },
+        { call: createTestCall(), useNativeResume: false },
       ),
       'connector.start timed out',
     );

@@ -2,6 +2,7 @@ import path from 'node:path';
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { z } from 'zod';
 import { MakaioBus } from '@makaio/bus-core';
+import { createTestCall } from '@makaio/test-utils';
 import {
   defineTool,
   defineToolset,
@@ -78,6 +79,7 @@ describe('ToolRegistry file access rule enforcement', () => {
 
   it('injects file access rules so filesystem-like tools can deny restricted paths', async () => {
     const result = await registry.execute(
+      createTestCall(),
       'read_file',
       { path: '/tmp/project/.env' },
       { contextOverrides: { cwd: '/tmp/project' } },
@@ -92,6 +94,7 @@ describe('ToolRegistry file access rule enforcement', () => {
 
   it('allows paths not denied by injected file access rules', async () => {
     const result = await registry.execute(
+      createTestCall(),
       'read_file',
       { path: '/tmp/project/readme.txt' },
       { contextOverrides: { cwd: '/tmp/project' } },
@@ -106,6 +109,7 @@ describe('ToolRegistry file access rule enforcement', () => {
 
   it('supports directory tools filtering entries with injected file access rules', async () => {
     const result = await registry.execute(
+      createTestCall(),
       'list_directory',
       { path: '/tmp/project', entries: ['.env', 'readme.txt', 'server.log'] },
       { contextOverrides: { cwd: '/tmp/project' } },

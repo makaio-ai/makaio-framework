@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { MakaioBus, createBusInstance } from '@makaio/bus-core';
+import { createTestCall } from '@makaio/test-utils';
 import { AccountManagerSubjects } from '../bus/namespace.js';
 import type { RawCredential } from '../interfaces/credential-source.js';
 import { AccountManager } from '../account-manager.js';
@@ -93,7 +94,7 @@ describe('AccountManager', () => {
         await isolatedService.init();
         receivedCredentials.length = 0;
 
-        await isolatedBus.emit(AccountManagerSubjects.credentials.switched, {
+        await isolatedBus.emit(createTestCall(), AccountManagerSubjects.credentials.switched, {
           clientId: 'claude-code',
           from: null,
           to: {

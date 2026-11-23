@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import { z } from 'zod';
 import { createAdapterNamespace } from '@makaio/ai-adapters-core';
 import { MakaioBus } from '@makaio/bus-core';
+import { busContextOf } from '@makaio/bus-core/kernel-api';
 
 /**
  * Unit tests for createAdapterNamespace factory function.
@@ -31,7 +32,7 @@ const createMultiLevelNestedNamespace = () =>
 describe('createAdapterNamespace', () => {
   beforeEach(() => {
     // Reset namespace registry to ensure tests are independent
-    MakaioBus.getContext().namespaceRegistry.__resetNamespaces?.();
+    busContextOf(MakaioBus).namespaceRegistry.__resetNamespaces?.();
   });
 
   describe('Namespace Structure', () => {

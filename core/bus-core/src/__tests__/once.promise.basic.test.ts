@@ -14,7 +14,7 @@ describe('once - Promise overload', () => {
     it('should resolve with event context when event is emitted', async () => {
       const promise = MakaioBus.once(EventSubjects.message);
 
-      await MakaioBus.emit(EventSubjects.message, {
+      await MakaioBus.emit(MakaioBus.own('root'), EventSubjects.message, {
         content: 'hello',
         sessionId: 'session-1',
       });
@@ -28,7 +28,7 @@ describe('once - Promise overload', () => {
     });
 
     it('should resolve before emit completes (event fired first)', async () => {
-      const emitPromise = MakaioBus.emit(EventSubjects.message, {
+      const emitPromise = MakaioBus.emit(MakaioBus.own('root'), EventSubjects.message, {
         content: 'test',
         sessionId: 'session-1',
       });
@@ -45,7 +45,7 @@ describe('once - Promise overload', () => {
     it('should have correct payload typing', async () => {
       const ctx = MakaioBus.once(EventSubjects.message);
 
-      await MakaioBus.emit(EventSubjects.message, {
+      await MakaioBus.emit(MakaioBus.own('root'), EventSubjects.message, {
         content: 'typed',
         sessionId: 'session-1',
       });

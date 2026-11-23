@@ -18,7 +18,7 @@ export const shellKillTool = defineTool({
     }
 
     try {
-      const result = await context.bus.requestOptional(ShellSubjects.kill, input);
+      const result = await context.bus.requestOptional(context.call, ShellSubjects.kill, input);
 
       if (!result.handled) {
         return toolError(ToolErrorCodes.TOOL_NOT_FOUND, 'Shell service is not available');

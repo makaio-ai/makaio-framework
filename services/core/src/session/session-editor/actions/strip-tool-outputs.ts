@@ -1,4 +1,5 @@
 import type { SessionMessage } from '@makaio/contracts';
+import type { CallContext } from '@makaio/core';
 import type { SessionEditorAction } from '../../../session-editor/types.js';
 
 /**
@@ -34,7 +35,13 @@ export const stripToolOutputsAction: SessionEditorAction = {
   description: 'Remove tool output contents, keep structure',
   category: 'transformation',
 
-  async execute(messages: SessionMessage[]) {
+  /**
+   * Strip tool output contents from the messages.
+   * @param _call - Call context of the pipeline's operation (unused: this action sends nothing)
+   * @param messages - Messages to strip tool outputs from
+   * @returns Messages with placeholder tool outputs
+   */
+  async execute(_call: CallContext, messages: SessionMessage[]) {
     return { kind: 'messages' as const, messages: stripToolOutputBlocks(messages) };
   },
 };

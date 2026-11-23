@@ -22,6 +22,7 @@ import type {
   RuntimeOutcomeCode,
 } from '@makaio/contracts/client';
 import { DEFAULT_FAILURE_POLICY } from '@makaio/contracts/client';
+import type { CallContext } from '@makaio/core';
 import { validateContributorResponse } from './client-hook-response-validation.js';
 
 // ---------------------------------------------------------------------------
@@ -338,6 +339,7 @@ function composeAbortSignal(abort: AbortController, requestSignal: AbortSignal):
 
 /**
  * Start a single contributor callback and race it against its timeout.
+ * @param call - Call of the hook-request message being answered.
  * @param entry - Registered contributor entry.
  * @param clientId - Client receiving the hook event.
  * @param requestDeadline - Absolute epoch-ms request deadline, or `undefined`.
@@ -347,6 +349,7 @@ function composeAbortSignal(abort: AbortController, requestSignal: AbortSignal):
  * @returns A {@link PendingCallback} tracking the in-flight callback.
  */
 function startContributorCallback(
+  call: CallContext,
   entry: RegisteredContributor,
   clientId: string,
   requestDeadline: number | undefined,
@@ -369,6 +372,7 @@ function startContributorCallback(
   }
 
   const ctx: ContributorCallbackContext = {
+    call,
     clientId,
     deadline: effectiveDeadline,
     remainingBudgetMs: cutoffMs,
@@ -547,6 +551,7 @@ function applyClosedFailurePolicy(
  *   retained.
  * - **closed** — all partial effects are discarded and the deterministic
  *   first closed failure (by snapshot order) is returned.
+ * @param call - Call of the hook-request message being answered.
  * @param snapshot - Ordered array of registered contributors (priority-
  *   then-ordinal). The collector does not re-sort.
  * @param clientId - Client receiving the hook event.
@@ -560,6 +565,7 @@ function applyClosedFailurePolicy(
  * @returns A promise resolving to the {@link CollectionResult}.
  */
 export async function collectContributions(
+  call: CallContext,
   snapshot: ReadonlyArray<RegisteredContributor>,
   clientId: string,
   requestDeadline: number | undefined,
@@ -578,7 +584,7 @@ export async function collectContributions(
 
   // Start all callbacks concurrently
   const pending = snapshot.map((entry) =>
-    startContributorCallback(entry, clientId, requestDeadline, requestSignal, eventName, eventPayload),
+    startContributorCallback(call, entry, clientId, requestDeadline, requestSignal, eventName, eventPayload),
   );
 
   // Await all results

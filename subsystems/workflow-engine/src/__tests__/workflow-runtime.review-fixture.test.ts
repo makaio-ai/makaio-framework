@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { createBusInstance } from '@makaio/bus-core';
+import { createTestCall } from '@makaio/test-utils';
 import {
   ArtifactNamespace,
   ArtifactSubjects,
@@ -204,7 +205,7 @@ describe('review workflow fixture — artifact data shape', () => {
       nodes: built.definition.root.nodes.slice(0, 2), // parallel + aggregate
     };
 
-    const outcome = await executeSequence(subSequence, runtimeCtx, emptyExpressionCtx);
+    const outcome = await executeSequence(createTestCall(), subSequence, runtimeCtx, emptyExpressionCtx);
 
     expect(outcome.status).toBe('completed');
     expect(capturedFindings).toBeDefined();
@@ -281,7 +282,7 @@ describe('review workflow fixture — artifact data shape', () => {
       nodes: built.definition.root.nodes.slice(0, 2),
     };
 
-    await executeSequence(subSequence, runtimeCtx, emptyExpressionCtx);
+    await executeSequence(createTestCall(), subSequence, runtimeCtx, emptyExpressionCtx);
 
     // The merge should have written one revision.
     expect(capturedRevisions).toHaveLength(1);
@@ -331,7 +332,7 @@ describe('review workflow fixture — artifact data shape', () => {
       nodes: built.definition.root.nodes.slice(0, 2),
     };
 
-    await executeSequence(subSequence, runtimeCtx, emptyExpressionCtx);
+    await executeSequence(createTestCall(), subSequence, runtimeCtx, emptyExpressionCtx);
 
     expect(capturedRevisions).toHaveLength(1);
     expect(capturedRevisions[0]?.data.status).toBe('draft');
@@ -389,7 +390,7 @@ describe('review workflow fixture — artifact data shape', () => {
       });
     });
 
-    const outcome = await executeSequence(built.definition.root, runtimeCtx, emptyExpressionCtx);
+    const outcome = await executeSequence(createTestCall(), built.definition.root, runtimeCtx, emptyExpressionCtx);
 
     expect(outcome.status).toBe('completed');
     expect(capturedRevisions.at(-1)?.data.status).toBe('rejected');
@@ -444,7 +445,7 @@ describe('review workflow fixture — artifact data shape', () => {
       });
     });
 
-    const outcome = await executeSequence(built.definition.root, runtimeCtx, emptyExpressionCtx);
+    const outcome = await executeSequence(createTestCall(), built.definition.root, runtimeCtx, emptyExpressionCtx);
 
     expect(outcome.status).toBe('completed');
     expect(capturedRevisions.map((revision) => revision.data.status)).toEqual([
@@ -509,7 +510,7 @@ describe('review workflow fixture — artifact data shape', () => {
       nodes: built.definition.root.nodes.slice(0, 2),
     };
 
-    await executeSequence(subSequence, runtimeCtx, emptyExpressionCtx);
+    await executeSequence(createTestCall(), subSequence, runtimeCtx, emptyExpressionCtx);
 
     expect(capturedError).toBeDefined();
     expect(capturedError?.message).toContain('statusPath');
@@ -563,7 +564,7 @@ describe('review workflow fixture — artifact data shape', () => {
       nodes: built.definition.root.nodes.slice(0, 2),
     };
 
-    await executeSequence(subSequence, runtimeCtx, emptyExpressionCtx);
+    await executeSequence(createTestCall(), subSequence, runtimeCtx, emptyExpressionCtx);
 
     // ctx.artifact.data is snapped at context creation time and must not change.
     expect(snapshotBefore?.status).toBe('draft');
@@ -625,7 +626,7 @@ describe('review workflow fixture — workflow.artifact.updated events', () => {
       nodes: built.definition.root.nodes.slice(0, 2),
     };
 
-    await executeSequence(subSequence, runtimeCtx, emptyExpressionCtx);
+    await executeSequence(createTestCall(), subSequence, runtimeCtx, emptyExpressionCtx);
 
     // Allow microtasks from fire-and-forget event emission to settle.
     await vi.waitFor(() => {
@@ -688,7 +689,7 @@ describe('review workflow fixture — parallel branch outputs in WorkLog', () =>
       nodes: built.definition.root.nodes.slice(0, 2),
     };
 
-    const outcome = await executeSequence(subSequence, runtimeCtx, emptyExpressionCtx);
+    const outcome = await executeSequence(createTestCall(), subSequence, runtimeCtx, emptyExpressionCtx);
 
     expect(outcome.status).toBe('completed');
     expect(capturedBranchOutputs).toBeDefined();
@@ -764,7 +765,7 @@ describe('review workflow fixture — functional updateArtifact', () => {
       nodes: built.definition.root.nodes.slice(0, 2),
     };
 
-    await executeSequence(subSequence, runtimeCtx, emptyExpressionCtx);
+    await executeSequence(createTestCall(), subSequence, runtimeCtx, emptyExpressionCtx);
 
     expect(capturedRevisions).toHaveLength(1);
     // Functional updater appended a quality finding.
@@ -837,6 +838,7 @@ describe('review workflow fixture — functional updateArtifact', () => {
     };
 
     const artifact = createArtifactContext<Record<string, unknown>>({
+      call: createTestCall(),
       executionId: 'exec-overlap-test',
       frameId: 'frame-overlap-test',
       bindingState,
@@ -902,7 +904,7 @@ describe('review workflow fixture — no artifact binding', () => {
       nodes: built.definition.root.nodes.slice(0, 2),
     };
 
-    const outcome = await executeSequence(subSequence, runtimeCtx, emptyExpressionCtx);
+    const outcome = await executeSequence(createTestCall(), subSequence, runtimeCtx, emptyExpressionCtx);
 
     expect(outcome.status).toBe('completed');
     expect(aggregateCalled).toBe(true);

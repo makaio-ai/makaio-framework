@@ -1,3 +1,4 @@
+import type { CallContext } from '@makaio/core';
 import { resolveTemplate } from '@makaio/expression';
 import {
   SubagentSubjects,
@@ -26,24 +27,6 @@ const SESSION_LINK_POLL_ATTEMPTS = 5;
 const SESSION_LINK_POLL_DELAY_MS = 20;
 const SESSION_LINK_POLL_TIMEOUT_MS = 25;
 
-interface ResolvedSubagentConfigInput {
-  readonly task: string;
-  readonly adapterName: string;
-  readonly providerConfigId?: string;
-  readonly model?: string;
-  readonly reasoningEffort?: WorkflowResolvedRole['reasoningEffort'];
-  readonly harnessId?: string;
-  readonly systemPrompt?: string;
-  readonly contextMode?: WorkflowResolvedRole['contextMode'];
-  readonly providerContext?: WorkflowResolvedRole['providerContext'];
-  readonly adapterConfig?: WorkflowResolvedRole['adapterConfig'];
-  readonly tools?: WorkflowResolvedRole['tools'];
-  readonly disallowedTools?: WorkflowResolvedRole['disallowedTools'];
-  readonly allowedDirectories?: WorkflowResolvedRole['allowedDirectories'];
-  readonly responseSchema?: ResponseSchemaDescriptor;
-  readonly completion?: WorkflowResolvedRole['completion'];
-}
-
 export interface ExecuteRoleSubagentNodeParams {
   /** Node identifier used in diagnostics and child cancellation reasons. */
   readonly nodeId: string;
@@ -71,27 +54,12 @@ export interface ExecuteRoleSubagentNodeParams {
   readonly completion?: WorkflowResolvedRole['completion'];
 }
 
-export interface ExecuteResolvedSubagentNodeParams {
-  /** Node identifier used in diagnostics and child cancellation reasons. */
-  readonly nodeId: string;
-  /** Human-readable node type label, e.g. `station node` or `delegate-role node`. */
-  readonly nodeLabel: string;
+export interface ExecuteResolvedSubagentNodeParams
+  extends Omit<ExecuteRoleSubagentNodeParams, 'roleId' | 'prompt' | 'unresolvedRoleError' | 'completion'> {
   /** Fully resolved task prompt for the child subagent. */
   readonly task: string;
   /** Resolved adapter/model/provider configuration for the child subagent. */
   readonly resolvedConfig: WorkflowResolvedRole;
-  /** Optional structured-output schema forwarded to the subagent runtime. */
-  readonly outputSchema?: ResponseSchemaDescriptor;
-  /** Optional await timeout for the spawned subagent. */
-  readonly timeoutMs?: number;
-  /** Error emitted when the subagent spawn subject has no runtime handler. */
-  readonly unavailableRuntimeError: string;
-  /** Error emitted when the subagent await subject has no runtime handler. */
-  readonly unavailableAwaitError: string;
-  /** Label included in best-effort child cancellation reasons. */
-  readonly cancellationLabel: string;
-  /** Runtime frame that owns the spawned child session. */
-  readonly frameId?: string;
   /** Authority-owned finalizer selected by the serialized delegate node. */
   readonly resultFinalizerId?: string;
   /** Delegate node type used by the authority finalizer contract. */
@@ -124,12 +92,14 @@ export interface DelegateResultFinalizationParams {
  * invariant: a role reference is resolved by the workflow seam, then execution
  * happens through the framework subagent runtime. Keeping that path centralized
  * prevents role-backed stations and delegate-role primitives from drifting.
+ * @param call - Call context of the handled message this node execution serves.
  * @param params - Node-specific labels, role, prompt, and output options.
  * @param ctx - Execution-wide runtime context.
  * @param expressionCtx - Current primitive expression context.
  * @returns Terminal node outcome derived from the child subagent result.
  */
 export async function executeRoleSubagentNode(
+  call: CallContext,
   params: ExecuteRoleSubagentNodeParams,
   ctx: RuntimeContext,
   expressionCtx: PrimitiveExpressionContext,
@@ -138,20 +108,18 @@ export async function executeRoleSubagentNode(
     return { status: 'cancelled' };
   }
 
-  const roleResult = await ctx.bus.requestOptional(WorkflowSubjects.resolveRole, {
+  const roleResult = await ctx.bus.requestOptional(call, WorkflowSubjects.resolveRole, {
     roleId: params.roleId,
   });
   if (!roleResult.handled) {
-    return {
-      status: 'failed',
-      error: params.unresolvedRoleError,
-    };
+    return { status: 'failed', error: params.unresolvedRoleError };
   }
 
   const task = resolveTemplate(params.prompt, buildRuntimeExpressionScope(expressionCtx));
   const resolvedConfig =
     params.completion !== undefined ? { ...roleResult.data, completion: params.completion } : roleResult.data;
   return executeResolvedSubagentNode(
+    call,
     {
       ...params,
       task,
@@ -168,11 +136,13 @@ export async function executeRoleSubagentNode(
  * This lower-level helper is shared by `delegate-agent` and role-backed nodes:
  * both paths differ only in how they resolve the adapter configuration and
  * build the task prompt.
+ * @param call - Call context of the handled message this node execution serves.
  * @param params - Resolved execution config, task, labels, and timeout.
  * @param ctx - Execution-wide runtime context.
  * @returns Terminal node outcome derived from the child subagent result.
  */
 export async function executeResolvedSubagentNode(
+  call: CallContext,
   params: ExecuteResolvedSubagentNodeParams,
   ctx: RuntimeContext,
 ): Promise<NodeOutcome> {
@@ -181,40 +151,35 @@ export async function executeResolvedSubagentNode(
   }
 
   const delegateStartedAt = performance.now();
-  const spawnResult = await ctx.bus.requestOptional(SubagentSubjects.spawn, {
+  const spawnResult = await ctx.bus.requestOptional(call, SubagentSubjects.spawn, {
     parentSessionId: ctx.execution.coordinatorSessionId ?? ctx.executionId,
     depth: 1,
     config: buildSubagentConfig(params.task, params.resolvedConfig, params.outputSchema),
   });
   if (!spawnResult.handled) {
-    return {
-      status: 'failed',
-      error: params.unavailableRuntimeError,
-    };
+    return { status: 'failed', error: params.unavailableRuntimeError };
   }
 
-  const sessionLinkEmitted = await emitFrameSessionLink(params, ctx, spawnResult.data.subagentId, {
+  const sessionLinkEmitted = await emitFrameSessionLink(call, params, ctx, spawnResult.data.subagentId, {
     attempts: SESSION_LINK_POLL_ATTEMPTS,
   });
 
-  const awaitResult = await awaitResolvedSubagent(params, ctx, spawnResult.data.subagentId);
+  const awaitResult = await awaitResolvedSubagent(call, params, ctx, spawnResult.data.subagentId);
   if (awaitResult === 'aborted') {
     return { status: 'cancelled' };
   }
   if (!sessionLinkEmitted) {
-    await emitFrameSessionLink(params, ctx, spawnResult.data.subagentId, { attempts: 1 });
+    await emitFrameSessionLink(call, params, ctx, spawnResult.data.subagentId, { attempts: 1 });
   }
   if (!awaitResult.handled) {
     await killResolvedSubagent(
+      call,
       params,
       ctx,
       spawnResult.data.subagentId,
       `Workflow execution '${ctx.executionId}' could not await ${params.cancellationLabel} '${params.nodeId}'`,
     );
-    return {
-      status: 'failed',
-      error: params.unavailableAwaitError,
-    };
+    return { status: 'failed', error: params.unavailableAwaitError };
   }
 
   if (ctx.signal.aborted || awaitResult.data.status === 'cancelled') {
@@ -224,6 +189,7 @@ export async function executeResolvedSubagentNode(
     const rawResult = awaitResult.data.result ?? null;
     try {
       const finalOutput = await finalizeDelegateResult(
+        call,
         { ...params, toolObservations: awaitResult.data.toolObservations, usage: awaitResult.data.usage },
         ctx,
         rawResult,
@@ -237,6 +203,7 @@ export async function executeResolvedSubagentNode(
   }
   if (awaitResult.data.status === 'timeout' || awaitResult.data.status === 'waiting_input') {
     await killResolvedSubagent(
+      call,
       params,
       ctx,
       spawnResult.data.subagentId,
@@ -259,6 +226,7 @@ export async function executeResolvedSubagentNode(
  * session events. Finalizer failures deliberately propagate: callers selected
  * the finalizer as part of the execution contract and retrying could duplicate
  * authority-side effects.
+ * @param call - Call context of the handled message this node execution serves.
  * @param params - Delegate identity and optional finalizer selector.
  * @param ctx - Execution-wide runtime context.
  * @param rawResult - Successful raw subagent result.
@@ -266,6 +234,7 @@ export async function executeResolvedSubagentNode(
  * @returns Raw result when no finalizer is selected, otherwise authority output.
  */
 export async function finalizeDelegateResult(
+  call: CallContext,
   params: DelegateResultFinalizationParams,
   ctx: RuntimeContext,
   rawResult: JsonValue,
@@ -290,7 +259,7 @@ export async function finalizeDelegateResult(
       ? {}
       : { economics: buildDelegateEconomics(params.resolvedConfig, durationMs, params.usage) }),
   };
-  const gatewayResult = await ctx.bus.requestOptional(WorkflowSubjects.finalizeDelegateResult, request, {
+  const gatewayResult = await ctx.bus.requestOptional(call, WorkflowSubjects.finalizeDelegateResult, request, {
     signal: ctx.signal,
   });
   if (gatewayResult.handled) return gatewayResult.data.output;
@@ -300,7 +269,7 @@ export async function finalizeDelegateResult(
   // their static transport allowlist admits only the gateway subject.
   const { subjects } = createWorkflowDelegateResultFinalizerNamespace(params.resultFinalizerId);
   const { finalizerId: _finalizerId, ...finalizerRequest } = request;
-  const result = await ctx.bus.request(subjects.finalize, finalizerRequest, { signal: ctx.signal });
+  const result = await ctx.bus.request(call, subjects.finalize, finalizerRequest, { signal: ctx.signal });
   return result.output;
 }
 
@@ -323,6 +292,7 @@ export function elapsedDelegateDuration(startedAt: number): number {
  * abort-aware delays to allow the subagent runtime to populate the
  * `childSessionId`. Failures at any step are swallowed so that session link
  * emission never affects workflow execution outcomes.
+ * @param call - Call context of the handled message this node execution serves.
  * @param params - Resolved execution params carrying the optional frame ID.
  * @param ctx - Execution-wide runtime context.
  * @param subagentId - Spawned subagent identifier.
@@ -330,6 +300,7 @@ export function elapsedDelegateDuration(startedAt: number): number {
  * @returns True when a frame-session link was emitted.
  */
 async function emitFrameSessionLink(
+  call: CallContext,
   params: ExecuteResolvedSubagentNodeParams,
   ctx: RuntimeContext,
   subagentId: string,
@@ -340,12 +311,12 @@ async function emitFrameSessionLink(
   }
 
   try {
-    const childSessionId = await resolveChildSessionId(ctx, subagentId, options.attempts);
+    const childSessionId = await resolveChildSessionId(call, ctx, subagentId, options.attempts);
     if (childSessionId === undefined) {
       return false;
     }
 
-    await ctx.bus.emit(WorkflowSubjects.frame.sessionLinked, {
+    await ctx.bus.emit(call, WorkflowSubjects.frame.sessionLinked, {
       executionId: ctx.executionId,
       frameId: params.frameId,
       sessionId: childSessionId,
@@ -370,12 +341,14 @@ async function emitFrameSessionLink(
  * best-effort telemetry. Only retries when a handler is present but the child
  * session ID is not yet populated, covering the race between spawn and the
  * runtime wiring up the session.
+ * @param call - Call context of the handled message this node execution serves.
  * @param ctx - Execution-wide runtime context.
  * @param subagentId - Spawned subagent identifier.
  * @param attempts - Maximum status requests to issue.
  * @returns The child session ID, or `undefined` if it could not be resolved.
  */
 async function resolveChildSessionId(
+  call: CallContext,
   ctx: RuntimeContext,
   subagentId: string,
   attempts: number,
@@ -384,7 +357,7 @@ async function resolveChildSessionId(
     if (ctx.signal?.aborted) {
       return undefined;
     }
-    const statusResult = await requestChildStatus(ctx, subagentId);
+    const statusResult = await requestChildStatus(call, ctx, subagentId);
     if (statusResult === undefined) {
       return undefined;
     }
@@ -408,13 +381,19 @@ async function resolveChildSessionId(
 
 /**
  * Request the child subagent status with a short best-effort budget.
+ * @param call - Call context of the handled message this node execution serves.
  * @param ctx - Execution-wide runtime context.
  * @param subagentId - Spawned subagent identifier.
  * @returns Optional status result, or `undefined` when polling should stop.
  */
-async function requestChildStatus(ctx: RuntimeContext, subagentId: string): Promise<ChildStatusResult | undefined> {
+async function requestChildStatus(
+  call: CallContext,
+  ctx: RuntimeContext,
+  subagentId: string,
+): Promise<ChildStatusResult | undefined> {
   try {
     return await ctx.bus.requestOptional(
+      call,
       SubagentSubjects.getStatus,
       { subagentId },
       { timeout: SESSION_LINK_POLL_TIMEOUT_MS, signal: ctx.signal },
@@ -422,6 +401,129 @@ async function requestChildStatus(ctx: RuntimeContext, subagentId: string): Prom
   } catch {
     return undefined;
   }
+}
+
+/**
+ * Await a role-backed subagent while honoring workflow cancellation.
+ *
+ * The await RPC may block until the child reaches a terminal state. Workflow
+ * cancellation owns the parent execution lifetime, so the runtime races the
+ * await against the abort signal and best-effort cancels the child first.
+ * @param call - Call context of the handled message this node execution serves.
+ * @param params - Node labels and timeout used for diagnostics and await input.
+ * @param ctx - Execution-wide runtime context.
+ * @param subagentId - Spawned subagent identifier.
+ * @returns Await RPC result, or `'aborted'` when workflow cancellation wins.
+ */
+async function awaitResolvedSubagent(
+  call: CallContext,
+  params: ExecuteResolvedSubagentNodeParams,
+  ctx: RuntimeContext,
+  subagentId: string,
+): Promise<ResolvedSubagentAwaitResult | 'aborted'> {
+  if (ctx.signal.aborted) {
+    await killResolvedSubagent(call, params, ctx, subagentId);
+    return 'aborted';
+  }
+
+  // `timeout: 0` disables the bus request envelope's 60s default
+  // (DEFAULT_REQUEST_TIMEOUT_MS), which would otherwise kill every await
+  // longer than 60s regardless of `params.timeoutMs`. The await deadline
+  // belongs to the subagent service: the handler resolves with
+  // `{ status: 'timeout' }` after `payload.timeoutMs` (or
+  // `constraints.defaultAwaitTimeoutMs`, default 300s), so the request never
+  // dangles. Workflow cancellation stays covered by the abort race below.
+  // `0` is honored end-to-end: in-process (awaitWithTimeoutAndSignal), relay
+  // hops (`message.timeout ?? DEFAULT` preserves 0), and transport
+  // correlation tracking (CorrelationTracker skips the timer for 0).
+  const awaitPromise = ctx.bus.requestOptional(
+    call,
+    SubagentSubjects.await,
+    {
+      subagentId,
+      ...(params.timeoutMs !== undefined ? { timeoutMs: params.timeoutMs } : {}),
+    },
+    { timeout: 0 },
+  );
+  if (ctx.signal.aborted) {
+    await killResolvedSubagent(call, params, ctx, subagentId);
+    return 'aborted';
+  }
+  let abortListener: (() => void) | undefined;
+  const abortPromise = new Promise<'aborted'>((resolve) => {
+    abortListener = () => resolve('aborted');
+    ctx.signal.addEventListener('abort', abortListener, { once: true });
+  });
+  try {
+    const result = await Promise.race([awaitPromise, abortPromise]);
+    if (result === 'aborted') {
+      await killResolvedSubagent(call, params, ctx, subagentId);
+    }
+    return result;
+  } catch (error) {
+    await killResolvedSubagent(
+      call,
+      params,
+      ctx,
+      subagentId,
+      `Workflow execution '${ctx.executionId}' failed awaiting ${params.cancellationLabel} '${params.nodeId}'`,
+    );
+    throw error;
+  } finally {
+    if (abortListener !== undefined) {
+      ctx.signal.removeEventListener('abort', abortListener);
+    }
+  }
+}
+
+/**
+ * Best-effort child cancellation for role-backed workflow nodes.
+ * @param call - Call context of the handled message this node execution serves.
+ * @param params - Node labels used in the cancellation reason.
+ * @param ctx - Execution-wide runtime context.
+ * @param subagentId - Spawned subagent identifier.
+ * @param reason - Optional lifecycle-specific cancellation reason.
+ */
+async function killResolvedSubagent(
+  call: CallContext,
+  params: ExecuteResolvedSubagentNodeParams,
+  ctx: RuntimeContext,
+  subagentId: string,
+  reason?: string,
+): Promise<void> {
+  try {
+    await ctx.bus.requestOptional(call, SubagentSubjects.kill, {
+      subagentId,
+      reason:
+        reason ?? `Workflow execution '${ctx.executionId}' cancelled ${params.cancellationLabel} '${params.nodeId}'`,
+    });
+  } catch (error) {
+    // Child kill is best-effort lifecycle cleanup: missing handlers, handler
+    // failures, and timeouts must not mask the parent workflow outcome.
+    console.warn(
+      `[workflow-engine] Best-effort subagent kill failed for '${subagentId}' ` +
+        `(${params.cancellationLabel} '${params.nodeId}')`,
+      error,
+    );
+  }
+}
+
+interface ResolvedSubagentConfigInput {
+  readonly task: string;
+  readonly adapterName: string;
+  readonly providerConfigId?: string;
+  readonly model?: string;
+  readonly reasoningEffort?: WorkflowResolvedRole['reasoningEffort'];
+  readonly harnessId?: string;
+  readonly systemPrompt?: string;
+  readonly contextMode?: WorkflowResolvedRole['contextMode'];
+  readonly providerContext?: WorkflowResolvedRole['providerContext'];
+  readonly adapterConfig?: WorkflowResolvedRole['adapterConfig'];
+  readonly tools?: WorkflowResolvedRole['tools'];
+  readonly disallowedTools?: WorkflowResolvedRole['disallowedTools'];
+  readonly allowedDirectories?: WorkflowResolvedRole['allowedDirectories'];
+  readonly responseSchema?: ResponseSchemaDescriptor;
+  readonly completion?: WorkflowResolvedRole['completion'];
 }
 
 /**
@@ -485,103 +587,4 @@ function buildSubagentConfig(
     ...(role.completion !== undefined ? { completion: role.completion } : {}),
     ...(outputSchema !== undefined ? { responseSchema: outputSchema } : {}),
   };
-}
-
-/**
- * Await a role-backed subagent while honoring workflow cancellation.
- *
- * The await RPC may block until the child reaches a terminal state. Workflow
- * cancellation owns the parent execution lifetime, so the runtime races the
- * await against the abort signal and best-effort cancels the child first.
- * @param params - Node labels and timeout used for diagnostics and await input.
- * @param ctx - Execution-wide runtime context.
- * @param subagentId - Spawned subagent identifier.
- * @returns Await RPC result, or `'aborted'` when workflow cancellation wins.
- */
-async function awaitResolvedSubagent(
-  params: ExecuteResolvedSubagentNodeParams,
-  ctx: RuntimeContext,
-  subagentId: string,
-): Promise<ResolvedSubagentAwaitResult | 'aborted'> {
-  if (ctx.signal.aborted) {
-    await killResolvedSubagent(params, ctx, subagentId);
-    return 'aborted';
-  }
-
-  // `timeout: 0` disables the bus request envelope's 60s default
-  // (DEFAULT_REQUEST_TIMEOUT_MS), which would otherwise kill every await
-  // longer than 60s regardless of `params.timeoutMs`. The await deadline
-  // belongs to the subagent service: the handler resolves with
-  // `{ status: 'timeout' }` after `payload.timeoutMs` (or
-  // `constraints.defaultAwaitTimeoutMs`, default 300s), so the request never
-  // dangles. Workflow cancellation stays covered by the abort race below.
-  // `0` is honored end-to-end: in-process (awaitWithTimeoutAndSignal), relay
-  // hops (`message.timeout ?? DEFAULT` preserves 0), and transport
-  // correlation tracking (CorrelationTracker skips the timer for 0).
-  const awaitPromise = ctx.bus.requestOptional(
-    SubagentSubjects.await,
-    {
-      subagentId,
-      ...(params.timeoutMs !== undefined ? { timeoutMs: params.timeoutMs } : {}),
-    },
-    { timeout: 0 },
-  );
-  if (ctx.signal.aborted) {
-    await killResolvedSubagent(params, ctx, subagentId);
-    return 'aborted';
-  }
-  let abortListener: (() => void) | undefined;
-  const abortPromise = new Promise<'aborted'>((resolve) => {
-    abortListener = () => resolve('aborted');
-    ctx.signal.addEventListener('abort', abortListener, { once: true });
-  });
-  try {
-    const result = await Promise.race([awaitPromise, abortPromise]);
-    if (result === 'aborted') {
-      await killResolvedSubagent(params, ctx, subagentId);
-    }
-    return result;
-  } catch (error) {
-    await killResolvedSubagent(
-      params,
-      ctx,
-      subagentId,
-      `Workflow execution '${ctx.executionId}' failed awaiting ${params.cancellationLabel} '${params.nodeId}'`,
-    );
-    throw error;
-  } finally {
-    if (abortListener !== undefined) {
-      ctx.signal.removeEventListener('abort', abortListener);
-    }
-  }
-}
-
-/**
- * Best-effort child cancellation for role-backed workflow nodes.
- * @param params - Node labels used in the cancellation reason.
- * @param ctx - Execution-wide runtime context.
- * @param subagentId - Spawned subagent identifier.
- * @param reason - Optional lifecycle-specific cancellation reason.
- */
-async function killResolvedSubagent(
-  params: ExecuteResolvedSubagentNodeParams,
-  ctx: RuntimeContext,
-  subagentId: string,
-  reason?: string,
-): Promise<void> {
-  try {
-    await ctx.bus.requestOptional(SubagentSubjects.kill, {
-      subagentId,
-      reason:
-        reason ?? `Workflow execution '${ctx.executionId}' cancelled ${params.cancellationLabel} '${params.nodeId}'`,
-    });
-  } catch (error) {
-    // Child kill is best-effort lifecycle cleanup: missing handlers, handler
-    // failures, and timeouts must not mask the parent workflow outcome.
-    console.warn(
-      `[workflow-engine] Best-effort subagent kill failed for '${subagentId}' ` +
-        `(${params.cancellationLabel} '${params.nodeId}')`,
-      error,
-    );
-  }
 }

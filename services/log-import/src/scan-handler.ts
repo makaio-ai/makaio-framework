@@ -170,6 +170,7 @@ export function registerGenericScanHandler(
 
         // Upsert to sessions (discover-only, no message import)
         const { created } = await bus.request(
+          ctx.call,
           SessionStorageSubjects.importUpsert,
           toImportUpsertPayload({
             metadata,

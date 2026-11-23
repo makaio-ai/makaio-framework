@@ -1,3 +1,4 @@
+import type { CallContext } from '@makaio/core';
 import type {
   AIReasoningLevel,
   BaseAgentConnectorConfig,
@@ -60,8 +61,10 @@ export type ClaudeCliAgentConfig = BaseAgentConnectorConfig<ClaudeCodeCliConnect
 
 /**
  * Callback type for emitting SDK events with connector metadata.
+ * @param call - Call of the message driving the SDK turn
+ * @param msg - Raw SDK event payload
  */
-export type EmitSdkEventCallback = (msg: unknown) => Promise<void>;
+export type EmitSdkEventCallback = (call: CallContext, msg: unknown) => Promise<void>;
 
 /**
  * Callback type for notifying when a turn starts processing a message.
@@ -89,8 +92,9 @@ export interface ClaudeCliSessionConfig extends ConnectorSessionConfig<ClaudeCod
    * Announce that this session abandoned its provider thread with no confirmed
    * successor. Forwarded from the connector config; see
    * `BaseAgentConnectorConfig.onAdapterSessionMoved`.
+   * @param call - Call of the message driving the session movement
    */
-  onAdapterSessionMoved?: () => Promise<void>;
+  onAdapterSessionMoved?: (call: CallContext) => Promise<void>;
   /** CLI-specific provider config */
   providerConfig?: ClaudeCodeCliProviderConfig;
   /** Previous adapter session ID for resume */

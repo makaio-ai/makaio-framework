@@ -18,7 +18,9 @@
  *
  * ## Usage
  * ```typescript
- * import { nativeSessionSupervisorPackage } from '@makaio/subsystem-native-session-supervisor/package';
+ * import { createNativeSessionSupervisorPackage } from '@makaio/subsystem-native-session-supervisor/package';
+ *
+ * const supervisorPackage = createNativeSessionSupervisorPackage({ observeConnectionClosed });
  * ```
  * @packageDocumentation
  */

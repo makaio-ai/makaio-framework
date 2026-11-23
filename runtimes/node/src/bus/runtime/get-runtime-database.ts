@@ -20,6 +20,7 @@ import { RuntimeSubjects } from './namespace.js';
 export async function getRuntimeDatabase<TSchema extends Record<string, unknown> = Record<string, never>>(
   bus: IMakaioBus,
 ): Promise<MakaioDatabase<TSchema>> {
-  const { db } = await bus.request(RuntimeSubjects.database, {});
+  // ORIGIN: This ad-hoc lookup starts a database request on the connected bus.
+  const { db } = await bus.request(bus.own('root'), RuntimeSubjects.database, {});
   return db as MakaioDatabase<TSchema>;
 }

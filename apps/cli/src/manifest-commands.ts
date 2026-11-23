@@ -15,7 +15,12 @@ import type { CliArgManifest, CliManifest, CliSubcommandManifest } from '@makaio
 import type { CliContribution } from '@makaio/kernel/cli';
 import { INTERACTIVE_SUBCOMMAND } from '@makaio/kernel/cli';
 import type { IMakaioBus } from '@makaio/bus-core';
-import { formatInteractiveTerminalError, formatZodError, hasInteractiveTerminal } from './schema-adapter.js';
+import {
+  formatInteractiveTerminalError,
+  formatZodError,
+  hasInteractiveTerminal,
+  rootCallFor,
+} from './schema-adapter.js';
 import { toCliLongOptionName } from './flag-names.js';
 import {
   createProcessCommandContext,
@@ -245,7 +250,12 @@ async function resolveAndExecute(
     if (shouldStopForCommandSignal(signalContext.signal)) return;
     const gate = await evaluateBeforeRunGate(
       contribution.beforeRun,
-      { subcommandName, args: parsed.data as Record<string, unknown>, bus: resolved.bus },
+      {
+        subcommandName,
+        args: parsed.data as Record<string, unknown>,
+        call: rootCallFor(resolved.bus),
+        bus: resolved.bus,
+      },
       ctx.connectionError,
     );
     if (shouldStopForCommandSignal(signalContext.signal)) return;
@@ -323,7 +333,7 @@ async function resolveAndExecuteInteractive(
     if (shouldStopForCommandSignal(signalContext.signal)) return;
     const gate = await evaluateBeforeRunGate(
       contribution.beforeRun,
-      { subcommandName: INTERACTIVE_SUBCOMMAND, args: {}, bus: resolved.bus },
+      { subcommandName: INTERACTIVE_SUBCOMMAND, args: {}, call: rootCallFor(resolved.bus), bus: resolved.bus },
       ctx.connectionError,
     );
     if (shouldStopForCommandSignal(signalContext.signal)) return;
@@ -333,7 +343,11 @@ async function resolveAndExecuteInteractive(
       return;
     }
 
-    await contribution.interactive({ bus: resolved.bus, signal: signalContext.signal });
+    await contribution.interactive({
+      call: rootCallFor(resolved.bus),
+      bus: resolved.bus,
+      signal: signalContext.signal,
+    });
   } catch (err) {
     if (!shouldStopForCommandSignal(signalContext.signal)) {
       reportCommandFailure(err);

@@ -8,6 +8,7 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
 import type { AIModel } from '@makaio/contracts';
+import { createTestCall } from '@makaio/test-utils';
 import { AdapterSubsystemSubjects } from '../../adapter-subsystem/namespace.js';
 import { ProviderStorageSubjects } from '../../settings/storage/providers-namespace.js';
 import type { ProviderConfigFileRecord } from '../../adapter-subsystem/schemas.js';
@@ -114,7 +115,7 @@ describe('resolveModelCapabilities', () => {
     setup();
 
     // No bus handlers needed — the function should short-circuit before any call.
-    const result = await resolveModelCapabilities(MakaioBus, undefined, MODEL_NAME);
+    const result = await resolveModelCapabilities(createTestCall(), MakaioBus, undefined, MODEL_NAME);
 
     expect(result).toBeUndefined();
   });
@@ -122,7 +123,7 @@ describe('resolveModelCapabilities', () => {
   it('returns undefined immediately when model is undefined', async () => {
     setup();
 
-    const result = await resolveModelCapabilities(MakaioBus, PROVIDER_CONFIG_ID, undefined);
+    const result = await resolveModelCapabilities(createTestCall(), MakaioBus, PROVIDER_CONFIG_ID, undefined);
 
     expect(result).toBeUndefined();
   });
@@ -139,7 +140,7 @@ describe('resolveModelCapabilities', () => {
       },
     ]);
 
-    const result = await resolveModelCapabilities(MakaioBus, PROVIDER_CONFIG_ID, MODEL_NAME);
+    const result = await resolveModelCapabilities(createTestCall(), MakaioBus, PROVIDER_CONFIG_ID, MODEL_NAME);
 
     expect(result).toEqual({ supportedReasoningLevels: REASONING_LEVELS });
   });
@@ -150,7 +151,7 @@ describe('resolveModelCapabilities', () => {
     // Catalog does NOT include `MODEL_NAME`
     registerProviderCatalogHandler([{ name: 'claude-haiku', contextWindowSize: 200_000, labId: DEFINITION_ID }]);
 
-    const result = await resolveModelCapabilities(MakaioBus, PROVIDER_CONFIG_ID, MODEL_NAME);
+    const result = await resolveModelCapabilities(createTestCall(), MakaioBus, PROVIDER_CONFIG_ID, MODEL_NAME);
 
     expect(result).toBeUndefined();
   });
@@ -164,7 +165,7 @@ describe('resolveModelCapabilities', () => {
       }),
     );
 
-    const result = await resolveModelCapabilities(MakaioBus, PROVIDER_CONFIG_ID, MODEL_NAME);
+    const result = await resolveModelCapabilities(createTestCall(), MakaioBus, PROVIDER_CONFIG_ID, MODEL_NAME);
 
     expect(result).toBeUndefined();
   });
@@ -179,7 +180,7 @@ describe('resolveModelCapabilities', () => {
     );
 
     // Must not throw — capability resolution is best-effort.
-    const result = await resolveModelCapabilities(MakaioBus, PROVIDER_CONFIG_ID, MODEL_NAME);
+    const result = await resolveModelCapabilities(createTestCall(), MakaioBus, PROVIDER_CONFIG_ID, MODEL_NAME);
 
     expect(result).toBeUndefined();
   });

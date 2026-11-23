@@ -6,18 +6,16 @@
  * WebSocket I/O — the same pattern used by the transport layer.
  */
 
+import { MAKAIO_CLI_LOCAL_PARTY_KIND } from '@makaio/core';
 import { describe, expect, it } from 'vitest';
 import { HmacAuth } from '../hmac-auth.js';
-import {
-  MAKAIO_LOCAL_CLI_HMAC_IDENTITY_ID,
-  MAKAIO_LOCAL_CLI_PEER_KIND,
-  registerMakaioLocalCliHmacIdentity,
-} from '../local-cli-identity.js';
+import { MAKAIO_LOCAL_CLI_HMAC_IDENTITY_ID, registerMakaioLocalCliHmacIdentity } from '../local-cli-identity.js';
 import {
   clearHmacIdentitySecretsForTesting,
   registerHmacIdentitySecret,
-  resolveHmacIdentityPeer,
+  resolveHmacIdentityParty,
   resolveHmacIdentitySecret,
+  rotateHmacIdentitySecret,
 } from '../identity-secret-registry.js';
 import type { WebSocketLike } from '../../types.js';
 
@@ -69,15 +67,20 @@ describe('HmacAuth — global-secret mode', () => {
     expect(serverAuth.isSocketAuthenticated(socket)).toBe(true);
   });
 
-  it('getReceiveContext returns undefined in global-secret mode', async () => {
+  it('uses distinct connection ids without an attesting caller in global-secret mode', async () => {
     const secret = 'shared-global-secret';
     const serverAuth = new HmacAuth({ secret, challengeTimeout: 200 });
     const clientAuth = new HmacAuth({ secret, challengeTimeout: 200 });
     const socket = makeSocket();
 
     await runAuthHandshake(serverAuth, clientAuth, socket);
+    const context = serverAuth.getReceiveContext(socket);
+    expect(context).toEqual({ transportName: '', connectionId: expect.any(String), authenticated: true });
+    expect(serverAuth.getReceiveContext(socket)?.connectionId).toBe(context?.connectionId);
 
-    expect(serverAuth.getReceiveContext(socket)).toBeUndefined();
+    const secondSocket = makeSocket();
+    await runAuthHandshake(serverAuth, new HmacAuth({ secret, challengeTimeout: 200 }), secondSocket);
+    expect(serverAuth.getReceiveContext(secondSocket)?.connectionId).not.toBe(context?.connectionId);
   });
 
   it('authenticates global-secret clients when an identity resolver is configured', async () => {
@@ -92,7 +95,11 @@ describe('HmacAuth — global-secret mode', () => {
 
     await expect(runAuthHandshake(serverAuth, clientAuth, socket)).resolves.toBeUndefined();
     expect(serverAuth.isSocketAuthenticated(socket)).toBe(true);
-    expect(serverAuth.getReceiveContext(socket)).toBeUndefined();
+    expect(serverAuth.getReceiveContext(socket)).toEqual({
+      transportName: '',
+      connectionId: expect.any(String),
+      authenticated: true,
+    });
   });
 
   it('rejects when client uses wrong secret', async () => {
@@ -109,7 +116,7 @@ describe('HmacAuth — global-secret mode', () => {
 // ---------------------------------------------------------------------------
 
 describe('HmacAuth — identity-bound mode', () => {
-  it('authenticates the registered local CLI identity as its dedicated peer kind', async () => {
+  it('authenticates the registered local CLI identity as its dedicated party kind', async () => {
     clearHmacIdentitySecretsForTesting();
     const secret = 'local-cli-shared-secret';
     const cleanup = registerMakaioLocalCliHmacIdentity(secret);
@@ -119,7 +126,7 @@ describe('HmacAuth — identity-bound mode', () => {
         secret,
         challengeTimeout: 200,
         resolveSecret: resolveHmacIdentitySecret,
-        resolvePeer: resolveHmacIdentityPeer,
+        resolveParty: resolveHmacIdentityParty,
       });
       const clientAuth = new HmacAuth({
         secret,
@@ -129,10 +136,11 @@ describe('HmacAuth — identity-bound mode', () => {
       const socket = makeSocket();
 
       await expect(runAuthHandshake(serverAuth, clientAuth, socket)).resolves.toBeUndefined();
-      expect(serverAuth.getReceiveContext(socket)?.peer).toEqual({
-        kind: MAKAIO_LOCAL_CLI_PEER_KIND,
+      expect(serverAuth.getReceiveContext(socket)?.authenticated).toBe(true);
+      expect(serverAuth.getReceiveContext(socket)?.attests).toBe('inbound');
+      expect(serverAuth.getReceiveContext(socket)?.caller).toEqual({
+        kind: MAKAIO_CLI_LOCAL_PARTY_KIND,
         id: MAKAIO_LOCAL_CLI_HMAC_IDENTITY_ID,
-        authenticated: true,
       });
     } finally {
       cleanup();
@@ -159,7 +167,7 @@ describe('HmacAuth — identity-bound mode', () => {
     await expect(runAuthHandshake(serverAuth, clientAuth, socket)).resolves.toBeUndefined();
   });
 
-  it('does not infer peer authorization when no trusted peer resolver is configured', async () => {
+  it('does not infer caller authorization when no trusted party resolver is configured', async () => {
     const executionId = 'exec-def-456';
     const secret = 'per-execution-secret-2';
 
@@ -182,7 +190,8 @@ describe('HmacAuth — identity-bound mode', () => {
     const executionId = 'wfx-registry-1';
     const secret = 'per-execution-registry-secret';
     registerHmacIdentitySecret(attemptId, secret, {
-      peerKind: 'workflow-execution-attempt',
+      partyKind: 'test.workflow-execution-attempt',
+      attestingRole: 'job-run',
       claims: { executionId },
     });
 
@@ -191,22 +200,32 @@ describe('HmacAuth — identity-bound mode', () => {
         secret: 'global-secret',
         challengeTimeout: 200,
         resolveSecret: resolveHmacIdentitySecret,
-        resolvePeer: resolveHmacIdentityPeer,
+        resolveParty: resolveHmacIdentityParty,
       });
       const clientAuth = new HmacAuth({ secret, identityId: attemptId, challengeTimeout: 200 });
       const socket = makeSocket();
 
       await expect(runAuthHandshake(serverAuth, clientAuth, socket)).resolves.toBeUndefined();
       expect(serverAuth.isSocketAuthenticated(socket)).toBe(true);
-      expect(serverAuth.getReceiveContext(socket)?.peer).toEqual({
-        kind: 'workflow-execution-attempt',
+      expect(serverAuth.getReceiveContext(socket)?.authenticated).toBe(true);
+      expect(serverAuth.getReceiveContext(socket)?.attests).toBe('inbound');
+      expect(serverAuth.getReceiveContext(socket)?.caller).toEqual({
+        kind: 'test.workflow-execution-attempt',
         id: attemptId,
-        authenticated: true,
         claims: { executionId },
       });
 
-      clearHmacIdentitySecretsForTesting();
+      const rotatedSecret = 'rotated-registry-secret';
+      rotateHmacIdentitySecret(attemptId, rotatedSecret);
+      expect(serverAuth.getReceiveContext(socket)?.attests).toBeUndefined();
 
+      const rotatedClient = new HmacAuth({ secret: rotatedSecret, identityId: attemptId, challengeTimeout: 200 });
+      const rotatedSocket = makeSocket();
+      await runAuthHandshake(serverAuth, rotatedClient, rotatedSocket);
+      expect(serverAuth.getReceiveContext(rotatedSocket)?.attests).toBe('inbound');
+
+      clearHmacIdentitySecretsForTesting();
+      expect(serverAuth.getReceiveContext(rotatedSocket)).toBeUndefined();
       expect(serverAuth.isSocketAuthenticated(socket)).toBe(false);
       expect(serverAuth.getReceiveContext(socket)).toBeUndefined();
     } finally {
@@ -214,51 +233,55 @@ describe('HmacAuth — identity-bound mode', () => {
     }
   });
 
-  it('exposes registered non-workflow peer kinds through receive context', async () => {
+  it('exposes registered non-workflow party kinds through receive context', async () => {
     clearHmacIdentitySecretsForTesting();
     const identityId = 'dashboard:session-1';
     const secret = 'per-dashboard-session-secret';
-    registerHmacIdentitySecret(identityId, secret, { peerKind: 'dashboard-session' });
+    registerHmacIdentitySecret(identityId, secret, { partyKind: 'test.dashboard-session' });
 
     try {
       const serverAuth = new HmacAuth({
         secret: 'global-secret',
         challengeTimeout: 200,
         resolveSecret: resolveHmacIdentitySecret,
-        resolvePeer: resolveHmacIdentityPeer,
+        resolveParty: resolveHmacIdentityParty,
       });
       const clientAuth = new HmacAuth({ secret, identityId, challengeTimeout: 200 });
       const socket = makeSocket();
 
       await expect(runAuthHandshake(serverAuth, clientAuth, socket)).resolves.toBeUndefined();
-      expect(serverAuth.getReceiveContext(socket)?.peer).toEqual({
-        kind: 'dashboard-session',
+      expect(serverAuth.getReceiveContext(socket)?.authenticated).toBe(true);
+      expect(serverAuth.getReceiveContext(socket)).not.toHaveProperty('attests');
+      expect(serverAuth.getReceiveContext(socket)?.caller).toEqual({
+        kind: 'test.dashboard-session',
         id: identityId,
-        authenticated: true,
       });
     } finally {
       clearHmacIdentitySecretsForTesting();
     }
   });
 
-  it('keeps a newer peer registration when an older cleanup uses the same secret', () => {
+  it('keeps a newer party registration when an older cleanup uses the same secret', () => {
     clearHmacIdentitySecretsForTesting();
     const identityId = 'shared-identity';
     const secret = 'same-transport-secret';
-    const cleanupBootstrapPeer = registerHmacIdentitySecret(identityId, secret, { peerKind: 'worker-bootstrap' });
-    const cleanupDashboardPeer = registerHmacIdentitySecret(identityId, secret, { peerKind: 'dashboard-session' });
+    const cleanupBootstrapParty = registerHmacIdentitySecret(identityId, secret, {
+      partyKind: 'test.worker-bootstrap',
+    });
+    const cleanupDashboardParty = registerHmacIdentitySecret(identityId, secret, {
+      partyKind: 'test.dashboard-session',
+    });
 
     try {
-      cleanupBootstrapPeer();
+      cleanupBootstrapParty();
 
       expect(resolveHmacIdentitySecret(identityId)).toBe(secret);
-      expect(resolveHmacIdentityPeer(identityId)).toEqual({
-        kind: 'dashboard-session',
+      expect(resolveHmacIdentityParty(identityId)).toEqual({
+        kind: 'test.dashboard-session',
         id: identityId,
-        authenticated: true,
       });
     } finally {
-      cleanupDashboardPeer();
+      cleanupDashboardParty();
       clearHmacIdentitySecretsForTesting();
     }
   });
@@ -279,7 +302,7 @@ describe('HmacAuth — identity-bound mode', () => {
     await expect(runAuthHandshake(serverAuth, clientAuth, socket)).rejects.toThrow("Unknown identity 'unknown-exec'");
   });
 
-  it('peer is removed from getReceiveContext after cleanupSocket', async () => {
+  it('caller is removed from getReceiveContext after cleanupSocket', async () => {
     const executionId = 'exec-ghi-789';
     const secret = 'cleanup-test-secret';
 
@@ -287,8 +310,7 @@ describe('HmacAuth — identity-bound mode', () => {
       secret: 'ignored',
       challengeTimeout: 200,
       resolveSecret: (claimedId) => (claimedId === executionId ? secret : null),
-      resolvePeer: (claimedId) =>
-        claimedId === executionId ? { kind: 'test-identity', id: claimedId, authenticated: true } : null,
+      resolveParty: (claimedId) => (claimedId === executionId ? { kind: 'test.identity', id: claimedId } : null),
     });
     const clientAuth = new HmacAuth({ secret, identityId: executionId, challengeTimeout: 200 });
     const socket = makeSocket();

@@ -1,4 +1,5 @@
-import type { OptionalResult } from '@makaio/core';
+import type { IMakaioBus } from '@makaio/bus-core';
+import type { CallContext, OptionalResult } from '@makaio/core';
 import {
   ClientSubjects,
   type ClientSessionAccountObserveRequest,
@@ -10,23 +11,15 @@ import {
  * observations to the session linker without depending on a global bus singleton.
  */
 export type RequestSessionAccountObservation = (
+  call: CallContext,
   payload: ClientSessionAccountObserveRequest,
 ) => Promise<OptionalResult<ClientSessionAccountObserveResponse>>;
 
-interface SessionAccountObservationRequestBus {
-  requestOptional: (
-    subject: typeof ClientSubjects.session.account.observe,
-    payload: ClientSessionAccountObserveRequest,
-  ) => Promise<OptionalResult<ClientSessionAccountObserveResponse>>;
-}
-
 /**
  * Build a requester for Claude session account observations.
- * @param bus - Bus exposing the observation request subject.
- * @returns Requester that preserves `requestOptional()` semantics.
+ * @param bus - Bus used to send the observation request.
+ * @returns Requester that forwards the caller's `call` and preserves `requestOptional()` semantics.
  */
-export function createSessionAccountObservationRequester(
-  bus: SessionAccountObservationRequestBus,
-): RequestSessionAccountObservation {
-  return (payload) => bus.requestOptional(ClientSubjects.session.account.observe, payload);
+export function createSessionAccountObservationRequester(bus: IMakaioBus): RequestSessionAccountObservation {
+  return (call, payload) => bus.requestOptional(call, ClientSubjects.session.account.observe, payload);
 }

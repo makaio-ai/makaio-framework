@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { MakaioBus } from '../bus.js';
+import { busContextOf } from '../kernel-api.js';
 import { z } from 'zod';
 import { createBusNamespace } from '@makaio/core';
 
@@ -19,7 +20,7 @@ describe('bus.intercept()', () => {
   });
 
   it('should have interceptorHandlers in context', () => {
-    const context = MakaioBus.getContext();
+    const context = busContextOf(MakaioBus);
     expect(context.interceptorHandlers).toBeInstanceOf(Map);
   });
 
@@ -30,7 +31,7 @@ describe('bus.intercept()', () => {
 
       expect(typeof unsubscribe).toBe('function');
 
-      const context = MakaioBus.getContext();
+      const context = busContextOf(MakaioBus);
       const entries = context.interceptorHandlers.get('interceptTest.action');
       expect(entries).toHaveLength(1);
 
@@ -47,7 +48,7 @@ describe('bus.intercept()', () => {
       MakaioBus.intercept(TestSubjects.action, highHandler, { priority: 100 });
       MakaioBus.intercept(TestSubjects.action, medHandler, { priority: 50 });
 
-      const context = MakaioBus.getContext();
+      const context = busContextOf(MakaioBus);
       const entries = context.interceptorHandlers.get('interceptTest.action')!;
 
       expect(entries[0].handler).toBe(highHandler);
@@ -64,7 +65,7 @@ describe('bus.intercept()', () => {
       MakaioBus.intercept(TestSubjects.action, handler2, { priority: 50 });
       MakaioBus.intercept(TestSubjects.action, handler3, { priority: 50 });
 
-      const context = MakaioBus.getContext();
+      const context = busContextOf(MakaioBus);
       const entries = context.interceptorHandlers.get('interceptTest.action')!;
 
       expect(entries[0].handler).toBe(handler1);
@@ -76,7 +77,7 @@ describe('bus.intercept()', () => {
       const handler = vi.fn();
       MakaioBus.intercept(TestSubjects.action, handler);
 
-      const context = MakaioBus.getContext();
+      const context = busContextOf(MakaioBus);
       const entries = context.interceptorHandlers.get('interceptTest.action')!;
 
       expect(entries[0].priority).toBe(0);
@@ -93,7 +94,7 @@ describe('bus.intercept()', () => {
       MakaioBus.intercept(TestSubjects.action, handlerZero);
       MakaioBus.intercept(TestSubjects.action, handlerPositive, { priority: 10 });
 
-      const context = MakaioBus.getContext();
+      const context = busContextOf(MakaioBus);
       const entries = context.interceptorHandlers.get('interceptTest.action')!;
 
       expect(entries[0].handler).toBe(handlerPositive);
@@ -117,7 +118,7 @@ describe('bus.intercept()', () => {
       });
       MakaioBus.intercept(TestSubjects.action, handler3, { priority: 10 });
 
-      const context = MakaioBus.getContext();
+      const context = busContextOf(MakaioBus);
       expect(context.interceptorHandlers.get('interceptTest.action')).toHaveLength(3);
 
       unsub2();
@@ -139,7 +140,7 @@ describe('bus.intercept()', () => {
         await releaseHandler.promise;
       });
 
-      const emitted = MakaioBus.emit(TestSubjects.action, { value: 'test' });
+      const emitted = MakaioBus.emit(MakaioBus.own('root'), TestSubjects.action, { value: 'test' });
 
       expect(handlerInvoked).toBe(true);
       releaseHandler.resolve();
@@ -156,7 +157,7 @@ describe('bus.intercept()', () => {
         handlerInvoked = true;
       });
 
-      const emitted = MakaioBus.emit(TestSubjects.action, { value: 'test' });
+      const emitted = MakaioBus.emit(MakaioBus.own('root'), TestSubjects.action, { value: 'test' });
 
       expect(handlerInvoked).toBe(false);
       releaseInterceptor.resolve();
@@ -175,7 +176,7 @@ describe('bus.intercept()', () => {
         order.push('handler');
       });
 
-      await MakaioBus.emit(TestSubjects.action, { value: 'test' });
+      await MakaioBus.emit(MakaioBus.own('root'), TestSubjects.action, { value: 'test' });
 
       expect(order).toEqual(['interceptor', 'handler']);
     });
@@ -207,7 +208,7 @@ describe('bus.intercept()', () => {
         { priority: 50 },
       );
 
-      await MakaioBus.emit(TestSubjects.action, { value: 'test' });
+      await MakaioBus.emit(MakaioBus.own('root'), TestSubjects.action, { value: 'test' });
 
       expect(order).toEqual(['high', 'medium', 'low']);
     });
@@ -220,6 +221,7 @@ describe('bus.intercept()', () => {
       });
 
       await MakaioBus.emit(
+        MakaioBus.own('root'),
         TestSubjects.action,
         { value: 'test' },
         {
@@ -272,7 +274,7 @@ describe('bus.intercept()', () => {
         handlerPayload = ctx.payload;
       });
 
-      await MakaioBus.emit(TestSubjects.action, { value: 'original' });
+      await MakaioBus.emit(MakaioBus.own('root'), TestSubjects.action, { value: 'original' });
 
       expect(payloads).toEqual([{ value: 'original' }, { value: 'transformed-1' }]);
       expect(handlerPayload).toEqual({ value: 'transformed-2' });
@@ -287,7 +289,7 @@ describe('bus.intercept()', () => {
 
       MakaioBus.on(TestSubjects.action, handlerCalled);
 
-      await MakaioBus.emit(TestSubjects.action, { value: 'test' });
+      await MakaioBus.emit(MakaioBus.own('root'), TestSubjects.action, { value: 'test' });
 
       expect(handlerCalled).not.toHaveBeenCalled();
     });
@@ -312,7 +314,7 @@ describe('bus.intercept()', () => {
         { priority: 50 },
       );
 
-      await MakaioBus.emit(TestSubjects.action, { value: 'test' });
+      await MakaioBus.emit(MakaioBus.own('root'), TestSubjects.action, { value: 'test' });
 
       expect(order).toEqual(['first']);
     });
@@ -329,7 +331,7 @@ describe('bus.intercept()', () => {
         order.push('handler');
       });
 
-      await MakaioBus.emit(TestSubjects.action, { value: 'test' });
+      await MakaioBus.emit(MakaioBus.own('root'), TestSubjects.action, { value: 'test' });
 
       expect(order).toEqual(['async', 'handler']);
     });
@@ -349,7 +351,9 @@ describe('bus.intercept()', () => {
       MakaioBus.intercept(TestSubjects.action, secondInterceptor, { priority: 50 });
       MakaioBus.on(TestSubjects.action, handler);
 
-      await expect(MakaioBus.emit(TestSubjects.action, { value: 'test' })).rejects.toThrow('Interceptor failed');
+      await expect(MakaioBus.emit(MakaioBus.own('root'), TestSubjects.action, { value: 'test' })).rejects.toThrow(
+        'Interceptor failed',
+      );
 
       expect(secondInterceptor).not.toHaveBeenCalled();
       expect(handler).not.toHaveBeenCalled();
@@ -374,7 +378,7 @@ describe('scoped bus intercept', () => {
 
     scopedBus.intercept(scopedInterceptNamespace.subjects.event, called);
 
-    await MakaioBus.emit(scopedInterceptNamespace.subjects.event, { data: 'test' });
+    await MakaioBus.emit(MakaioBus.own('root'), scopedInterceptNamespace.subjects.event, { data: 'test' });
 
     expect(called).toHaveBeenCalled();
   });
@@ -386,11 +390,11 @@ describe('scoped bus intercept', () => {
     filteredBus.intercept(scopedInterceptNamespace.subjects.event, called);
 
     // Should NOT be called - payload doesn't match filter
-    await MakaioBus.emit(scopedInterceptNamespace.subjects.event, { data: 'other' });
+    await MakaioBus.emit(MakaioBus.own('root'), scopedInterceptNamespace.subjects.event, { data: 'other' });
     expect(called).not.toHaveBeenCalled();
 
     // Should be called - payload matches filter
-    await MakaioBus.emit(scopedInterceptNamespace.subjects.event, { data: 'test' });
+    await MakaioBus.emit(MakaioBus.own('root'), scopedInterceptNamespace.subjects.event, { data: 'test' });
     expect(called).toHaveBeenCalledTimes(1);
   });
 });
@@ -406,7 +410,7 @@ describe('filtered bus intercept', () => {
 
     filteredBus.intercept(scopedInterceptNamespace.subjects.event, called);
 
-    await MakaioBus.emit(scopedInterceptNamespace.subjects.event, { data: 'test' });
+    await MakaioBus.emit(MakaioBus.own('root'), scopedInterceptNamespace.subjects.event, { data: 'test' });
 
     expect(called).toHaveBeenCalled();
   });

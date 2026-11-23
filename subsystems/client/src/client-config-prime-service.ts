@@ -7,7 +7,6 @@
  */
 
 import type { IMakaioBus } from '@makaio/bus-core';
-import { MakaioBus } from '@makaio/bus-core';
 import { ClientSubjects } from '@makaio/contracts/client';
 import { BaseService } from '@makaio/service-base';
 import { primeClientConfig } from './client-config-prime.js';
@@ -19,7 +18,7 @@ export class ClientConfigPrimeService extends BaseService {
   /**
    * @param bus - Bus instance used for handler registration and delegation.
    */
-  public constructor(bus: IMakaioBus = MakaioBus) {
+  public constructor(bus: IMakaioBus) {
     super(bus);
   }
 
@@ -28,7 +27,7 @@ export class ClientConfigPrimeService extends BaseService {
    */
   protected override onInit(): void {
     this.registerHandler(ClientSubjects.config.prime, async (ctx) => {
-      ctx.setResult(await primeClientConfig(this.bus, ctx.payload));
+      ctx.setResult(await primeClientConfig(ctx.call, this.bus, ctx.payload));
     });
   }
 }

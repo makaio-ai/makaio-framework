@@ -19,6 +19,7 @@
  * @packageDocumentation
  */
 
+import type { CallContext } from '@makaio/core';
 import type { ExtensionContext } from '../extension/extension-context.js';
 
 // ---------------------------------------------------------------------------
@@ -228,6 +229,11 @@ export type InteractionSelector = EventNameSelector | CapabilitySelector;
  * cooperative cancellation.
  */
 export interface ContributorCallbackContext {
+  /**
+   * Call of the hook-request message being answered. Forward it to every send
+   * made by the callback; never store it for a later invocation.
+   */
+  readonly call: CallContext;
   /** Client receiving the hook event. */
   readonly clientId: string;
   /**

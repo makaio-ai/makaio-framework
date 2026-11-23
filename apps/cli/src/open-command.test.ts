@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Command } from 'commander';
 import { HostSubjects } from '@makaio/contracts';
+import { createMockBus } from '@makaio/test-utils';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -108,33 +109,34 @@ describe('registerOpenCommand', () => {
   });
 
   it('focuses a running app over the bus and disconnects the client', async () => {
-    const request = vi.fn().mockResolvedValue({ focused: true, windowId: 7 });
-    const disconnect = vi.fn();
+    const { bus, own, request } = createMockBus();
+    request.mockResolvedValue({ focused: true, windowId: 7 });
     busClientMocks.probeHealth.mockResolvedValue({ auth: false });
     busClientMocks.resolveClientAuth.mockReturnValue(undefined);
-    busClientMocks.connectBusClient.mockResolvedValue({ request, disconnect });
+    busClientMocks.connectBusClient.mockResolvedValue(bus);
     const info = vi.spyOn(console, 'info').mockImplementation(() => undefined);
 
     await runOpen();
 
     expect(busClientMocks.probeHealth).toHaveBeenCalledOnce();
     expect(busClientMocks.resolveClientAuth).toHaveBeenCalledWith({ auth: false });
-    expect(request).toHaveBeenCalledWith(HostSubjects.app.focus, {});
-    expect(disconnect).toHaveBeenCalledOnce();
+    expect(own).toHaveBeenCalledExactlyOnceWith('root');
+    expect(request).toHaveBeenCalledWith(bus.own('root'), HostSubjects.app.focus, {});
+    expect(bus.disconnect).toHaveBeenCalledOnce();
     expect(info).toHaveBeenCalledWith('Makaio is now in the foreground.');
   });
 
   it('sets a failure exit code when the running app cannot be focused', async () => {
-    const request = vi.fn().mockResolvedValue({ focused: false, windowId: null });
-    const disconnect = vi.fn();
+    const { bus, request } = createMockBus();
+    request.mockResolvedValue({ focused: false, windowId: null });
     busClientMocks.probeHealth.mockResolvedValue({ auth: false });
-    busClientMocks.connectBusClient.mockResolvedValue({ request, disconnect });
+    busClientMocks.connectBusClient.mockResolvedValue(bus);
     const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
 
     await runOpen();
 
     expect(error).toHaveBeenCalledWith('Failed to focus Makaio.');
-    expect(disconnect).toHaveBeenCalledOnce();
+    expect(bus.disconnect).toHaveBeenCalledOnce();
     expect(process.exitCode).toBe(1);
   });
 

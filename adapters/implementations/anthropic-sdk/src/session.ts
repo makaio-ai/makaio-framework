@@ -24,7 +24,7 @@ import { buildMessageCreateRequest } from './utils/buildMessageCreateRequest.js'
 import { BaseStreamSession } from '@makaio/ai-adapters-stream-session';
 import type { ScopedSubjectDefinition } from '@makaio/core';
 import type { ResponseSchemaDescriptor, ToolListItem } from '@makaio/contracts';
-import { MakaioBus } from '@makaio/bus-core';
+import type { IMakaioBus } from '@makaio/bus-core';
 
 type CacheableContentBlockParam = ContentBlockParam & {
   cache_control?: CacheControlEphemeral | null;
@@ -40,6 +40,14 @@ function isCacheableContentBlock(block: ContentBlockParam): block is CacheableCo
 }
 
 /**
+ * Session configuration with the host bus required.
+ *
+ * The session no longer falls back to the process-wide bus: the owner that builds the
+ * session passes the bus its tool execution runs on.
+ */
+type AnthropicSdkSessionConfigWithBus = AnthropicSdkSessionConfig & { globalBus: IMakaioBus };
+
+/**
  * Session for Anthropic SDK lifecycle management.
  *
  * Manages Anthropic client calls across multiple user messages:
@@ -51,7 +59,7 @@ function isCacheableContentBlock(block: ContentBlockParam): block is CacheableCo
  * session. Each turn rebuilds the messages[] array with full history.
  */
 export class AnthropicSdkSession extends BaseStreamSession<
-  AnthropicSdkSessionConfig,
+  AnthropicSdkSessionConfigWithBus,
   AnthropicSdkConnectorTurn,
   MessageCompleteEvent
 > {
@@ -90,7 +98,7 @@ export class AnthropicSdkSession extends BaseStreamSession<
    * Create an Anthropic SDK connector session.
    * @param config - Session configuration (bus identity, model/cwd defaults, Anthropic client/tools, and lifecycle hooks).
    */
-  public constructor(config: AnthropicSdkSessionConfig) {
+  public constructor(config: AnthropicSdkSessionConfigWithBus) {
     super(config);
     this.currentReasoningEffort = config.reasoningEffort;
     this.nativeTools = config.anthropicTools;
@@ -283,10 +291,10 @@ export class AnthropicSdkSession extends BaseStreamSession<
         : {}),
     });
 
-    await turn.markStepStarted();
+    await turn.markStepStarted(handle.call);
 
     try {
-      await processStream(stream, {
+      await processStream(handle.call, stream, {
         bus: this.config.bus,
         agentId: this.config.agentId,
         adapterId: this.config.adapterId,
@@ -297,7 +305,7 @@ export class AnthropicSdkSession extends BaseStreamSession<
         logLowLevelEvent: this.config.logLowLevelEvent,
       });
     } finally {
-      await turn.markStepFinished();
+      await turn.markStepFinished(handle.call);
     }
   }
 
@@ -365,9 +373,10 @@ export class AnthropicSdkSession extends BaseStreamSession<
       }
 
       const toolResultBlocks = await handleToolCalls(
+        currentHandle.call,
         result.tool_calls,
         {
-          bus: this.config.globalBus ?? MakaioBus,
+          bus: this.config.globalBus,
           emitSdkEvent: this.config.emitSdkEvent,
           requestToolApproval: this.config.requestToolApproval,
           recordMcpCall: this.config.recordMcpCall,

@@ -78,7 +78,7 @@ export class ClientProfileService extends BaseService {
       const { name, description } = ctx.payload;
 
       // Reject duplicates before touching the filesystem.
-      const existing = await this.bus.request(ClientProfileStorageSubjects.get, { clientId, name });
+      const existing = await this.bus.request(ctx.call, ClientProfileStorageSubjects.get, { clientId, name });
       if (existing.record !== null) {
         throw new Error(`Profile '${name}' already exists for client '${clientId}'`);
       }
@@ -91,7 +91,7 @@ export class ClientProfileService extends BaseService {
         // Prime the newly created profile config directory before persisting the
         // profile record.  The call is a no-op when the client has not registered
         // a handler.
-        await primeClientConfig(this.bus, {
+        await primeClientConfig(ctx.call, this.bus, {
           clientId,
           configDir,
           phase: 'profile-create',
@@ -109,7 +109,7 @@ export class ClientProfileService extends BaseService {
           updatedAt: now,
         };
 
-        await this.bus.request(ClientProfileStorageSubjects.set, profile);
+        await this.bus.request(ctx.call, ClientProfileStorageSubjects.set, profile);
         ctx.setResult({ profile });
       } catch (error) {
         await fs.rm(configDir, { recursive: true, force: true });
@@ -124,7 +124,7 @@ export class ClientProfileService extends BaseService {
   private registerListHandler(): void {
     this.registerHandler(ClientSubjects.profile.list, async (ctx) => {
       const clientId = canonicalizeClientId(ctx.payload.clientId, 'profile.list');
-      const result = await this.bus.request(ClientProfileStorageSubjects.list, { clientId });
+      const result = await this.bus.request(ctx.call, ClientProfileStorageSubjects.list, { clientId });
       ctx.setResult({ profiles: result.records });
     });
   }
@@ -135,7 +135,7 @@ export class ClientProfileService extends BaseService {
   private registerGetHandler(): void {
     this.registerHandler(ClientSubjects.profile.get, async (ctx) => {
       const clientId = canonicalizeClientId(ctx.payload.clientId, 'profile.get');
-      const result = await this.bus.request(ClientProfileStorageSubjects.get, {
+      const result = await this.bus.request(ctx.call, ClientProfileStorageSubjects.get, {
         clientId,
         name: ctx.payload.name,
       });
@@ -151,7 +151,7 @@ export class ClientProfileService extends BaseService {
       const clientId = canonicalizeClientId(ctx.payload.clientId, 'profile.update');
       const { name, description } = ctx.payload;
 
-      const existing = await this.bus.request(ClientProfileStorageSubjects.get, { clientId, name });
+      const existing = await this.bus.request(ctx.call, ClientProfileStorageSubjects.get, { clientId, name });
       if (existing.record === null) {
         throw new Error(`Profile '${name}' not found for client '${clientId}'`);
       }
@@ -162,7 +162,7 @@ export class ClientProfileService extends BaseService {
         updatedAt: Date.now(),
       };
 
-      await this.bus.request(ClientProfileStorageSubjects.set, updated);
+      await this.bus.request(ctx.call, ClientProfileStorageSubjects.set, updated);
       ctx.setResult({ profile: updated });
     });
   }
@@ -175,14 +175,14 @@ export class ClientProfileService extends BaseService {
       const clientId = canonicalizeClientId(ctx.payload.clientId, 'profile.delete');
       const { name } = ctx.payload;
 
-      const existing = await this.bus.request(ClientProfileStorageSubjects.get, { clientId, name });
+      const existing = await this.bus.request(ctx.call, ClientProfileStorageSubjects.get, { clientId, name });
       if (existing.record !== null) {
         const profilesBasePath = path.join(this.clientsBasePath, clientId, 'profiles');
         assertPathWithinBase(profilesBasePath, existing.record.configDir, 'profile.delete');
         await fs.rm(existing.record.configDir, { recursive: true, force: true });
       }
 
-      const result = await this.bus.request(ClientProfileStorageSubjects.delete, { clientId, name });
+      const result = await this.bus.request(ctx.call, ClientProfileStorageSubjects.delete, { clientId, name });
       ctx.setResult({ success: result.success });
     });
   }
@@ -195,7 +195,7 @@ export class ClientProfileService extends BaseService {
       const clientId = canonicalizeClientId(ctx.payload.clientId, 'profile.setDefault');
       const { name } = ctx.payload;
 
-      const result = await this.bus.request(ClientProfileStorageSubjects.setDefault, { clientId, name });
+      const result = await this.bus.request(ctx.call, ClientProfileStorageSubjects.setDefault, { clientId, name });
       if (result.record === null) {
         throw new Error(`Profile '${name}' not found for client '${clientId}'`);
       }

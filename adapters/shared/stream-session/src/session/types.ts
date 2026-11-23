@@ -1,4 +1,5 @@
 import type { ScopedBus } from '@makaio/bus-core';
+import type { CallContext } from '@makaio/core';
 import type {
   AIReasoningLevel,
   MessageHandle,
@@ -82,8 +83,10 @@ export interface StreamSessionConfig<TBus extends ScopedBus<string> = ScopedBus<
    * Adapter configs narrow this to their full `SdkEventMessage` union.
    * The base session only emits `agent_started` and `error` events,
    * both of which are members of every adapter's `SdkEventMessage` union.
+   * @param call - Call context of the turn's message handle that the event belongs to
+   * @param event - Lifecycle event to emit
    */
-  emitSdkEvent: (event: BaseSessionEmitEvent) => Promise<void>;
+  emitSdkEvent: (call: CallContext, event: BaseSessionEmitEvent) => Promise<void>;
   /** Handle a connector-level error. */
   handleError: (error: Error, rethrow: boolean) => void;
   /** Called synchronously when a new turn is about to start. */

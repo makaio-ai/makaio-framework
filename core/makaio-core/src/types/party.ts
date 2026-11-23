@@ -198,6 +198,9 @@ function plainChildren(container: object): unknown[] | undefined {
  *
  * A `Proxy` is inspected through its traps like any object; the guard reads each
  * value once and does not defend against a proxy that answers differently later.
+ * The predicate never throws: a revoked proxy or a trap that throws is caught
+ * and rejected like any other non-plain shape, because this predicate also backs
+ * {@link CallClaimSchema} (`z.custom`), which must not throw either.
  *
  * Iterative, so deep nesting cannot overflow the stack. Each distinct object is
  * traversed once, so shared references cost linear, not exponential, time.
@@ -230,7 +233,14 @@ export function isCallClaim(value: unknown): value is CallClaim {
     if (validated.has(current)) {
       continue;
     }
-    const children = plainChildren(current);
+    let children: unknown[] | undefined;
+    try {
+      children = plainChildren(current);
+    } catch {
+      // A revoked proxy, or a proxy whose trap throws, is not plain data: the
+      // predicate stays total and reports it as rejected rather than propagating.
+      return false;
+    }
     if (children === undefined) {
       return false;
     }
@@ -249,7 +259,16 @@ export const CallClaimSchema = z.custom<CallClaim>(isCallClaim);
 /** Zod schema for a {@link PartyRef}; unknown keys are rejected. */
 export const PartyRefSchema = z.object({ kind: ContributionNameSchema, id: z.string().min(1) }).strict();
 
+/**
+ * Zod schema for the `claims` of a {@link Party}: a plain object whose values are
+ * {@link CallClaim}s. The object is checked as a whole by {@link isCallClaim}, so a key a
+ * per-key record schema would drop silently (an own `__proto__`) is rejected instead.
+ */
+const PartyClaimsSchema = z.custom<{ readonly [key: string]: CallClaim }>(
+  (value) => isCallClaim(value) && typeof value === 'object' && value !== null && !Array.isArray(value),
+);
+
 /** Zod schema for a {@link Party}, with or without `claims`; unknown keys are rejected. */
 export const PartySchema = PartyRefSchema.extend({
-  claims: z.record(z.string(), CallClaimSchema).optional(),
+  claims: PartyClaimsSchema.optional(),
 }).strict();

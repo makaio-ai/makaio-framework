@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { createBusInstance } from '@makaio/bus-core';
+import { createTestCall } from '@makaio/test-utils';
 import {
   ArtifactNamespace,
   ArtifactSubjects,
@@ -75,7 +76,7 @@ function setup(options: { resolve?: string; create?: string; startRef?: boolean;
     ...(options.startRef && { artifactRef: { kind: existing.kind, id: existing.id } }),
   };
   return {
-    resolve: () => resolveWorkflowArtifactBinding({ definition, execution, runContext, bus }),
+    resolve: () => resolveWorkflowArtifactBinding({ call: createTestCall(), definition, execution, runContext, bus }),
     createdData,
     queries,
   };

@@ -1,4 +1,4 @@
-import type { ExtractSubjectPayload } from '@makaio/core';
+import type { CallContext, ExtractSubjectPayload } from '@makaio/core';
 import type { IMakaioBus } from '@makaio/bus-core';
 import {
   AgentSubjects,
@@ -25,20 +25,36 @@ export interface AgentRuntimeMutationManagerConfig {
   getConnector: () => AIAgentConnector;
   /** Agent-wide exclusivity boundary for connector-affecting operations. */
   runExclusive: <T>(action: () => Promise<T>) => Promise<T>;
-  /** Swap connector while the caller already owns the agent-wide runtime barrier. */
+  /**
+   * Swap connector while the caller already owns the agent-wide runtime barrier.
+   * @param call - Call context of the operation that triggers the swap
+   * @param configOverrides - Connector construction overrides
+   * @param beforeCommit - Final guard after initialization and before publication
+   */
   swapConnectorUnlocked: (
+    call: CallContext,
     configOverrides?: AgentConnectorConfigOverrides,
     beforeCommit?: ConnectorSwapCommitGuard,
   ) => Promise<void>;
-  /** Emit cwd.changed payload. */
+  /**
+   * Emit cwd.changed payload.
+   * @param call - Call context the emission is made under
+   * @param payload - Cwd change payload without agent identity
+   */
   emitCwdChanged: (
+    call: CallContext,
     payload: Omit<
       ExtractSubjectPayload<typeof AgentSubjects.cwd.changed>,
       'agentId' | 'adapterId' | 'adapterName' | 'adapterSessionId'
     >,
   ) => Promise<void>;
-  /** Emit model.changed payload. */
+  /**
+   * Emit model.changed payload.
+   * @param call - Call context the emission is made under
+   * @param payload - Model change payload without agent identity
+   */
   emitModelChanged: (
+    call: CallContext,
     payload: Omit<
       ExtractSubjectPayload<typeof AgentSubjects.model.changed>,
       'agentId' | 'adapterId' | 'adapterName' | 'adapterSessionId'

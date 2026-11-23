@@ -10,6 +10,7 @@
 
 import type { IMakaioBus } from '@makaio/bus-core';
 import { CapabilitySubjects, type ICapabilityProvider } from '@makaio/contracts';
+import type { CallContext } from '@makaio/core';
 
 /** Capability id used for observed-session ingestion policy providers. */
 export const OBSERVED_SESSION_INGESTION_POLICY_CAPABILITY_ID = 'observed-session-ingestion-policy';
@@ -43,25 +44,29 @@ export interface ObservedSessionIngestionPolicyInput {
 export interface IObservedSessionIngestionPolicyProvider extends ICapabilityProvider {
   /**
    * Decide whether an observed session should content-import or metadata-register only.
+   * @param call - Call context of the message requesting the ingestion decision
    * @param input - Observed session identity and importer context
    * @returns Ingestion policy decision
    */
   decideObservedSessionIngestion(
+    call: CallContext,
     input: ObservedSessionIngestionPolicyInput,
   ): ObservedSessionIngestionPolicyDecision | Promise<ObservedSessionIngestionPolicyDecision>;
 }
 
 /**
  * Register an observed-session ingestion policy provider.
+ * @param call - Call context for the provider registration lifecycle
  * @param bus - Makaio bus instance
  * @param provider - Policy provider to register
  * @returns Promise that resolves after registration handlers have completed
  */
 export function registerObservedSessionIngestionPolicyProvider(
+  call: CallContext,
   bus: IMakaioBus,
   provider: IObservedSessionIngestionPolicyProvider,
 ): Promise<void> {
-  return bus.emit(CapabilitySubjects.register, {
+  return bus.emit(call, CapabilitySubjects.register, {
     capabilityId: OBSERVED_SESSION_INGESTION_POLICY_CAPABILITY_ID,
     provider,
   });
@@ -69,12 +74,17 @@ export function registerObservedSessionIngestionPolicyProvider(
 
 /**
  * Unregister an observed-session ingestion policy provider.
+ * @param call - Call context for the provider registration lifecycle
  * @param bus - Makaio bus instance
  * @param providerId - Policy provider id to remove
  * @returns Promise that resolves after unregistration handlers have completed
  */
-export function unregisterObservedSessionIngestionPolicyProvider(bus: IMakaioBus, providerId: string): Promise<void> {
-  return bus.emit(CapabilitySubjects.unregister, {
+export function unregisterObservedSessionIngestionPolicyProvider(
+  call: CallContext,
+  bus: IMakaioBus,
+  providerId: string,
+): Promise<void> {
+  return bus.emit(call, CapabilitySubjects.unregister, {
     capabilityId: OBSERVED_SESSION_INGESTION_POLICY_CAPABILITY_ID,
     providerId,
   });

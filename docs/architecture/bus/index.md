@@ -27,7 +27,7 @@ local handlers and transport sends before it resolves. Use events for telemetry,
 lifecycle notifications, and anything where the sender should not need a result.
 
 ```ts
-await bus.emit(AgentSubjects.started, {
+await bus.emit(bus.own('start'), AgentSubjects.started, {
   agentId: 'agent-1',
   adapterId: 'claude-primary',
   adapterName: 'claude-code',
@@ -44,6 +44,7 @@ anything where the caller needs a value back.
 
 ```ts
 const { capabilities, nativeTools } = await bus.request(
+  bus.own('root'),
   AdapterSubjects.getCapabilities,
   { adapterName: 'openai-node' },
 );
@@ -177,6 +178,44 @@ The handler receives an `EventContext` with:
 - `messageId` — unique ID for this emission
 - `correlationId` — optional, for tracing related messages
 
+### Call Context
+
+Every bus send carries a `CallContext`. Pass it as the first argument to
+`emit()`, `request()`, `requestOptional()`, or `broadcast()`. Event and request
+handlers read `ctx.call.caller` for the immediate sender, `ctx.call.principal`
+for the party the work is done for, and `ctx.call.attestedBy` for the party
+vouching for the principal, when present. `ctx.transport` holds receive-side
+connection context and is absent for an in-process send.
+
+Forward `ctx.call` on every send made for the handled message. Pass the same
+call through helpers and callbacks, including work that runs after an `await`.
+The bus stamps the sending carrier as the next local caller and preserves the
+principal and attestation.
+
+```ts
+bus.on(HarnessSubjects.list, async (ctx) => {
+  const result = await bus.request(ctx.call, HarnessStorageSubjects.list, ctx.payload);
+  ctx.setResult(result);
+});
+```
+
+For work without a triggering message, mint an own context at the entry point
+with `bus.own(purpose)`:
+
+| Purpose | Use |
+|---------|-----|
+| `start` | Startup work |
+| `stop` | Shutdown work |
+| `schedule` | Timer or scheduler work |
+| `observer` | Independent observer callbacks |
+| `shared-work` | Independent work shared across multiple callers |
+| `root` | Other top-level work initiated by this carrier |
+
+`schedule`, `observer`, `shared-work`, and `stop` can run alongside open
+handlers. Own contexts belong to the bus carrier that minted them. Sending
+with another carrier's own context throws `ForeignOwnContextError`. Received
+`ctx.call` values can be forwarded across carriers.
+
 ### One-Time Listeners
 
 ```ts
@@ -196,7 +235,7 @@ bus.once(AgentSubjects.started, (ctx) => {
 ### Emitting Events
 
 ```ts
-await bus.emit(AgentSubjects.started, {
+await bus.emit(bus.own('start'), AgentSubjects.started, {
   agentId: 'agent-1',
   adapterId: 'claude-primary',
   adapterName: 'claude-code',
@@ -227,7 +266,7 @@ bus.on(ToolSubjects.list, (ctx) => {
 ### Making Requests
 
 ```ts
-const { tools, toolsets } = await bus.request(ToolSubjects.list, {});
+const { tools, toolsets } = await bus.request(bus.own('root'), ToolSubjects.list, {});
 ```
 
 `request()` throws if:
@@ -243,6 +282,7 @@ When a handler might not be registered (e.g., an optional extension), use
 
 ```ts
 const result = await bus.requestOptional(
+  bus.own('root'),
   HarnessSubjects.resolve,
   { agentId, toolName },
 );
@@ -266,6 +306,7 @@ Only `NoHandlerError` is converted to `{ handled: false }`. All other errors
 
 ```ts
 const results = await bus.broadcast(
+  bus.own('root'),
   CapabilitySubjects.listProviders,
   { capabilityId: 'log-import' },
 );
@@ -336,7 +377,7 @@ bypassed. The caller must connect directly to the owning runtime.
 | Behavior | `localSubject()` | `hostLocalRequest()` |
 |----------|-----------------|---------------------|
 | Schema constraint | Events and requests | Requests only |
-| Local origin | Stays local | Stays local |
+| In-process send | Stays local | Stays local |
 | Remote ingress | Rejected | Allowed (direct only) |
 | Advertisement | Not advertised | Local priorities only |
 | Relay (A→B→C) | N/A | Forbidden |
@@ -453,7 +494,7 @@ bus transforms them into nested accessor objects on the `subjects` export.
 Set a custom timeout per request:
 
 ```ts
-const result = await bus.request(SlowSubjects.compute, payload, {
+const result = await bus.request(bus.own('root'), SlowSubjects.compute, payload, {
   timeout: 120_000,
 });
 ```

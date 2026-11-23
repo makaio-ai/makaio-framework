@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
 import { ClaudeCodeClientSubjects } from '@makaio/client-claude-code/runtime';
+import { createTestCall } from '@makaio/test-utils';
 import { addMcpServerToProject, removeMcpServerFromProject } from '../utils/mcp-settings.js';
 
 describe('mcp-settings', () => {
@@ -29,7 +30,7 @@ describe('mcp-settings', () => {
         }),
       );
 
-      const handled = await addMcpServerToProject('/workspace/my-project', 'makaio-tools', {
+      const handled = await addMcpServerToProject(createTestCall(), '/workspace/my-project', 'makaio-tools', {
         type: 'http',
         url: 'http://localhost:3000',
       });
@@ -52,7 +53,7 @@ describe('mcp-settings', () => {
         }),
       );
 
-      const handled = await addMcpServerToProject('/project', 'stdio-server', {
+      const handled = await addMcpServerToProject(createTestCall(), '/project', 'stdio-server', {
         type: 'stdio',
         command: 'node',
         args: ['server.js'],
@@ -74,7 +75,7 @@ describe('mcp-settings', () => {
         }),
       );
 
-      const handled = await addMcpServerToProject('/project', 'existing-server', {
+      const handled = await addMcpServerToProject(createTestCall(), '/project', 'existing-server', {
         type: 'http',
         url: 'http://already-there',
       });
@@ -85,7 +86,7 @@ describe('mcp-settings', () => {
 
     it('resolves false when no config service is registered', async () => {
       await expect(
-        addMcpServerToProject('/project', 'makaio', { type: 'http', url: 'http://localhost:3000' }),
+        addMcpServerToProject(createTestCall(), '/project', 'makaio', { type: 'http', url: 'http://localhost:3000' }),
       ).resolves.toBe(false);
     });
   });
@@ -133,9 +134,9 @@ describe('mcp-settings', () => {
         }),
       );
 
-      await expect(addMcpServerToProject('/project', 'my-server', { type: 'http', url: 'http://x' })).rejects.toThrow(
-        'service unavailable',
-      );
+      await expect(
+        addMcpServerToProject(createTestCall(), '/project', 'my-server', { type: 'http', url: 'http://x' }),
+      ).rejects.toThrow('service unavailable');
     });
   });
 });

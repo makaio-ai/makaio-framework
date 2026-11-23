@@ -8,6 +8,7 @@ import {
   REVIEWER_PROCESSOR_CAPABILITY_ID,
 } from '@makaio/contracts';
 import type {
+  CallContext,
   IReviewSource,
   IReviewerProcessor,
   ReviewFinding,
@@ -285,7 +286,7 @@ export class ReviewFindingsService extends BaseService {
     // List stored findings
     this.registerHandler(ReviewSubjects.findings.list, async (ctx) => {
       const { target, status } = ctx.payload;
-      const result = await this.bus.request(ReviewStorageSubjects.findings.list, {
+      const result = await this.bus.request(ctx.call, ReviewStorageSubjects.findings.list, {
         target,
         status,
       });
@@ -295,8 +296,8 @@ export class ReviewFindingsService extends BaseService {
     // Fetch findings from external sources and reconcile
     this.registerHandler(ReviewSubjects.findings.fetch, async (ctx) => {
       const { target, repoPath } = ctx.payload;
-      const { created, updated } = await this.fetchAndReconcile(target, repoPath);
-      const { findings } = await this.bus.request(ReviewStorageSubjects.findings.list, {
+      const { created, updated } = await this.fetchAndReconcile(ctx.call, target, repoPath);
+      const { findings } = await this.bus.request(ctx.call, ReviewStorageSubjects.findings.list, {
         target,
       });
       ctx.setResult({ findings, created, updated });
@@ -305,7 +306,7 @@ export class ReviewFindingsService extends BaseService {
     // Trigger a review on a source
     this.registerHandler(ReviewSubjects.start, async (ctx) => {
       const { target, repoPath, sourceId } = ctx.payload;
-      const result = await this.triggerReview(target, repoPath, sourceId);
+      const result = await this.triggerReview(ctx.call, target, repoPath, sourceId);
       ctx.setResult(result);
     });
 
@@ -324,14 +325,14 @@ export class ReviewFindingsService extends BaseService {
         addressedBy: null,
       };
 
-      await this.bus.request(ReviewStorageSubjects.findings.upsert, { finding });
+      await this.bus.request(ctx.call, ReviewStorageSubjects.findings.upsert, { finding });
       ctx.setResult({ finding });
     });
 
     // Update finding lifecycle status
     this.registerHandler(ReviewSubjects.finding.updateStatus, async (ctx) => {
       const { findingId, target, status, reason, addressedBy } = ctx.payload;
-      const { finding: existing } = await this.bus.request(ReviewStorageSubjects.findings.get, {
+      const { finding: existing } = await this.bus.request(ctx.call, ReviewStorageSubjects.findings.get, {
         id: findingId,
       });
 
@@ -347,9 +348,9 @@ export class ReviewFindingsService extends BaseService {
       const now = Date.now();
       const updated = transitionFindingStatus(existing, status, now, reason, addressedBy);
 
-      await this.bus.request(ReviewStorageSubjects.findings.upsert, { finding: updated });
+      await this.bus.request(ctx.call, ReviewStorageSubjects.findings.upsert, { finding: updated });
 
-      await this.bus.emit(ReviewSubjects.finding.statusChanged, {
+      await this.bus.emit(ctx.call, ReviewSubjects.finding.statusChanged, {
         finding: updated,
         previousStatus,
       });
@@ -386,12 +387,14 @@ export class ReviewFindingsService extends BaseService {
   /**
    * Fetch snapshots from all (or one) sources, extract findings, reconcile,
    * and persist differences.
+   * @param call - Call context of the request that triggered the fetch
    * @param target - The PR/branch target to fetch for
    * @param repoPath - Local filesystem path for VCS provider routing
    * @param sourceId - Optional specific source; all sources when omitted
    * @returns Counts of created and updated findings
    */
   private async fetchAndReconcile(
+    call: CallContext,
     target: FindingTarget,
     repoPath: string,
     sourceId?: string,
@@ -401,7 +404,7 @@ export class ReviewFindingsService extends BaseService {
         ? [this.sources.get(sourceId)].filter((s): s is IReviewSource => s !== undefined)
         : [...this.sources.values()].filter((s) => s.capabilities.canFetch);
 
-    const { findings: existing } = await this.bus.request(ReviewStorageSubjects.findings.list, {
+    const { findings: existing } = await this.bus.request(call, ReviewStorageSubjects.findings.list, {
       target,
     });
 
@@ -411,7 +414,7 @@ export class ReviewFindingsService extends BaseService {
     for (const source of sourcesToFetch) {
       if (source.fetchSnapshot === undefined) continue;
 
-      const snapshot = await source.fetchSnapshot({ target, repoPath });
+      const snapshot = await source.fetchSnapshot(call, { target, repoPath });
       const bucket = this.processors.get(source.reviewer) ?? [];
       const processor = resolveProcessor(bucket, source.preferredProcessorKey);
       if (processor === null) {
@@ -421,7 +424,7 @@ export class ReviewFindingsService extends BaseService {
 
       const fresh = extractFindings(snapshot, processor);
       const sourceExisting = existing.filter((finding) => finding.sourceId === source.id);
-      const { c, u } = await this.reconcile(sourceExisting, fresh);
+      const { c, u } = await this.reconcile(call, sourceExisting, fresh);
       created += c;
       updated += u;
 
@@ -434,7 +437,7 @@ export class ReviewFindingsService extends BaseService {
       // must not be cancelled by a subscriber reacting to another source.
       if (c > 0 || u > 0) {
         try {
-          await this.bus.emit(ReviewSubjects.findings.arrived, {
+          await this.bus.emit(call, ReviewSubjects.findings.arrived, {
             target,
             sourceId: source.id,
             reviewer: source.reviewer,
@@ -459,11 +462,16 @@ export class ReviewFindingsService extends BaseService {
    * - Existing verified/addressed findings whose IDs appear in fresh as open → re-open.
    * - Existing open findings whose fresh counterpart reports `verified` → mark `verified`.
    * - User-owned statuses (`dismissed`, `deferred`) are never overridden by fresh data.
+   * @param call - Call context of the request that triggered the reconciliation
    * @param existing - Currently stored findings for this target
    * @param fresh - Freshly extracted findings from the source
    * @returns Counts of created and updated records
    */
-  private async reconcile(existing: ReviewFinding[], fresh: ReviewFinding[]): Promise<{ c: number; u: number }> {
+  private async reconcile(
+    call: CallContext,
+    existing: ReviewFinding[],
+    fresh: ReviewFinding[],
+  ): Promise<{ c: number; u: number }> {
     const existingById = new Map(existing.map((f) => [f.id, f]));
     const freshById = new Map(fresh.map((f) => [f.id, f]));
     const now = Date.now();
@@ -516,7 +524,7 @@ export class ReviewFindingsService extends BaseService {
     }
 
     if (toUpsert.length > 0) {
-      await this.bus.request(ReviewStorageSubjects.findings.upsertBatch, {
+      await this.bus.request(call, ReviewStorageSubjects.findings.upsertBatch, {
         findings: toUpsert,
       });
     }
@@ -532,12 +540,14 @@ export class ReviewFindingsService extends BaseService {
    * Trigger a review on a specific source (or the first triggerable source).
    *
    * Checks rate limits before triggering.
+   * @param call - Call context of the request that triggered the review
    * @param target - The PR/branch target to trigger for
    * @param repoPath - Local filesystem path for VCS provider routing
    * @param sourceId - Optional specific source to trigger
    * @returns Trigger result including rate limit state
    */
   private async triggerReview(
+    call: CallContext,
     target: FindingTarget,
     repoPath: string,
     sourceId?: string,
@@ -560,10 +570,10 @@ export class ReviewFindingsService extends BaseService {
       return { triggered: false, rateLimit };
     }
 
-    const result = await source.trigger({ target, repoPath });
+    const result = await source.trigger(call, { target, repoPath });
 
     if (result.triggered) {
-      await this.bus.emit(ReviewSubjects.started, {
+      await this.bus.emit(call, ReviewSubjects.started, {
         target,
         sourceId: source.id,
       });

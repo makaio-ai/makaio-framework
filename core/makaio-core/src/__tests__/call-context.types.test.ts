@@ -41,6 +41,14 @@ function typeAssertions(): void {
   // @ts-expect-error a context is not buildable from its parts passed as an argument literal
   pass({ caller: party, principal: party });
 
+  // The nominal stamp only blocks literal and spread syntax: a value assembled through
+  // Object.assign or structuredClone keeps the same shape and compiles without a cast.
+  // Only the runtime WeakSet check (bus-core's call-context/mint.ts) rejects either value;
+  // see call-context-carrier.test.ts for that rejection.
+  const assigned: CallContext = Object.assign({}, ctx, { principal: party });
+  const cloned: CallContext = structuredClone(ctx);
+  void [assigned, cloned];
+
   // @ts-expect-error caller.id is read-only
   ctx.caller.id = 'other';
 

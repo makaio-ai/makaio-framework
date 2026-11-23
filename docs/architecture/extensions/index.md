@@ -55,6 +55,7 @@ interface MakaioExtension<THostContext extends ExtensionContext = NodeExtensionC
   tools?: ExtensionToolsContribution<THostContext>;
   hashTriggers?: ExtensionHashTriggersContribution<THostContext['bus']>;
   automationTriggers?: ExtensionAutomationTriggersContribution<THostContext>;
+  clientHookResponses?: ExtensionClientHookResponsesContribution<THostContext>;
   sessionEventActions?: ExtensionSessionEventActionsContribution;
   logImport?: LogImportContribution;
   ui?: ExtensionUiContribution; // declarative metadata unless bridged by a browser factory
@@ -63,6 +64,10 @@ interface MakaioExtension<THostContext extends ExtensionContext = NodeExtensionC
 
 The `create` factory is optional. An extension that only contributes a window, a tray entry,
 or browser UI omits it entirely.
+
+Client hook response contributors receive the hook request's call as
+`ContributorCallbackContext.call`. Their `respond(ctx)` callback forwards `ctx.call` on
+every send it makes for that invocation, including sends after an await.
 
 ### `descriptor.json` — install/discovery contract
 
@@ -465,6 +470,10 @@ an `emit(payload, metadata?)` function — plus the params already parsed throug
 returns a cleanup function. The runtime aborts the signal before awaiting cleanup, so an
 `activate` that parks on the signal always settles.
 
+For an occurrence caused by a bus message, pass its received call as `metadata.call`.
+The runtime carries it onto the trigger event for consumers. An independent watcher
+like the one above supplies only the payload.
+
 `bindingKey` is the canonical key the runtime indexed this activation under, for a trigger that has
 to name its activation to a collaborator or in a log line. It is not a unique index over time: a
 retiring and a fresh activation of one key can briefly coexist, so a collaborator keys its own state
@@ -619,6 +628,11 @@ Critical extension failures still fail boot because the host declared that exten
    dependency order. Storage handlers are registered after migrations are applied, and
    contribution processors activate executable surfaces such as HTTP routes.
 3. **`shutdown()`** — calls `service.destroy()` in reverse boot order.
+
+Extension services use `bus.own('start')` for sends from startup and `bus.own('stop')`
+for sends from teardown, minted on the bus that performs the send. Handlers registered
+during startup forward each received message's `ctx.call`. Handler code reads the sender
+from `ctx.call.caller`. See [Calls and origins](../../creating-extensions.md#calls-and-origins).
 
 ### Enable and disable
 

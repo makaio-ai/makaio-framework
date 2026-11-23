@@ -6,21 +6,22 @@
  * @packageDocumentation
  */
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
-import { MakaioBus, type IMakaioBus } from '@makaio/bus-core';
+import type { IMakaioBus } from '@makaio/bus-core';
 import { useBus } from '../bus/bus-provider.js';
-import { AdapterSubjects } from '@makaio/contracts';
+import { AdapterSubjects, type ResolvedProviderContext } from '@makaio/contracts';
+import type { CallContext } from '@makaio/contracts/call-context';
 import { AdapterRuntimeSubjects } from '@makaio/services-core/adapter-runtime';
 import { AdapterSubsystemSubjects, type BindingRecord } from '@makaio/services-core/adapter-subsystem';
+import { resolveRuntimeProviderContext } from '@makaio/services-core/provider-context';
 import { LogImportSubjects } from '@makaio/services-log-import/log-import';
-import type { AgentSelection, ResolvedProviderContext } from '@makaio/contracts';
+import type { AgentSelection } from '@makaio/contracts';
 import type { LogImportMode } from '@makaio/services-log-import/log-import';
 import { SettingsSubjects } from '@makaio/services-core/settings/namespace';
 import { ExtensionSubjects } from '@makaio/kernel';
 import type { ExtensionInfo } from '@makaio/kernel';
-import { resolveRuntimeProviderContext } from '@makaio/services-core/provider-context';
 import { onboardingStepRegistry, findCategory, deriveDefaultEnabled } from '@makaio/ui-kernel';
 import type { OnboardingStepDefinition as KernelOnboardingStepDefinition } from '@makaio/ui-kernel';
-import { persistPluginEnabled } from './plugin-persistence.js';
+import { persistPluginEnabled, persistPluginEnabledIsolated } from './plugin-persistence.js';
 import { seedManagedExtensions } from './seed-managed-extensions.js';
 import { useAppContext } from '../state/app-context-store.js';
 import { useProviderStore } from '../state/provider-store.js';
@@ -91,46 +92,22 @@ function finalizeOnboardingCompletion(onComplete: () => void): void {
   }
 }
 /**
- * Persist one plugin's enabled state, isolating both a transport failure and
- * a `'rejected'` outcome so a caller iterating many plugins never lets one
- * failure abandon the rest of its batch.
- * @param pluginName - Registry name of the plugin.
- * @param enabled - Desired enabled state.
- * @param bus - Bus instance used to dispatch the request.
- * @param context - Short label distinguishing an explicit choice from a derived default in logs.
- */
-async function persistPluginEnabledIsolated(
-  pluginName: string,
-  enabled: boolean,
-  bus: IMakaioBus,
-  context: string,
-): Promise<void> {
-  try {
-    const result = await persistPluginEnabled(pluginName, enabled, bus);
-    // 'rejected' is the only outcome where nothing was persisted; the durable
-    // 'restart-required' still honoured the operator's (or default's) choice.
-    if (result.outcome === 'rejected') {
-      console.error(
-        `[useOnboardingFlow] ${context} for ${pluginName} was rejected; the extension keeps its previous preference.`,
-      );
-    }
-  } catch (err) {
-    console.error(`[useOnboardingFlow] Failed to persist ${context.toLowerCase()} for ${pluginName}:`, err);
-  }
-}
-/**
+ * @param call - Call context of the user action that creates the config.
+ * @param bus - Bus used for the create request and handed to the host-owned create bridge.
  * @param input - Onboarding draft.
- * @param refreshProviderConfigs - Refresh callback after a successful create.
+ * @param refreshProviderConfigs - Refresh callback receiving the same call after a successful create.
  * @returns Created config ID.
  */
 async function createOnboardingProviderConfig(
+  call: CallContext,
+  bus: IMakaioBus,
   input: OnboardingProviderConfigDraft,
-  refreshProviderConfigs: () => Promise<void>,
+  refreshProviderConfigs: (call: CallContext) => Promise<void>,
 ): Promise<string> {
   const creator = onboardingProviderConfigRegistration?.creator ?? null;
   if (creator) {
-    const configId = await creator(MakaioBus, input);
-    await refreshProviderConfigs();
+    const configId = await creator(call, bus, input);
+    await refreshProviderConfigs(call);
     return configId;
   }
   if (authDraftRequiresStorage(input.auth)) {
@@ -138,11 +115,11 @@ async function createOnboardingProviderConfig(
   }
   const { auth } = compileProviderConfigAuthDraft(input.auth);
   const { auth: _authDraft, ...configInput } = input;
-  const { config } = await MakaioBus.request(AdapterSubsystemSubjects.createProviderConfig, {
+  const { config } = await bus.request(call, AdapterSubsystemSubjects.createProviderConfig, {
     ...configInput,
     auth,
   });
-  await refreshProviderConfigs();
+  await refreshProviderConfigs(call);
   return config.id;
 }
 /**
@@ -152,17 +129,23 @@ async function createOnboardingProviderConfig(
  * adapter-qualified atomic runtime context.
  * Returns `undefined` for adapters with no usable provider binding
  * (e.g. local claude-code).
+ * @param call - Call context of the user action that runs the health check.
+ * @param bus - Bus used for the binding lookup and the context resolution.
  * @param adapterName - Adapter type name to look up
  * @returns Resolved provider context, or undefined when no binding exists
  * @throws RuntimeProviderContextResolutionError when the selected binding is unavailable or incompatible
  */
-async function resolveHealthCheckProviderContext(adapterName: string): Promise<ResolvedProviderContext | undefined> {
-  const bindingResult = await MakaioBus.requestOptional(AdapterSubsystemSubjects.getDefaultBinding, { adapterName });
+async function resolveHealthCheckProviderContext(
+  call: CallContext,
+  bus: IMakaioBus,
+  adapterName: string,
+): Promise<ResolvedProviderContext | undefined> {
+  const bindingResult = await bus.requestOptional(call, AdapterSubsystemSubjects.getDefaultBinding, { adapterName });
   if (!bindingResult.handled || !bindingResult.data.binding) {
     return undefined;
   }
   const { binding } = bindingResult.data;
-  return resolveRuntimeProviderContext(MakaioBus, {
+  return resolveRuntimeProviderContext(call, bus, {
     adapterName: binding.adapterName,
     providerConfigId: binding.providerConfigId,
   });
@@ -227,7 +210,7 @@ function useOnboardingFlowImpl({ context, onComplete, onSkip }: UseOnboardingFlo
 
     const doFetch = async () => {
       try {
-        const extensionsResult = await MakaioBus.request(ExtensionSubjects.list, {});
+        const extensionsResult = await bus.request(bus.own('root'), ExtensionSubjects.list, {});
         if (!isCurrentRun()) return;
 
         const { managed, initialDisables } = seedManagedExtensions(extensionsResult.extensions);
@@ -240,7 +223,7 @@ function useOnboardingFlowImpl({ context, onComplete, onSkip }: UseOnboardingFlo
     };
 
     void doFetch();
-  }, []);
+  }, [bus]);
 
   useEffect(
     () => () => {
@@ -251,14 +234,14 @@ function useOnboardingFlowImpl({ context, onComplete, onSkip }: UseOnboardingFlo
   );
 
   const refreshAdapterList = useCallback(async (): Promise<void> => {
-    const { adapters: fresh } = await MakaioBus.request(SettingsSubjects.adapter.list, {});
+    const { adapters: fresh } = await bus.request(bus.own('root'), SettingsSubjects.adapter.list, {});
     setAdapters(fresh);
     setEnabledAdapterNames(new Set(fresh.filter((a) => a.enabled).map((a) => a.adapterName)));
-  }, []);
+  }, [bus]);
 
   const enableAdapter = useCallback(
     async (adapterName: string): Promise<void> => {
-      const setEnabledResult = await MakaioBus.request(SettingsSubjects.adapter.setEnabled, {
+      const setEnabledResult = await bus.request(bus.own('root'), SettingsSubjects.adapter.setEnabled, {
         adapterName,
         enabled: true,
       });
@@ -267,12 +250,12 @@ function useOnboardingFlowImpl({ context, onComplete, onSkip }: UseOnboardingFlo
       await refreshAdapterList();
       useProviderStore.getState().invalidate();
     },
-    [refreshAdapterList],
+    [bus, refreshAdapterList],
   );
 
   const disableAdapter = useCallback(
     async (adapterName: string): Promise<void> => {
-      const setEnabledResult = await MakaioBus.request(SettingsSubjects.adapter.setEnabled, {
+      const setEnabledResult = await bus.request(bus.own('root'), SettingsSubjects.adapter.setEnabled, {
         adapterName,
         enabled: false,
       });
@@ -286,72 +269,77 @@ function useOnboardingFlowImpl({ context, onComplete, onSkip }: UseOnboardingFlo
       await refreshAdapterList();
       useProviderStore.getState().invalidate();
     },
-    [refreshAdapterList],
+    [bus, refreshAdapterList],
   );
 
-  const runHealthCheck = useCallback(async (adapterName: string): Promise<HealthCheckResult> => {
-    setHealthCheckResults((prev) => new Map([...prev, [adapterName, { status: 'pending' }]]));
-    healthCheckAbortMap.current.get(adapterName)?.abort();
-    const abortController = new AbortController();
-    healthCheckAbortMap.current.set(adapterName, abortController);
-    const clearCurrentAbortController = (): void => {
-      if (healthCheckAbortMap.current.get(adapterName) === abortController) {
-        healthCheckAbortMap.current.delete(adapterName);
+  const runHealthCheck = useCallback(
+    async (adapterName: string): Promise<HealthCheckResult> => {
+      setHealthCheckResults((prev) => new Map([...prev, [adapterName, { status: 'pending' }]]));
+      healthCheckAbortMap.current.get(adapterName)?.abort();
+      const abortController = new AbortController();
+      healthCheckAbortMap.current.set(adapterName, abortController);
+      const clearCurrentAbortController = (): void => {
+        if (healthCheckAbortMap.current.get(adapterName) === abortController) {
+          healthCheckAbortMap.current.delete(adapterName);
+        }
+      };
+
+      const call = bus.own('root');
+      let adapterId: string;
+      try {
+        const resolved = await bus.request(
+          call,
+          AdapterRuntimeSubjects.resolveId,
+          { adapterName },
+          {
+            signal: abortController.signal,
+          },
+        );
+        adapterId = resolved.adapterId;
+      } catch (err) {
+        clearCurrentAbortController();
+        if (abortController.signal.aborted) return { status: 'pending' }; // guard: stale resolveId errors
+        const message = err instanceof Error ? err.message : String(err);
+        const result: HealthCheckResult = {
+          status: 'error',
+          message: `Could not resolve adapter "${adapterName}": ${message}`,
+        };
+        setHealthCheckResults((prev) => new Map([...prev, [adapterName, result]]));
+        return result;
       }
-    };
 
-    let adapterId: string;
-    try {
-      const resolved = await MakaioBus.request(
-        AdapterRuntimeSubjects.resolveId,
-        { adapterName },
-        {
+      try {
+        if (abortController.signal.aborted) return { status: 'pending' };
+        const providerContext = await resolveHealthCheckProviderContext(call, bus, adapterName);
+        if (abortController.signal.aborted) return { status: 'pending' };
+        const startMs = Date.now();
+        const inferPayload = {
+          adapterId,
+          prompt: HEALTH_CHECK_PROMPT,
+          ...(providerContext && { providerContext }),
+        };
+        await bus.request(call, AdapterSubjects.infer, inferPayload, {
+          timeout: HEALTH_CHECK_TIMEOUT_MS,
           signal: abortController.signal,
-        },
-      );
-      adapterId = resolved.adapterId;
-    } catch (err) {
-      clearCurrentAbortController();
-      if (abortController.signal.aborted) return { status: 'pending' }; // guard: stale resolveId errors
-      const message = err instanceof Error ? err.message : String(err);
-      const result: HealthCheckResult = {
-        status: 'error',
-        message: `Could not resolve adapter "${adapterName}": ${message}`,
-      };
-      setHealthCheckResults((prev) => new Map([...prev, [adapterName, result]]));
-      return result;
-    }
+        });
 
-    try {
-      if (abortController.signal.aborted) return { status: 'pending' };
-      const providerContext = await resolveHealthCheckProviderContext(adapterName);
-      if (abortController.signal.aborted) return { status: 'pending' };
-      const startMs = Date.now();
-      const inferPayload = {
-        adapterId,
-        prompt: HEALTH_CHECK_PROMPT,
-        ...(providerContext && { providerContext }),
-      };
-      await MakaioBus.request(AdapterSubjects.infer, inferPayload, {
-        timeout: HEALTH_CHECK_TIMEOUT_MS,
-        signal: abortController.signal,
-      });
+        if (abortController.signal.aborted) return { status: 'pending' };
 
-      if (abortController.signal.aborted) return { status: 'pending' };
-
-      const result: HealthCheckResult = { status: 'success', durationMs: Date.now() - startMs };
-      setHealthCheckResults((prev) => new Map([...prev, [adapterName, result]]));
-      return result;
-    } catch (err) {
-      if (abortController.signal.aborted) return { status: 'pending' };
-      const message = err instanceof Error ? err.message : String(err);
-      const result: HealthCheckResult = { status: 'error', message };
-      setHealthCheckResults((prev) => new Map([...prev, [adapterName, result]]));
-      return result;
-    } finally {
-      clearCurrentAbortController();
-    }
-  }, []);
+        const result: HealthCheckResult = { status: 'success', durationMs: Date.now() - startMs };
+        setHealthCheckResults((prev) => new Map([...prev, [adapterName, result]]));
+        return result;
+      } catch (err) {
+        if (abortController.signal.aborted) return { status: 'pending' };
+        const message = err instanceof Error ? err.message : String(err);
+        const result: HealthCheckResult = { status: 'error', message };
+        setHealthCheckResults((prev) => new Map([...prev, [adapterName, result]]));
+        return result;
+      } finally {
+        clearCurrentAbortController();
+      }
+    },
+    [bus],
+  );
 
   const setLogImportMode = useCallback((adapterName: string, mode: LogImportMode): void => {
     setLogImportSelections((prev) => new Map([...prev, [adapterName, mode]]));
@@ -366,7 +354,7 @@ function useOnboardingFlowImpl({ context, onComplete, onSkip }: UseOnboardingFlo
     setIsScanning(true);
     setScanError(null);
     try {
-      const { adapters: adapterResults, clients: clientResults } = await scanOnboarding();
+      const { adapters: adapterResults, clients: clientResults } = await scanOnboarding(bus.own('root'));
       if (scanRunIdRef.current !== runId) return;
       setScanAdapters(adapterResults);
       setScanClients(clientResults);
@@ -385,7 +373,7 @@ function useOnboardingFlowImpl({ context, onComplete, onSkip }: UseOnboardingFlo
         setIsScanning(false);
       }
     }
-  }, []);
+  }, [bus]);
 
   const togglePlugin = useCallback(
     (pluginName: string, enabled: boolean): void => {
@@ -417,7 +405,7 @@ function useOnboardingFlowImpl({ context, onComplete, onSkip }: UseOnboardingFlo
         });
       };
 
-      void persistPluginEnabled(pluginName, enabled, bus)
+      void persistPluginEnabled(bus.own('root'), pluginName, enabled, bus)
         .then((result) => {
           // Only a genuine `'rejected'` outcome reverts (not durable `'restart-required'`), and only if unsuperseded.
           if (result.outcome === 'rejected' && isCurrentToggle()) {
@@ -447,23 +435,27 @@ function useOnboardingFlowImpl({ context, onComplete, onSkip }: UseOnboardingFlo
     });
   }, []);
 
-  const refreshProviderConfigs = useCallback(async (): Promise<void> => {
-    setProviderConfigs(await listProviderConfigSummaryViews(MakaioBus));
-  }, []);
+  const refreshProviderConfigs = useCallback(
+    async (call: CallContext): Promise<void> => {
+      setProviderConfigs(await listProviderConfigSummaryViews(call, bus));
+    },
+    [bus],
+  );
 
   const createProviderConfig = useCallback(
     async (input: OnboardingProviderConfigDraft): Promise<string> =>
-      createOnboardingProviderConfig(input, refreshProviderConfigs),
-    [refreshProviderConfigs],
+      createOnboardingProviderConfig(bus.own('root'), bus, input, refreshProviderConfigs),
+    [bus, refreshProviderConfigs],
   );
 
   const deleteProviderConfig = useCallback(
     async (id: string): Promise<void> => {
-      await MakaioBus.request(AdapterSubsystemSubjects.deleteProviderConfig, { id });
-      await refreshProviderConfigs();
+      const call = bus.own('root');
+      await bus.request(call, AdapterSubsystemSubjects.deleteProviderConfig, { id });
+      await refreshProviderConfigs(call);
       setAdapterProviderBindings((prev) => prev.filter((b) => b.providerConfigId !== id));
     },
-    [refreshProviderConfigs],
+    [bus, refreshProviderConfigs],
   );
 
   /**
@@ -471,39 +463,44 @@ function useOnboardingFlowImpl({ context, onComplete, onSkip }: UseOnboardingFlo
    * Shared by {@link bindProvider}, {@link unbindProvider}, and {@link refreshBindings}.
    * @param adapterName - The adapter name whose bindings should be refreshed.
    */
-  const refreshBindingsForAdapter = useCallback(async (adapterName: string): Promise<void> => {
-    const { bindings } = await MakaioBus.request(AdapterSubsystemSubjects.listBindings, { adapterName });
-    setAdapterProviderBindings((prev) => {
-      const without = prev.filter((b) => b.adapterName !== adapterName);
-      return [...without, ...bindings];
-    });
-  }, []);
+  const refreshBindingsForAdapter = useCallback(
+    async (adapterName: string): Promise<void> => {
+      const { bindings } = await bus.request(bus.own('root'), AdapterSubsystemSubjects.listBindings, {
+        adapterName,
+      });
+      setAdapterProviderBindings((prev) => {
+        const without = prev.filter((b) => b.adapterName !== adapterName);
+        return [...without, ...bindings];
+      });
+    },
+    [bus],
+  );
 
   const bindProvider = useCallback(
     async (adapterName: string, providerConfigId: string): Promise<void> => {
-      await MakaioBus.request(AdapterSubsystemSubjects.bind, { adapterName, providerConfigId });
+      await bus.request(bus.own('root'), AdapterSubsystemSubjects.bind, { adapterName, providerConfigId });
       await refreshBindingsForAdapter(adapterName);
     },
-    [refreshBindingsForAdapter],
+    [bus, refreshBindingsForAdapter],
   );
 
   const unbindProvider = useCallback(
     async (adapterName: string, providerConfigId: string): Promise<void> => {
-      await MakaioBus.request(AdapterSubsystemSubjects.unbind, { adapterName, providerConfigId });
+      await bus.request(bus.own('root'), AdapterSubsystemSubjects.unbind, { adapterName, providerConfigId });
       await refreshBindingsForAdapter(adapterName);
     },
-    [refreshBindingsForAdapter],
+    [bus, refreshBindingsForAdapter],
   );
 
   const setDefaultProvider = useCallback(
     async (adapterName: string, providerConfigId: string): Promise<void> => {
-      await MakaioBus.request(AdapterSubsystemSubjects.setDefaultBinding, {
+      await bus.request(bus.own('root'), AdapterSubsystemSubjects.setDefaultBinding, {
         adapterName,
         providerConfigId,
       });
       await refreshBindingsForAdapter(adapterName);
     },
-    [refreshBindingsForAdapter],
+    [bus, refreshBindingsForAdapter],
   );
 
   const actions: OnboardingFlowActions = useMemo(
@@ -523,10 +520,11 @@ function useOnboardingFlowImpl({ context, onComplete, onSkip }: UseOnboardingFlo
       bindProvider,
       unbindProvider,
       setDefaultProvider,
-      refreshProviderConfigs,
+      refreshProviderConfigs: () => refreshProviderConfigs(bus.own('root')),
       refreshBindings: refreshBindingsForAdapter,
     }),
     [
+      bus,
       enableAdapter,
       disableAdapter,
       runHealthCheck,
@@ -563,12 +561,13 @@ function useOnboardingFlowImpl({ context, onComplete, onSkip }: UseOnboardingFlo
       if (defaultAgentSelection) {
         setDefaultSelection(defaultAgentSelection);
       }
+      const call = bus.own('root');
       // Per-item catch: one adapter's failed/timed-out `setMode` request must not abandon the rest of this batch.
       const modeEntries = Array.from(logImportSelections.entries());
       await Promise.all(
         modeEntries.map(async ([adapterName, mode]) => {
           try {
-            await MakaioBus.request(LogImportSubjects.setMode, { adapterName, mode }, { timeout: PERSIST_TIMEOUT_MS });
+            await bus.request(call, LogImportSubjects.setMode, { adapterName, mode }, { timeout: PERSIST_TIMEOUT_MS });
           } catch (err) {
             console.error(`[useOnboardingFlow] Failed to persist log import mode for ${adapterName}:`, err);
           }
@@ -579,7 +578,7 @@ function useOnboardingFlowImpl({ context, onComplete, onSkip }: UseOnboardingFlo
       // not discard every other plugin choice made in this flow.
       await Promise.all(
         Array.from(pluginEnabledStates.entries()).map(([pluginName, enabled]) =>
-          persistPluginEnabledIsolated(pluginName, enabled, bus, 'Extension state'),
+          persistPluginEnabledIsolated(call, pluginName, enabled, bus, 'Extension state'),
         ),
       );
       if (persistPluginDefaults) {
@@ -590,7 +589,7 @@ function useOnboardingFlowImpl({ context, onComplete, onSkip }: UseOnboardingFlo
           .map((ext) => ({ name: ext.name, defaultEnabled: deriveDefaultEnabled(findCategory(ext.name)) }));
         await Promise.all(
           pendingDefaults.map(({ name, defaultEnabled }) =>
-            persistPluginEnabledIsolated(name, defaultEnabled, bus, 'Default extension state'),
+            persistPluginEnabledIsolated(call, name, defaultEnabled, bus, 'Default extension state'),
           ),
         );
       }

@@ -1,7 +1,15 @@
 import path from 'node:path';
 import type { IMakaioBus } from '@makaio/bus-core';
+import { createCarrierBus } from '@makaio/bus-core/kernel-api';
+import { MAKAIO_EXTENSION_PARTY_KIND } from '@makaio/core';
+import type { PartyRef } from '@makaio/core';
 import { EXTENSION_DATA_DIR_SEGMENT, encodeExtensionNameAsPathSegment } from '@makaio/contracts';
-import type { ExtensionOperatorConfigSource, ExtensionToken, OpenContributionReader } from '@makaio/contracts';
+import type {
+  ExtensionIdentity,
+  ExtensionOperatorConfigSource,
+  ExtensionToken,
+  OpenContributionReader,
+} from '@makaio/contracts';
 import {
   type ExtensionConfigResolution,
   type ExtensionConfigResolutionMode,
@@ -17,7 +25,10 @@ import type { ExtensionContextBase, ExtensionEntry, KernelExtensionContext } fro
  * coordinator can wire them to its own shutdown sequence and entry map.
  */
 export interface ExtensionContextHost {
-  /** Bus instance exposed to extensions. */
+  /**
+   * Host bus instance. Every extension gets its own carrier-bound instance derived
+   * from it, never this one. Must be a bus built by the bus core.
+   */
   readonly bus: IMakaioBus;
   /**
    * Node platform/user context supplied by the composition root.
@@ -193,6 +204,30 @@ export function checkExtensionNameAddressable(extensionName: string): string | u
 }
 
 /**
+ * Build the party reference of an extension: carrier kind `makaio.extension`, id the extension name.
+ * @param identity - Trusted identity of the extension entry.
+ * @returns The extension's carrier party.
+ */
+function extensionCarrierOf(identity: ExtensionIdentity): PartyRef {
+  // The carrier comes from the trusted identity of the entry, never from an argument of the extension.
+  return { kind: MAKAIO_EXTENSION_PARTY_KIND, id: identity.extensionName };
+}
+
+/**
+ * Create the carrier bus of an extension.
+ *
+ * The carrier comes from the trusted identity of the entry, never from an argument
+ * of the extension. Every extension-owned send, and every CLI command an extension
+ * contributes, runs on this bus rather than on the host bus.
+ * @param hostBus - Host bus built by the bus core.
+ * @param identity - Trusted identity of the extension entry.
+ * @returns Bus instance bound to the extension's carrier.
+ */
+export function createExtensionCarrierBus(hostBus: IMakaioBus, identity: ExtensionIdentity): IMakaioBus {
+  return createCarrierBus(hostBus, extensionCarrierOf(identity));
+}
+
+/**
  * Build a {@link NodeExtensionContext} for extension create/storage lifecycles.
  *
  * The `dataDir` is resolved to `<makaioHome>/data/<encoded>` where `<encoded>`
@@ -207,6 +242,10 @@ export function checkExtensionNameAddressable(extensionName: string): string | u
  * somehow arrives the extension cannot be given a unique, safe `dataDir` and
  * must not start. Call sites isolate the failure per-extension (the entry
  * transitions to `failed`; only critical extensions escalate to boot abort).
+ * The context carries a bus instance bound to the extension (carrier kind
+ * `makaio.extension`, id the extension name): its `bus.own(purpose)` yields the
+ * extension's own call contexts. When the host supplies `credentialsFor`, the
+ * extension also gets a credential resolver bound to the same carrier and bus.
  * @param host - Coordinator surface providing bus, platform context, and service lookup.
  * @param entry - Extension entry receiving the context.
  * @param config - Optional resolved config.
@@ -245,9 +284,14 @@ export function buildExtensionContext(
         `within the filesystem component length limit.`,
     );
   }
+  const { credentialsFor, ...base } = host.extensionContextBase;
+  const carrier = extensionCarrierOf(entry.identity);
+  const bus = createExtensionCarrierBus(host.bus, entry.identity);
+  const credentials = credentialsFor?.(carrier, bus);
   return {
-    ...host.extensionContextBase,
-    bus: host.bus,
+    ...base,
+    bus,
+    ...(credentials !== undefined ? { credentials } : {}),
     identity: entry.identity,
     dataDir: path.join(host.extensionContextBase.makaioHome, EXTENSION_DATA_DIR_SEGMENT, segment),
     getService: <T>(token: ExtensionToken<T>): T | undefined => host.getExtensionService(token.name),

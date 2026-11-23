@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import type { CallContext } from '@makaio/core';
 import { defineTool, toolSuccess, toolError, ToolErrorCodes } from '@makaio/tools-core';
 import type { BusLike, ToolResult } from '@makaio/tools-core';
 import { ReviewSubjects, FindingStatusSchema, ReviewFindingSchema, FindingTargetSchema } from '@makaio/contracts';
@@ -126,12 +127,14 @@ type ReviewFindingsOutput = z.infer<typeof ReviewFindingsOutputSchema>;
 
 /**
  * Dispatches a validated review_findings tool input to the appropriate bus handler.
+ * @param call - Call context of the tool execution request
  * @param input - Validated discriminated-union input
  * @param bus - Bus instance for subject requests
  * @param cwd - Tool execution working directory for repoPath fallback
  * @returns Typed tool result
  */
 async function dispatch(
+  call: CallContext,
   input: ReviewFindingsInput,
   bus: BusLike,
   cwd: string,
@@ -140,13 +143,16 @@ async function dispatch(
     case 'list': {
       const repoPath = input.repoPath ?? cwd;
       const target = buildTarget(input.pr, repoPath);
-      const { findings } = await bus.request(ReviewSubjects.findings.list, { target, status: input.status });
+      const { findings } = await bus.request(call, ReviewSubjects.findings.list, { target, status: input.status });
       return toolSuccess({ summary: `Found ${findings.length} finding(s) for PR #${input.pr}`, findings });
     }
     case 'fetch': {
       const repoPath = input.repoPath ?? cwd;
       const target = buildTarget(input.pr, repoPath);
-      const { findings, created, updated } = await bus.request(ReviewSubjects.findings.fetch, { target, repoPath });
+      const { findings, created, updated } = await bus.request(call, ReviewSubjects.findings.fetch, {
+        target,
+        repoPath,
+      });
       return toolSuccess({
         summary: `Fetched findings for PR #${input.pr}: ${created} new, ${updated} updated`,
         findings,
@@ -155,7 +161,7 @@ async function dispatch(
     case 'start': {
       const repoPath = input.repoPath ?? cwd;
       const target = buildTarget(input.pr, repoPath);
-      const { triggered, estimatedDelayMs, rateLimit } = await bus.request(ReviewSubjects.start, {
+      const { triggered, estimatedDelayMs, rateLimit } = await bus.request(call, ReviewSubjects.start, {
         target,
         repoPath,
         sourceId: input.sourceId,
@@ -176,7 +182,7 @@ async function dispatch(
     case 'update_status': {
       const repoPath = input.repoPath ?? cwd;
       const target = buildTarget(input.pr, repoPath);
-      const { success, finding } = await bus.request(ReviewSubjects.finding.updateStatus, {
+      const { success, finding } = await bus.request(call, ReviewSubjects.finding.updateStatus, {
         findingId: input.findingId,
         target,
         status: input.status,
@@ -192,11 +198,11 @@ async function dispatch(
       });
     }
     case 'submit': {
-      const { finding } = await bus.request(ReviewSubjects.findings.submit, { finding: input.finding });
+      const { finding } = await bus.request(call, ReviewSubjects.findings.submit, { finding: input.finding });
       return toolSuccess({ summary: `Finding submitted: ${finding.id}`, submitted: finding });
     }
     case 'sources': {
-      const { sources } = await bus.request(ReviewSubjects.source.list, {});
+      const { sources } = await bus.request(call, ReviewSubjects.source.list, {});
       return toolSuccess({ summary: `${sources.length} review source(s) available`, sources });
     }
   }
@@ -232,6 +238,6 @@ Operations:
     if (!ctx.bus) {
       return toolError(ToolErrorCodes.INTERNAL_ERROR, 'bus required for review_findings');
     }
-    return dispatch(input, ctx.bus, ctx.cwd);
+    return dispatch(ctx.call, input, ctx.bus, ctx.cwd);
   },
 });

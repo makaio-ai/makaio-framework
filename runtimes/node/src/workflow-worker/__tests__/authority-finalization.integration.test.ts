@@ -22,6 +22,7 @@ import { readOnlyFilesystemToolset } from '@makaio/extension-filesystem';
 import { buildDeterministicAdapterId } from '@makaio/services-core/adapter-runtime';
 import { AdapterSubsystemSubjects } from '@makaio/services-core/adapter-subsystem';
 import { ClientStorageSubjects, ProviderStorageSubjects } from '@makaio/services-core/settings/storage';
+import { createTestCall } from '@makaio/test-utils';
 import {
   ExecutionAttemptAuthority,
   workflowAttemptOutcomeCodec,
@@ -70,6 +71,7 @@ describe('authority Worker finalization integration', () => {
   });
 
   it('keeps the worker result authority-owned through explicit finalizer acknowledgement', async () => {
+    const call = createTestCall();
     const cwd = await mkdtemp(join(tmpdir(), 'makaio-authority-finalization-'));
     cleanups.push(() => rm(cwd, { recursive: true, force: true }));
     await writeFile(join(cwd, 'input.txt'), 'authority governed read');
@@ -88,13 +90,12 @@ describe('authority Worker finalization integration', () => {
       auth: new HmacAuth({
         secret: transportSecret,
         resolveSecret: () => transportSecret,
-        resolvePeer: (attemptId) => {
+        resolveParty: (attemptId) => {
           const executionId = attemptExecutionIds.get(attemptId);
           if (executionId === undefined) return null;
           return {
-            kind: 'workflow-execution-attempt',
+            kind: 'makaio.job-run',
             id: attemptId,
-            authenticated: true,
             claims: { executionId },
           };
         },
@@ -171,10 +172,10 @@ describe('authority Worker finalization integration', () => {
     });
     const runner = new WorkerRunner({
       authority,
-      readRunContext: async (executionId, signal) =>
-        (await MakaioBus.request(WorkflowStorageSubjects.getRunContext, { executionId }, { signal })).runContext,
+      readRunContext: async (call, executionId, signal) =>
+        (await MakaioBus.request(call, WorkflowStorageSubjects.getRunContext, { executionId }, { signal })).runContext,
       manifest: { contributionRefs: [] },
-      dispatch: async (request, signal) => {
+      dispatch: async (call, request, signal) => {
         attemptExecutionIds.set(request.executionAttemptId, request.config.executionId);
         dispatchedAttemptId = request.executionAttemptId;
         // A created attempt is not yet registrable; this stands in for the
@@ -269,7 +270,7 @@ describe('authority Worker finalization integration', () => {
           }
           const startsBeforeProbe = adapterCapture.starts.length;
           const authorityStartsBeforeProbe = authorityAgentStarts;
-          await runtime.bus.request(AdapterSubjects.startAgent, {
+          await runtime.bus.request(call, AdapterSubjects.startAgent, {
             adapterId: adapterCapture.adapterId,
             ownerInstanceId: adapterCapture.ownerInstanceId,
             initialMessage: 'Verify isolated adapter execution locality',
@@ -282,7 +283,7 @@ describe('authority Worker finalization integration', () => {
           expect(adapterCapture.starts).toHaveLength(startsBeforeProbe + 1);
           expect(authorityAgentStarts).toBe(authorityStartsBeforeProbe);
           await expect(
-            runtime.bus.request(ClientStorageSubjects.get, { id: 'deterministic-client' }),
+            runtime.bus.request(call, ClientStorageSubjects.get, { id: 'deterministic-client' }),
           ).resolves.toMatchObject({
             client: {
               id: 'deterministic-client',
@@ -305,12 +306,13 @@ describe('authority Worker finalization integration', () => {
               runtimeIncarnationId,
             }),
           );
-          const { definitionSnapshot } = await runtime.bus.request(WorkflowSubjects.getRunContext, {
+          const { definitionSnapshot } = await runtime.bus.request(call, WorkflowSubjects.getRunContext, {
             executionId: request.config.executionId,
           });
           if (definitionSnapshot === undefined)
             throw new Error('Authority did not provide a trusted workflow snapshot');
           const result = await runWorkflowOrchestrator({
+            call,
             config: request.config,
             loaded: { definition: definitionSnapshot, runtimeHandlers: new Map() },
             bus: runtime.bus,
@@ -360,11 +362,11 @@ describe('authority Worker finalization integration', () => {
     MakaioBus.registerNamespace(namespace);
     cleanups.push(
       MakaioBus.on(subjects.finalize, async (ctx) => {
-        const before = await MakaioBus.request(WorkflowStorageSubjects.getExecution, {
+        const before = await MakaioBus.request(ctx.call, WorkflowStorageSubjects.getExecution, {
           executionId: ctx.payload.executionId,
         });
         expect(before.execution?.status).toBe('finalizing');
-        await MakaioBus.request(WorkflowStorageSubjects.acknowledgeFinalization, {
+        await MakaioBus.request(ctx.call, WorkflowStorageSubjects.acknowledgeFinalization, {
           executionId: ctx.payload.executionId,
           claimToken: ctx.payload.claimToken,
           settledAt: Date.now(),
@@ -429,9 +431,11 @@ describe('authority Worker finalization integration', () => {
       successFinalizerId: finalizerId,
       executableSource: { kind: 'path' as const, path: 'authority-flow.ts' },
     };
-    await MakaioBus.request(WorkflowSubjects.setDefinition, { workflow });
-    const { executionId } = await MakaioBus.request(WorkflowSubjects.start, { workflowId: workflow.id });
-    await expect(MakaioBus.request(WorkflowStorageSubjects.getRunContext, { executionId })).resolves.toMatchObject({
+    await MakaioBus.request(call, WorkflowSubjects.setDefinition, { workflow });
+    const { executionId } = await MakaioBus.request(call, WorkflowSubjects.start, { workflowId: workflow.id });
+    await expect(
+      MakaioBus.request(call, WorkflowStorageSubjects.getRunContext, { executionId }),
+    ).resolves.toMatchObject({
       runContext: {
         source: { kind: 'path', path: 'authority-flow.ts' },
         definitionSnapshot: { id: workflow.id },

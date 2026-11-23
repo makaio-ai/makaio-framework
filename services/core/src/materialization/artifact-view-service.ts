@@ -11,6 +11,7 @@ import {
   type ArtifactViewResolveResponse,
   type ArtifactViewSection,
 } from '@makaio/contracts';
+import type { CallContext } from '@makaio/core';
 import { BaseService } from '@makaio/service-base';
 import type { ArtifactSchemaRegistry } from '../artifact/artifact-schema-registry.js';
 import type { ArtifactViewBuilderRegistry } from './artifact-view-builder-registry.js';
@@ -51,13 +52,14 @@ export class ArtifactViewService extends BaseService {
   protected async onInit(): Promise<void> {
     this.registerHandler(MaterializationSubjects.artifact.view.resolve, async (ctx) => {
       const { ref, level, affordance, params } = ArtifactViewResolveRequestSchema.parse(ctx.payload);
-      const result = await this.resolve(ref, level, affordance, params);
+      const result = await this.resolve(ctx.call, ref, level, affordance, params);
       ctx.setResult(result);
     });
   }
 
   /**
    * Resolve an artifact view through an explicitly registered builder.
+   * @param call - Call context of the handled resolve request, forwarded to the artifact lookup.
    * @param ref - Immutable reference to the artifact revision to render.
    * @param level - Requested detail level.
    * @param affordance - Structural affordance selector.
@@ -65,13 +67,14 @@ export class ArtifactViewService extends BaseService {
    * @returns Discriminated resolve response.
    */
   private async resolve(
+    call: CallContext,
     ref: ArtifactRef,
     level: ArtifactViewLevel,
     affordance: ArtifactViewAffordanceRequest,
     params: Record<string, unknown> | undefined,
   ): Promise<ArtifactViewResolveResponse> {
     // Resolve precisely the requested immutable artifact revision.
-    const resolveResult = await this.bus.requestOptional(ArtifactSubjects.resolve, { ref });
+    const resolveResult = await this.bus.requestOptional(call, ArtifactSubjects.resolve, { ref });
 
     if (!resolveResult.handled || resolveResult.data.artifact === null) {
       return { status: 'artifact-not-found', view: null };

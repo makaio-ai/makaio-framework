@@ -114,7 +114,7 @@ export function registerRebindObservedHandler(deps: SessionHandlerDeps): () => v
     if (changedProperties.length > 0) {
       // Fire-and-forget: entity cache reactivity is best-effort.
       void bus
-        .emit(SessionSubjects.updated, { sessionId: row.sessionId, changedProperties })
+        .emit(ctx.call, SessionSubjects.updated, { sessionId: row.sessionId, changedProperties })
         .catch((err) => console.error('[SessionStorage] Failed to emit session.updated:', err));
     }
   });

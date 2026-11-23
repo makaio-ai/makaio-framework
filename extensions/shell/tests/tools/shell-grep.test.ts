@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest';
+import { createTestCall } from '@makaio/test-utils';
 import { shellGrepTool } from '../../src/tools/shell-grep.js';
 import { createDefaultCreateOptions, setupShellToolTest } from './shared.js';
 
@@ -26,6 +27,7 @@ describe('shellGrepTool', () => {
       await ctx.instance.waitForExit();
 
       const result = await ctx.registry.execute(
+        createTestCall(),
         'shell_grep',
         {
           shellId: ctx.instance.shellId,
@@ -63,6 +65,7 @@ describe('shellGrepTool', () => {
       await ctx.instance.waitForExit();
 
       const result = await ctx.registry.execute(
+        createTestCall(),
         'shell_grep',
         {
           shellId: ctx.instance.shellId,
@@ -96,6 +99,7 @@ describe('shellGrepTool', () => {
 
       // Search only stdout
       const stdoutResult = await ctx.registry.execute(
+        createTestCall(),
         'shell_grep',
         {
           shellId: ctx.instance.shellId,
@@ -119,6 +123,7 @@ describe('shellGrepTool', () => {
 
       // Search only stderr
       const stderrResult = await ctx.registry.execute(
+        createTestCall(),
         'shell_grep',
         {
           shellId: ctx.instance.shellId,
@@ -153,6 +158,7 @@ describe('shellGrepTool', () => {
 
       // Get first 2 matches
       const firstPage = await ctx.registry.execute(
+        createTestCall(),
         'shell_grep',
         {
           shellId: ctx.instance.shellId,
@@ -181,6 +187,7 @@ describe('shellGrepTool', () => {
 
       // Get next 2 matches
       const secondPage = await ctx.registry.execute(
+        createTestCall(),
         'shell_grep',
         {
           shellId: ctx.instance.shellId,
@@ -215,6 +222,7 @@ describe('shellGrepTool', () => {
       await ctx.instance.waitForExit();
 
       const result = await ctx.registry.execute(
+        createTestCall(),
         'shell_grep',
         {
           shellId: ctx.instance.shellId,
@@ -238,6 +246,7 @@ describe('shellGrepTool', () => {
   describe('error handling', () => {
     it('errors for unknown shell ID', async () => {
       const result = await ctx.registry.execute(
+        createTestCall(),
         'shell_grep',
         {
           shellId: 'nonexistent-shell-id',
@@ -266,6 +275,7 @@ describe('shellGrepTool', () => {
       await ctx.instance.waitForExit();
 
       const result = await ctx.registry.execute(
+        createTestCall(),
         'shell_grep',
         {
           shellId: ctx.instance.shellId,
@@ -294,6 +304,7 @@ describe('shellGrepTool', () => {
       await ctx.instance.waitForExit();
 
       const result = await ctx.registry.execute(
+        createTestCall(),
         'shell_grep',
         {
           shellId: ctx.instance.shellId,

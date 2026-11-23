@@ -4,6 +4,7 @@ import {
   ProviderContextActivationRollbackError,
 } from '@makaio/services-core/provider-context';
 import type { IMakaioBus } from '@makaio/bus-core';
+import type { CallContext } from '@makaio/core';
 import type { AIAgentConnector } from '../connector/index.js';
 import type { AgentRuntimeMutationManagerConfig } from './agent-runtime-mutation-manager-config.js';
 import type { AgentCredentialChangeRequestPayload, AgentCredentialChangeResponsePayload } from './types.js';
@@ -29,8 +30,12 @@ export interface AgentCredentialChangeManagerConfig {
   readonly setProviderContext: (providerContext: ProviderContext) => void;
   /** Replace the connector while preserving lifecycle rollback. */
   readonly swapConnectorUnlocked: AgentRuntimeMutationManagerConfig['swapConnectorUnlocked'];
-  /** Persist the selected provider config after connector commit. */
-  readonly persistProviderConfigId: (providerConfigId: string) => Promise<void>;
+  /**
+   * Persist the selected provider config after connector commit.
+   * @param call - Call context of the credential change being applied
+   * @param providerConfigId - Provider config selected by the change
+   */
+  readonly persistProviderConfigId: (call: CallContext, providerConfigId: string) => Promise<void>;
 }
 
 /** Internal control-flow signal for a failed final credential-change guard. */
@@ -51,10 +56,14 @@ export class AgentCredentialChangeManager {
 
   /**
    * Queue and apply a schema-validated credential rotation snapshot.
+   * @param call - Call context of the request being handled
    * @param payload - Credential change request payload
    * @returns Credential mutation result
    */
-  public async handle(payload: AgentCredentialChangeRequestPayload): Promise<AgentCredentialChangeResponsePayload> {
+  public async handle(
+    call: CallContext,
+    payload: AgentCredentialChangeRequestPayload,
+  ): Promise<AgentCredentialChangeResponsePayload> {
     const nextProviderContext = ResolvedProviderContextSchema.parse(payload.providerContext);
     const providerConfigId = nextProviderContext.providerConfigId;
     if (this.hasProviderMismatch(providerConfigId)) {
@@ -63,16 +72,18 @@ export class AgentCredentialChangeManager {
     if (!this.config.sequencer.queue(providerConfigId, payload.changeSequence)) {
       return { success: false, reason: 'stale_change' };
     }
-    return this.config.runExclusive(() => this.applyQueuedChange(nextProviderContext, payload.changeSequence));
+    return this.config.runExclusive(() => this.applyQueuedChange(call, nextProviderContext, payload.changeSequence));
   }
 
   /**
    * Apply one queued change while holding the turn-dispatch barrier.
+   * @param call - Call context of the request being handled
    * @param nextProviderContext - Canonical provider context to activate
    * @param changeSequence - Monotonic credential change sequence
    * @returns Credential mutation result
    */
   private async applyQueuedChange(
+    call: CallContext,
     nextProviderContext: ReturnType<typeof ResolvedProviderContextSchema.parse>,
     changeSequence: number,
   ): Promise<AgentCredentialChangeResponsePayload> {
@@ -93,35 +104,41 @@ export class AgentCredentialChangeManager {
     let activation: AgentProviderContextActivation | undefined;
     try {
       this.assertGuard(providerConfigId, changeSequence, connector);
-      activation = await AgentProviderContextActivation.prepare(this.config.globalBus, nextProviderContext);
+      activation = await AgentProviderContextActivation.prepare(call, this.config.globalBus, nextProviderContext);
       this.assertGuard(providerConfigId, changeSequence, connector);
-      await this.config.swapConnectorUnlocked({ providerContext: nextProviderContext }, async () => {
-        this.assertGuard(providerConfigId, changeSequence, connector);
-        await activation?.commit();
-      });
+      await this.config.swapConnectorUnlocked(
+        call,
+        { providerContext: nextProviderContext },
+        async (call: CallContext) => {
+          this.assertGuard(providerConfigId, changeSequence, connector);
+          await activation?.commit(call);
+        },
+      );
       this.config.setProviderContext(nextProviderContext);
       this.config.sequencer.markApplied(providerConfigId, changeSequence);
-      await this.config.persistProviderConfigId(providerConfigId);
+      await this.config.persistProviderConfigId(call, providerConfigId);
       return { success: true, swapped: true };
     } catch (error) {
       this.config.sequencer.release(providerConfigId, changeSequence);
-      return this.handleFailure(error, activation);
+      return this.handleFailure(call, error, activation);
     }
   }
 
   /**
    * Roll back pending activation and map failures to credential-free responses.
+   * @param call - Call context of the credential change whose activation failed
    * @param error - Failure raised while activating or swapping the connector
    * @param activation - Mutable transaction state for the activation attempt
    * @returns Credential-free mutation failure response
    */
   private async handleFailure(
+    call: CallContext,
     error: unknown,
     activation: AgentProviderContextActivation | undefined,
   ): Promise<AgentCredentialChangeResponsePayload> {
     if (activation !== undefined) {
       try {
-        await activation.rollbackPending();
+        await activation.rollbackPending(call);
       } catch (rollbackError) {
         const sanitizedPrimary = sanitizeCredentialChangeError(error);
         throw new AggregateError(

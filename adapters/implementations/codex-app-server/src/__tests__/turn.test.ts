@@ -3,6 +3,8 @@
  */
 
 import { describe, it, expect, beforeEach } from 'vitest';
+import { MakaioBus } from '@makaio/bus-core';
+import { createTestCall } from '@makaio/test-utils';
 import { CodexAppServerTurn } from '../turn.js';
 import { CodexAppServerNamespace } from '../namespaces/index.js';
 import type { CodexAppServerBus } from '../namespaces/index.js';
@@ -16,7 +18,7 @@ import type { NormalizedMessageInput } from '@makaio/ai-adapters-core';
  * @returns Promise resolving to a CodexAppServerBus
  */
 function createTestBus(): Promise<CodexAppServerBus> {
-  return CodexAppServerNamespace.scopedBus();
+  return CodexAppServerNamespace.scopedBus(MakaioBus);
 }
 
 describe('CodexAppServerTurn', () => {
@@ -42,7 +44,7 @@ describe('CodexAppServerTurn', () => {
       ],
       message: 'Hello, world!',
     };
-    messageHandle = new MessageHandle('msg-1', message, 'enqueue');
+    messageHandle = new MessageHandle(createTestCall(), 'msg-1', message, 'enqueue');
     turn = new CodexAppServerTurn(bus, adapterId, adapterName, agentId, threadId, messageHandle);
   });
 
@@ -62,15 +64,15 @@ describe('CodexAppServerTurn', () => {
 
   describe('start', () => {
     it('transitions from idle to active', async () => {
-      await turn.start();
+      await turn.start(createTestCall());
       expect(turn.getState()).toBe('active');
     });
   });
 
   describe('handleTurnStarted', () => {
     it('sets turnId and transitions to processing_started', async () => {
-      await turn.start();
-      await turn.handleTurnStarted('turn-456');
+      await turn.start(createTestCall());
+      await turn.handleTurnStarted(createTestCall(), 'turn-456');
 
       expect(turn.getTurnId()).toBe('turn-456');
       expect(turn.getState()).toBe('processing_started');
@@ -79,9 +81,9 @@ describe('CodexAppServerTurn', () => {
 
   describe('handleItemStarted - first item', () => {
     it('transitions processing_started to turn_started then step_started', async () => {
-      await turn.start();
-      await turn.handleTurnStarted('turn-1');
-      await turn.handleItemStarted('item-1', 'agentMessage');
+      await turn.start(createTestCall());
+      await turn.handleTurnStarted(createTestCall(), 'turn-1');
+      await turn.handleItemStarted(createTestCall(), 'item-1', 'agentMessage');
 
       expect(turn.getState()).toBe('step_started');
       expect(turn.getCurrentItemId()).toBe('item-1');
@@ -90,19 +92,19 @@ describe('CodexAppServerTurn', () => {
 
   describe('handleItemCompleted', () => {
     it('transitions from step_started to step_finished', async () => {
-      await turn.start();
-      await turn.handleTurnStarted('turn-1');
-      await turn.handleItemStarted('item-1', 'agentMessage');
-      await turn.handleItemCompleted('item-1');
+      await turn.start(createTestCall());
+      await turn.handleTurnStarted(createTestCall(), 'turn-1');
+      await turn.handleItemStarted(createTestCall(), 'item-1', 'agentMessage');
+      await turn.handleItemCompleted(createTestCall(), 'item-1');
 
       expect(turn.getState()).toBe('step_finished');
     });
 
     it('ignores mismatched item IDs', async () => {
-      await turn.start();
-      await turn.handleTurnStarted('turn-1');
-      await turn.handleItemStarted('item-1', 'agentMessage');
-      await turn.handleItemCompleted('item-2'); // Different ID
+      await turn.start(createTestCall());
+      await turn.handleTurnStarted(createTestCall(), 'turn-1');
+      await turn.handleItemStarted(createTestCall(), 'item-1', 'agentMessage');
+      await turn.handleItemCompleted(createTestCall(), 'item-2'); // Different ID
 
       expect(turn.getState()).toBe('step_started'); // No transition
     });
@@ -110,57 +112,57 @@ describe('CodexAppServerTurn', () => {
 
   describe('multiple items', () => {
     it('handles item sequence: started → finished → started → finished', async () => {
-      await turn.start();
-      await turn.handleTurnStarted('turn-1');
+      await turn.start(createTestCall());
+      await turn.handleTurnStarted(createTestCall(), 'turn-1');
 
       // First item
-      await turn.handleItemStarted('item-1', 'commandExecution');
+      await turn.handleItemStarted(createTestCall(), 'item-1', 'commandExecution');
       expect(turn.getState()).toBe('step_started');
 
-      await turn.handleItemCompleted('item-1');
+      await turn.handleItemCompleted(createTestCall(), 'item-1');
       expect(turn.getState()).toBe('step_finished');
 
       // Second item
-      await turn.handleItemStarted('item-2', 'fileChange');
+      await turn.handleItemStarted(createTestCall(), 'item-2', 'fileChange');
       expect(turn.getState()).toBe('step_started');
 
-      await turn.handleItemCompleted('item-2');
+      await turn.handleItemCompleted(createTestCall(), 'item-2');
       expect(turn.getState()).toBe('step_finished');
     });
   });
 
   describe('handleTurnCompleted', () => {
     it('transitions from step_finished to turn_finished', async () => {
-      await turn.start();
-      await turn.handleTurnStarted('turn-1');
-      await turn.handleItemStarted('item-1', 'agentMessage');
-      await turn.handleItemCompleted('item-1');
-      await turn.handleTurnCompleted();
+      await turn.start(createTestCall());
+      await turn.handleTurnStarted(createTestCall(), 'turn-1');
+      await turn.handleItemStarted(createTestCall(), 'item-1', 'agentMessage');
+      await turn.handleItemCompleted(createTestCall(), 'item-1');
+      await turn.handleTurnCompleted(createTestCall());
 
       expect(turn.getState()).toBe('turn_finished');
     });
 
     it('requires at least one item before turn can complete', async () => {
-      await turn.start();
-      await turn.handleTurnStarted('turn-1');
+      await turn.start(createTestCall());
+      await turn.handleTurnStarted(createTestCall(), 'turn-1');
       // Without items, state stays at processing_started
       expect(turn.getState()).toBe('processing_started');
 
       // Need an item to move forward
-      await turn.handleItemStarted('item-1', 'agentMessage');
-      await turn.handleItemCompleted('item-1');
-      await turn.handleTurnCompleted();
+      await turn.handleItemStarted(createTestCall(), 'item-1', 'agentMessage');
+      await turn.handleItemCompleted(createTestCall(), 'item-1');
+      await turn.handleTurnCompleted(createTestCall());
       expect(turn.getState()).toBe('turn_finished');
     });
   });
 
   describe('pause (interrupt)', () => {
     it('pauses active turn and returns turnEnded: false', async () => {
-      await turn.start();
-      await turn.handleTurnStarted('turn-1');
-      await turn.handleItemStarted('item-1', 'commandExecution');
+      await turn.start(createTestCall());
+      await turn.handleTurnStarted(createTestCall(), 'turn-1');
+      await turn.handleItemStarted(createTestCall(), 'item-1', 'commandExecution');
 
-      const result = await turn.pause();
+      const result = await turn.pause(createTestCall());
 
       expect(result.turnEnded).toBe(false);
       expect(result.stateBeforePause).toBe('step_started');
@@ -168,30 +170,30 @@ describe('CodexAppServerTurn', () => {
     });
 
     it('returns turnEnded: true if already finished', async () => {
-      await turn.start();
-      await turn.handleTurnStarted('turn-1');
-      await turn.handleItemStarted('item-1', 'agentMessage');
-      await turn.handleItemCompleted('item-1');
-      await turn.handleTurnCompleted();
+      await turn.start(createTestCall());
+      await turn.handleTurnStarted(createTestCall(), 'turn-1');
+      await turn.handleItemStarted(createTestCall(), 'item-1', 'agentMessage');
+      await turn.handleItemCompleted(createTestCall(), 'item-1');
+      await turn.handleTurnCompleted(createTestCall());
 
-      const result = await turn.pause();
+      const result = await turn.pause(createTestCall());
 
       expect(result.turnEnded).toBe(true);
       expect(result.stateBeforePause).toBe('turn_finished');
     });
 
     it('prevents accepting immediate after pause', async () => {
-      await turn.start();
-      await turn.pause();
+      await turn.start(createTestCall());
+      await turn.pause(createTestCall());
 
       expect(turn.canAcceptImmediate()).toBe(false);
     });
 
     it('throws error on resume attempt', async () => {
-      await turn.start();
-      await turn.pause();
+      await turn.start(createTestCall());
+      await turn.pause(createTestCall());
 
-      await expect(turn.resume()).rejects.toThrow('Codex app-server does not support resume');
+      await expect(turn.resume(createTestCall())).rejects.toThrow('Codex app-server does not support resume');
     });
   });
 
@@ -221,27 +223,27 @@ describe('CodexAppServerTurn', () => {
   describe('complete lifecycle flow', () => {
     it('handles full turn lifecycle with state transitions', async () => {
       // Turn starts
-      await turn.start();
+      await turn.start(createTestCall());
       expect(turn.getState()).toBe('active');
 
       // Turn started notification
-      await turn.handleTurnStarted('turn-full');
+      await turn.handleTurnStarted(createTestCall(), 'turn-full');
       expect(turn.getState()).toBe('processing_started');
 
       // First item
-      await turn.handleItemStarted('item-1', 'reasoning');
+      await turn.handleItemStarted(createTestCall(), 'item-1', 'reasoning');
       expect(turn.getState()).toBe('step_started');
-      await turn.handleItemCompleted('item-1');
+      await turn.handleItemCompleted(createTestCall(), 'item-1');
       expect(turn.getState()).toBe('step_finished');
 
       // Second item
-      await turn.handleItemStarted('item-2', 'commandExecution');
+      await turn.handleItemStarted(createTestCall(), 'item-2', 'commandExecution');
       expect(turn.getState()).toBe('step_started');
-      await turn.handleItemCompleted('item-2');
+      await turn.handleItemCompleted(createTestCall(), 'item-2');
       expect(turn.getState()).toBe('step_finished');
 
       // Turn completes
-      await turn.handleTurnCompleted();
+      await turn.handleTurnCompleted(createTestCall());
       expect(turn.getState()).toBe('turn_finished');
       expect(turn.isCompleted()).toBe(true);
     });

@@ -209,6 +209,7 @@ export type {
   MakaioWebUiAction,
   MakaioWebUiActions,
   MakaioWebUiComponentProps,
+  MakaioWebUiExecutionContext,
   MakaioWebUiLoader,
   MakaioWebUiRoute,
   MessageEventFilter,

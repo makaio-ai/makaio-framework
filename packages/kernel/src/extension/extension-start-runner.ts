@@ -1,4 +1,5 @@
 import type { IMakaioBus } from '@makaio/bus-core';
+import type { CallContext } from '@makaio/core';
 import { getErrorString } from '@makaio/utils';
 import { cancellationRejection } from '../cancellation.js';
 import { ServiceSkipError } from '../service-skip-error.js';
@@ -49,8 +50,9 @@ export async function startExtensionEntry(
   name: string,
   entry: ExtensionEntry,
 ): Promise<void> {
+  const call = host.bus.own('start');
   if (!entry.enabled) {
-    transitionPackageEntry(host.bus, entry, 'skipped');
+    transitionPackageEntry(call, host.bus, entry, 'skipped');
     host.bootProgress.skipped(entry.pkg, 'disabled');
     return;
   }
@@ -62,7 +64,7 @@ export async function startExtensionEntry(
   });
   if (inactiveDeps.length > 0) {
     const message = `Required dependencies not active: ${inactiveDeps.map((d) => d.name).join(', ')}`;
-    failEntry(host, name, entry, message);
+    failEntry(call, host, name, entry, message);
     if (entry.pkg.critical) throw new Error(`Critical package "${name}" failed: ${message}`);
     return;
   }
@@ -78,19 +80,19 @@ export async function startExtensionEntry(
   // Checking here ensures the failure is always contained as a per-extension
   // `failed` transition regardless of which lifecycle hooks are declared.
   //
-  // `enableExtension` (kernel:extension.setEnabled(true)) is the other seam
+  // `enableExtension` (the internal restart primitive) is the other seam
   // that can move an entry toward `active`; it runs this exact same check via
   // the shared `checkExtensionNameAddressable` predicate so the two paths
   // cannot drift apart.
   const addressabilityError = checkExtensionNameAddressable(entry.identity.extensionName);
   if (addressabilityError !== undefined) {
-    failEntry(host, name, entry, addressabilityError);
+    failEntry(call, host, name, entry, addressabilityError);
     if (entry.pkg.critical) throw new Error(`Critical package "${name}" failed: ${addressabilityError}`);
     return;
   }
 
   host.bootProgress.starting(entry.pkg);
-  transitionPackageEntry(host.bus, entry, 'initializing');
+  transitionPackageEntry(call, host.bus, entry, 'initializing');
   // Config resolution fails only when an operator-supplied layer cannot be
   // honoured; loadConfig and stored-config parse failures stay non-throwing and
   // are represented as absent config. An operator failure is an activation
@@ -99,46 +101,53 @@ export async function startExtensionEntry(
   try {
     config = resolveExtensionEntryConfig(host.contextHost, name, entry, 'activate');
   } catch (err) {
-    failEntry(host, name, entry, getErrorString(err));
+    failEntry(call, host, name, entry, getErrorString(err));
     if (entry.pkg.critical) throw err;
     return;
   }
 
-  if (!registerEntryStorage(host, name, entry, config)) return;
+  if (!registerEntryStorage(call, host, name, entry, config)) return;
 
   if (!entry.pkg.create) {
-    await startEntryWithoutService(host, name, entry);
+    await startEntryWithoutService(call, host, name, entry);
     return;
   }
 
-  await startEntryWithService(host, name, entry, config);
+  await startEntryWithService(call, host, name, entry, config);
 }
 
 /**
  * Run the no-create path for an entry that declares no service factory.
+ * @param call - Call responsible for starting the extension.
  * @param host - Coordinator state required for startup.
  * @param name - Extension name used for log messages.
  * @param entry - Extension entry to start.
  * @throws Error when a critical extension fails.
  */
-async function startEntryWithoutService(host: ExtensionStartHost, name: string, entry: ExtensionEntry): Promise<void> {
+async function startEntryWithoutService(
+  call: CallContext,
+  host: ExtensionStartHost,
+  name: string,
+  entry: ExtensionEntry,
+): Promise<void> {
   try {
     await runContributionProcessors(host.contributionProcessors, host.contextHost, name, entry, 'activated');
   } catch (err) {
     runStorageCleanup(name, entry);
-    if (handleServiceSkipError(host, name, entry, err)) return;
+    if (handleServiceSkipError(call, host, name, entry, err)) return;
     const message = err instanceof Error ? err.message : String(err);
-    failEntry(host, name, entry, message);
+    failEntry(call, host, name, entry, message);
     if (entry.pkg.critical) throw err;
     return;
   }
-  transitionPackageEntry(host.bus, entry, 'active');
+  transitionPackageEntry(call, host.bus, entry, 'active');
   host.bootProgress.ready(entry.pkg);
-  await registerEntryTray(host.bus, name, entry);
+  await registerEntryTray(call, host.bus, name, entry);
 }
 
 /**
  * Run the service-factory path for an entry that declares a `create` function.
+ * @param call - Call responsible for starting the extension.
  * @param host - Coordinator state required for startup.
  * @param name - Extension name used for log messages.
  * @param entry - Extension entry to start.
@@ -146,6 +155,7 @@ async function startEntryWithoutService(host: ExtensionStartHost, name: string, 
  * @throws Error when a critical extension fails.
  */
 async function startEntryWithService(
+  call: CallContext,
   host: ExtensionStartHost,
   name: string,
   entry: ExtensionEntry,
@@ -158,16 +168,16 @@ async function startEntryWithService(
     // On failure the catch block below destroys the service and transitions
     // the entry to failed, exactly the same path as a create/init failure.
     await runContributionProcessors(host.contributionProcessors, host.contextHost, name, entry, 'activated');
-    transitionPackageEntry(host.bus, entry, 'active');
+    transitionPackageEntry(call, host.bus, entry, 'active');
     host.bootProgress.ready(entry.pkg);
-    await registerEntryTray(host.bus, name, entry);
+    await registerEntryTray(call, host.bus, name, entry);
   } catch (err) {
     const cleanupFailures: unknown[] = await releaseService(name, entry, 'start');
     cleanupFailures.push(...runStorageCleanup(name, entry));
-    if (handleServiceSkipError(host, name, entry, err)) return;
+    if (handleServiceSkipError(call, host, name, entry, err)) return;
     const message = err instanceof Error ? err.message : String(err);
     const cancelled = host.signal?.aborted === true;
-    failEntry(host, name, entry, cancelled ? `Start cancelled: ${message}` : message);
+    failEntry(call, host, name, entry, cancelled ? `Start cancelled: ${message}` : message);
     // A start the host cancelled is not the extension's failure, whatever its
     // criticality: it ends the whole start with the reason the host gave, which
     // is what lets the boot treat it as a cancellation. Cleanup that failed on
@@ -186,6 +196,7 @@ async function startEntryWithService(
 
 /**
  * Apply the shared {@link ServiceSkipError} startup contract.
+ * @param call - Call responsible for starting the extension.
  * @param host - Coordinator state required for startup.
  * @param name - Extension name used for log messages.
  * @param entry - Extension entry being started.
@@ -193,24 +204,31 @@ async function startEntryWithService(
  * @returns `true` when the error was handled as a skip.
  * @throws Error when a critical extension attempts to skip startup.
  */
-function handleServiceSkipError(host: ExtensionStartHost, name: string, entry: ExtensionEntry, err: unknown): boolean {
+function handleServiceSkipError(
+  call: CallContext,
+  host: ExtensionStartHost,
+  name: string,
+  entry: ExtensionEntry,
+  err: unknown,
+): boolean {
   if (!(err instanceof ServiceSkipError)) return false;
 
   if (entry.pkg.critical) {
     const message = `Critical package cannot skip startup: ${err.reason}`;
-    failEntry(host, name, entry, message);
+    failEntry(call, host, name, entry, message);
     throw new Error(`Critical package "${name}" failed: ${message}`, { cause: err });
   }
 
   entry.error = err.reason;
   console.info(`[ExtensionCoordinator] Package "${name}" skipped: ${err.reason}`);
-  transitionPackageEntry(host.bus, entry, 'skipped');
+  transitionPackageEntry(call, host.bus, entry, 'skipped');
   host.bootProgress.skipped(entry.pkg, err.reason);
   return true;
 }
 
 /**
  * Register storage handlers for one extension entry.
+ * @param call - Call responsible for starting the extension.
  * @param host - Coordinator state required for storage registration.
  * @param name - Extension name used for log messages.
  * @param entry - Extension entry whose storage should be registered.
@@ -218,17 +236,23 @@ function handleServiceSkipError(host: ExtensionStartHost, name: string, entry: E
  * @returns `true` when startup should continue.
  * @throws Error when a critical storage registration fails.
  */
-function registerEntryStorage(host: ExtensionStartHost, name: string, entry: ExtensionEntry, config: unknown): boolean {
+function registerEntryStorage(
+  call: CallContext,
+  host: ExtensionStartHost,
+  name: string,
+  entry: ExtensionEntry,
+  config: unknown,
+): boolean {
   if (!entry.pkg.storage?.registerHandlers || host.db === undefined) return true;
   try {
     const pkgCtx = buildExtensionContext(host.contextHost, entry, config);
-    const cleanup = entry.pkg.storage.registerHandlers(host.bus, host.db, pkgCtx);
+    const cleanup = entry.pkg.storage.registerHandlers(pkgCtx.bus, host.db, pkgCtx);
     if (cleanup) entry.storageCleanup = cleanup;
     return true;
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     console.error(`[ExtensionCoordinator] Package "${name}" storage registration failed:`, err);
-    failEntry(host, name, entry, message);
+    failEntry(call, host, name, entry, message);
     if (entry.pkg.critical) throw err;
     return false;
   }
@@ -257,27 +281,40 @@ function runStorageCleanup(name: string, entry: ExtensionEntry): unknown[] {
 
 /**
  * Mark an extension entry failed and update boot progress.
+ * @param call - Call responsible for starting the extension.
  * @param host - Coordinator state required for failure recording.
  * @param name - Extension name used for log messages.
  * @param entry - Extension entry to fail.
  * @param message - Human-readable failure reason.
  */
-function failEntry(host: ExtensionStartHost, name: string, entry: ExtensionEntry, message: string): void {
+function failEntry(
+  call: CallContext,
+  host: ExtensionStartHost,
+  name: string,
+  entry: ExtensionEntry,
+  message: string,
+): void {
   entry.error = message;
   console.error(`[ExtensionCoordinator] Package "${name}" failed:`, message);
-  transitionPackageEntry(host.bus, entry, 'failed');
+  transitionPackageEntry(call, host.bus, entry, 'failed');
   host.bootProgress.failed(entry.pkg, message);
 }
 
 /**
  * Bridge one extension's static tray manifest into the tray menu service.
+ * @param call - Call responsible for starting the extension.
  * @param bus - Bus used to register the tray entry.
  * @param name - Extension name used for log messages.
  * @param entry - Extension entry whose tray manifest should be registered.
  */
-async function registerEntryTray(bus: IMakaioBus, name: string, entry: ExtensionEntry): Promise<void> {
+async function registerEntryTray(
+  call: CallContext,
+  bus: IMakaioBus,
+  name: string,
+  entry: ExtensionEntry,
+): Promise<void> {
   try {
-    await registerPackageTrayMenuEntry(bus, entry.pkg);
+    await registerPackageTrayMenuEntry(call, bus, entry.pkg);
   } catch (err) {
     console.warn(`[ExtensionCoordinator] Failed to register tray entry for ${name}:`, err);
   }

@@ -64,7 +64,8 @@
  * @packageDocumentation
  */
 
-import { MakaioBus, RequestError, type IMakaioBus } from '@makaio/bus-core';
+import { RequestError, type IMakaioBus } from '@makaio/bus-core';
+import type { CallContext } from '@makaio/core';
 import {
   BinaryNotFoundError,
   ClientSubjects,
@@ -118,6 +119,12 @@ const MANAGED_SESSION_CAP = 10_000;
  * lifecycle.
  */
 const SESSION_IDENTITY_CACHE_CAP = MANAGED_SESSION_CAP;
+
+/** Raw hook payload accepted by {@link normalizeClaudeCodeHook}. */
+type RawHookEvent = Parameters<typeof normalizeClaudeCodeHook>[0];
+
+/** Raw statusline payload accepted by {@link normalizeClaudeCodeStatusline}. */
+type RawStatusline = Parameters<typeof normalizeClaudeCodeStatusline>[0];
 
 // WiringExecutionCtx is imported from wiring-handlers.ts and used here for the
 // cached execution context that is shared across config and wiring handlers.
@@ -249,7 +256,7 @@ export class ClaudeCodeClientService extends BaseService {
   /**
    * Creates a new Claude Code client service.
    * @param bus - Bus instance used for hook subscription and semantic emission.
-   *   Defaults to the global {@link MakaioBus} singleton.
+   *   Required: the instance of the extension that owns this service.
    * @param machineId - Stable runtime identity of the observing machine,
    *   caller-supplied from the extension context. Omit in tests or when the
    *   identity is unavailable.
@@ -266,7 +273,7 @@ export class ClaudeCodeClientService extends BaseService {
    *   recording.
    */
   public constructor(
-    bus: IMakaioBus = MakaioBus,
+    bus: IMakaioBus,
     machineId?: string,
     providerContractRegistry?: ClientHookProviderContractRegistry,
     hookResponseRegistry?: ClientHookResponseRegistry,
@@ -313,12 +320,12 @@ export class ClaudeCodeClientService extends BaseService {
       }
     });
 
-    this.registerHandler(ClaudeCodeClientSubjects.hook.received, async ({ payload }) => {
-      await this.handleHookReceived(payload);
+    this.registerHandler(ClaudeCodeClientSubjects.hook.received, async ({ payload, call }) => {
+      await this.handleHookReceived(call, payload);
     });
 
-    this.registerHandler(ClaudeCodeClientSubjects.statusline.received, async ({ payload }) => {
-      await this.handleStatuslineReceived(payload);
+    this.registerHandler(ClaudeCodeClientSubjects.statusline.received, async ({ payload, call }) => {
+      await this.handleStatuslineReceived(call, payload);
     });
 
     this.registerProviderContract();
@@ -420,19 +427,30 @@ export class ClaudeCodeClientService extends BaseService {
    * the full rationale on fresh-resolution and explicit-binaryVersion semantics.
    */
   private registerWiringHandlers(): void {
-    const deps = {
-      resolveContextFresh: () => this.doResolveExecutionContext(),
-      createSettings: (projectDir?: string) => this.createSettings(projectDir),
-    };
     this.registerHandler(ClaudeCodeClientSubjects.wiring.list, async (ctx) => {
-      ctx.setResult(await handleWiringList(ctx.payload, deps));
+      ctx.setResult(await handleWiringList(ctx.payload, this.wiringDeps(ctx.call)));
     });
     this.registerHandler(ClaudeCodeClientSubjects.wiring.apply, async (ctx) => {
-      ctx.setResult(await handleWiringApply(ctx.payload, deps));
+      ctx.setResult(await handleWiringApply(ctx.payload, this.wiringDeps(ctx.call)));
     });
     this.registerHandler(ClaudeCodeClientSubjects.wiring.remove, async (ctx) => {
-      ctx.setResult(await handleWiringRemove(ctx.payload, deps));
+      ctx.setResult(await handleWiringRemove(ctx.payload, this.wiringDeps(ctx.call)));
     });
+  }
+
+  /**
+   * Build the dependencies of one wiring request.
+   *
+   * The fresh binary resolution serves exactly this request, so it sends with
+   * the call of the wiring message being handled.
+   * @param call - Call context of the wiring request being handled
+   * @returns Dependencies for the wiring handlers
+   */
+  private wiringDeps(call: CallContext) {
+    return {
+      resolveContextFresh: () => this.doResolveExecutionContext(call),
+      createSettings: (projectDir?: string) => this.createSettings(projectDir),
+    };
   }
 
   /**
@@ -460,7 +478,8 @@ export class ClaudeCodeClientService extends BaseService {
    */
   private resolveExecutionContext(): Promise<WiringExecutionCtx> {
     if (this.cachedExecutionContext !== undefined) return this.cachedExecutionContext;
-    const pending = this.doResolveExecutionContext().then(
+    // The cached promise serves many requests (shared work): own context.
+    const pending = this.doResolveExecutionContext(this.bus.own('shared-work')).then(
       (ctx) => {
         if (ctx === undefined && this.cachedExecutionContext === pending) this.cachedExecutionContext = undefined;
         return ctx;
@@ -483,11 +502,12 @@ export class ClaudeCodeClientService extends BaseService {
    * `undefined` is returned and callers fall back to sensible defaults.
    * @returns Minimal execution context, or `undefined` when no binary
    *   resolution handler is registered or the binary is not found.
+   * @param call - Call context the `client.resolveBinary` request is sent with
    */
-  private async doResolveExecutionContext(): Promise<WiringExecutionCtx> {
+  private async doResolveExecutionContext(call: CallContext): Promise<WiringExecutionCtx> {
     let result;
     try {
-      result = await this.bus.requestOptional(ClientSubjects.resolveBinary, { clientId: CLIENT_ID });
+      result = await this.bus.requestOptional(call, ClientSubjects.resolveBinary, { clientId: CLIENT_ID });
     } catch (error) {
       if (isResolveBinaryMissingGlobalBinary(error)) return undefined;
       throw error;
@@ -553,7 +573,7 @@ export class ClaudeCodeClientService extends BaseService {
   private registerHookHandleHandler(): void {
     this.registerHandler(ClaudeCodeClientSubjects.hook.handle, async (ctx) => {
       ctx.setResult(
-        await this.handleHookRequest(ctx.payload, {
+        await this.handleHookRequest(ctx.call, ctx.payload, {
           deadline: ctx.deadline,
           signal: ctx.signal,
           onDiagnostics: (diagnostics) => {
@@ -586,18 +606,20 @@ export class ClaudeCodeClientService extends BaseService {
    *
    * Falls back to the no-op passthrough when no hook response registry is
    * available (backward-compatible test mode).
+   * @param call - Call of the hook-request message being answered.
    * @param payload - Raw hook payload delivered on `client:claude-code.hook.handle`.
    * @param options - Request-scoped deadline and signal from the bus context.
    * @returns Response to forward to the client binary via stdout.
    */
   private async handleHookRequest(
+    call: CallContext,
     payload: RawClientHookPayload,
     options?: ComposeHookResponseOptions,
   ): Promise<ClientHookHandleResponse> {
     if (!this.hookResponseRegistry) {
       return { exitCode: 0, stdout: '', stderr: '' };
     }
-    return composeHookResponse(this.hookResponseRegistry, payload, options);
+    return composeHookResponse(call, this.hookResponseRegistry, payload, options);
   }
 
   /**
@@ -658,17 +680,18 @@ export class ClaudeCodeClientService extends BaseService {
    * Session-local usage does not require an account identity and is emitted
    * whenever the payload contains supported measurements. Account quota
    * windows still require the resolved identity.
+   * @param call - Call context of the received statusline message
    * @param raw - Raw statusline payload delivered on
    *   `client:claude-code.statusline.received`
    */
-  private async handleStatuslineReceived(raw: Parameters<typeof normalizeClaudeCodeStatusline>[0]): Promise<void> {
+  private async handleStatuslineReceived(call: CallContext, raw: RawStatusline): Promise<void> {
     const adapterSessionId = raw.session_id;
     if (!adapterSessionId) return;
     const cacheEpoch = this.sessionIdentityCacheEpoch;
 
     // 1. Check session identity cache (pinned on first resolution).
     let identity: StatuslineIdentityContext | null = this.sessionIdentityCache.get(adapterSessionId) ?? null;
-    const sessionResolution = await this.resolveStatuslineSession(adapterSessionId, identity);
+    const sessionResolution = await this.resolveStatuslineSession(call, adapterSessionId, identity);
     identity = sessionResolution.identity;
     let makaioSessionId = sessionResolution.sessionId;
 
@@ -676,7 +699,7 @@ export class ClaudeCodeClientService extends BaseService {
     //    This covers standalone Claude Code (no session exists yet or no storage
     //    handler is registered).
     if (!identity) {
-      const activeResult = await this.bus.requestOptional(ClientSubjects.account.getActive, {
+      const activeResult = await this.bus.requestOptional(call, ClientSubjects.account.getActive, {
         clientId: CLIENT_ID,
       });
       if (activeResult.handled && activeResult.data.identity) {
@@ -707,7 +730,7 @@ export class ClaudeCodeClientService extends BaseService {
     const sessionUsage = normalizeClaudeCodeSessionUsage(raw, identity?.clientAccountId, makaioSessionId);
     if (sessionUsage) {
       try {
-        await this.bus.emit(ClientSubjects.session.usage.snapshot, sessionUsage);
+        await this.bus.emit(call, ClientSubjects.session.usage.snapshot, sessionUsage);
       } catch {
         // The bus already logs subscriber failures. Session telemetry is
         // fail-open so it cannot suppress the independent quota observation.
@@ -719,24 +742,28 @@ export class ClaudeCodeClientService extends BaseService {
     const normalized = normalizeClaudeCodeStatusline(raw, identity);
     if (!normalized) return;
 
-    await this.bus.requestOptional(ClientSubjects.usage.ingest, normalized);
+    await this.bus.requestOptional(call, ClientSubjects.usage.ingest, normalized);
   }
 
   /**
    * Resolve the Makaio session while preserving a previously pinned account.
    * Cached fallback identities without a session ID keep probing until the
    * corresponding session becomes available.
+   * @param call - Call context of the statusline message being handled
    * @param adapterSessionId - Native Claude Code session identifier
    * @param identity - Account identity already pinned for this native session
    * @returns Resolved identity and optional Makaio session identifier
    */
   private async resolveStatuslineSession(
+    call: CallContext,
     adapterSessionId: string,
     identity: StatuslineIdentityContext | null,
   ): Promise<{ identity: StatuslineIdentityContext | null; sessionId: string | undefined }> {
     if (identity?.sessionId !== undefined) return { identity, sessionId: identity.sessionId };
 
-    const result = await this.bus.requestOptional(SessionStorageSubjects.getByAdapterSessionId, { adapterSessionId });
+    const result = await this.bus.requestOptional(call, SessionStorageSubjects.getByAdapterSessionId, {
+      adapterSessionId,
+    });
     const session = result.handled ? result.data.session : null;
     if (!session) return { identity, sessionId: undefined };
 
@@ -756,9 +783,10 @@ export class ClaudeCodeClientService extends BaseService {
    * A single hook may normalize into multiple events (e.g. `UserPromptSubmit`
    * yields `turn.started` followed by `userPrompt.submitted`); they are
    * emitted sequentially in normalizer order.
+   * @param call - Call context of the received hook message
    * @param raw - Raw hook payload delivered on `client:claude-code.hook.received`
    */
-  private async handleHookReceived(raw: Parameters<typeof normalizeClaudeCodeHook>[0]): Promise<void> {
+  private async handleHookReceived(call: CallContext, raw: RawHookEvent): Promise<void> {
     const events = normalizeClaudeCodeHook(raw, this.machineId);
 
     // Evaluate the adapter-managed gate ONCE per raw hook: all events produced
@@ -778,7 +806,7 @@ export class ClaudeCodeClientService extends BaseService {
 
     for (const normalized of events) {
       try {
-        await this.emitNormalizedEvent(normalized, isManaged);
+        await this.emitNormalizedEvent(call, normalized, isManaged);
       } catch (error: unknown) {
         console.warn(
           '[ClaudeCodeClientService] Subscriber threw during emission of',
@@ -803,45 +831,50 @@ export class ClaudeCodeClientService extends BaseService {
    *
    * Adapter-managed sessions suppress duplicate events via
    * {@link shouldSuppressForManagedSession} — see that function for gate logic.
+   * @param call - Call context of the hook message the event derives from
    * @param normalized - Normalized event produced by {@link normalizeClaudeCodeHook}
    * @param isManaged - Pre-computed adapter-managed flag for this raw hook batch
    */
-  private async emitNormalizedEvent(normalized: ClaudeCodeNormalizedEvent, isManaged: boolean): Promise<void> {
+  private async emitNormalizedEvent(
+    call: CallContext,
+    normalized: ClaudeCodeNormalizedEvent,
+    isManaged: boolean,
+  ): Promise<void> {
     if (shouldSuppressForManagedSession(normalized, isManaged)) {
       return;
     }
     switch (normalized.subject) {
       case ClientSubjects.session.started:
-        await this.bus.emit(ClientSubjects.session.started, await this.enrichForkLineage(normalized.payload));
+        await this.bus.emit(call, ClientSubjects.session.started, await this.enrichForkLineage(normalized.payload));
         break;
       case ClientSubjects.session.userPrompt.submitted:
-        await this.bus.emit(ClientSubjects.session.userPrompt.submitted, normalized.payload);
+        await this.bus.emit(call, ClientSubjects.session.userPrompt.submitted, normalized.payload);
         break;
       case ClientSubjects.session.turn.started:
-        await this.bus.emit(ClientSubjects.session.turn.started, normalized.payload);
+        await this.bus.emit(call, ClientSubjects.session.turn.started, normalized.payload);
         break;
       case ClientSubjects.session.turn.completed:
-        await this.bus.emit(ClientSubjects.session.turn.completed, normalized.payload);
+        await this.bus.emit(call, ClientSubjects.session.turn.completed, normalized.payload);
         break;
       case ClientSubjects.session.tool.pre:
-        await this.bus.emit(ClientSubjects.session.tool.pre, normalized.payload);
+        await this.bus.emit(call, ClientSubjects.session.tool.pre, normalized.payload);
         break;
       case ClientSubjects.session.tool.post:
-        await this.bus.emit(ClientSubjects.session.tool.post, normalized.payload);
+        await this.bus.emit(call, ClientSubjects.session.tool.post, normalized.payload);
         break;
       case ClientSubjects.session.subagent.started: {
         const { payload } = normalized as NarrowedEvent<typeof ClientSubjects.session.subagent.started>;
-        await this.bus.emit(ClientSubjects.session.subagent.started, payload);
+        await this.bus.emit(call, ClientSubjects.session.subagent.started, payload);
         break;
       }
       case ClientSubjects.session.subagent.completed: {
         const { payload } = normalized as NarrowedEvent<typeof ClientSubjects.session.subagent.completed>;
-        await this.bus.emit(ClientSubjects.session.subagent.completed, payload);
+        await this.bus.emit(call, ClientSubjects.session.subagent.completed, payload);
         break;
       }
       case ClientSubjects.session.compaction.pre: {
         const { payload } = normalized as NarrowedEvent<typeof ClientSubjects.session.compaction.pre>;
-        await this.bus.emit(ClientSubjects.session.compaction.pre, payload);
+        await this.bus.emit(call, ClientSubjects.session.compaction.pre, payload);
         break;
       }
       default:

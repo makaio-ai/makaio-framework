@@ -3,10 +3,11 @@ import { MakaioBus } from '../bus.js';
 import { z } from 'zod';
 import { createBusNamespace } from '@makaio/core';
 import { ValidationError } from '../errors/validation-error.js';
+import { busContextOf } from '../kernel-api.js';
 
 describe('validation modes', () => {
   beforeEach(() => {
-    MakaioBus.getContext()?.namespaceRegistry.__resetNamespaces?.();
+    busContextOf(MakaioBus).namespaceRegistry.__resetNamespaces?.();
   });
 
   it('strict mode throws on invalid payload', async () => {
@@ -15,9 +16,11 @@ describe('validation modes', () => {
         event: z.object({ name: z.string() }),
       }),
     );
-    const bus = await ns.scopedBus();
+    const bus = await ns.scopedBus(MakaioBus);
 
-    await expect(bus.emit(ns.subjects.event, { name: 123 } as never)).rejects.toThrow(ValidationError);
+    await expect(bus.emit(MakaioBus.own('root'), ns.subjects.event, { name: 123 } as never)).rejects.toThrow(
+      ValidationError,
+    );
   });
 
   it('lenient mode calls onSchemaViolation instead of throwing', async () => {
@@ -40,14 +43,14 @@ describe('validation modes', () => {
         },
       ),
     );
-    const bus = await ns.scopedBus();
+    const bus = await ns.scopedBus(MakaioBus);
 
     const received: unknown[] = [];
     bus.on(ns.subjects.event, ({ payload }) => {
       received.push(payload);
     });
 
-    await bus.emit(ns.subjects.event, { name: 123 } as never);
+    await bus.emit(MakaioBus.own('root'), ns.subjects.event, { name: 123 } as never);
 
     expect(violations).toHaveLength(1);
     expect(violations[0].subject).toBe('val-lenient.event');
@@ -58,14 +61,14 @@ describe('validation modes', () => {
     const ns = MakaioBus.registerNamespace(
       createBusNamespace('val-skip', { event: z.object({ name: z.string() }) }, { busValidationMode: 'skip' }),
     );
-    const bus = await ns.scopedBus();
+    const bus = await ns.scopedBus(MakaioBus);
 
     const received: unknown[] = [];
     bus.on(ns.subjects.event, ({ payload }) => {
       received.push(payload);
     });
 
-    await bus.emit(ns.subjects.event, { name: 123 } as never);
+    await bus.emit(MakaioBus.own('root'), ns.subjects.event, { name: 123 } as never);
 
     expect(received).toHaveLength(1); // no throw, no callback
   });
@@ -76,15 +79,17 @@ describe('validation modes', () => {
         event: z.object({ name: z.string() }),
       }),
     );
-    const bus = await ns.scopedBus();
+    const bus = await ns.scopedBus(MakaioBus);
 
-    await expect(bus.emit(ns.subjects.event, { name: 123 } as never)).rejects.toThrow(ValidationError);
+    await expect(bus.emit(MakaioBus.own('root'), ns.subjects.event, { name: 123 } as never)).rejects.toThrow(
+      ValidationError,
+    );
   });
 });
 
 describe('request validation modes', () => {
   beforeEach(() => {
-    MakaioBus.getContext()?.namespaceRegistry.__resetNamespaces?.();
+    busContextOf(MakaioBus).namespaceRegistry.__resetNamespaces?.();
   });
 
   it('strict mode throws on invalid request payload', async () => {
@@ -93,9 +98,11 @@ describe('request validation modes', () => {
         rpc: { request: z.object({ input: z.string() }), response: z.object({ output: z.string() }) },
       }),
     );
-    const bus = await ns.scopedBus();
+    const bus = await ns.scopedBus(MakaioBus);
 
-    await expect(bus.request(ns.subjects.rpc, { input: 123 } as never)).rejects.toThrow(ValidationError);
+    await expect(bus.request(MakaioBus.own('root'), ns.subjects.rpc, { input: 123 } as never)).rejects.toThrow(
+      ValidationError,
+    );
   });
 
   it('lenient mode calls onSchemaViolation for request payloads', async () => {
@@ -110,10 +117,10 @@ describe('request validation modes', () => {
         },
       ),
     );
-    const bus = await ns.scopedBus();
+    const bus = await ns.scopedBus(MakaioBus);
     bus.on(ns.subjects.rpc, (ctx) => ctx.setResult({ output: 'ok' }));
 
-    const result = await bus.request(ns.subjects.rpc, { input: 123 } as never);
+    const result = await bus.request(MakaioBus.own('root'), ns.subjects.rpc, { input: 123 } as never);
 
     expect(violations).toContain('req-lenient.rpc');
     expect(result).toEqual({ output: 'ok' });
@@ -129,10 +136,10 @@ describe('request validation modes', () => {
         },
       ),
     );
-    const bus = await ns.scopedBus();
+    const bus = await ns.scopedBus(MakaioBus);
     bus.on(ns.subjects.rpc, (ctx) => ctx.setResult({ output: 'ok' }));
 
-    const result = await bus.request(ns.subjects.rpc, { input: 123 } as never);
+    const result = await bus.request(MakaioBus.own('root'), ns.subjects.rpc, { input: 123 } as never);
 
     expect(result).toEqual({ output: 'ok' });
   });
@@ -140,7 +147,7 @@ describe('request validation modes', () => {
 
 describe('namespace validation config resolution', () => {
   beforeEach(() => {
-    MakaioBus.getContext()?.namespaceRegistry.__resetNamespaces?.();
+    busContextOf(MakaioBus).namespaceRegistry.__resetNamespaces?.();
   });
 
   afterEach(() => {
@@ -166,7 +173,7 @@ describe('namespace validation config resolution', () => {
       ),
     );
 
-    expect(MakaioBus.getContext()?.namespaceRegistry.getValidationConfig('validation-parent.child.event')).toEqual({
+    expect(busContextOf(MakaioBus).namespaceRegistry.getValidationConfig('validation-parent.child.event')).toEqual({
       mode: 'lenient',
       onViolation: childViolation,
     });
@@ -191,7 +198,7 @@ describe('namespace validation config resolution', () => {
     );
 
     expect(
-      MakaioBus.getContext()?.namespaceRegistry.getValidationConfig('validation-strict-parent.child.event'),
+      busContextOf(MakaioBus).namespaceRegistry.getValidationConfig('validation-strict-parent.child.event'),
     ).toEqual({
       mode: 'strict',
     });
@@ -228,7 +235,7 @@ describe('namespace validation config resolution', () => {
 
 describe('broadcast validation modes', () => {
   beforeEach(() => {
-    MakaioBus.getContext()?.namespaceRegistry.__resetNamespaces?.();
+    busContextOf(MakaioBus).namespaceRegistry.__resetNamespaces?.();
   });
 
   it('strict mode throws on invalid broadcast request payload', async () => {
@@ -238,7 +245,9 @@ describe('broadcast validation modes', () => {
       }),
     );
 
-    await expect(MakaioBus.broadcast(ns.subjects.collect, { input: 123 } as never)).rejects.toThrow(ValidationError);
+    await expect(
+      MakaioBus.broadcast(MakaioBus.own('root'), ns.subjects.collect, { input: 123 } as never),
+    ).rejects.toThrow(ValidationError);
   });
 
   it('lenient mode reports broadcast request and response violations without dropping responses', async () => {
@@ -258,13 +267,13 @@ describe('broadcast validation modes', () => {
         },
       ),
     );
-    const bus = await ns.scopedBus();
+    const bus = await ns.scopedBus(MakaioBus);
     bus.on(ns.subjects.collect, (ctx) => {
       ctx.identify?.('local');
       ctx.setResult({ output: 123 } as never);
     });
 
-    const results = await MakaioBus.broadcast(ns.subjects.collect, { input: 123 } as never);
+    const results = await MakaioBus.broadcast(MakaioBus.own('root'), ns.subjects.collect, { input: 123 } as never);
 
     expect(violations).toEqual([
       { subject: 'broadcast-lenient.collect', paths: ['input'] },
@@ -279,13 +288,15 @@ describe('broadcast validation modes', () => {
         collect: { request: z.object({ input: z.string() }), response: z.object({ output: z.string() }) },
       }),
     );
-    const bus = await ns.scopedBus();
+    const bus = await ns.scopedBus(MakaioBus);
     bus.on(ns.subjects.collect, (ctx) => {
       ctx.identify?.('local');
       ctx.setResult({ output: 123 } as never);
     });
 
-    await expect(MakaioBus.broadcast(ns.subjects.collect, { input: 'valid' })).rejects.toThrow(ValidationError);
+    await expect(MakaioBus.broadcast(MakaioBus.own('root'), ns.subjects.collect, { input: 'valid' })).rejects.toThrow(
+      ValidationError,
+    );
   });
 
   it('validates broadcast responses after incremental extendResult calls complete', async () => {
@@ -297,14 +308,14 @@ describe('broadcast validation modes', () => {
         },
       }),
     );
-    const bus = await ns.scopedBus();
+    const bus = await ns.scopedBus(MakaioBus);
     bus.on(ns.subjects.collect, (ctx) => {
       ctx.identify?.('extended');
       ctx.extendResult({ output: 'ok' });
       ctx.extendResult({ count: 1 });
     });
 
-    const results = await MakaioBus.broadcast(ns.subjects.collect, { input: 'valid' });
+    const results = await MakaioBus.broadcast(MakaioBus.own('root'), ns.subjects.collect, { input: 'valid' });
 
     expect(results).toEqual([{ nodeId: 'extended', payload: { output: 'ok', count: 1 } }]);
   });

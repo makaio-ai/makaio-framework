@@ -433,7 +433,9 @@ export async function registerWorkerRuntime(bus: IMakaioBus, options: RegisterWo
   const response = parseGateResponse(
     ExecutionAttemptSubjects.runtime.register,
     ExecutionAttemptSchemas['runtime.register'].response,
+    // ORIGIN: The worker claims its attempt during startup.
     await bus.request(
+      bus.own('start'),
       ExecutionAttemptSubjects.runtime.register,
       { executionAttemptId, runtimeIncarnationId },
       { signal },
@@ -481,7 +483,9 @@ export async function admitWorkflowRunOperation(
   const response = parseGateResponse(
     ExecutionAttemptSubjects.operation.admit,
     ExecutionAttemptSchemas['operation.admit'].response,
+    // ORIGIN: The worker initiates admission before running the workflow.
     await bus.request(
+      bus.own('start'),
       ExecutionAttemptSubjects.operation.admit,
       { executionAttemptId, operationKind: 'workflow-run', admissionKey, runtimeGeneration },
       { signal },

@@ -690,7 +690,9 @@ describe('runHeadlessWorkflowWorker integration', () => {
       { interval: 10, timeout: 5_000 },
     );
 
-    await authoritySide.bus.emit(createWorkflowCancelSubject(cancelSubject), { executionId });
+    await authoritySide.bus.emit(authoritySide.bus.own('stop'), createWorkflowCancelSubject(cancelSubject), {
+      executionId,
+    });
     const result = await worker;
 
     expect(result).toMatchObject({ outcome: { kind: 'cancelled' }, decision: 'accepted' });
@@ -776,6 +778,7 @@ describe('runHeadlessWorkflowWorker integration', () => {
       });
       await expect(
         reconcileAttemptCancellation(
+          authoritySide.bus.own('stop'),
           { bus: authoritySide.bus, authority },
           { executionId, executionAttemptId, timeoutMs: 5_000 },
         ),
@@ -1075,7 +1078,9 @@ describe('runHeadlessWorkflowWorker integration', () => {
         // Simulate cancellation during materialization by emitting cancel
         // on the authority bus. The preBus cancel listener should pick it up.
         const cancelSubject = `workflow.${executionId}.cancel`;
-        await authoritySide.bus.emit(createWorkflowCancelSubject(cancelSubject), { executionId });
+        await authoritySide.bus.emit(authoritySide.bus.own('stop'), createWorkflowCancelSubject(cancelSubject), {
+          executionId,
+        });
         // Give the event a moment to propagate
         await new Promise<void>((r) => setTimeout(r, 100));
         // Return normally — the harness should detect the abort
@@ -1149,7 +1154,7 @@ describe('runHeadlessWorkflowWorker integration', () => {
       expect(cancellationPropagationPending).toBe(true);
     });
 
-    await authoritySide.bus.emit(cancellationSubject, { executionId });
+    await authoritySide.bus.emit(authoritySide.bus.own('stop'), cancellationSubject, { executionId });
     await preCompositionCancellation;
     releaseCancellationPropagation();
 

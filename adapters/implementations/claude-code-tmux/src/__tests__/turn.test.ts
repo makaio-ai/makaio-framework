@@ -1,10 +1,12 @@
 import { describe, it, expect, vi } from 'vitest';
 import { MessageHandle } from '@makaio/ai-adapters-core';
+import { createTestBusInstance, createTestCall } from '@makaio/test-utils';
 import { TmuxConnectorTurn } from '../turn.js';
 import { ClaudeCodeTmuxConnectorNamespace } from '../namespace/index.js';
 
 function makeMockHandle(): MessageHandle {
   return new MessageHandle(
+    createTestCall(),
     'msg-1',
     { role: 'user', blocks: [{ type: 'text', content: 'hello' }], message: 'hello' },
     'enqueue',
@@ -17,7 +19,7 @@ async function makeTurn(
   interruptSettleMs = 1_000,
 ): Promise<TmuxConnectorTurn> {
   return new TmuxConnectorTurn(
-    await ClaudeCodeTmuxConnectorNamespace.scopedBus(),
+    await ClaudeCodeTmuxConnectorNamespace.scopedBus(createTestBusInstance()),
     'adapter-1',
     'claude-code-tmux',
     'agent-1',
@@ -35,7 +37,7 @@ describe('TmuxConnectorTurn', () => {
   });
 
   it('transitions through the full hook-driven lifecycle', async () => {
-    const bus = await ClaudeCodeTmuxConnectorNamespace.scopedBus();
+    const bus = await ClaudeCodeTmuxConnectorNamespace.scopedBus(createTestBusInstance());
     const turn = new TmuxConnectorTurn(
       bus,
       'adapter-1',
@@ -47,16 +49,16 @@ describe('TmuxConnectorTurn', () => {
       vi.fn(),
     );
 
-    await turn.start();
+    await turn.start(createTestCall());
     expect(turn.getState()).toBe('turn_started');
 
-    await turn.markStepStarted();
+    await turn.markStepStarted(createTestCall());
     expect(turn.getState()).toBe('step_started');
 
-    await turn.markStepFinished();
+    await turn.markStepFinished(createTestCall());
     expect(turn.getState()).toBe('step_finished');
 
-    await turn.markTurnFinished();
+    await turn.markTurnFinished(createTestCall());
     expect(turn.getState()).toBe('turn_finished');
     expect(turn.isCompleted()).toBe(true);
   });
@@ -64,23 +66,23 @@ describe('TmuxConnectorTurn', () => {
   it('supports multiple tool use cycles (step_finished → step_started)', async () => {
     const turn = await makeTurn();
 
-    await turn.start();
-    await turn.markStepStarted();
-    await turn.markStepFinished();
+    await turn.start(createTestCall());
+    await turn.markStepStarted(createTestCall());
+    await turn.markStepFinished(createTestCall());
     expect(turn.getState()).toBe('step_finished');
 
-    await turn.markStepStarted();
+    await turn.markStepStarted(createTestCall());
     expect(turn.getState()).toBe('step_started');
 
-    await turn.markStepFinished();
-    await turn.markTurnFinished();
+    await turn.markStepFinished(createTestCall());
+    await turn.markTurnFinished(createTestCall());
     expect(turn.isCompleted()).toBe(true);
   });
 
   it('pause returns turnEnded: true when already finished', async () => {
     const turn = await makeTurn();
-    await turn.start();
-    await turn.markTurnFinished();
+    await turn.start(createTestCall());
+    await turn.markTurnFinished(createTestCall());
 
     const result = await turn.pause();
     expect(result.turnEnded).toBe(true);
@@ -89,7 +91,7 @@ describe('TmuxConnectorTurn', () => {
   it('sends Escape and consumes Stop as interrupt acknowledgement', async () => {
     const requestInterrupt = vi.fn();
     const turn = await makeTurn(requestInterrupt);
-    await turn.start();
+    await turn.start(createTestCall());
 
     expect(turn.canAcceptImmediate()).toBe(true);
     const resultPromise = turn.pause();
@@ -109,7 +111,7 @@ describe('TmuxConnectorTurn', () => {
     const requestInterrupt = vi.fn();
     const onInterruptSettledWithoutStop = vi.fn();
     const turn = await makeTurn(requestInterrupt, onInterruptSettledWithoutStop, 1);
-    await turn.start();
+    await turn.start(createTestCall());
 
     const result = await turn.pause();
 
@@ -121,6 +123,6 @@ describe('TmuxConnectorTurn', () => {
 
   it('resume throws (tmux does not support resume)', async () => {
     const turn = await makeTurn();
-    await expect(turn.resume()).rejects.toThrow(/does not support resume/);
+    await expect(turn.resume(createTestCall())).rejects.toThrow(/does not support resume/);
   });
 });

@@ -1,4 +1,5 @@
 import type { IMakaioBus } from '@makaio/bus-core';
+import type { CallContext } from '@makaio/core';
 import { AccountManagerSubjects } from '../bus/namespace.js';
 import type { ILabelProvider } from '../interfaces/label-provider.js';
 import type { IAccountCredentialStore, IAccountMetadataStore } from '../interfaces/account-store.js';
@@ -87,10 +88,10 @@ export class LabelResolver {
           }
           return;
         }
-        await this.handleCredentialEvent(ctx.payload.clientId, ctx.payload.account);
+        await this.handleCredentialEvent(ctx.call, ctx.payload.clientId, ctx.payload.account);
       }),
       this.bus.on(AccountManagerSubjects.credentials.refreshed, async (ctx) => {
-        await this.handleCredentialEvent(ctx.payload.clientId, ctx.payload.account);
+        await this.handleCredentialEvent(ctx.call, ctx.payload.clientId, ctx.payload.account);
       }),
       this.bus.on(AccountManagerSubjects.credentials.switched, async (ctx) => {
         const { clientId, to } = ctx.payload;
@@ -101,7 +102,7 @@ export class LabelResolver {
         // Clear any prior retry throttle so a freshly-switched account is not
         // suppressed by a failed lookup that occurred while it was inactive.
         this.clearRetryState(clientId, to.id);
-        await this.handleCredentialEvent(clientId, to);
+        await this.handleCredentialEvent(ctx.call, clientId, to);
       }),
     );
   }
@@ -130,10 +131,11 @@ export class LabelResolver {
 
   /**
    * Attempts label resolution for the given account if the source supports it.
+   * @param call - Call context of the triggering credential event
    * @param clientId - Client identifier for store operations
    * @param publicAccount - The public account snapshot from the bus event
    */
-  private async handleCredentialEvent(clientId: string, publicAccount: Account): Promise<void> {
+  private async handleCredentialEvent(call: CallContext, clientId: string, publicAccount: Account): Promise<void> {
     // Skip accounts that are already labeled — label resolution stops once resolved.
     if (publicAccount.label) return;
 
@@ -149,7 +151,7 @@ export class LabelResolver {
 
     try {
       const [metadata, credential] = await Promise.all([
-        this.metadataStore.get(clientId, publicAccount.id),
+        this.metadataStore.get(call, clientId, publicAccount.id),
         this.credentialStore.get(clientId, publicAccount.id),
       ]);
       if (!metadata || !credential || metadata.label) {
@@ -162,14 +164,14 @@ export class LabelResolver {
 
       const label = await source.resolveLabel(credential.credential);
       if (label) {
-        const updated = await this.metadataStore.setLabel(clientId, publicAccount.id, label);
+        const updated = await this.metadataStore.setLabel(call, clientId, publicAccount.id, label);
         if (!updated) {
           return;
         }
         // Once labeled, clear retry state — no further retries needed.
         this.labelRetryAt.delete(key);
 
-        await this.bus.emit(AccountManagerSubjects.accounts.labeled, {
+        await this.bus.emit(call, AccountManagerSubjects.accounts.labeled, {
           clientId,
           account: updated,
         });

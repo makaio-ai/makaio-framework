@@ -48,7 +48,9 @@ export function checkSubagentTool() {
       }
 
       try {
-        const result = await context.bus.request(SubagentSubjects.getStatus, { subagentId: input.subagentId });
+        const result = await context.bus.request(context.call, SubagentSubjects.getStatus, {
+          subagentId: input.subagentId,
+        });
         return toolSuccess(result);
       } catch (err) {
         // Service throws if subagent not found

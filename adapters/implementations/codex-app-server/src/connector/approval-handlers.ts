@@ -17,6 +17,13 @@ import {
   type DynamicToolCallResponse,
 } from '../dynamic-tool-handling.js';
 import type { IMakaioBus } from '@makaio/bus-core';
+import type { Forbid, ForbiddenKeys, MessageHandle } from '@makaio/ai-adapters-core';
+import type { CallContext } from '@makaio/contracts';
+import type { ScopedSubjectDefinition } from '@makaio/core';
+import type { CodexTurnEmit } from './turn-flow-handlers.js';
+
+/** Message returned to the server when an approval request belongs to no live operation. */
+const UNATTRIBUTABLE_APPROVAL_MESSAGE = 'no operation attributable to this approval request';
 
 /**
  * Approval response returned to the server.
@@ -27,14 +34,29 @@ export interface ApprovalResponse {
 }
 
 /**
+ * Requests tool approval over the scoped bus under the call of the operation the request belongs to.
+ * @typeParam S - Approval subject definition
+ */
+export type CodexRequestToolApproval = <S extends ScopedSubjectDefinition<CodexAppServerBus['namespace']>>(
+  call: CallContext,
+  subject: S,
+  payload: Forbid<S['$meta']['payload']['request'], ForbiddenKeys>,
+) => Promise<S['$meta']['payload']['response']>;
+
+/**
  * Context needed for approval handling.
  */
 export interface ApprovalContext {
   agentId: string;
   cwd: string;
   commandExecutionByItemId: Map<string, { command: string; cwd: string }>;
-  /** Bound requestToolApproval from AIAgentConnector - typed loosely to avoid coupling */
-  requestToolApproval: (subject: unknown, payload: unknown) => Promise<ApprovalResponse>;
+  /** Bound requestToolApproval from AIAgentConnector. */
+  requestToolApproval: CodexRequestToolApproval;
+  /**
+   * Returns the pending message handle that the provider turn belongs to, or `undefined` when
+   * no live operation is attributable. Handlers read it synchronously, before any `await`.
+   */
+  handleForTurn: (turnId: string) => MessageHandle | undefined;
   handleError: (error: Error, terminate: boolean) => void;
   /**
    * Returns the set of SDK-native tool names currently disabled by the active harness.
@@ -68,10 +90,6 @@ export async function handleCommandApprovalRequest(
   request: ServerRequest,
   ctx: ApprovalContext,
 ): Promise<ApprovalResponse> {
-  if (ctx.getDisabledNativeTools().has('bash')) {
-    return { decision: 'decline', message: 'bash tool is disabled by the active harness' };
-  }
-
   const params = request.params as {
     threadId: string;
     turnId: string;
@@ -79,11 +97,17 @@ export async function handleCommandApprovalRequest(
     reason?: string | null;
     proposedExecpolicyAmendment?: unknown;
   };
+  const handle = ctx.handleForTurn(params.turnId);
+
+  if (ctx.getDisabledNativeTools().has('bash')) {
+    return { decision: 'decline', message: 'bash tool is disabled by the active harness' };
+  }
+  if (!handle) return { decision: 'decline', message: UNATTRIBUTABLE_APPROVAL_MESSAGE };
 
   try {
     const commandInfo =
       ctx.commandExecutionByItemId.get(params.itemId) ?? (await ctx.waitForCommandInfo(params.itemId));
-    const response = await ctx.requestToolApproval(CodexAppServerSubjects.exec_approval_request, {
+    const response = await ctx.requestToolApproval(handle.call, CodexAppServerSubjects.exec_approval_request, {
       threadId: params.threadId,
       turnId: params.turnId,
       callId: params.itemId,
@@ -117,10 +141,6 @@ export async function handleFileChangeApprovalRequest(
   request: ServerRequest,
   ctx: ApprovalContext,
 ): Promise<ApprovalResponse> {
-  if (ctx.getDisabledNativeTools().has('patch')) {
-    return { decision: 'decline', message: 'patch tool is disabled by the active harness' };
-  }
-
   const params = request.params as {
     threadId: string;
     turnId: string;
@@ -128,9 +148,15 @@ export async function handleFileChangeApprovalRequest(
     reason: string | null;
     grantRoot: string | null;
   };
+  const handle = ctx.handleForTurn(params.turnId);
+
+  if (ctx.getDisabledNativeTools().has('patch')) {
+    return { decision: 'decline', message: 'patch tool is disabled by the active harness' };
+  }
+  if (!handle) return { decision: 'decline', message: UNATTRIBUTABLE_APPROVAL_MESSAGE };
 
   try {
-    const response = await ctx.requestToolApproval(CodexAppServerSubjects.file_change_approval_request, {
+    const response = await ctx.requestToolApproval(handle.call, CodexAppServerSubjects.file_change_approval_request, {
       threadId: params.threadId,
       turnId: params.turnId,
       itemId: params.itemId,
@@ -155,10 +181,18 @@ export async function handleFileChangeApprovalRequest(
 export interface DynamicToolApprovalContext {
   /** Global bus that owns ToolRegistry execution handlers. */
   bus: IMakaioBus;
-  /** Bound requestToolApproval from AIAgentConnector — typed loosely to avoid coupling */
-  requestToolApproval: (subject: unknown, payload: unknown) => Promise<ApprovalResponse>;
-  /** Scoped bus emit function for emitting lifecycle events */
-  emit: CodexAppServerBus['emit'];
+  /** Bound requestToolApproval from AIAgentConnector. */
+  requestToolApproval: CodexRequestToolApproval;
+  /**
+   * Returns the pending message handle that the provider turn belongs to, or `undefined` when
+   * no live operation is attributable. The handler reads it synchronously as its first statement.
+   */
+  handleForTurn: (turnId: string) => MessageHandle | undefined;
+  /**
+   * Emitter for lifecycle events, bound by the connector to the handle {@link handleForTurn} returns
+   * for the same request (observer context when there is none); both are read in the same synchronous turn.
+   */
+  emit: CodexTurnEmit;
   /** Session ID for bus routing */
   sessionId?: string;
   /** Provider-assigned session identifier forwarded to tool execution context. */
@@ -186,12 +220,12 @@ export interface DynamicToolApprovalContext {
  * every tool call regardless of its approval outcome.
  * @param params - Tool call parameters from the server request
  * @param output - Serialised error output to surface as the tool result
- * @param emit - Scoped bus emit function
+ * @param emit - Emitter bound to the operation of the denied request
  */
 async function emitDeniedDynamicToolCallLifecycle(
   params: DynamicToolCallServerRequest['params'],
   output: string,
-  emit: CodexAppServerBus['emit'],
+  emit: CodexTurnEmit,
 ): Promise<void> {
   const now = Date.now();
   await emit(CodexAppServerSubjects.dynamic_tool_call_begin, {
@@ -214,11 +248,47 @@ async function emitDeniedDynamicToolCallLifecycle(
 }
 
 /**
+ * Answer a dynamic tool call with a tool-level denial and nothing executed.
+ *
+ * Approval failures are tool-level, not adapter-level: the tool invocation completed
+ * (with a failure result) and the agent should see it in context, so the error is
+ * returned as tool output rather than routed through handleError. The synthetic
+ * lifecycle is best-effort; if it fails, the denial is still returned.
+ * @param params - Tool call parameters from the server request
+ * @param ctx - Dynamic tool approval and execution context
+ * @param errorText - Serialised error output to return as the tool result
+ * @returns Content items to send back to codex
+ */
+async function denyDynamicToolCall(
+  params: DynamicToolCallServerRequest['params'],
+  ctx: DynamicToolApprovalContext,
+  errorText: string,
+): Promise<DynamicToolCallResponse> {
+  ctx.dynamicToolCallByItemId.set(params.itemId, {
+    name: params.name,
+    args: params.arguments,
+    output: errorText,
+    success: false,
+  });
+  try {
+    await emitDeniedDynamicToolCallLifecycle(params, errorText, ctx.emit);
+  } catch {
+    // Lifecycle emit failure should not block the denial response.
+  } finally {
+    // Clean up cache — denied/error paths emit synthetic lifecycle events, so the Codex
+    // server never sends item/completed and handleItemCompleted never runs for this itemId.
+    ctx.dynamicToolCallByItemId.delete(params.itemId);
+  }
+  return { content: [{ type: 'text', text: errorText }] };
+}
+
+/**
  * Handle an `item/tool/call` server request (experimental API).
  *
  * Requests tool approval via the scoped bus before executing. If denied, returns error
  * content without executing. If approved, executes via bus and caches result under
- * `itemId` for lifecycle handler correlation.
+ * `itemId` for lifecycle handler correlation. A request that belongs to no live operation
+ * is denied without an approval request.
  *
  * Denied calls emit a synthetic `dynamic_tool_call_begin`/`end` pair so that
  * downstream lifecycle consumers (e.g. `AgentSubjects.tool.use`) observe every
@@ -231,9 +301,14 @@ export async function handleDynamicToolCallApprovalRequest(
   params: DynamicToolCallServerRequest['params'],
   ctx: DynamicToolApprovalContext,
 ): Promise<DynamicToolCallResponse> {
+  const handle = ctx.handleForTurn(params.turnId);
+  if (!handle) {
+    return denyDynamicToolCall(params, ctx, JSON.stringify({ error: UNATTRIBUTABLE_APPROVAL_MESSAGE }));
+  }
+
   let approval: ApprovalResponse;
   try {
-    approval = await ctx.requestToolApproval(CodexAppServerSubjects.dynamic_tool_call_approval_request, {
+    approval = await ctx.requestToolApproval(handle.call, CodexAppServerSubjects.dynamic_tool_call_approval_request, {
       threadId: params.threadId,
       turnId: params.turnId,
       itemId: params.itemId,
@@ -242,27 +317,7 @@ export async function handleDynamicToolCallApprovalRequest(
       timestamp: Date.now(),
     });
   } catch (error) {
-    // Approval failures are tool-level, not adapter-level — return the error as tool
-    // output rather than routing through handleError, because the tool invocation
-    // completed (with a failure result) and the agent should see it in context.
-    const errorText = JSON.stringify({ error: String(error) });
-    ctx.dynamicToolCallByItemId.set(params.itemId, {
-      name: params.name,
-      args: params.arguments,
-      output: errorText,
-      success: false,
-    });
-    // Synthetic lifecycle is best-effort — if it fails, still return the tool-level denial.
-    try {
-      await emitDeniedDynamicToolCallLifecycle(params, errorText, ctx.emit);
-    } catch {
-      // Lifecycle emit failure should not block the denial response.
-    } finally {
-      // Clean up cache — denied/error paths emit synthetic lifecycle events, so the Codex
-      // server never sends item/completed and handleItemCompleted never runs for this itemId.
-      ctx.dynamicToolCallByItemId.delete(params.itemId);
-    }
-    return { content: [{ type: 'text', text: errorText }] };
+    return denyDynamicToolCall(params, ctx, JSON.stringify({ error: String(error) }));
   }
 
   // Fail closed: requestToolApproval crosses a bus boundary, so the runtime response
@@ -272,25 +327,10 @@ export async function handleDynamicToolCallApprovalRequest(
       approval?.decision === 'decline'
         ? (approval.message ?? 'Tool call denied by approval handler')
         : 'Invalid approval response from approval handler';
-    const errorText = JSON.stringify({ error: message });
-    ctx.dynamicToolCallByItemId.set(params.itemId, {
-      name: params.name,
-      args: params.arguments,
-      output: errorText,
-      success: false,
-    });
-    // Synthetic lifecycle is best-effort — same pattern as error path above.
-    try {
-      await emitDeniedDynamicToolCallLifecycle(params, errorText, ctx.emit);
-    } catch {
-      // Lifecycle emit failure should not block the denial response.
-    } finally {
-      ctx.dynamicToolCallByItemId.delete(params.itemId);
-    }
-    return { content: [{ type: 'text', text: errorText }] };
+    return denyDynamicToolCall(params, ctx, JSON.stringify({ error: message }));
   }
 
-  const response = await handleDynamicToolCall(params, {
+  const response = await handleDynamicToolCall(handle.call, params, {
     bus: ctx.bus,
     sessionId: ctx.sessionId,
     adapterSessionId: ctx.adapterSessionId,

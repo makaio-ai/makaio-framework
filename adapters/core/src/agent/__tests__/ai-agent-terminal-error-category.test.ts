@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
 import { RateLimitError } from '@makaio/core';
 import { AgentSubjects } from '@makaio/contracts';
+import { createTestCall } from '@makaio/test-utils';
 import { createTestableAgent, MockConnector } from './helpers/mock-agent.js';
 
 function makeMockConnectorFactory(): (config: { model: string; cwd: string }) => MockConnector {
@@ -35,7 +36,7 @@ describe('AIAgent terminal error categories', () => {
     });
 
     try {
-      const startResult = await agent.start('trigger a terminal error');
+      const startResult = await agent.start(createTestCall(), 'trigger a terminal error');
       startResult.messageHandle.markCompleted({
         outcome: 'error',
         error: new RateLimitError('provider rate limited'),

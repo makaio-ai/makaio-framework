@@ -13,6 +13,9 @@
  */
 
 import { describe, it, expect, beforeEach } from 'vitest';
+import { MakaioBus } from '@makaio/bus-core';
+import type { CallContext } from '@makaio/contracts';
+import { createTestCall } from '@makaio/test-utils';
 import { MessageHandle, type NormalizedMessageInput } from '@makaio/ai-adapters-core';
 import { QwenAcpNamespace, QwenAcpSubjects } from '../namespaces/index.js';
 import { QwenAcpTurn } from '../turn.js';
@@ -31,19 +34,21 @@ const TEST_MESSAGE: NormalizedMessageInput = {
 
 /**
  * Create a fresh MessageHandle for each test to avoid cross-test state.
+ * @param call - Call of the message handled by the turn
  * @returns A new MessageHandle in the 'queued' state
  */
-function makeHandle(): MessageHandle {
-  return new MessageHandle('msg-test', TEST_MESSAGE, 'enqueue');
+function makeHandle(call: CallContext): MessageHandle {
+  return new MessageHandle(call, 'msg-test', TEST_MESSAGE, 'enqueue');
 }
 
 /**
  * Construct a QwenAcpTurn wired to the provided bus.
+ * @param call - Call of the message handled by the turn
  * @param bus - Scoped bus to emit lifecycle events onto
  * @returns A new QwenAcpTurn instance in the 'idle' state
  */
-function makeTurn(bus: QwenAcpBus): QwenAcpTurn {
-  return new QwenAcpTurn(makeHandle(), bus, 'adapter-1', 'qwen-acp', 'agent-1');
+function makeTurn(call: CallContext, bus: QwenAcpBus): QwenAcpTurn {
+  return new QwenAcpTurn(makeHandle(call), bus, 'adapter-1', 'qwen-acp', 'agent-1');
 }
 
 // ---------------------------------------------------------------------------
@@ -51,12 +56,14 @@ function makeTurn(bus: QwenAcpBus): QwenAcpTurn {
 // ---------------------------------------------------------------------------
 
 describe('QwenAcpTurn', () => {
+  let call: CallContext;
   let bus: QwenAcpBus;
   let turn: QwenAcpTurn;
 
   beforeEach(async () => {
-    bus = await QwenAcpNamespace.scopedBus();
-    turn = makeTurn(bus);
+    call = createTestCall();
+    bus = await QwenAcpNamespace.scopedBus(MakaioBus);
+    turn = makeTurn(call, bus);
   });
 
   // -------------------------------------------------------------------------
@@ -89,16 +96,16 @@ describe('QwenAcpTurn', () => {
     it('transitions through idle → turn_started → step_started → step_finished → turn_finished', async () => {
       expect(turn.getState()).toBe('idle');
 
-      await turn.start();
+      await turn.start(call);
       expect(turn.getState()).toBe('turn_started');
 
-      await turn.markStepStarted();
+      await turn.markStepStarted(call);
       expect(turn.getState()).toBe('step_started');
 
-      await turn.markStepFinished();
+      await turn.markStepFinished(call);
       expect(turn.getState()).toBe('step_finished');
 
-      await turn.markTurnFinished();
+      await turn.markTurnFinished(call);
       expect(turn.getState()).toBe('turn_finished');
     });
   });
@@ -109,18 +116,18 @@ describe('QwenAcpTurn', () => {
 
   describe('multiple steps', () => {
     it('allows step_started → step_finished → step_started → step_finished cycles', async () => {
-      await turn.start();
-      await turn.markStepStarted();
+      await turn.start(call);
+      await turn.markStepStarted(call);
       expect(turn.getState()).toBe('step_started');
 
-      await turn.markStepFinished();
+      await turn.markStepFinished(call);
       expect(turn.getState()).toBe('step_finished');
 
       // Second step cycle
-      await turn.markStepStarted();
+      await turn.markStepStarted(call);
       expect(turn.getState()).toBe('step_started');
 
-      await turn.markStepFinished();
+      await turn.markStepFinished(call);
       expect(turn.getState()).toBe('step_finished');
     });
   });
@@ -131,27 +138,27 @@ describe('QwenAcpTurn', () => {
 
   describe('markTurnFinished', () => {
     it('transitions through step_finished automatically when called from step_started', async () => {
-      await turn.start();
-      await turn.markStepStarted();
+      await turn.start(call);
+      await turn.markStepStarted(call);
       expect(turn.getState()).toBe('step_started');
 
-      await turn.markTurnFinished();
+      await turn.markTurnFinished(call);
       // step_started → step_finished → turn_finished
       expect(turn.getState()).toBe('turn_finished');
     });
 
     it('goes directly to turn_finished when called from turn_started', async () => {
-      await turn.start();
+      await turn.start(call);
       expect(turn.getState()).toBe('turn_started');
 
-      await turn.markTurnFinished();
+      await turn.markTurnFinished(call);
       expect(turn.getState()).toBe('turn_finished');
     });
 
     it('is idempotent: calling again from turn_finished stays at turn_finished', async () => {
-      await turn.start();
-      await turn.markTurnFinished();
-      await turn.markTurnFinished();
+      await turn.start(call);
+      await turn.markTurnFinished(call);
+      await turn.markTurnFinished(call);
       expect(turn.getState()).toBe('turn_finished');
     });
   });
@@ -179,29 +186,29 @@ describe('QwenAcpTurn', () => {
 
   describe('pause and resume', () => {
     it('isPaused returns true after pause', async () => {
-      await turn.start();
-      await turn.pause();
+      await turn.start(call);
+      await turn.pause(call);
       expect(turn.isPaused()).toBe(true);
     });
 
     it('isPaused returns false after resume', async () => {
-      await turn.start();
-      await turn.pause();
-      await turn.resume();
+      await turn.start(call);
+      await turn.pause(call);
+      await turn.resume(call);
       expect(turn.isPaused()).toBe(false);
     });
 
     it('pause returns turnEnded:false when turn is still active', async () => {
-      await turn.start();
-      const result = await turn.pause();
+      await turn.start(call);
+      const result = await turn.pause(call);
       expect(result.turnEnded).toBe(false);
       expect(result.stateBeforePause).toBe('turn_started');
     });
 
     it('pause returns turnEnded:true when turn is already finished', async () => {
-      await turn.start();
-      await turn.markTurnFinished();
-      const result = await turn.pause();
+      await turn.start(call);
+      await turn.markTurnFinished(call);
+      const result = await turn.pause(call);
       expect(result.turnEnded).toBe(true);
       expect(result.stateBeforePause).toBe('turn_finished');
     });
@@ -213,26 +220,26 @@ describe('QwenAcpTurn', () => {
 
   describe('canAcceptImmediate', () => {
     it('returns true while turn is running', async () => {
-      await turn.start();
+      await turn.start(call);
       expect(turn.canAcceptImmediate()).toBe(true);
     });
 
     it('returns false after turn_finished', async () => {
-      await turn.start();
-      await turn.markTurnFinished();
+      await turn.start(call);
+      await turn.markTurnFinished(call);
       expect(turn.canAcceptImmediate()).toBe(false);
     });
 
     it('returns false while paused', async () => {
-      await turn.start();
-      await turn.pause();
+      await turn.start(call);
+      await turn.pause(call);
       expect(turn.canAcceptImmediate()).toBe(false);
     });
 
     it('returns true again after resume (turn not finished)', async () => {
-      await turn.start();
-      await turn.pause();
-      await turn.resume();
+      await turn.start(call);
+      await turn.pause(call);
+      await turn.resume(call);
       expect(turn.canAcceptImmediate()).toBe(true);
     });
   });
@@ -248,7 +255,7 @@ describe('QwenAcpTurn', () => {
         events.push(ctx.payload);
       });
 
-      await turn.start();
+      await turn.start(call);
 
       expect(events).toHaveLength(1);
       expect(events[0]).toMatchObject({ agentId: 'agent-1' });
@@ -260,8 +267,8 @@ describe('QwenAcpTurn', () => {
         events.push(ctx.payload);
       });
 
-      await turn.start();
-      await turn.markStepStarted();
+      await turn.start(call);
+      await turn.markStepStarted(call);
 
       expect(events).toHaveLength(1);
       expect(events[0]).toMatchObject({ agentId: 'agent-1', stepType: 'text' });
@@ -273,9 +280,9 @@ describe('QwenAcpTurn', () => {
         events.push(ctx.payload);
       });
 
-      await turn.start();
-      await turn.markStepStarted();
-      await turn.markStepFinished();
+      await turn.start(call);
+      await turn.markStepStarted(call);
+      await turn.markStepFinished(call);
 
       expect(events).toHaveLength(1);
       expect(events[0]).toMatchObject({ agentId: 'agent-1', stepType: 'text' });
@@ -291,9 +298,9 @@ describe('QwenAcpTurn', () => {
         finishedEvents.push(ctx.payload);
       });
 
-      await turn.start();
-      await turn.markStepStarted('tool_use');
-      await turn.markStepFinished();
+      await turn.start(call);
+      await turn.markStepStarted(call, 'tool_use');
+      await turn.markStepFinished(call);
 
       expect(startedEvents).toHaveLength(1);
       expect(startedEvents[0]).toMatchObject({ agentId: 'agent-1', stepType: 'tool_use' });
@@ -307,8 +314,8 @@ describe('QwenAcpTurn', () => {
         events.push(ctx.payload);
       });
 
-      await turn.start();
-      await turn.markTurnFinished();
+      await turn.start(call);
+      await turn.markTurnFinished(call);
 
       expect(events).toHaveLength(1);
       expect(events[0]).toMatchObject({ agentId: 'agent-1' });
@@ -325,9 +332,9 @@ describe('QwenAcpTurn', () => {
         turnFinishedEvents.push(ctx.payload);
       });
 
-      await turn.start();
-      await turn.markStepStarted();
-      await turn.markTurnFinished();
+      await turn.start(call);
+      await turn.markStepStarted(call);
+      await turn.markTurnFinished(call);
 
       expect(stepFinishedEvents).toHaveLength(1);
       expect(turnFinishedEvents).toHaveLength(1);
@@ -339,10 +346,10 @@ describe('QwenAcpTurn', () => {
         stateChanges.push({ previousState: ctx.payload.previousState, newState: ctx.payload.newState });
       });
 
-      await turn.start();
-      await turn.markStepStarted();
-      await turn.markStepFinished();
-      await turn.markTurnFinished();
+      await turn.start(call);
+      await turn.markStepStarted(call);
+      await turn.markStepFinished(call);
+      await turn.markTurnFinished(call);
 
       expect(stateChanges).toEqual([
         { previousState: 'idle', newState: 'turn_started' },
@@ -363,12 +370,12 @@ describe('QwenAcpTurn', () => {
         stepFinishedEvents.push(ctx.payload);
       });
 
-      await turn.start();
+      await turn.start(call);
 
-      await turn.markStepStarted();
-      await turn.markStepFinished();
-      await turn.markStepStarted();
-      await turn.markStepFinished();
+      await turn.markStepStarted(call);
+      await turn.markStepFinished(call);
+      await turn.markStepStarted(call);
+      await turn.markStepFinished(call);
 
       expect(stepStartedEvents).toHaveLength(2);
       expect(stepFinishedEvents).toHaveLength(2);
@@ -381,13 +388,13 @@ describe('QwenAcpTurn', () => {
 
   describe('message handle', () => {
     it('returns the message handle passed to the constructor', () => {
-      const handle = makeHandle();
+      const handle = makeHandle(call);
       const localTurn = new QwenAcpTurn(handle, bus, 'adapter-1', 'qwen-acp', 'agent-1');
       expect(localTurn.getMessageHandle()).toBe(handle);
     });
 
     it('markAcknowledged delegates to the message handle', async () => {
-      const handle = makeHandle();
+      const handle = makeHandle(call);
       const localTurn = new QwenAcpTurn(handle, bus, 'adapter-1', 'qwen-acp', 'agent-1');
 
       localTurn.markAcknowledged();
@@ -396,7 +403,7 @@ describe('QwenAcpTurn', () => {
     });
 
     it('markCompleted delegates to the message handle', async () => {
-      const handle = makeHandle();
+      const handle = makeHandle(call);
       const localTurn = new QwenAcpTurn(handle, bus, 'adapter-1', 'qwen-acp', 'agent-1');
 
       localTurn.markCompleted({ outcome: 'completed' });

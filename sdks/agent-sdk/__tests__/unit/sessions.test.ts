@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { createMockBus, createTestBusInstance } from '@makaio/test-utils';
+import { createMockBus, createTestBusInstance, createTestCall } from '@makaio/test-utils';
 import { MessageStorageSubjects, SessionSubjects } from '@makaio/contracts';
 import {
   registerCoreSessionServiceHandlers,
@@ -74,22 +74,22 @@ const createSessionRuntime = () => {
 
 describe('session SDK facade with real core handlers', () => {
   it('round-trips create, list, get, rename, and delete through real bus handlers', async () => {
-    const runtime = createSessionRuntime();
+    const { bus, cleanup } = createSessionRuntime();
     try {
-      await runtime.bus.request(SessionSubjects.create, {
+      await bus.request(bus.own('root'), SessionSubjects.create, {
         sessionId: 'session-real-1',
         title: 'Original title',
       });
 
-      expect(await getSessionInfo(runtime.bus, 'session-real-1')).toMatchObject({
+      expect(await getSessionInfo(bus.own('root'), bus, 'session-real-1')).toMatchObject({
         sessionId: 'session-real-1',
         title: 'Original title',
         status: 'active',
       });
 
-      await renameSession(runtime.bus, 'session-real-1', 'Renamed title');
+      await renameSession(bus.own('root'), bus, 'session-real-1', 'Renamed title');
 
-      const renamed = await getSessionInfo(runtime.bus, 'session-real-1');
+      const renamed = await getSessionInfo(bus.own('root'), bus, 'session-real-1');
       expect(renamed).toMatchObject({
         sessionId: 'session-real-1',
         title: 'Renamed title',
@@ -98,28 +98,28 @@ describe('session SDK facade with real core handlers', () => {
       expect(renamed?.createdAt).toEqual(expect.any(String));
       expect(renamed?.lastActivityAt).toEqual(expect.any(String));
 
-      await runtime.bus.request(SessionSubjects.create, {
+      await bus.request(bus.own('root'), SessionSubjects.create, {
         sessionId: 'session-real-2',
         title: 'Second session',
       });
 
-      const listed = await listSessions(runtime.bus, { status: 'active', limit: 1 });
+      const listed = await listSessions(bus.own('root'), bus, { status: 'active', limit: 1 });
       expect(listed).toHaveLength(1);
       expect(listed[0]?.sessionId).toBe('session-real-2');
 
-      await deleteSession(runtime.bus, 'session-real-1');
+      await deleteSession(bus.own('root'), bus, 'session-real-1');
 
-      expect(await getSessionInfo(runtime.bus, 'session-real-1')).toBeUndefined();
+      expect(await getSessionInfo(bus.own('root'), bus, 'session-real-1')).toBeUndefined();
     } finally {
-      runtime.cleanup();
+      cleanup();
     }
   });
 
   it('reads stored messages through real message storage pagination semantics', async () => {
-    const runtime = createSessionRuntime();
+    const { bus, cleanup } = createSessionRuntime();
     try {
-      await runtime.bus.request(SessionSubjects.create, { sessionId: 'session-real-messages' });
-      await runtime.bus.request(MessageStorageSubjects.append, {
+      await bus.request(bus.own('root'), SessionSubjects.create, { sessionId: 'session-real-messages' });
+      await bus.request(bus.own('root'), MessageStorageSubjects.append, {
         emitEvent: false,
         message: makeMessageRecord({
           messageId: 'msg-real-2',
@@ -128,7 +128,7 @@ describe('session SDK facade with real core handlers', () => {
           timestamp: 1_700_000_000_020,
         }),
       });
-      await runtime.bus.request(MessageStorageSubjects.append, {
+      await bus.request(bus.own('root'), MessageStorageSubjects.append, {
         emitEvent: false,
         message: makeMessageRecord({
           messageId: 'msg-real-1',
@@ -138,7 +138,7 @@ describe('session SDK facade with real core handlers', () => {
         }),
       });
 
-      const messages = await getSessionMessages(runtime.bus, 'session-real-messages');
+      const messages = await getSessionMessages(bus.own('root'), bus, 'session-real-messages');
 
       expect(messages).toEqual([
         {
@@ -155,7 +155,7 @@ describe('session SDK facade with real core handlers', () => {
         },
       ]);
     } finally {
-      runtime.cleanup();
+      cleanup();
     }
   });
 });
@@ -169,7 +169,7 @@ describe('listSessions', () => {
     const { bus, request } = createMockBus();
     request.mockResolvedValue({ sessions: [], total: 0 });
 
-    const result = await listSessions(bus);
+    const result = await listSessions(createTestCall(), bus);
 
     expect(result).toEqual([]);
   });
@@ -181,7 +181,7 @@ describe('listSessions', () => {
       total: 1,
     });
 
-    const result = await listSessions(bus);
+    const result = await listSessions(createTestCall(), bus);
 
     expect(result).toHaveLength(1);
     expect(result[0]).toEqual({
@@ -198,27 +198,30 @@ describe('listSessions', () => {
     const { bus, request } = createMockBus();
     request.mockResolvedValue({ sessions: [], total: 0 });
 
-    await listSessions(bus, { status: 'closed' });
+    const call = createTestCall();
+    await listSessions(call, bus, { status: 'closed' });
 
-    expect(request).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ status: 'closed' }));
+    expect(request).toHaveBeenCalledWith(call, SessionSubjects.list, expect.objectContaining({ status: 'closed' }));
   });
 
   it('passes limit option to the bus', async () => {
     const { bus, request } = createMockBus();
     request.mockResolvedValue({ sessions: [], total: 0 });
 
-    await listSessions(bus, { limit: 5 });
+    const call = createTestCall();
+    await listSessions(call, bus, { limit: 5 });
 
-    expect(request).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ limit: 5 }));
+    expect(request).toHaveBeenCalledWith(call, SessionSubjects.list, expect.objectContaining({ limit: 5 }));
   });
 
   it('defaults to status all when no options provided', async () => {
     const { bus, request } = createMockBus();
     request.mockResolvedValue({ sessions: [], total: 0 });
 
-    await listSessions(bus);
+    const call = createTestCall();
+    await listSessions(call, bus);
 
-    expect(request).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ status: 'all' }));
+    expect(request).toHaveBeenCalledWith(call, SessionSubjects.list, expect.objectContaining({ status: 'all' }));
   });
 
   it('omits adapterName when not present on session', async () => {
@@ -228,7 +231,7 @@ describe('listSessions', () => {
       total: 1,
     });
 
-    const result = await listSessions(bus);
+    const result = await listSessions(createTestCall(), bus);
 
     expect(result[0]).not.toHaveProperty('adapterName');
   });
@@ -243,7 +246,7 @@ describe('getSessionInfo', () => {
     const { bus, request } = createMockBus();
     request.mockResolvedValue({ session: makeSessionRecord({ title: 'Found it' }) });
 
-    const result = await getSessionInfo(bus, 'session-1');
+    const result = await getSessionInfo(createTestCall(), bus, 'session-1');
 
     expect(result).toEqual({
       sessionId: 'session-1',
@@ -258,7 +261,7 @@ describe('getSessionInfo', () => {
     const { bus, request } = createMockBus();
     request.mockResolvedValue({ session: null });
 
-    const result = await getSessionInfo(bus, 'missing-session');
+    const result = await getSessionInfo(createTestCall(), bus, 'missing-session');
 
     expect(result).toBeUndefined();
   });
@@ -267,9 +270,10 @@ describe('getSessionInfo', () => {
     const { bus, request } = createMockBus();
     request.mockResolvedValue({ session: null });
 
-    await getSessionInfo(bus, 'session-abc');
+    const call = createTestCall();
+    await getSessionInfo(call, bus, 'session-abc');
 
-    expect(request).toHaveBeenCalledWith(expect.anything(), { sessionId: 'session-abc' });
+    expect(request).toHaveBeenCalledWith(call, SessionSubjects.get, { sessionId: 'session-abc' });
   });
 });
 
@@ -282,7 +286,7 @@ describe('getSessionMessages', () => {
     const { bus, request } = createMockBus();
     request.mockResolvedValue({ messages: [], nextCursor: null });
 
-    const result = await getSessionMessages(bus, 'session-1');
+    const result = await getSessionMessages(createTestCall(), bus, 'session-1');
 
     expect(result).toEqual([]);
   });
@@ -294,7 +298,7 @@ describe('getSessionMessages', () => {
       nextCursor: null,
     });
 
-    const result = await getSessionMessages(bus, 'session-1');
+    const result = await getSessionMessages(createTestCall(), bus, 'session-1');
 
     expect(result).toEqual([
       {
@@ -319,7 +323,7 @@ describe('getSessionMessages', () => {
         nextCursor: null,
       });
 
-    const result = await getSessionMessages(bus, 'session-1');
+    const result = await getSessionMessages(createTestCall(), bus, 'session-1');
 
     expect(result).toHaveLength(2);
     expect(result[0].messageId).toBe('msg-1');
@@ -331,10 +335,12 @@ describe('getSessionMessages', () => {
     const { bus, request } = createMockBus();
     request.mockResolvedValue({ messages: [], nextCursor: null });
 
-    await getSessionMessages(bus, 'session-abc');
+    const call = createTestCall();
+    await getSessionMessages(call, bus, 'session-abc');
 
     expect(request).toHaveBeenCalledWith(
-      expect.anything(),
+      call,
+      MessageStorageSubjects.getBySession,
       expect.objectContaining({ sessionId: 'session-abc', order: 'asc' }),
     );
   });
@@ -346,9 +352,19 @@ describe('getSessionMessages', () => {
       .mockResolvedValueOnce({ messages: [makeMessageRecord()], nextCursor: cursor })
       .mockResolvedValueOnce({ messages: [], nextCursor: null });
 
-    await getSessionMessages(bus, 'session-1');
+    const call = createTestCall();
+    await getSessionMessages(call, bus, 'session-1');
 
-    expect(request).toHaveBeenNthCalledWith(2, expect.anything(), expect.objectContaining({ after: cursor }));
+    expect(request).toHaveBeenNthCalledWith(1, call, MessageStorageSubjects.getBySession, {
+      sessionId: 'session-1',
+      order: 'asc',
+    });
+    expect(request).toHaveBeenNthCalledWith(
+      2,
+      call,
+      MessageStorageSubjects.getBySession,
+      expect.objectContaining({ after: cursor }),
+    );
   });
 });
 
@@ -361,7 +377,7 @@ describe('forkSession', () => {
     const { bus, request } = createMockBus();
     request.mockResolvedValue({ sessionId: 'forked-session-1' });
 
-    const result = await forkSession(bus, 'session-1');
+    const result = await forkSession(createTestCall(), bus, 'session-1');
 
     expect(result).toEqual({ sessionId: 'forked-session-1' });
   });
@@ -370,10 +386,12 @@ describe('forkSession', () => {
     const { bus, request } = createMockBus();
     request.mockResolvedValue({ sessionId: 'forked-session-1' });
 
-    await forkSession(bus, 'session-abc');
+    const call = createTestCall();
+    await forkSession(call, bus, 'session-abc');
 
     expect(request).toHaveBeenCalledWith(
-      expect.anything(),
+      call,
+      SessionSubjects.fork,
       expect.objectContaining({ sourceSessionId: 'session-abc' }),
     );
   });
@@ -382,19 +400,24 @@ describe('forkSession', () => {
     const { bus, request } = createMockBus();
     request.mockResolvedValue({ sessionId: 'forked-session-1' });
 
-    await forkSession(bus, 'session-1', { messageId: 'msg-42' });
+    const call = createTestCall();
+    await forkSession(call, bus, 'session-1', { messageId: 'msg-42' });
 
-    expect(request).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ fromMessageId: 'msg-42' }));
+    expect(request).toHaveBeenCalledWith(
+      call,
+      SessionSubjects.fork,
+      expect.objectContaining({ fromMessageId: 'msg-42' }),
+    );
   });
 
   it('omits fromMessageId when options is not provided', async () => {
     const { bus, request } = createMockBus();
     request.mockResolvedValue({ sessionId: 'forked-session-1' });
 
-    await forkSession(bus, 'session-1');
+    await forkSession(createTestCall(), bus, 'session-1');
 
-    const callArg = request.mock.calls[0][1] as Record<string, unknown>;
-    expect(callArg).not.toHaveProperty('fromMessageId');
+    const payload = request.mock.calls[0][2];
+    expect(payload).not.toHaveProperty('fromMessageId');
   });
 });
 
@@ -410,13 +433,14 @@ describe('deleteSession', () => {
       .mockResolvedValueOnce({ success: true })
       .mockResolvedValueOnce({ success: true, eventsDeleted: 5 });
 
-    await deleteSession(bus, 'session-1');
+    const call = createTestCall();
+    await deleteSession(call, bus, 'session-1');
 
     expect(request).toHaveBeenCalledTimes(3);
-    expect(request.mock.calls.map(([subject, payload]) => [subject, payload])).toEqual([
-      [SessionSubjects.close, { sessionId: 'session-1' }],
-      [SessionSubjects.archive, { sessionId: 'session-1' }],
-      [SessionSubjects.purge, { sessionId: 'session-1' }],
+    expect(request.mock.calls).toEqual([
+      [call, SessionSubjects.close, { sessionId: 'session-1' }],
+      [call, SessionSubjects.archive, { sessionId: 'session-1' }],
+      [call, SessionSubjects.purge, { sessionId: 'session-1' }],
     ]);
   });
 
@@ -424,7 +448,7 @@ describe('deleteSession', () => {
     const { bus, request } = createMockBus();
     request.mockRejectedValueOnce(new Error('transport unavailable'));
 
-    await expect(deleteSession(bus, 'session-1')).rejects.toThrow('transport unavailable');
+    await expect(deleteSession(createTestCall(), bus, 'session-1')).rejects.toThrow('transport unavailable');
     expect(request).toHaveBeenCalledTimes(1);
   });
 
@@ -432,7 +456,7 @@ describe('deleteSession', () => {
     const { bus, request } = createMockBus();
     request.mockResolvedValueOnce({ success: true }).mockRejectedValueOnce(new Error('storage unavailable'));
 
-    await expect(deleteSession(bus, 'session-1')).rejects.toThrow('storage unavailable');
+    await expect(deleteSession(createTestCall(), bus, 'session-1')).rejects.toThrow('storage unavailable');
     expect(request).toHaveBeenCalledTimes(2);
   });
 
@@ -443,7 +467,7 @@ describe('deleteSession', () => {
       .mockResolvedValueOnce({ success: true })
       .mockResolvedValueOnce({ success: false, error: 'Not archived' });
 
-    await expect(deleteSession(bus, 'session-1')).rejects.toThrow('Not archived');
+    await expect(deleteSession(createTestCall(), bus, 'session-1')).rejects.toThrow('Not archived');
   });
 });
 
@@ -456,22 +480,25 @@ describe('renameSession', () => {
     const { bus, request } = createMockBus();
     request.mockResolvedValue({ success: true });
 
-    await renameSession(bus, 'session-1', 'New Title');
+    const call = createTestCall();
+    await renameSession(call, bus, 'session-1', 'New Title');
 
-    expect(request).toHaveBeenCalledWith(expect.anything(), { sessionId: 'session-1', title: 'New Title' });
+    expect(request).toHaveBeenCalledWith(call, SessionSubjects.update, { sessionId: 'session-1', title: 'New Title' });
   });
 
   it('resolves without error when update succeeds', async () => {
     const { bus, request } = createMockBus();
     request.mockResolvedValue({ success: true });
 
-    await expect(renameSession(bus, 'session-1', 'A title')).resolves.toBeUndefined();
+    await expect(renameSession(createTestCall(), bus, 'session-1', 'A title')).resolves.toBeUndefined();
   });
 
   it('throws when the session service reports failure', async () => {
     const { bus, request } = createMockBus();
     request.mockResolvedValue({ success: false });
 
-    await expect(renameSession(bus, 'session-1', 'A title')).rejects.toThrow("Failed to rename session 'session-1'");
+    await expect(renameSession(createTestCall(), bus, 'session-1', 'A title')).rejects.toThrow(
+      "Failed to rename session 'session-1'",
+    );
   });
 });

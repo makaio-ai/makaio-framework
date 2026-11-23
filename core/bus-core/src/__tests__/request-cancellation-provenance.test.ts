@@ -17,6 +17,7 @@ import {
   type BusRequestMessage,
   type BusTransport,
 } from '../index.js';
+import { busContextOf } from '../kernel-api.js';
 import { dispatch } from '../methods/request/dispatch.js';
 
 const namespace = createBusNamespace('cancellationProvenance', {
@@ -147,7 +148,7 @@ describe.each(['local', 'remote'] as const)('%s request cancellation', (path) =>
         const started = pDefer<void>();
         const work = pDefer<void>();
         const controller = new AbortController();
-        const registration = bus.getContext().transportRegistry.registerTransport('cancellationProvenance', peer);
+        const registration = busContextOf(bus).transportRegistry.registerTransport('cancellationProvenance', peer);
         await registration.ready;
         if (path === 'local') {
           bus.on(subjects.wait, async (ctx) => {
@@ -156,17 +157,15 @@ describe.each(['local', 'remote'] as const)('%s request cancellation', (path) =>
             ctx.setResult({ ok: true });
           });
         } else {
-          bus
-            .getContext()
-            .remoteRequestHandlers.set('cancellationProvenance.wait', [
-              { transport: 'cancellationProvenance', priority: 0 },
-            ]);
+          busContextOf(bus).remoteRequestHandlers.set('cancellationProvenance.wait', [
+            { transport: 'cancellationProvenance', priority: 0 },
+          ]);
         }
 
         try {
           if (phase === 'before') controller.abort(create());
           const result = bus
-            .request(subjects.wait, {}, { timeout, signal: controller.signal })
+            .request(bus.own('root'), subjects.wait, {}, { timeout, signal: controller.signal })
             .catch((e: unknown) => e);
           if (phase === 'in flight') {
             await (path === 'local' ? started.promise : peer.started.promise);
@@ -214,7 +213,7 @@ describe('public cancellation classification', () => {
     bus.on(subjects.wait, () => work.promise);
     const signal = AbortSignal.abort(new DeadlineError('caller cancellation'));
     try {
-      await expect(bus.broadcast(subjects.wait, {}, { timeout, signal })).rejects.toBe(signal.reason);
+      await expect(bus.broadcast(bus.own('root'), subjects.wait, {}, { timeout, signal })).rejects.toBe(signal.reason);
     } finally {
       work.resolve();
       bus.__resetHandlers?.();
@@ -225,7 +224,7 @@ describe('public cancellation classification', () => {
     const bus = createBusInstance();
     const { subjects } = bus.registerNamespace(namespace);
     const signal = AbortSignal.abort(new NoHandlerError('caller cancellation'));
-    await expect(bus.requestOptional(subjects.wait, {}, { signal })).rejects.toBe(signal.reason);
+    await expect(bus.requestOptional(bus.own('root'), subjects.wait, {}, { signal })).rejects.toBe(signal.reason);
   });
 
   it.each(['request', 'broadcast'] as const)('keeps genuine %s timeout distinct', async (method) => {
@@ -235,7 +234,13 @@ describe('public cancellation classification', () => {
     const work = pDefer<void>();
     const controller = new AbortController();
     bus.on(subjects.wait, () => work.promise);
-    const result = bus[method](subjects.wait, {}, { timeout: 20, signal: controller.signal }).catch((e: unknown) => e);
+    const options = { timeout: 20, signal: controller.signal };
+    // An explicit branch: a union of overloaded send members has no common call signature.
+    const pending =
+      method === 'request'
+        ? bus.request(bus.own('root'), subjects.wait, {}, options)
+        : bus.broadcast(bus.own('root'), subjects.wait, {}, options);
+    const result = pending.catch((e: unknown) => e);
     await vi.advanceTimersByTimeAsync(20);
     expect(await result).toBeInstanceOf(TimeoutError);
     expect(isRequestCancellation(await result, controller.signal)).toBe(false);
@@ -259,10 +264,11 @@ describe('dispatch cancellation provenance', () => {
       throw failure;
     });
     const result = await dispatch(
-      bus.getContext(),
+      busContextOf(bus),
       subjects.wait,
       {},
       {
+        call: bus.own('root'),
         correlationId: 'local',
         messageId: 'local',
         timeout: 0,
@@ -285,21 +291,22 @@ describe('dispatch cancellation provenance', () => {
     const peer = new PendingPeer();
     const controller = new AbortController();
     peer.failure = failure;
-    const registration = bus.getContext().transportRegistry.registerTransport('cancellationProvenance', peer);
+    const registration = busContextOf(bus).transportRegistry.registerTransport('cancellationProvenance', peer);
     await registration.ready;
-    bus
-      .getContext()
-      .remoteRequestHandlers.set('cancellationProvenance.wait', [{ transport: 'cancellationProvenance', priority: 0 }]);
+    busContextOf(bus).remoteRequestHandlers.set('cancellationProvenance.wait', [
+      { transport: 'cancellationProvenance', priority: 0 },
+    ]);
     const fallback = vi.fn((ctx: { setResult: (result: { ok: boolean }) => void }) => ctx.setResult({ ok: true }));
     bus.on(subjects.wait, fallback, { priority: -1 });
     // The wait observes rejection before the queued cancellation runs. The dispatch
     // catch must retain that failure even though the signal is aborted by then.
     vi.spyOn(console, 'error').mockImplementation(() => {});
     const result = dispatch(
-      bus.getContext(),
+      busContextOf(bus),
       subjects.wait,
       {},
       {
+        call: bus.own('root'),
         correlationId: 'remote',
         messageId: 'remote',
         timeout: 0,
@@ -341,7 +348,9 @@ describe('dispatch cancellation provenance', () => {
     );
     bus.on(subjects.wait, () => child.promise);
     try {
-      const result = await bus.request(subjects.wait, {}, { signal: controller.signal }).catch((e: unknown) => e);
+      const result = await bus
+        .request(bus.own('root'), subjects.wait, {}, { signal: controller.signal })
+        .catch((e: unknown) => e);
       if (outcome === 'cancellation') expectCancellation(result, controller.signal);
       else expect(result).toMatchObject({ cause: failure });
       child.reject(new Error('late detached child failure'));
@@ -367,7 +376,7 @@ describe('dispatch cancellation provenance', () => {
     );
     bus.on(subjects.wait, () => child.promise);
     try {
-      const result = bus.request(subjects.wait, {}).catch((e: unknown) => e);
+      const result = bus.request(bus.own('root'), subjects.wait, {}).catch((e: unknown) => e);
       child.reject(failure);
       expect(await result).toBeInstanceOf(RequestError);
       expect(await result).toMatchObject({ cause: failure });

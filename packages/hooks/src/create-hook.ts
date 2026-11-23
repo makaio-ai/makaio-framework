@@ -1,4 +1,4 @@
-import { MakaioBus, type InterceptorContext } from '@makaio/bus-core';
+import { MakaioBus, type IMakaioBus, type InterceptorContext } from '@makaio/bus-core';
 import { AgentSubjects, SessionSubjects, type StepFinished, type StepType } from '@makaio/contracts';
 import type { ExtractSubjectPayload, SubjectDefinition } from '@makaio/core';
 import { buildPostTurnContext } from './contexts/post-turn.js';
@@ -140,12 +140,15 @@ export type HookContext<K extends HookName, S extends SubjectDefinition = Subjec
 export function createHook<K extends HookName, S extends SubjectDefinition = SubjectDefinition>(
   name: K,
   options: HookOptions<K, S> & {
+    /** Bus of the registering extension: attributes every send the hook makes to that extension. */
+    bus: IMakaioBus;
     handler: (ctx: HookContext<K, S>) => void | Promise<void>;
     priority?: number;
   },
 ): HookRegistration {
   if (name === 'BusMessage') {
     const busOptions = options as BusMessageHookOptions<S> & {
+      bus: IMakaioBus;
       handler: (ctx: BusMessageContext<ExtractSubjectPayload<S>>) => void | Promise<void>;
       priority?: number;
     };
@@ -190,13 +193,14 @@ export function createHook<K extends HookName, S extends SubjectDefinition = Sub
 
   if (name === 'PostTurn') {
     const postTurnOptions = options as PostTurnHookOptions & {
+      bus: IMakaioBus;
       handler: (ctx: PostTurnContext) => void | Promise<void>;
       priority?: number;
     };
     const hookName = postTurnOptions.name ?? 'anonymous';
 
     // Intercept session.turn.completed event
-    const unsubscribe = MakaioBus.intercept(
+    const unsubscribe = postTurnOptions.bus.intercept(
       SessionSubjects.turn.completed,
       async (rawCtx: InterceptorContext<SessionTurnCompleted>) => {
         // Backfill filter BEFORE context enrichment: skipped events must not
@@ -212,7 +216,7 @@ export function createHook<K extends HookName, S extends SubjectDefinition = Sub
         await runHookWithErrorHandling(
           'PostTurn',
           hookName,
-          () => buildPostTurnContext(rawCtx, MakaioBus),
+          () => buildPostTurnContext(rawCtx, postTurnOptions.bus),
           postTurnOptions.handler,
           () => rawCtx.next(),
         );
@@ -225,6 +229,7 @@ export function createHook<K extends HookName, S extends SubjectDefinition = Sub
 
   if (name === 'PostStep') {
     const postStepOptions = options as PostStepHookOptions & {
+      bus: IMakaioBus;
       handler: (ctx: PostStepContext) => void | Promise<void>;
       priority?: number;
     };
@@ -234,7 +239,7 @@ export function createHook<K extends HookName, S extends SubjectDefinition = Sub
     const hookName = postStepOptions.name ?? 'anonymous';
 
     // Intercept agent.step.finished event
-    const unsubscribe = MakaioBus.intercept(
+    const unsubscribe = postStepOptions.bus.intercept(
       AgentSubjects.step.finished,
       async (rawCtx: InterceptorContext<StepFinished>) => {
         // Apply step type filter BEFORE enrichment to avoid unnecessary queries
@@ -246,7 +251,7 @@ export function createHook<K extends HookName, S extends SubjectDefinition = Sub
         await runHookWithErrorHandling(
           'PostStep',
           hookName,
-          () => buildPostStepContext(rawCtx, MakaioBus),
+          () => buildPostStepContext(rawCtx, postStepOptions.bus),
           postStepOptions.handler,
           () => rawCtx.next(),
         );

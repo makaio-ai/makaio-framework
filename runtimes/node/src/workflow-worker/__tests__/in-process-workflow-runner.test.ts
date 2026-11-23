@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 import type { WorkflowDefinition, WorkflowWorkerConfig } from '@makaio/contracts';
 import { BUS_EVENT_AUTOMATION_TRIGGER_KIND } from '@makaio/contracts';
 import { createBusNamespace } from '@makaio/core';
+import { createTestCall } from '@makaio/test-utils';
 import { z } from 'zod';
 import { InProcessWorkflowRunner } from '../in-process-workflow-runner.js';
 import { makeBusWithStorage } from './fixtures.js';
@@ -61,7 +62,7 @@ describe('InProcessWorkflowRunner', () => {
     const [bus, cleanup] = makeBusWithStorage();
     try {
       const runner = new InProcessWorkflowRunner({ bus });
-      const result = await runner.run(makeConfig(), new AbortController().signal);
+      const result = await runner.run(createTestCall(), makeConfig(), new AbortController().signal);
 
       expect(result).toEqual({
         state: 'uncommitted',
@@ -83,6 +84,7 @@ describe('InProcessWorkflowRunner', () => {
       const runner = new InProcessWorkflowRunner({ bus });
 
       const result = await runner.run(
+        createTestCall(),
         makeConfig({
           triggerPayload: {},
           triggerMode: 'immediate',
@@ -107,7 +109,7 @@ describe('InProcessWorkflowRunner', () => {
       const invalidConfig = makeConfig();
       Object.assign(invalidConfig, { workflowId: 123 });
 
-      await expect(runner.run(invalidConfig, signal)).rejects.toThrow();
+      await expect(runner.run(createTestCall(), invalidConfig, signal)).rejects.toThrow();
     } finally {
       cleanup();
     }
@@ -120,7 +122,7 @@ describe('InProcessWorkflowRunner', () => {
       // Omit definition — loadWorkflowFromConfig throws before reaching the orchestrator.
       const config = makeConfig({ definition: undefined });
 
-      await expect(runner.run(config, new AbortController().signal)).rejects.toThrow(
+      await expect(runner.run(createTestCall(), config, new AbortController().signal)).rejects.toThrow(
         "missing the required 'definition' field",
       );
     } finally {
@@ -136,6 +138,7 @@ describe('InProcessWorkflowRunner', () => {
       const controller = new AbortController();
 
       const runPromise = runner.run(
+        createTestCall(),
         makeConfig({
           triggerPayload: {},
           triggerMode: 'await-trigger',
@@ -165,6 +168,7 @@ describe('InProcessWorkflowRunner', () => {
       const runner = new InProcessWorkflowRunner({ bus });
 
       const runPromise = runner.run(
+        createTestCall(),
         makeConfig({
           triggerPayload: {},
           triggerMode: 'await-trigger',

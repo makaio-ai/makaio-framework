@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { createBusInstance, MakaioBus } from '@makaio/bus-core';
 import { WorkflowRunContextSchema, type ExecutionAttemptInstruction } from '@makaio/contracts';
+import { createTestCall } from '@makaio/test-utils';
 import {
   ExecutionAttemptAuthority,
   parseWorkflowAttemptInstruction,
@@ -146,7 +147,7 @@ describe('createNodeWorkflowRunnerPackageOptions construction gates', () => {
       executionAttemptBootstrapTimeoutMs: 60_000,
       workflowRunner: {
         mode: 'worker',
-        dispatch: async (request) => {
+        dispatch: async (_call, request) => {
           runContext.inputs = { question: 'changed after creation' };
           captured = repository.attempts.get(request.executionAttemptId)?.instruction;
           throw new Error('dispatch unavailable');
@@ -154,7 +155,7 @@ describe('createNodeWorkflowRunnerPackageOptions construction gates', () => {
       },
     });
     try {
-      await expect(options.workflowRunner!.run(config, new AbortController().signal)).rejects.toThrow(
+      await expect(options.workflowRunner!.run(createTestCall(), config, new AbortController().signal)).rejects.toThrow(
         'dispatch unavailable',
       );
       expect(captured).toBeDefined();
@@ -189,6 +190,7 @@ describe('createNodeWorkflowRunnerPackageOptions construction gates', () => {
     const controller = new AbortController();
     try {
       const result = options.workflowRunner!.run(
+        createTestCall(),
         makeWorkerConfig({ source: { kind: 'path', path: '/host/workflow.ts' } }),
         controller.signal,
       );

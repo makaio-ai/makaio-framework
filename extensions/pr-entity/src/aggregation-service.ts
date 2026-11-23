@@ -1,6 +1,6 @@
 import { BaseService } from '@makaio/service-base';
 import { VCSSubjects, ReviewSubjects, VCSPRSubjects } from '@makaio/contracts';
-import type { PullRequestState, ReviewFinding } from '@makaio/contracts';
+import type { CallContext, PullRequestState, ReviewFinding } from '@makaio/contracts';
 import type { IMakaioBus } from '@makaio/bus-core';
 import { LRUCache } from './lru-cache.js';
 import {
@@ -66,19 +66,19 @@ export class VCSPRAggregationService extends BaseService {
   protected onInit(): void {
     this.registerHandler(VCSPRSubjects.get, async (ctx) => {
       const { repoPath, prNumber } = ctx.payload;
-      const pr = await this.aggregatePR(repoPath, prNumber, false);
+      const pr = await this.aggregatePR(ctx.call, repoPath, prNumber, false);
       ctx.setResult({ pr });
     });
 
     this.registerHandler(VCSPRSubjects.list, async (ctx) => {
       const { repoPath, branch } = ctx.payload;
-      const prs = await this.aggregateList(repoPath, branch);
+      const prs = await this.aggregateList(ctx.call, repoPath, branch);
       ctx.setResult({ prs });
     });
 
     this.registerHandler(VCSPRSubjects.refresh, async (ctx) => {
       const { repoPath, prNumber } = ctx.payload;
-      const pr = await this.aggregatePR(repoPath, prNumber, true);
+      const pr = await this.aggregatePR(ctx.call, repoPath, prNumber, true);
       ctx.setResult({ pr });
     });
   }
@@ -99,17 +99,20 @@ export class VCSPRAggregationService extends BaseService {
    *
    * PRs that fail to aggregate individually are silently skipped so a partial
    * response is returned rather than failing the entire list.
+   * @param call - Call context of the request being served
    * @param repoPath - Local filesystem path to the repository
    * @param branch - Optional branch filter (empty string means all branches)
    * @returns Array of enriched PR states
    */
-  private async aggregateList(repoPath: string, branch?: string): Promise<PullRequestState[]> {
-    const { pullRequests } = await this.bus.request(VCSSubjects.pr.list, {
+  private async aggregateList(call: CallContext, repoPath: string, branch?: string): Promise<PullRequestState[]> {
+    const { pullRequests } = await this.bus.request(call, VCSSubjects.pr.list, {
       repoPath,
       branch: branch ?? '',
     });
 
-    const results = await Promise.allSettled(pullRequests.map((pr) => this.aggregatePR(repoPath, pr.number, false)));
+    const results = await Promise.allSettled(
+      pullRequests.map((pr) => this.aggregatePR(call, repoPath, pr.number, false)),
+    );
 
     const states: PullRequestState[] = [];
     for (const result of results) {
@@ -125,12 +128,18 @@ export class VCSPRAggregationService extends BaseService {
    *
    * The result is cached by `(repoPath, prNumber)`. Pass `forceRefresh = true`
    * to bypass and refresh the cache entry.
+   * @param call - Call context of the request being served
    * @param repoPath - Local filesystem path to the repository
    * @param prNumber - Pull request number
    * @param forceRefresh - When `true`, bypass and update the cache entry
    * @returns Enriched PR state
    */
-  private async aggregatePR(repoPath: string, prNumber: number, forceRefresh: boolean): Promise<PullRequestState> {
+  private async aggregatePR(
+    call: CallContext,
+    repoPath: string,
+    prNumber: number,
+    forceRefresh: boolean,
+  ): Promise<PullRequestState> {
     const key = prCacheKey(repoPath, prNumber);
 
     if (!forceRefresh) {
@@ -139,7 +148,7 @@ export class VCSPRAggregationService extends BaseService {
     }
 
     // Step 1: Fetch the PR to get the head commit SHA
-    const { pullRequest } = await this.bus.request(VCSSubjects.pr.get, { repoPath, prNumber });
+    const { pullRequest } = await this.bus.request(call, VCSSubjects.pr.get, { repoPath, prNumber });
     if (!pullRequest) {
       throw new Error(`PR #${prNumber} not found in ${repoPath}`);
     }
@@ -149,14 +158,16 @@ export class VCSPRAggregationService extends BaseService {
 
     // Step 2: Fetch everything else in parallel
     const [checksResult, statusesResult, findingsResult, repoResult] = await Promise.allSettled([
-      hasHeadSha ? this.bus.request(VCSSubjects.checks.get, { repoPath, commitSha }) : Promise.resolve({ checks: [] }),
       hasHeadSha
-        ? this.bus.request(VCSSubjects.statuses.get, { repoPath, commitSha })
+        ? this.bus.request(call, VCSSubjects.checks.get, { repoPath, commitSha })
+        : Promise.resolve({ checks: [] }),
+      hasHeadSha
+        ? this.bus.request(call, VCSSubjects.statuses.get, { repoPath, commitSha })
         : Promise.resolve({ statuses: [] }),
-      this.bus.requestOptional(ReviewSubjects.findings.list, {
+      this.bus.requestOptional(call, ReviewSubjects.findings.list, {
         target: { repository: repoPath, prNumber, headSha: hasHeadSha ? commitSha : undefined },
       }),
-      this.bus.request(VCSSubjects.repository.get, { repoPath }),
+      this.bus.request(call, VCSSubjects.repository.get, { repoPath }),
     ]);
 
     // Unwrap parallel results with graceful fallbacks

@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
 import { McpSubjects } from '@makaio/contracts';
+import { createTestCall } from '@makaio/test-utils';
 import { ClaudeConnectorSession } from '../src/session.js';
 import { McpSessionRegistration } from '../src/mcp-session-bridge.js';
 
@@ -12,17 +13,20 @@ import { McpSessionRegistration } from '../src/mcp-session-bridge.js';
  * @param overrides - Partial config overrides
  */
 function makeSession(overrides: Partial<ConstructorParameters<typeof ClaudeConnectorSession>[0]> = {}) {
-  return new ClaudeConnectorSession({
-    bus: {} as never,
-    adapterId: 'test-adapter',
-    adapterName: 'claude-agent-sdk',
-    agentId: 'test-agent',
-    cwd: '/tmp',
-    model: 'claude-sonnet',
-    env: {},
-    contextEnv: {},
-    ...overrides,
-  });
+  return new ClaudeConnectorSession(
+    {
+      bus: {} as never,
+      adapterId: 'test-adapter',
+      adapterName: 'claude-agent-sdk',
+      agentId: 'test-agent',
+      cwd: '/tmp',
+      model: 'claude-sonnet',
+      env: {},
+      contextEnv: {},
+      ...overrides,
+    },
+    MakaioBus,
+  );
 }
 
 describe('ClaudeConnectorSession — MCP bus registration', () => {
@@ -57,7 +61,7 @@ describe('ClaudeConnectorSession — MCP bus registration', () => {
       },
     });
 
-    await session.syncMcpContextForTest('adapter-session-1');
+    await session.syncMcpContextForTest(createTestCall(), 'adapter-session-1');
 
     // After registration the port is known; updateMcpServers must include the
     // makaio HTTP MCP proxy entry pointing at the registered port.
@@ -84,7 +88,7 @@ describe('ClaudeConnectorSession — MCP bus registration', () => {
       },
     });
 
-    await expect(session.syncMcpContextForTest('adapter-session-2')).resolves.not.toThrow();
+    await expect(session.syncMcpContextForTest(createTestCall(), 'adapter-session-2')).resolves.not.toThrow();
 
     // Port was not set, so no port change → refreshMcpContext would not call
     // updateMcpServers. Calling it manually confirms port is absent.
@@ -123,13 +127,44 @@ describe('ClaudeConnectorSession — MCP bus registration', () => {
       mcpServerPort: SEEDED_PORT,
     });
 
-    const pending = registration.register('adapter-session-race');
-    registration.unregister();
+    const pending = registration.register(createTestCall(), 'adapter-session-race');
+    registration.unregister(createTestCall());
     release();
 
     await expect(pending).resolves.toBe(false);
     expect(registration.isRegistered).toBe(false);
     expect(registration.serverPort).toBe(SEEDED_PORT);
+  });
+
+  it('retires a rotated registration under the call of the operation that rotates it', async () => {
+    const PERSON = { kind: 'acme.person', id: 'person-rotating' };
+    const unregisterPrincipals: unknown[] = [];
+    cleanup.push(
+      MakaioBus.on(McpSubjects.session.register, (ctx) => {
+        ctx.setResult({ port: 34567 });
+      }),
+      MakaioBus.on(McpSubjects.session.unregister, (ctx) => {
+        unregisterPrincipals.push(ctx.call.principal);
+        ctx.setResult({});
+      }),
+    );
+    const registration = new McpSessionRegistration({
+      bus: {} as never,
+      adapterId: 'test-adapter',
+      adapterName: 'claude-agent-sdk',
+      agentId: 'test-agent',
+      cwd: '/tmp',
+      model: 'claude-sonnet',
+      env: {},
+      contextEnv: {},
+      sessionId: 'makaio-session-rotate',
+    });
+    const operation = createTestCall({ principal: PERSON });
+    await registration.register(operation, 'adapter-session-rotate');
+
+    registration.unregister(operation);
+
+    await expect.poll(() => unregisterPrincipals).toEqual([PERSON]);
   });
 
   it('skips registration when sessionId is not set', async () => {
@@ -145,7 +180,7 @@ describe('ClaudeConnectorSession — MCP bus registration', () => {
     // Session with no sessionId at all (sessionId remains undefined).
     const session = makeSession();
 
-    await session.syncMcpContextForTest();
+    await session.syncMcpContextForTest(createTestCall());
 
     expect(handlerCalls).toHaveLength(0);
   });
@@ -178,7 +213,7 @@ describe('ClaudeConnectorSession — MCP bus registration', () => {
       setMcpServers: async () => ({ added: [], removed: [], errors: {} }),
     });
 
-    await session.syncMcpContextForTest('adapter-session-payload');
+    await session.syncMcpContextForTest(createTestCall(), 'adapter-session-payload');
 
     expect(capturedPayloads).toHaveLength(1);
     const payload = capturedPayloads[0] as Record<string, unknown>;
@@ -219,7 +254,7 @@ describe('ClaudeConnectorSession — MCP bus registration', () => {
       },
     });
 
-    await session.syncMcpContextForTest('adapter-session-refresh', 'refresh');
+    await session.syncMcpContextForTest(createTestCall(), 'adapter-session-refresh', 'refresh');
 
     // setMcpServers must have been called exactly once by refreshMcpContext.
     expect(setMcpServersSpy).toHaveLength(1);

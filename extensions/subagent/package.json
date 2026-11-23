@@ -14,6 +14,9 @@
     "./server": "./src/server.ts",
     "./package.json": "./package.json"
   },
+  "peerDependencies": {
+    "@makaio/framework": "workspace:*"
+  },
   "dependencies": {
     "@makaio/bus-core": "workspace:*",
     "@makaio/contracts": "workspace:*",

@@ -1,5 +1,8 @@
 import type { MakaioBusContext, WithReceiveContext } from '../../types/index.js';
-import type { RequestContext, SubjectDefinition } from '@makaio/core';
+import type { CallContext, RequestContext, SubjectDefinition } from '@makaio/core';
+import { hostPartyOf } from '../../call-context/carrier.js';
+import { trackOpenHandlerCall } from '../../call-context/own-work.js';
+import { wireMetadataOf } from '../../call-context/wire.js';
 import { getMatchingHandlerEntries, getMatchingRemoteEntries } from './getMatchingHandlers.js';
 import {
   buildMergedList,
@@ -14,13 +17,17 @@ import {
 } from './merged-list.js';
 import { getFullSubjectForSubjectDefinition } from '../../utils/subject-transformation.js';
 import { isNoHandlerErrorForSubject } from '../../utils/transport.js';
-import { LOCAL_ORIGIN, REMOTE_ORIGIN } from '../../utils/transport-helpers.js';
 import { isRequestCancellation, RequestError, TimeoutError, toAbortError } from '../../errors/index.js';
 import { awaitWithTimeoutAndSignal } from './await-with-timeout-and-signal.js';
 import { remainingUntil, resolveDispatchDeadline, runReadinessGate } from './readiness-gate.js';
 
 /** Options for the recursive dispatch function. */
 export interface DispatchOptions extends WithReceiveContext {
+  /**
+   * Minted call context of the message: the handlers see it as `ctx.call` and its
+   * principal travels on every remote hop. Already derived, never re-derived here.
+   */
+  call: CallContext;
   /** Explicit transport allowlist for remote dispatch. */
   allowedTransports?: ReadonlyArray<string>;
   /**
@@ -189,7 +196,7 @@ async function executeLocalEntry(
     messageId: options.messageId,
     correlationId: options.correlationId,
     transport: options.transport,
-    origin: options.transport ? REMOTE_ORIGIN : LOCAL_ORIGIN,
+    call: options.call,
     ...(options.deadline !== undefined && { deadline: options.deadline }),
     ...(options.signal !== undefined && { signal: options.signal }),
     setResult: (value) => {
@@ -233,7 +240,7 @@ async function executeLocalEntry(
   };
 
   try {
-    await entry.handler(ctx);
+    await trackOpenHandlerCall(entry.owner, () => entry.handler(ctx));
 
     // If next() was called (with or without await), settle the outstanding
     // downstream work now. For properly-awaited handlers this is a no-op;
@@ -345,6 +352,8 @@ async function executeRemoteEntry(
   // Transport disconnected — skip and continue at the next position.
   if (!transport) return skipToNext();
 
+  const metadata = wireMetadataOf(options.call, hostPartyOf(context));
+
   const requestMessage = {
     type: 'request' as const,
     subject: subjectKey,
@@ -361,6 +370,8 @@ async function executeRemoteEntry(
     // Carry the caller's readiness budget so the next hop gates on it rather than
     // silently falling back to the default.
     ...(options.readinessTimeout !== undefined && { readinessTimeout: options.readinessTimeout }),
+    // Only the principal reference travels, never claims; omitted when it is this host itself.
+    ...(metadata !== undefined && { metadata }),
   };
 
   const { signal } = options;
@@ -417,6 +428,10 @@ async function executeRemoteEntry(
  *
  * Tie-breaking: local entries run before remote entries at equal priority, avoiding
  * unnecessary network hops.
+ *
+ * This is the entry for an ALREADY MINTED call context (`options.call`): a send that
+ * `request` derived, or a message the transport registry received and whose context
+ * `callFromReceive` built. It never derives a context and never checks a carrier.
  * @param context - Bus context
  * @param subjectDefinition - Subject definition (`$meta.local`, namespace, etc.)
  * @param payload - Request payload (may be replaced by a handler via `ctx.replacePayload()`)

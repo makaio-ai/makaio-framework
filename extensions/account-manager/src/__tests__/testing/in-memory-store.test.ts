@@ -1,11 +1,13 @@
 import { describe, expect, it } from 'vitest';
+import { createTestCall } from '@makaio/test-utils';
 import { InMemoryAccountMetadataStore } from './in-memory-store.js';
 
 describe('InMemoryAccountMetadataStore', () => {
   it('advances metadata generation across ordinary metadata patches', async () => {
     const store = new InMemoryAccountMetadataStore();
+    const call = createTestCall();
 
-    await store.upsert('claude-code', {
+    await store.upsert(call, 'claude-code', {
       id: 'acc-generated',
       label: 'Generated',
       metadata: { planType: 'free' },
@@ -14,26 +16,29 @@ describe('InMemoryAccountMetadataStore', () => {
       lastSeenAt: 200,
     });
 
-    await expect(store.getWithMetadataGeneration('claude-code', 'acc-generated')).resolves.toMatchObject({
+    await expect(store.getWithMetadataGeneration(call, 'claude-code', 'acc-generated')).resolves.toMatchObject({
       metadataGeneration: 0,
       account: { metadata: { planType: 'free' } },
     });
 
-    await expect(store.patchMetadata('claude-code', 'acc-generated', 0, { planType: 'plus' })).resolves.toMatchObject({
-      metadata: { planType: 'plus' },
-    });
+    await expect(
+      store.patchMetadata(call, 'claude-code', 'acc-generated', 0, { planType: 'plus' }),
+    ).resolves.toMatchObject({ metadata: { planType: 'plus' } });
 
-    await expect(store.getWithMetadataGeneration('claude-code', 'acc-generated')).resolves.toMatchObject({
+    await expect(store.getWithMetadataGeneration(call, 'claude-code', 'acc-generated')).resolves.toMatchObject({
       metadataGeneration: 1,
       account: { metadata: { planType: 'plus' } },
     });
-    await expect(store.patchMetadata('claude-code', 'acc-generated', 0, { rateLimitTier: 'team' })).resolves.toBeNull();
+    await expect(
+      store.patchMetadata(call, 'claude-code', 'acc-generated', 0, { rateLimitTier: 'team' }),
+    ).resolves.toBeNull();
   });
 
   it('applies JSON merge-patch semantics for null values', async () => {
     const store = new InMemoryAccountMetadataStore();
+    const call = createTestCall();
 
-    await store.upsert('claude-code', {
+    await store.upsert(call, 'claude-code', {
       id: 'acc-merge',
       label: 'Merge',
       metadata: {
@@ -49,7 +54,7 @@ describe('InMemoryAccountMetadataStore', () => {
     });
 
     await expect(
-      store.patchMetadata('claude-code', 'acc-merge', 0, {
+      store.patchMetadata(call, 'claude-code', 'acc-merge', 0, {
         nested: {
           expiresAt: null,
           seats: 4,
@@ -67,8 +72,9 @@ describe('InMemoryAccountMetadataStore', () => {
 
   it('does not advance metadata generation for a semantic no-op nested patch', async () => {
     const store = new InMemoryAccountMetadataStore();
+    const call = createTestCall();
 
-    await store.upsert('claude-code', {
+    await store.upsert(call, 'claude-code', {
       id: 'acc-noop',
       label: 'Noop',
       metadata: { nested: { seats: 4 } },
@@ -78,12 +84,12 @@ describe('InMemoryAccountMetadataStore', () => {
     });
 
     await expect(
-      store.patchMetadata('claude-code', 'acc-noop', 0, {
+      store.patchMetadata(call, 'claude-code', 'acc-noop', 0, {
         nested: { seats: 4 },
       }),
     ).resolves.toMatchObject({
       metadata: { nested: { seats: 4 } },
     });
-    await expect(store.getMetadataGeneration('claude-code', 'acc-noop')).resolves.toBe(0);
+    await expect(store.getMetadataGeneration(call, 'claude-code', 'acc-noop')).resolves.toBe(0);
   });
 });

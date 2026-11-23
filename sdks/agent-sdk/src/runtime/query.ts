@@ -40,7 +40,8 @@ export function query(params: QueryParams): MakaioQuery {
   return deferQuery(
     (async () => {
       const bus = await ensureRuntime();
-      return buildQuery(bus, params, config);
+      // ORIGIN: SDK-user operation
+      return buildQuery(bus.own('root'), bus, params, config);
     })(),
   );
 }

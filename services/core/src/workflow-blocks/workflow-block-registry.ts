@@ -1,5 +1,10 @@
 import type { IMakaioBus } from '@makaio/bus-core';
-import type { RegisteredStepBlock, WorkflowBlockCollection, WorkflowBlockMetadata } from '@makaio/contracts';
+import type {
+  CallContext,
+  RegisteredStepBlock,
+  WorkflowBlockCollection,
+  WorkflowBlockMetadata,
+} from '@makaio/contracts';
 import { WorkflowBlocksSubjects, zodSchemaToJsonRecord } from '@makaio/contracts';
 import { localContributionName } from '@makaio/core';
 import { BaseService } from '@makaio/service-base';
@@ -71,7 +76,8 @@ export class WorkflowBlockRegistry extends BaseService {
     this.stepsByExtension.set(extensionName, steps);
     this.revision += 1;
     try {
-      await this.emitChanged(extensionName, 'registered');
+      // ORIGIN: Direct calls from another carrier start work on this registry's bus.
+      await this.emitChanged(this.bus.own('shared-work'), extensionName, 'registered');
     } catch (error) {
       this.restoreExtensionState(extensionName, snapshot);
       throw error;
@@ -88,7 +94,8 @@ export class WorkflowBlockRegistry extends BaseService {
 
     this.revision += 1;
     try {
-      await this.emitChanged(extensionName, 'deregistered');
+      // ORIGIN: Direct calls from another carrier start work on this registry's bus.
+      await this.emitChanged(this.bus.own('shared-work'), extensionName, 'deregistered');
     } catch (error) {
       this.restoreExtensionState(extensionName, snapshot);
       throw error;
@@ -103,8 +110,12 @@ export class WorkflowBlockRegistry extends BaseService {
     return this.getCache().steps.map(cloneStepBlock);
   }
 
-  private async emitChanged(extensionName: string, reason: 'registered' | 'deregistered'): Promise<void> {
-    await this.bus.emit(WorkflowBlocksSubjects.changed, {
+  private async emitChanged(
+    call: CallContext,
+    extensionName: string,
+    reason: 'registered' | 'deregistered',
+  ): Promise<void> {
+    await this.bus.emit(call, WorkflowBlocksSubjects.changed, {
       extensionName,
       revision: this.revision,
       reason,

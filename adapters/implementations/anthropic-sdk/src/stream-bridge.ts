@@ -9,6 +9,7 @@
  * reasoning_complete, usage, tool_calls, message_complete).
  */
 import type { RawMessageStreamEvent } from '@anthropic-ai/sdk/resources/messages/messages.js';
+import type { CallContext } from '@makaio/core';
 import { AnthropicSdkConnectorSubjects, type SdkEventMessage } from './namespaces/index.js';
 import type { StreamBridgeConfig, ToolCallAccumulator } from './types/index.js';
 import { mergeDeltaUsage, mergeInitialUsage, type MergedUsage } from './utils/usage.js';
@@ -43,7 +44,7 @@ interface StreamState {
   contentBlocks: Map<number, ContentBlockState>;
 }
 /** Typed emitter for normalized sdk.event messages. */
-type EventEmitter = (event: SdkEventMessage) => Promise<void>;
+type EventEmitter = (call: CallContext, event: SdkEventMessage) => Promise<void>;
 
 /**
  * Create a fresh stream processing state object.
@@ -71,7 +72,7 @@ function buildEventEmitter(
   config: StreamBridgeConfig,
   metadata: { adapterName: string; agentId: string; adapterId: string; adapterSessionId?: string },
 ): EventEmitter {
-  return async (event) => {
+  return async (call, event) => {
     const correlatedEvent =
       event.eventType === 'usage' && config.requestCorrelation !== undefined
         ? {
@@ -83,18 +84,20 @@ function buildEventEmitter(
             ...(config.requestCorrelation.frameId !== undefined ? { frameId: config.requestCorrelation.frameId } : {}),
           }
         : event;
-    await config.bus.emit(AnthropicSdkConnectorSubjects.sdk.event, { event: correlatedEvent, ...metadata });
+    await config.bus.emit(call, AnthropicSdkConnectorSubjects.sdk.event, { event: correlatedEvent, ...metadata });
   };
 }
 
 /**
  * Handle content_block_delta: accumulate delta content and emit streaming events.
+ * @param call - Call context of the handled message.
  * @param index - Content block index from the stream event.
  * @param event - The full content_block_delta event.
  * @param state - Mutable stream state.
  * @param emitEvent - Normalized event emitter.
  */
 async function handleContentBlockDelta(
+  call: CallContext,
   index: number,
   event: RawMessageStreamEvent & { type: 'content_block_delta' },
   state: StreamState,
@@ -106,15 +109,19 @@ async function handleContentBlockDelta(
   if (rawDelta.type === 'text_delta') {
     if (block) block.text = (block.text ?? '') + rawDelta.text;
     state.content += rawDelta.text;
-    await emitEvent({ eventType: 'chunk', index, delta: { type: 'text_delta', text: rawDelta.text } });
+    await emitEvent(call, { eventType: 'chunk', index, delta: { type: 'text_delta', text: rawDelta.text } });
   } else if (rawDelta.type === 'thinking_delta') {
     if (block) block.thinking = (block.thinking ?? '') + rawDelta.thinking;
     state.reasoning += rawDelta.thinking;
-    await emitEvent({ eventType: 'reasoning_delta', content: rawDelta.thinking });
-    await emitEvent({ eventType: 'chunk', index, delta: { type: 'thinking_delta', thinking: rawDelta.thinking } });
+    await emitEvent(call, { eventType: 'reasoning_delta', content: rawDelta.thinking });
+    await emitEvent(call, {
+      eventType: 'chunk',
+      index,
+      delta: { type: 'thinking_delta', thinking: rawDelta.thinking },
+    });
   } else if (rawDelta.type === 'input_json_delta') {
     if (block) block.jsonAccumulator = (block.jsonAccumulator ?? '') + rawDelta.partial_json;
-    await emitEvent({
+    await emitEvent(call, {
       eventType: 'chunk',
       index,
       delta: { type: 'input_json_delta', partial_json: rawDelta.partial_json },
@@ -153,13 +160,14 @@ function handleContentBlockStop(index: number, state: StreamState): void {
 
 /**
  * Emit final semantic events once the stream has ended.
+ * @param call - Call context of the handled message.
  * @param state - Final aggregated stream state.
  * @param emitEvent - Normalized event emitter.
  */
-async function emitFinalEvents(state: StreamState, emitEvent: EventEmitter): Promise<void> {
+async function emitFinalEvents(call: CallContext, state: StreamState, emitEvent: EventEmitter): Promise<void> {
   if (state.usage) {
     const { inputTokens, outputTokens, cacheReadInputTokens, cacheCreationInputTokens } = state.usage;
-    await emitEvent({
+    await emitEvent(call, {
       eventType: 'usage',
       prompt_tokens: inputTokens,
       completion_tokens: outputTokens,
@@ -180,18 +188,18 @@ async function emitFinalEvents(state: StreamState, emitEvent: EventEmitter): Pro
       : undefined;
 
   if (toolCallPayload) {
-    await emitEvent({ eventType: 'tool_calls', toolCalls: toolCallPayload });
+    await emitEvent(call, { eventType: 'tool_calls', toolCalls: toolCallPayload });
   }
 
   if (state.reasoning) {
-    await emitEvent({
+    await emitEvent(call, {
       eventType: 'reasoning_complete',
       content: state.reasoning,
       ...(state.reasoningSignature !== undefined ? { signature: state.reasoningSignature } : {}),
     });
   }
 
-  await emitEvent({
+  await emitEvent(call, {
     eventType: 'message_complete',
     content: state.content || null,
     reasoning: state.reasoning || undefined,
@@ -211,10 +219,12 @@ async function emitFinalEvents(state: StreamState, emitEvent: EventEmitter): Pro
  * Emits to bus as the stream progresses:
  * - sdk.raw: Each raw Anthropic event (observability)
  * - sdk.event: Semantic events — chunk, reasoning_delta, reasoning_complete, usage, tool_calls, message_complete
+ * @param call - Call context of the handled message.
  * @param stream - The Anthropic streaming response.
  * @param config - Bridge configuration with bus, agent identity, and model.
  */
 export async function processStream(
+  call: CallContext,
   stream: AsyncIterable<RawMessageStreamEvent>,
   config: StreamBridgeConfig,
 ): Promise<void> {
@@ -227,7 +237,7 @@ export async function processStream(
 
   for await (const event of stream) {
     config.logLowLevelEvent?.(event);
-    await config.bus.emit(AnthropicSdkConnectorSubjects.sdk.raw, event);
+    await config.bus.emit(call, AnthropicSdkConnectorSubjects.sdk.raw, event);
 
     switch (event.type) {
       case 'message_start':
@@ -253,7 +263,7 @@ export async function processStream(
       }
 
       case 'content_block_delta':
-        await handleContentBlockDelta(event.index, event, state, emitEvent);
+        await handleContentBlockDelta(call, event.index, event, state, emitEvent);
         break;
 
       case 'content_block_stop':
@@ -271,5 +281,5 @@ export async function processStream(
     }
   }
 
-  await emitFinalEvents(state, emitEvent);
+  await emitFinalEvents(call, state, emitEvent);
 }

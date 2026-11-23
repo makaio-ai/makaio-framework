@@ -1,4 +1,4 @@
-import { MakaioBus, type IMakaioBus } from '@makaio/bus-core';
+import type { IMakaioBus } from '@makaio/bus-core';
 import { dep, extensionToken, type MakaioNodeExtension } from '@makaio/contracts';
 import { ClientSessionAccountObserveSchema, ClientSubjects } from '@makaio/contracts/client';
 import { BaseService } from '@makaio/service-base';
@@ -23,7 +23,7 @@ export class SessionClientAccountLinkingService extends BaseService {
    * Create the linker service.
    * @param bus - Bus instance used for request handling
    */
-  public constructor(bus: IMakaioBus = MakaioBus) {
+  public constructor(bus: IMakaioBus) {
     super(bus);
   }
 
@@ -31,7 +31,7 @@ export class SessionClientAccountLinkingService extends BaseService {
     const handleObserve = createSessionClientAccountObserveHandler(this.bus);
 
     this.registerHandler(ClientSubjects.session.account.observe, async (ctx) => {
-      ctx.setResult(await handleObserve(ClientSessionAccountObserveSchema.request.parse(ctx.payload)));
+      ctx.setResult(await handleObserve(ctx.call, ClientSessionAccountObserveSchema.request.parse(ctx.payload)));
     });
   }
 }

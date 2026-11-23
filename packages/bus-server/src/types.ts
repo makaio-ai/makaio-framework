@@ -18,11 +18,12 @@ export interface BusServerConfig {
   websocket: WebSocketServerLike;
 
   /**
-   * Optional bus instance (defaults to global singleton).
+   * Bus instance the server transport is registered with.
    *
-   * Useful for tests or custom contexts.
+   * Required: there is no process-wide default. Pass the bus of the carrier
+   * (extension or host) that owns this server.
    */
-  bus?: IMakaioBus;
+  bus: IMakaioBus;
 
   /**
    * Optional authentication provider for connection validation.

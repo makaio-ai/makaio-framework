@@ -9,6 +9,7 @@ import {
 } from '@makaio/subsystem-workflow-engine';
 import { WorkerRunner } from '../worker-runner.js';
 import { createInMemoryAttemptRepository } from '@makaio/subsystem-workflow-engine/testing';
+import { createTestCall } from '@makaio/test-utils';
 import { makeWorkerConfig } from './fixtures.js';
 
 const TEST_ALLOCATION_REF: ProviderAllocationRef = {
@@ -24,10 +25,11 @@ describe('WorkerRunner integration', () => {
     const outcome: WorkflowRunResult = { executionId: 'wfx-1', workflowId: 'workflow-1', status: 'completed' };
     const runner = new WorkerRunner({
       authority,
-      dispatch: async (request) => {
+      dispatch: async (call, request) => {
         await submitAttemptOutcome(
           { authority, convergence: { converge: async () => 'recorded-only' } },
           {
+            call,
             executionAttemptId: request.executionAttemptId,
             executionId: request.config.executionId,
             outcome,
@@ -37,6 +39,7 @@ describe('WorkerRunner integration', () => {
       },
     });
     const completion = await runner.run(
+      createTestCall(),
       makeWorkerConfig({ source: { kind: 'source', filename: 'workflow.ts', source: 'export default workflow;' } }),
       new AbortController().signal,
     );
@@ -66,7 +69,7 @@ describe('WorkerRunner integration', () => {
     });
 
     const runner = new WorkerRunner({
-      dispatch: async (request, signal) => {
+      dispatch: async (_call, request, signal) => {
         dispatchStarted();
         if (signal === undefined) throw new Error('WorkerRunner did not forward its cancellation signal');
 
@@ -108,6 +111,7 @@ describe('WorkerRunner integration', () => {
     const controller = new AbortController();
 
     const resultPromise = runner.run(
+      createTestCall(),
       makeWorkerConfig({
         definition: {
           id: 'workflow-1',

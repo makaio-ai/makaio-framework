@@ -1,4 +1,4 @@
-import type { MakaioBusLike } from '@makaio/core';
+import type { CallContext, MakaioBusLike } from '@makaio/core';
 
 /** Pipeline stage a hash trigger participates in. */
 export type HashTriggerStage = 'gather' | 'transform' | 'action';
@@ -52,6 +52,11 @@ export interface HashTriggerContext<TBus extends MakaioBusLike = MakaioBusLike> 
   message?: string;
   /** Bus instance for trigger operations. */
   bus: TBus;
+  /**
+   * Call context of the triggering act (the user's input or the handled message).
+   * Send through `bus` with this call; never mint a root context for it.
+   */
+  call: CallContext;
   /** Optional abort signal for cancellable operations. */
   signal?: AbortSignal;
   /** Entries gathered by earlier gather-stage triggers. */

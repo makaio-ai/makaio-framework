@@ -10,6 +10,8 @@
  * live instances.
  */
 import type { IMakaioBus, ScopedBus } from '@makaio/bus-core';
+import type { CallerSettlementAckRefusal } from '@makaio/contracts';
+import type { CallContext } from '@makaio/core';
 import type { AIAgent } from '../agent/ai-agent.js';
 import type { AIAgentConnector } from '../agent/index.js';
 import type { AgentTeardownArbiter } from '../agent/agent-teardown-arbiter.js';
@@ -17,8 +19,7 @@ import { closeConnectorRuntime } from '../agent/connector-runtime.js';
 import { aggregateTeardownReports, type TeardownReport } from '../connector/teardown-report.js';
 import type { AgentUsageTotals } from './types.js';
 import { AgentStorageSubjects } from '@makaio/services-core/session';
-import type { CallerSettlementAckRefusal } from '@makaio/contracts';
-import { releaseProviderKeyPublication, type ProviderKeyPublication } from './adapter-provider-key-publication.js';
+import { type ProviderKeyPublication, releaseProviderKeyPublication } from './adapter-provider-key-publication.js';
 
 /** Caller-owned generation waiting for its durable-settlement acknowledgement. */
 export interface PendingCallerSettlement {
@@ -258,14 +259,7 @@ export class ActiveAgentRegistry<
    * @returns `true` if the claim was granted
    */
   public claimAdapterSession(adapterSessionId: string): boolean {
-    if (this.pendingAdapterSessionClaims.has(adapterSessionId)) {
-      return false;
-    }
-    for (const entry of this.entries.values()) {
-      if (occupiedAdapterSessionId(entry) === adapterSessionId) {
-        return false;
-      }
-    }
+    if (this.hasAdapterSession(adapterSessionId)) return false;
     this.pendingAdapterSessionClaims.add(adapterSessionId);
     return true;
   }
@@ -351,12 +345,14 @@ export class ActiveAgentRegistry<
    * The admission prologue is synchronous. An already installed teardown wins
    * and refuses; an admitted acknowledgement is installed before its first
    * storage await, so a later teardown sees and waits for it.
+   * @param call - Call context of the acknowledgement request; a caller joining an installed flight shares its result
    * @param agentId - Hosted agent whose settlement completed
    * @param token - Opaque generation token returned by its dispatch
    * @param recoveryOwnsDurableRow - Whether ownership finalizes the recovery row after acknowledgement
    * @returns Whether this exact hosted generation accepted the acknowledgement
    */
   public acknowledgeCallerSettlement(
+    call: CallContext,
     agentId: string,
     token: string,
     recoveryOwnsDurableRow = false,
@@ -387,7 +383,7 @@ export class ActiveAgentRegistry<
       if (current?.promise === promise) this.settlementAckFlights.delete(agentId);
     };
     void promise.then(retireFlight, retireFlight);
-    void this.finishCallerSettlementAck(agentId, entry, pending, recoveryOwnsDurableRow).then(
+    void this.finishCallerSettlementAck(call, agentId, entry, pending, recoveryOwnsDurableRow).then(
       resolveFlight,
       rejectFlight,
     );
@@ -396,6 +392,7 @@ export class ActiveAgentRegistry<
 
   /**
    * Commit an admitted acknowledgement while teardown is ordered behind it.
+   * @param call - Call context of the acknowledgement request
    * @param agentId - Hosted agent being acknowledged
    * @param entry - Exact registry entry admitted by the synchronous prologue
    * @param pending - Exact pending generation admitted by the prologue
@@ -403,6 +400,7 @@ export class ActiveAgentRegistry<
    * @returns Acknowledgement result
    */
   private async finishCallerSettlementAck(
+    call: CallContext,
     agentId: string,
     entry: ActiveAgentEntry<TBus, TConnector, TAgent>,
     pending: PendingCallerSettlement,
@@ -411,7 +409,7 @@ export class ActiveAgentRegistry<
     if (!recoveryOwnsDurableRow) {
       let transitioned;
       try {
-        transitioned = await this.globalBus.requestOptional(AgentStorageSubjects.updateStatus, {
+        transitioned = await this.globalBus.requestOptional(call, AgentStorageSubjects.updateStatus, {
           agentId,
           status: 'idle',
           expectedStatus: ['starting', 'dead'],
@@ -602,12 +600,13 @@ export class ActiveAgentRegistry<
    * close emits — join the flight that emitted it instead of finding a half-present
    * registry and starting a second close.
    * @param agentId - Agent being torn down
-   * @param options - Lifecycle emission control and the caller's deadline
+   * @param options - Lifecycle emission control, the caller's deadline and the call of the
+   *   request that drives the teardown; without a call the close is an independent lifecycle boundary
    * @returns What the teardown observed
    */
   private async teardownFlight(
     agentId: string,
-    options: AgentTeardownOptions & { emitSessionClosed?: boolean | undefined },
+    options: AgentTeardownOptions & { emitSessionClosed?: boolean | undefined; call?: CallContext | undefined },
   ): Promise<TeardownReport> {
     const acknowledgement = this.settlementAckFlights.get(agentId);
     // The acknowledgement caller receives its own failure. Teardown waits for
@@ -625,9 +624,12 @@ export class ActiveAgentRegistry<
           if (entry === undefined) {
             return { evidence: 'released' };
           }
-          return entry.agent.close({ emitSessionClosed: options.emitSessionClosed });
+          return entry.agent.close({
+            emitSessionClosed: options.emitSessionClosed,
+            ...(options.call !== undefined && { call: options.call }),
+          });
         },
-        closeUnclosed: (runtime) => closeConnectorRuntime(runtime),
+        closeUnclosed: (runtime) => closeConnectorRuntime(options.call ?? this.globalBus.own('stop'), runtime),
         // Read at call time, like the close above: the entry is still present on
         // the expiry arm — it is this `finally` that removes it — and an identity
         // nothing is registered for has no wiring to give up.
@@ -659,21 +661,23 @@ export class ActiveAgentRegistry<
    * rejection into an aggregate carrying both failures, and returning instead of
    * throwing would delete that signal silently. Callers that want the class read
    * the resolved value; the throw contract is unchanged.
+   * @param call - Call context of the request that drives the eviction
    * @param agentId - Agent identifier
    * @param options - Lifecycle emission control and the caller's deadline
    * @returns What the teardown observed — reported even when the class is weak
    */
   public async evict(
+    call: CallContext,
     agentId: string,
     options: AgentTeardownOptions & { emitSessionClosed?: boolean } = {},
   ): Promise<TeardownReport> {
     const acknowledgement = this.settlementAckFlights.get(agentId);
     if (acknowledgement !== undefined) await acknowledgement.promise.catch(() => undefined);
     const callerOwnsAgentRow = this.getEntryCallerOwnsAgentRow(agentId);
-    const report = await this.teardownFlight(agentId, options);
+    const report = await this.teardownFlight(agentId, { ...options, call });
     if (!callerOwnsAgentRow) {
       try {
-        await this.globalBus.requestOptional(AgentStorageSubjects.updateStatus, { agentId, status: 'dead' });
+        await this.globalBus.requestOptional(call, AgentStorageSubjects.updateStatus, { agentId, status: 'dead' });
       } catch (error) {
         if (report.closeError === undefined) {
           throw error;
@@ -697,12 +701,17 @@ export class ActiveAgentRegistry<
    *
    * It goes through the same flight as the other three; what stays untouched is
    * its *status* behaviour, which is to write none.
+   * @param call - Call context of the request that drives the eviction
    * @param agentId - Agent to evict
    * @param options - The caller's deadline, when it has one
    * @returns What the teardown observed
    */
-  public async evictSilently(agentId: string, options: AgentTeardownOptions = {}): Promise<TeardownReport> {
-    const report = await this.teardownFlight(agentId, { ...options, emitSessionClosed: false });
+  public async evictSilently(
+    call: CallContext,
+    agentId: string,
+    options: AgentTeardownOptions = {},
+  ): Promise<TeardownReport> {
+    const report = await this.teardownFlight(agentId, { ...options, emitSessionClosed: false, call });
     if (report.closeError !== undefined) {
       console.warn(
         `[ActiveAgentRegistry:${this.adapterName}] Agent ${agentId} close error during silent eviction:`,
@@ -723,20 +732,28 @@ export class ActiveAgentRegistry<
    * Concurrent wrappers may both write a status, and that is safe without
    * arbitration because `disposed` is terminal in storage: the *effective* terminal
    * status is `disposed` whenever a disposal participated, in either order.
+   * @param call - Call context of the request that drives the disposal
    * @param agentId - Agent identifier
    * @param options - The caller's deadline, when it has one
    * @returns Whether an agent was found, and what its teardown observed
    */
-  public async dispose(agentId: string, options: AgentTeardownOptions = {}): Promise<AgentDisposalReport> {
+  public async dispose(
+    call: CallContext,
+    agentId: string,
+    options: AgentTeardownOptions = {},
+  ): Promise<AgentDisposalReport> {
     // Nothing registered and no flight, so the only question left is what else can
     // still be speaking for the identity. A subject always wins over the states
     // below, so a start claim or a replacement that coexists with a flight joins
     // that flight instead of being reported.
     if (!this.hasTeardownSubject(agentId)) return this.reportWithNothingToTearDown(agentId);
-    const report = await this.teardownFlight(agentId, options);
+    const report = await this.teardownFlight(agentId, { ...options, call });
     if (options.responsibility !== 'connector-only') {
       try {
-        await this.globalBus.requestOptional(AgentStorageSubjects.updateStatus, { agentId, status: 'disposed' });
+        await this.globalBus.requestOptional(call, AgentStorageSubjects.updateStatus, {
+          agentId,
+          status: 'disposed',
+        });
       } catch (error) {
         console.warn(`[ActiveAgentRegistry:${this.adapterName}] Failed to mark agent ${agentId} as disposed:`, error);
       }

@@ -4,9 +4,10 @@ import type { IMakaioBus } from '@makaio/bus-core';
 import { NoHandlerError, createBusInstance } from '@makaio/bus-core';
 import { createBusNamespace, getFullSubjectForSubjectDefinition } from '@makaio/core';
 import { BUS_EVENT_AUTOMATION_TRIGGER_KIND, createAutomationTriggerDescriptor } from '@makaio/contracts';
-import type { AutomationTriggerEvent } from '@makaio/contracts';
+import type { AutomationTriggerEvent, CallContext } from '@makaio/contracts';
 import { ExtensionCoordinator } from '@makaio/kernel';
 import type { ExtensionContextBase } from '@makaio/kernel';
+import { createTestCall } from '@makaio/test-utils';
 import type { AutomationTriggerBindingRuntime } from '../automation-trigger-binding-runtime.js';
 import { createBusEventAutomationTrigger } from '../builtins/bus-event-trigger.js';
 import { createAutomationTriggerContributionProcessor } from '../automation-trigger-contribution-processor.js';
@@ -233,6 +234,38 @@ describe('makaio.bus-event built-in automation trigger', () => {
 
     await vi.waitFor(() => expect(events).toHaveLength(1));
     expect(events[0]?.correlationId).toBe('corr-42');
+  });
+
+  it('preserves the triggering message call for each principal', async () => {
+    const harness = await bootHarness();
+    const { events, listener } = createRecorder();
+    const subject = testAutoNamespace.subjects.ticked;
+    const calls = ['alice', 'bob'].map((id) => createTestCall({ principal: { kind: 'test.user', id } }));
+    const receivedCalls: CallContext[] = [];
+    // The bus derives a call for delivery, so capture the call seen by the handler.
+    const unsubscribe = harness.bus.on(subject, (ctx) => {
+      receivedCalls.push(ctx.call);
+    });
+
+    try {
+      await harness.runtime.subscribe(
+        { kind: BUS_EVENT_AUTOMATION_TRIGGER_KIND, params: { subject: harness.subjects.ticked } },
+        listener,
+      );
+
+      for (const [index, call] of calls.entries()) {
+        await harness.bus.emit(call, subject, { index });
+      }
+
+      await vi.waitFor(() => expect(events).toHaveLength(calls.length));
+      expect(receivedCalls).toHaveLength(calls.length);
+      for (const [index, call] of calls.entries()) {
+        expect(events[index]?.call).toBe(receivedCalls[index]);
+        expect(events[index]?.call?.principal).toEqual(call.principal);
+      }
+    } finally {
+      unsubscribe();
+    }
   });
 
   it('skips and logs a payload that JSON cannot represent instead of throwing', async () => {

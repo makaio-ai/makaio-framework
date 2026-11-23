@@ -1,4 +1,5 @@
 import type { IMakaioBus } from '@makaio/bus-core';
+import type { CallContext } from '@makaio/core';
 import type { ExecutionStatus, WorkflowExecution } from '@makaio/contracts';
 import { WorkflowStorageSubjects } from './storage/namespace.js';
 
@@ -16,16 +17,18 @@ export interface ExecutionMetadataPatch {
 
 /**
  * Persist a metadata patch for one workflow execution.
+ * @param call - Call context of the handled message the update serves.
  * @param bus - Message bus used for storage writes.
  * @param execution - Mutable in-memory execution state (used for the execution ID).
  * @param patch - Metadata fields to persist.
  */
 export async function persistExecutionUpdate(
+  call: CallContext,
   bus: IMakaioBus,
   execution: WorkflowExecution,
   patch: ExecutionMetadataPatch,
 ): Promise<void> {
-  const result = await bus.request(WorkflowStorageSubjects.updateExecution, {
+  const result = await bus.request(call, WorkflowStorageSubjects.updateExecution, {
     executionId: execution.id,
     status: patch.status,
     error: patch.error,

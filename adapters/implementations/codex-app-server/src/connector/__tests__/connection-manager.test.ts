@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
+import { createTestCall } from '@makaio/test-utils';
 import { CONNECTOR_EXIT_OBSERVATION_MS, GenerationRetirementLedger } from '@makaio/ai-adapters-core';
 import type { IJsonlTransport, MessageListener, TransportEnd, TransportStatus } from '@makaio/subprocess';
 import type { ConnectionManagerContext } from '../connection-manager.js';
@@ -260,7 +261,9 @@ describe('Codex generation end evaluation', () => {
     // As the connector constructor does for an injected transport.
     superviseGenerationEnd(harness.context, injected);
 
-    await expect(initializeConnection(harness.context, harness.inflight)).rejects.toThrow('not ready');
+    await expect(initializeConnection(createTestCall(), harness.context, harness.inflight)).rejects.toThrow(
+      'not ready',
+    );
     await settle();
 
     // An injected transport cannot be replaced, so the reset ends it for good.
@@ -487,7 +490,7 @@ describe('Codex generation end with a real app-server', () => {
     const harness = createHarness({ binaryPath: '/definitely/missing/codex-binary' });
     harnesses.push(harness);
 
-    await expect(initializeConnection(harness.context, harness.inflight)).rejects.toThrow();
+    await expect(initializeConnection(createTestCall(), harness.context, harness.inflight)).rejects.toThrow();
     await settle();
 
     expect(harness.calls).toEqual([
@@ -504,7 +507,7 @@ describe('Codex generation end with a real app-server', () => {
   it('completes the handshake, then reports exactly one terminal error for an unexpected exit 0', async () => {
     const { harness } = createSpawningHarness(EXIT_AFTER_HANDSHAKE);
 
-    await initializeConnection(harness.context, harness.inflight);
+    await initializeConnection(createTestCall(), harness.context, harness.inflight);
     expect(harness.state().connected).toBe(true);
     await harness.spawned[0]?.ended;
     await settle();
@@ -516,7 +519,7 @@ describe('Codex generation end with a real app-server', () => {
 
   it('finalises a requested close exactly once and raises no terminal error', async () => {
     const { harness } = createSpawningHarness(ANSWERING_APP_SERVER);
-    await initializeConnection(harness.context, harness.inflight);
+    await initializeConnection(createTestCall(), harness.context, harness.inflight);
 
     harness.context.getJsonRpcClient()?.close();
     const end = await harness.spawned[0]?.ended;
@@ -528,7 +531,7 @@ describe('Codex generation end with a real app-server', () => {
 
   it('finalises once when the client closes its transport while the unexpected end is delivered', async () => {
     const { harness } = createSpawningHarness(ANSWERING_APP_SERVER);
-    await initializeConnection(harness.context, harness.inflight);
+    await initializeConnection(createTestCall(), harness.context, harness.inflight);
     const client = harness.context.getJsonRpcClient();
 
     // The client closes the transport from inside the end delivery; that close
@@ -546,10 +549,12 @@ describe('Codex generation end with a real app-server', () => {
   it('keeps the end of a reset generation away from the generation that replaced it and from its turn', async () => {
     const { harness, cwd } = createSpawningHarness(REFUSE_FIRST_GENERATION);
     try {
-      await expect(initializeConnection(harness.context, harness.inflight)).rejects.toThrow('not ready');
+      await expect(initializeConnection(createTestCall(), harness.context, harness.inflight)).rejects.toThrow(
+        'not ready',
+      );
       const [first] = harness.spawned;
 
-      await initializeConnection(harness.context, harness.inflight);
+      await initializeConnection(createTestCall(), harness.context, harness.inflight);
       const second = harness.spawned[1];
       expect(connectorTransport(harness.context)).toBe(second);
 

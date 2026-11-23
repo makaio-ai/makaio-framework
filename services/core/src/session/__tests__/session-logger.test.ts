@@ -12,6 +12,7 @@
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
+import { createTestCall } from '@makaio/test-utils';
 import { SessionEventStorageSubjects, SessionSubjects } from '@makaio/contracts';
 import {
   emitSessionTurnStarted,
@@ -44,7 +45,7 @@ describe('session lifecycle event writers', () => {
       const adapterName = 'Test Adapter';
       const adapterSessionId = 'adapter-session-789';
 
-      await MakaioBus.emit(SessionSubjects.agent.added, {
+      await MakaioBus.emit(createTestCall(), SessionSubjects.agent.added, {
         sessionId,
         agentId,
         adapterId,
@@ -80,7 +81,7 @@ describe('session lifecycle event writers', () => {
     it('should persist branch.created audit rows', async () => {
       const sessionId = 'session-branch-created-test';
 
-      await MakaioBus.emit(SessionSubjects.branch.created, {
+      await MakaioBus.emit(createTestCall(), SessionSubjects.branch.created, {
         sessionId,
         childSessionId: 'child-1',
         parentSessionId: sessionId,
@@ -108,7 +109,7 @@ describe('session lifecycle event writers', () => {
       });
 
       await expect(
-        MakaioBus.emit(SessionSubjects.branch.created, {
+        MakaioBus.emit(createTestCall(), SessionSubjects.branch.created, {
           sessionId: 'session-branch-audit-fail',
           childSessionId: 'child-1',
           parentSessionId: 'session-branch-audit-fail',
@@ -125,12 +126,12 @@ describe('session lifecycle event writers', () => {
     it('produces NO rows for branch.merged and squash (owned by their handlers)', async () => {
       const sessionId = 'session-merged-squash-test';
 
-      await MakaioBus.emit(SessionSubjects.branch.merged, {
+      await MakaioBus.emit(createTestCall(), SessionSubjects.branch.merged, {
         sessionId,
         childSessionId: 'child-1',
         parentSessionId: sessionId,
       });
-      await MakaioBus.emit(SessionSubjects.squash, {
+      await MakaioBus.emit(createTestCall(), SessionSubjects.squash, {
         sessionId,
         summaryJson: '{"summary":"compressed"}',
       });
@@ -150,7 +151,7 @@ describe('session lifecycle event writers', () => {
         received.push(ctx.payload);
       });
 
-      await emitSessionTurnStarted(MakaioBus, {
+      await emitSessionTurnStarted(createTestCall(), MakaioBus, {
         sessionId,
         turnId: 'turn-123',
         turnNumber: 1,
@@ -187,7 +188,7 @@ describe('session lifecycle event writers', () => {
     it('should create event envelope with UUID eventId and timestamp', async () => {
       const sessionId = 'session-envelope-test';
 
-      await MakaioBus.emit(SessionSubjects.agent.added, {
+      await MakaioBus.emit(createTestCall(), SessionSubjects.agent.added, {
         sessionId,
         agentId: 'agent-1',
         adapterId: 'adapter-1',
@@ -218,7 +219,7 @@ describe('session lifecycle event writers', () => {
       // Replace with a noop so the afterEach cleanup stays safe.
       writersCleanup = (): void => undefined;
 
-      await MakaioBus.emit(SessionSubjects.agent.added, {
+      await MakaioBus.emit(createTestCall(), SessionSubjects.agent.added, {
         sessionId,
         agentId: 'agent-1',
         adapterId: 'adapter-1',

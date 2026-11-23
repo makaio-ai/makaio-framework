@@ -6,6 +6,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import { MakaioBus } from '@makaio/bus-core';
 import { AgentSubjects } from '@makaio/contracts';
+import { createTestCall } from '@makaio/test-utils';
 
 const adapterName = getAdapterUnderTest();
 
@@ -70,7 +71,7 @@ describe('Tool Approvals', async () => {
         normalizeMessageInput(
           `Write the word HELLO to ${tmpFile} - pause IMMEDIATELY if first try failed. Reply with OK if file was written, otherwise with ERROR. ONLY reply with OK or ERROR (when in doubt, reply with ERROR).`,
         ),
-        { systemPrompt: TOOL_APPROVAL_SYSTEM_PROMPT },
+        { call: createTestCall(), systemPrompt: TOOL_APPROVAL_SYSTEM_PROMPT },
       );
 
       // Complete the task - should fail due to missing handler
@@ -157,6 +158,7 @@ describe('Tool Approvals', async () => {
 
       // Start agent
       const startResult = await agent.start(normalizeMessageInput(prompt), {
+        call: createTestCall(),
         systemPrompt: TOOL_APPROVAL_SYSTEM_PROMPT,
       });
 
@@ -225,6 +227,7 @@ describe('Tool Approvals', async () => {
 
       // Start agent
       const startResult = await agent.start(normalizeMessageInput(prompt), {
+        call: createTestCall(),
         systemPrompt: TOOL_APPROVAL_SYSTEM_PROMPT,
       });
 
@@ -310,7 +313,7 @@ describe('Tool Approvals', async () => {
           normalizeMessageInput(
             `Do NOT think too much, it's a simple task: Write the word HELLO to ${tmpFile} - reply with OK if successful, otherwise with ERROR`,
           ),
-          { systemPrompt: TOOL_APPROVAL_SYSTEM_PROMPT },
+          { call: createTestCall(), systemPrompt: TOOL_APPROVAL_SYSTEM_PROMPT },
         );
 
         // Complete the task

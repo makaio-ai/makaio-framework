@@ -143,7 +143,7 @@ export class AdapterSubsystemService extends BaseService {
     await this.configStore.loadSnapshot();
     this.configStore.registerListeners((fn) => this.addHandlerCleanup(fn));
     this.registerBusHandlers();
-    await this.bus.emit(AdapterSubsystemSubjects.ready, {});
+    await this.bus.emit(this.bus.own('start'), AdapterSubsystemSubjects.ready, {});
   }
 
   private registerBusHandlers(): void {
@@ -207,7 +207,7 @@ export class AdapterSubsystemService extends BaseService {
       AdapterSubsystemSubjects.resolveProviderRuntimeSnapshot,
       async (ctx) => {
         ctx.setResult({
-          snapshot: await this.configStore.resolveProviderRuntimeSnapshot(ctx.payload.providerConfigId),
+          snapshot: await this.configStore.resolveProviderRuntimeSnapshot(ctx.call, ctx.payload.providerConfigId),
         });
       },
       { priority: this.runtimeSnapshotHandlerPriority },
@@ -218,11 +218,12 @@ export class AdapterSubsystemService extends BaseService {
         const adapter = this.registry.getLoadedAdapters().find((entry) => entry.name === ctx.payload.adapterName);
         try {
           const captured = await this.configStore.resolveBoundProviderRuntimeSnapshot(
+            ctx.call,
             ctx.payload.adapterName,
             ctx.payload.providerConfigId,
           );
           ctx.setResult(
-            await resolveAdapterRuntimeSnapshot({
+            await resolveAdapterRuntimeSnapshot(ctx.call, {
               bus: this.bus,
               adapter,
               snapshot: captured.snapshot,
@@ -249,7 +250,7 @@ export class AdapterSubsystemService extends BaseService {
       );
       const missingIds = (adapter?.providerDefinitionIds ?? []).filter((id) => !resolvedDefinitions.has(id));
       if (missingIds.length > 0) {
-        const catalog = await this.bus.request(ExtensionSubjects.contributions.catalog, {});
+        const catalog = await this.bus.request(ctx.call, ExtensionSubjects.contributions.catalog, {});
         for (const entry of catalog.providers) {
           if (missingIds.includes(entry.definition.id)) resolvedDefinitions.set(entry.definition.id, entry.definition);
         }
@@ -263,6 +264,7 @@ export class AdapterSubsystemService extends BaseService {
     this.registerHandler(AdapterSubsystemSubjects.listCompatibleAuthOptions, async (ctx) => {
       ctx.setResult({
         options: await buildCompatibleAuthOptions(
+          ctx.call,
           this.bus,
           this.registry.getLoadedAdapters(),
           ctx.payload.definitionId,
@@ -276,23 +278,24 @@ export class AdapterSubsystemService extends BaseService {
 
   private registerMutationHandlers(): void {
     this.registerHandler(AdapterSubsystemSubjects.createProviderConfig, async (ctx) => {
-      ctx.setResult(await this.providerConfigService.createProviderConfig(ctx.payload));
+      ctx.setResult(await this.providerConfigService.createProviderConfig(ctx.call, ctx.payload));
     });
     this.registerHandler(AdapterSubsystemSubjects.updateProviderConfig, async (ctx) => {
-      ctx.setResult(await this.providerConfigService.updateProviderConfig(ctx.payload.id, ctx.payload.patch));
+      ctx.setResult(await this.providerConfigService.updateProviderConfig(ctx.call, ctx.payload.id, ctx.payload.patch));
     });
     this.registerHandler(AdapterSubsystemSubjects.setProviderConfigAuth, async (ctx) => {
-      ctx.setResult(await this.providerConfigService.setProviderConfigAuth(ctx.payload.id, ctx.payload.auth));
+      ctx.setResult(await this.providerConfigService.setProviderConfigAuth(ctx.call, ctx.payload.id, ctx.payload.auth));
     });
     this.registerHandler(AdapterSubsystemSubjects.deleteProviderConfig, async (ctx) => {
-      ctx.setResult(await this.providerConfigService.deleteProviderConfig(ctx.payload.id));
+      ctx.setResult(await this.providerConfigService.deleteProviderConfig(ctx.call, ctx.payload.id));
     });
     this.registerHandler(AdapterSubsystemSubjects.setDefaultProviderConfig, async (ctx) => {
-      ctx.setResult(await this.providerConfigService.setDefaultProviderConfig(ctx.payload.id));
+      ctx.setResult(await this.providerConfigService.setDefaultProviderConfig(ctx.call, ctx.payload.id));
     });
     this.registerHandler(AdapterSubsystemSubjects.setModelFilterMode, async (ctx) => {
       ctx.setResult(
         await this.providerConfigService.setModelFilterMode(
+          ctx.call,
           ctx.payload.id,
           ctx.payload.modelFilterMode,
           ctx.payload.preferredModel,
@@ -307,14 +310,16 @@ export class AdapterSubsystemService extends BaseService {
       ctx.setResult({ success: true });
     });
     this.registerHandler(AdapterSubsystemSubjects.bind, async (ctx) => {
-      ctx.setResult({ binding: await this.bindingService.bind(ctx.payload.adapterName, ctx.payload.providerConfigId) });
+      ctx.setResult({
+        binding: await this.bindingService.bind(ctx.call, ctx.payload.adapterName, ctx.payload.providerConfigId),
+      });
     });
     this.registerHandler(AdapterSubsystemSubjects.unbind, async (ctx) => {
-      await this.bindingService.unbind(ctx.payload.adapterName, ctx.payload.providerConfigId);
+      await this.bindingService.unbind(ctx.call, ctx.payload.adapterName, ctx.payload.providerConfigId);
       ctx.setResult({});
     });
     this.registerHandler(AdapterSubsystemSubjects.setDefaultBinding, async (ctx) => {
-      await this.bindingService.setDefaultBinding(ctx.payload.adapterName, ctx.payload.providerConfigId);
+      await this.bindingService.setDefaultBinding(ctx.call, ctx.payload.adapterName, ctx.payload.providerConfigId);
       ctx.setResult({});
     });
   }
@@ -331,7 +336,7 @@ export class AdapterSubsystemService extends BaseService {
    */
   protected override async onDestroy(): Promise<void> {
     const shutdown = await this.registry.shutdownAll();
-    await this.bus.emit(AdapterRuntimeSubjects.teardownCompleted, {
+    await this.bus.emit(this.bus.own('stop'), AdapterRuntimeSubjects.teardownCompleted, {
       ownerInstanceId: this.resolveOwnerInstanceId?.() ?? null,
       evidence: shutdown.evidence,
       ...(shutdown.detail !== undefined && { detail: shutdown.detail }),

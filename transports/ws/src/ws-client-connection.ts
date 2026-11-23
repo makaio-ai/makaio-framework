@@ -17,7 +17,7 @@ import { disposeSocket, extractSocketErrorMessage, sendEncoded, waitForSocketOpe
 import { connectionClosedError, WebSocketConnectionError } from './connection-error.js';
 import { buildSubscribeMessage, type SubscriptionEntry } from './subscribe-message.js';
 import { backoffMs, sleep, type WebSocketClientTransportReconnectOptions } from './ws-client-reconnect.js';
-import { handleInboundMessage } from './ws-client-message-handler.js';
+import { handleInboundMessage, type InboundMessageHandlerDeps } from './ws-client-message-handler.js';
 import { startHeartbeatWatchdog } from './ws-client-heartbeat.js';
 import type {
   WebSocketClientTransportHeartbeatOptions,
@@ -42,6 +42,8 @@ export interface ConnectionDeps {
   readonly debugLog: (message: string) => void;
   /** Optional authentication strategy. */
   readonly auth: TransportAuth | undefined;
+  /** Explicit local trust policy for this client connection. */
+  readonly attestingRole: InboundMessageHandlerDeps['attestingRole'];
   /** Wire codec for encoding/decoding messages. */
   readonly codec: ClientTransportCodec;
   /** Optional async transform applied after codec decoding. */
@@ -157,6 +159,7 @@ function attachMessageListener(ws: WebSocketLike, deps: ConnectionDeps): void {
       name: deps.name,
       debug: deps.debug,
       auth: deps.auth,
+      attestingRole: deps.attestingRole,
       codec: deps.codec,
       messageTransform: deps.messageTransform,
       correlations: deps.correlations,

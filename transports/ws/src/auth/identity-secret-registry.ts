@@ -6,15 +6,18 @@
  * claimed identity through this registry during the challenge/response flow.
  */
 
-import type { PayloadFilter, TransportPeerContext } from '@makaio/core';
+import type { CallClaim, InboundAttestingConnectionRole, Party, PayloadFilter } from '@makaio/core';
+import { ContributionNameSchema } from '@makaio/core';
 
 interface RegisteredHmacIdentitySecret {
   /** HMAC secret expected for this identity. */
   readonly secret: string;
-  /** Trusted peer kind exposed after the identity authenticates. */
-  readonly peerKind: string;
-  /** Optional opaque claims attached to the authenticated peer context. */
-  readonly claims?: Readonly<Record<string, unknown>>;
+  /** Trusted party kind (`<owner>.<name>`) of the caller after the identity authenticates. */
+  readonly partyKind: string;
+  /** Role granted to sockets authenticated with this registration. */
+  readonly attestingRole: InboundAttestingConnectionRole | undefined;
+  /** Optional claims attached to the authenticated caller party. */
+  readonly claims?: Readonly<Record<string, CallClaim>>;
   /**
    * Optional subjects this identity may use for inbound requests and events.
    *
@@ -34,16 +37,21 @@ interface RegisteredHmacIdentitySecret {
 /** Options for registering an HMAC identity secret. */
 export interface HmacIdentitySecretRegistrationOptions {
   /**
-   * Trusted peer kind exposed after this identity authenticates.
-   */
-  readonly peerKind: string;
-  /**
-   * Opaque claims attached to the authenticated peer context.
+   * Trusted party kind of the caller after this identity authenticates.
    *
-   * Bus handlers can read `ctx.transport.peer.claims` to access these values
+   * Must have the form `<owner>.<name>`; registration throws otherwise. The
+   * authenticated connection's caller is `{ kind: partyKind, id: identityId }`.
+   */
+  readonly partyKind: string;
+  /** Explicit role for a credential trusted to attest principals. */
+  readonly attestingRole?: InboundAttestingConnectionRole;
+  /**
+   * Claims attached to the authenticated caller party.
+   *
+   * Bus handlers can read `ctx.call.caller.claims` to access these values
    * without parsing the identity ID itself.
    */
-  readonly claims?: Readonly<Record<string, unknown>>;
+  readonly claims?: Readonly<Record<string, CallClaim>>;
   /**
    * Optional subjects this identity may use for requests and events.
    *
@@ -129,7 +137,7 @@ function createRegistrationCleanup(identityId: string, registration: RegisteredH
  * accidentally undone by an older cleanup handle.
  * @param identityId - Transport identity that may authenticate with the secret.
  * @param secret - HMAC secret expected for the identity.
- * @param options - Trusted peer metadata for this identity.
+ * @param options - Trusted party metadata for this identity.
  * @returns Cleanup function that unregisters this exact secret.
  */
 export function registerHmacIdentitySecret(
@@ -148,9 +156,14 @@ export function registerHmacIdentitySecret(
       'registerHmacIdentitySecret no longer accepts allowedSubjects; use allowedMessageSubjects and/or allowedSubscriptionSubjects',
     );
   }
-  const peerKind = options.peerKind.trim();
-  if (peerKind.length === 0) {
-    throw new Error('registerHmacIdentitySecret requires a non-empty peerKind');
+  const partyKind = options.partyKind.trim();
+  if (partyKind.length === 0) {
+    throw new Error('registerHmacIdentitySecret requires a non-empty partyKind');
+  }
+  if (!ContributionNameSchema.safeParse(partyKind).success) {
+    throw new Error(
+      `registerHmacIdentitySecret requires a partyKind of the form '<owner>.<name>', received '${partyKind}'`,
+    );
   }
   const hasDirectionalSubjectRestrictions =
     options.allowedMessageSubjects !== undefined || options.allowedSubscriptionSubjects !== undefined;
@@ -163,7 +176,8 @@ export function registerHmacIdentitySecret(
   }
   const registration: RegisteredHmacIdentitySecret = {
     secret,
-    peerKind,
+    partyKind,
+    attestingRole: options.attestingRole,
     ...(options.claims !== undefined ? { claims: options.claims } : {}),
     ...(hasDirectionalSubjectRestrictions
       ? {
@@ -185,12 +199,12 @@ export function registerHmacIdentitySecret(
 /** Options for rotating an existing HMAC identity secret. */
 export interface HmacIdentitySecretRotationOptions {
   /**
-   * Override opaque claims attached to the authenticated peer context.
+   * Override claims attached to the authenticated caller party.
    *
    * When omitted the existing claims from the current registration are
    * preserved. Provide explicitly to change claims during rotation.
    */
-  readonly claims?: Readonly<Record<string, unknown>>;
+  readonly claims?: Readonly<Record<string, CallClaim>>;
 }
 
 /**
@@ -227,7 +241,8 @@ export function rotateHmacIdentitySecret(
 
   const registration: RegisteredHmacIdentitySecret = {
     secret: newSecret,
-    peerKind: existing.peerKind,
+    partyKind: existing.partyKind,
+    attestingRole: existing.attestingRole,
     ...(options.claims !== undefined
       ? { claims: options.claims }
       : existing.claims !== undefined
@@ -273,19 +288,35 @@ export function resolveHmacIdentitySecret(identityId: string): string | null {
 }
 
 /**
- * Resolve trusted peer context for an identity claim.
- * @param identityId - Claimed transport identity.
- * @returns Registered peer context, or null when the identity is unknown.
+ * Resolve the attesting role of the credential that authenticated a socket.
+ * @param identityId - Identity verified by the handshake.
+ * @param authenticatedSecret - Secret verified by the handshake.
+ * @returns The attesting role granted to the current credential, if any.
  */
-export function resolveHmacIdentityPeer(identityId: string): TransportPeerContext | null {
+export function resolveHmacIdentityAttestingRole(
+  identityId: string,
+  authenticatedSecret: string | undefined,
+): InboundAttestingConnectionRole | undefined {
+  const entry = identitySecrets.get(identityId);
+  return entry && entry.secret === authenticatedSecret ? entry.attestingRole : undefined;
+}
+
+/**
+ * Resolve the trusted caller party for an identity claim.
+ *
+ * The party is `{ kind: partyKind, id: identityId }` plus the registered
+ * claims. It is derived from the registration, never from a message.
+ * @param identityId - Claimed transport identity.
+ * @returns Registered caller party, or null when the identity is unknown.
+ */
+export function resolveHmacIdentityParty(identityId: string): Party | null {
   const entry = identitySecrets.get(identityId);
   if (!entry) {
     return null;
   }
   return {
-    kind: entry.peerKind,
+    kind: entry.partyKind,
     id: identityId,
-    authenticated: true,
     ...(entry.claims !== undefined ? { claims: entry.claims } : {}),
   };
 }
@@ -329,7 +360,7 @@ export function resolveHmacIdentityRequiredSubscriptionFilters(
 
 /**
  * Add exact subjects to an existing restricted HMAC identity without rotating
- * its secret or replacing its peer metadata.
+ * its secret or replacing its party metadata.
  *
  * The stored set is resolved for every inbound message, so an already
  * authenticated WebSocket observes this update without reconnecting.

@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import type { CallContext } from '@makaio/core';
 import type { ICapabilityProvider } from '../../capability/index.js';
 import type { WorkflowWorkerBusAuth, WorkflowWorkerConfig, WorkerContributionManifest } from '../../workflow/index.js';
 import { JsonObjectContractSchema } from '../../shared/json-value.js';
@@ -828,11 +829,14 @@ export interface IWorkerProvider extends ICapabilityProvider {
    * allocation with a validated reference and infrastructure-only handle, or
    * a positively confirmed absence supported by bounded evidence. Ambiguous
    * failures reject instead of resolving.
+   * @param call - Call of the message that triggered dispatch, recovery sweep, or remediation; providers forward it
+   * to every bus send of this operation and never store it for a later operation.
+   * Must be a received call context, or one minted on the provider's own carrier — never another carrier's own context.
    * @param request - Full provision request containing Runtime inputs and private connection values.
    * @param signal - AbortSignal for cooperative cancellation of the provision operation.
    * @returns Allocated reference and handle, or confirmed absence with bounded evidence.
    */
-  provision(request: WorkerProvisionRequest, signal: AbortSignal): Promise<WorkerProvisionOutcome>;
+  provision(call: CallContext, request: WorkerProvisionRequest, signal: AbortSignal): Promise<WorkerProvisionOutcome>;
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -927,11 +931,18 @@ export interface IWorkerRecoveryCapability {
    * less — an ambiguous match, an unbounded listing, or a partial scan —
    * resolves as `unknown`. Provider API and transport failures reject, and
    * cancellation is rethrown.
+   * @param call - Call of the message that triggered dispatch, recovery sweep, or remediation; providers forward it
+   * to every bus send of this operation and never store it for a later operation.
+   * Must be a received call context, or one minted on the provider's own carrier — never another carrier's own context.
    * @param request - Durable attempt context identifying the allocation to search for.
    * @param signal - AbortSignal for cooperative cancellation of the discovery operation.
    * @returns Discovered allocation, proven absence, or retained uncertainty.
    */
-  discoverProvisioning(request: WorkerProviderContext, signal: AbortSignal): Promise<ProvisioningDiscovery>;
+  discoverProvisioning(
+    call: CallContext,
+    request: WorkerProviderContext,
+    signal: AbortSignal,
+  ): Promise<ProvisioningDiscovery>;
 
   /**
    * Re-attach to a known allocation's provider operation for the same attempt.
@@ -948,12 +959,16 @@ export interface IWorkerRecoveryCapability {
    * never creates, resumes, restarts, or deletes a resource and never announces
    * runtime readiness. A provider may confirm completion only after its
    * remaining duties are fulfilled; absence alone is not completion proof.
+   * @param call - Call of the message that triggered dispatch, recovery sweep, or remediation; providers forward it
+   * to every bus send of this operation and never store it for a later operation.
+   * Must be a received call context, or one minted on the provider's own carrier — never another carrier's own context.
    * @param allocationRef - Validated allocation reference from a prior provision.
    * @param request - Durable attempt context for provider-side correlation.
    * @param signal - AbortSignal for cooperative cancellation of the attach operation.
    * @returns Fresh control and observation handle for the known allocation's remaining duties.
    */
   attach(
+    call: CallContext,
     allocationRef: ProviderAllocationRef,
     request: WorkerProviderContext,
     signal: AbortSignal,
@@ -970,12 +985,16 @@ export interface IWorkerRecoveryCapability {
    * allocation more precisely. It remains read-only: the provider neither
    * persists that refinement nor creates, restarts, or deletes infrastructure.
    * The claim-owning host records the refinement before further control.
+   * @param call - Call of the message that triggered dispatch, recovery sweep, or remediation; providers forward it
+   * to every bus send of this operation and never store it for a later operation.
+   * Must be a received call context, or one minted on the provider's own carrier — never another carrier's own context.
    * @param allocationRef - Validated allocation reference to inspect.
    * @param request - Freshly resolved provider context for the same attempt.
    * @param signal - AbortSignal for cooperative cancellation of the inspect operation.
    * @returns Infrastructure state and optional evidence for the allocation.
    */
   inspect(
+    call: CallContext,
     allocationRef: ProviderAllocationRef,
     request: WorkerProviderContext,
     signal: AbortSignal,
@@ -987,11 +1006,15 @@ export interface IWorkerRecoveryCapability {
    * Idempotent: if the allocation is already absent or terminal, the call
    * succeeds without error. Providers must not throw when asked to terminate
    * a resource that no longer exists.
+   * @param call - Call of the message that triggered dispatch, recovery sweep, or remediation; providers forward it
+   * to every bus send of this operation and never store it for a later operation.
+   * Must be a received call context, or one minted on the provider's own carrier — never another carrier's own context.
    * @param allocationRef - Validated allocation reference to terminate.
    * @param request - Freshly resolved provider context for the same attempt.
    * @param signal - AbortSignal for cooperative cancellation of the terminate operation.
    */
   terminateAllocation(
+    call: CallContext,
     allocationRef: ProviderAllocationRef,
     request: WorkerProviderContext,
     signal: AbortSignal,
@@ -1068,12 +1091,14 @@ export interface WorkerDispatchAck {
  * provider has provisioned a resource and the allocation reference has been
  * persisted. Callers that need the workflow result must await it through the
  * Authority's in-process waiter (`waitForOutcome`).
+ * @param call - Handled workflow run's call forwarded to dispatch.
  * @param request - Dispatch request containing config, optional manifest, optional requirements,
  *   and the Authority-created attempt identifier.
  * @param signal - AbortSignal for cooperative cancellation.
  * @returns Allocation acknowledgment after provider provisioning succeeds.
  */
 export type WorkerDispatch = (
+  call: CallContext,
   request: {
     readonly executionAttemptId: string;
     readonly config: WorkflowWorkerConfig;

@@ -1,4 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
+import { createTestCall } from '@makaio/test-utils';
 import { shellOutputTool } from '../../src/tools/shell-output.js';
 import { DEFAULT_CONSTRAINTS } from '../../src/types.js';
 import { setupShellManagerTest } from './shared.js';
@@ -38,6 +39,7 @@ describe('shellOutputTool', () => {
       await instance.waitForExit();
 
       const result = await ctx.registry.execute(
+        createTestCall(),
         'shell_output',
         { ...defaultInput, shellId: instance.shellId, stream: 'stdout' },
         { contextOverrides: { constraints: ctx.constraints } },
@@ -71,6 +73,7 @@ describe('shellOutputTool', () => {
       await instance.waitForExit();
 
       const result = await ctx.registry.execute(
+        createTestCall(),
         'shell_output',
         { ...defaultInput, shellId: instance.shellId, stream: 'stderr' },
         { contextOverrides: { constraints: ctx.constraints } },
@@ -97,6 +100,7 @@ describe('shellOutputTool', () => {
       await instance.waitForExit();
 
       const result = await ctx.registry.execute(
+        createTestCall(),
         'shell_output',
         { ...defaultInput, shellId: instance.shellId, stream: 'both' },
         { contextOverrides: { constraints: ctx.constraints } },
@@ -125,6 +129,7 @@ describe('shellOutputTool', () => {
 
       // Using 'both' explicitly since tool.execute expects validated input
       const result = await ctx.registry.execute(
+        createTestCall(),
         'shell_output',
         { ...defaultInput, shellId: instance.shellId },
         { contextOverrides: { constraints: ctx.constraints } },
@@ -151,6 +156,7 @@ describe('shellOutputTool', () => {
 
       // Get full output first to know total size
       const fullResult = await ctx.registry.execute(
+        createTestCall(),
         'shell_output',
         { shellId: instance.shellId, stream: 'stdout', offset: 0, limit: 1000 },
         { contextOverrides: { constraints: ctx.constraints } },
@@ -164,6 +170,7 @@ describe('shellOutputTool', () => {
 
       // Get with offset
       const offsetResult = await ctx.registry.execute(
+        createTestCall(),
         'shell_output',
         { shellId: instance.shellId, stream: 'stdout', offset: 5, limit: 10000 },
         { contextOverrides: { constraints: ctx.constraints } },
@@ -192,6 +199,7 @@ describe('shellOutputTool', () => {
       await instance.waitForExit();
 
       const result = await ctx.registry.execute(
+        createTestCall(),
         'shell_output',
         { shellId: instance.shellId, stream: 'stdout', offset: 0, limit: 5 },
         { contextOverrides: { constraints: ctx.constraints } },
@@ -218,6 +226,7 @@ describe('shellOutputTool', () => {
       await instance.waitForExit();
 
       const result = await ctx.registry.execute(
+        createTestCall(),
         'shell_output',
         { ...defaultInput, shellId: instance.shellId },
         { contextOverrides: { constraints: ctx.constraints } },
@@ -243,6 +252,7 @@ describe('shellOutputTool', () => {
       await instance.waitForExit();
 
       const result = await ctx.registry.execute(
+        createTestCall(),
         'shell_output',
         { shellId: instance.shellId, stream: 'both', offset: 10000, limit: 10000 },
         { contextOverrides: { constraints: ctx.constraints } },
@@ -258,6 +268,7 @@ describe('shellOutputTool', () => {
 
     it('errors for unknown shell ID', async () => {
       const result = await ctx.registry.execute(
+        createTestCall(),
         'shell_output',
         { ...defaultInput, shellId: 'nonexistent-id' },
         { contextOverrides: { constraints: ctx.constraints } },
@@ -293,6 +304,7 @@ describe('shellOutputTool', () => {
       );
 
       const result = await ctx.registry.execute(
+        createTestCall(),
         'shell_output',
         { ...defaultInput, shellId: instance.shellId },
         { contextOverrides: { constraints: ctx.constraints } },

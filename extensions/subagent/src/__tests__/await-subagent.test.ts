@@ -140,6 +140,7 @@ describe('await_subagent tool', () => {
     // kills every await longer than that regardless of the requested
     // timeoutMs (the semantic deadline enforced by the SubagentService).
     expect(vi.mocked(mockBus.bus.request)).toHaveBeenCalledWith(
+      context.call,
       SubagentSubjects.await,
       { subagentId: 'sub-1', timeoutMs: 120_000 },
       { timeout: 0 },

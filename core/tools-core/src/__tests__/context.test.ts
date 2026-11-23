@@ -3,6 +3,7 @@ import { z } from 'zod';
 import type { MakaioContext } from '@makaio/core';
 import { createBusNamespace } from '@makaio/core';
 import { createBusInstance, MakaioBus } from '@makaio/bus-core';
+import { createTestCall } from '@makaio/test-utils';
 import type { BusLike, ToolExecutionContext } from '../types.js';
 
 // Create test subjects for BusLike tests
@@ -80,6 +81,7 @@ describe('ToolExecutionContext', () => {
   it('should extend MakaioContext', () => {
     // Type-level test: ToolExecutionContext should be assignable to MakaioContext
     const ctx: ToolExecutionContext = {
+      call: createTestCall(),
       cwd: '/test',
       env: { NODE_ENV: 'test' },
       platform: 'posix',
@@ -92,6 +94,7 @@ describe('ToolExecutionContext', () => {
 
   it('should have optional sessionId property', () => {
     const ctxWithSession: ToolExecutionContext = {
+      call: createTestCall(),
       cwd: '/test',
       env: {},
       platform: 'posix',
@@ -99,6 +102,7 @@ describe('ToolExecutionContext', () => {
     };
 
     const ctxWithoutSession: ToolExecutionContext = {
+      call: createTestCall(),
       cwd: '/test',
       env: {},
       platform: 'posix',
@@ -112,6 +116,7 @@ describe('ToolExecutionContext', () => {
     const bus = createBusInstance();
 
     const ctxWithBus: ToolExecutionContext = {
+      call: createTestCall(),
       cwd: '/test',
       env: {},
       platform: 'posix',
@@ -119,6 +124,7 @@ describe('ToolExecutionContext', () => {
     };
 
     const ctxWithoutBus: ToolExecutionContext = {
+      call: createTestCall(),
       cwd: '/test',
       env: {},
       platform: 'posix',
@@ -132,6 +138,7 @@ describe('ToolExecutionContext', () => {
     const bus = createBusInstance();
 
     const ctx: ToolExecutionContext = {
+      call: createTestCall(),
       cwd: '/test',
       env: {},
       platform: 'posix',
@@ -147,6 +154,7 @@ describe('ToolExecutionContext', () => {
     const signal = new AbortController().signal;
 
     const ctx: ToolExecutionContext = {
+      call: createTestCall(),
       cwd: '/workspace',
       env: { PATH: '/usr/bin', HOME: '/home/user' },
       platform: 'windows',
@@ -175,6 +183,7 @@ describe('Type compatibility', () => {
     }
 
     const toolCtx: ToolExecutionContext = {
+      call: createTestCall(),
       cwd: '/test',
       env: {},
       platform: 'posix',

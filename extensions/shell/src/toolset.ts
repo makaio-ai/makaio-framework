@@ -1,4 +1,4 @@
-import { MakaioBus, type IMakaioBus } from '@makaio/bus-core';
+import type { IMakaioBus } from '@makaio/bus-core';
 import { defineToolset, widenTool } from '@makaio/tools-core';
 import { ShellManager } from './manager/shell-manager.js';
 import { ShellConstraintsSchema } from './schemas.js';
@@ -30,8 +30,8 @@ export const shellToolset = defineToolset({
 export interface CreateShellToolsetOptions {
   /** Existing ShellManager instance, used by direct tests. */
   manager?: ShellManager;
-  /** Bus used by the shell service test harness. */
-  bus?: IMakaioBus;
+  /** Bus the shell service registers its handlers on. */
+  bus: IMakaioBus;
 }
 
 /**
@@ -39,11 +39,11 @@ export interface CreateShellToolsetOptions {
  *
  * Extension activation owns lifecycle in production. Direct tests that bypass
  * activation can initialize the returned service to register shell bus handlers.
- * @param options - Optional shell manager and bus for test isolation.
+ * @param options - Bus for the shell service and optional shell manager for test isolation.
  * @returns Shell toolset, manager, and service.
  */
-export function createShellToolset(options: CreateShellToolsetOptions = {}) {
+export function createShellToolset(options: CreateShellToolsetOptions) {
   const manager = options.manager ?? new ShellManager();
-  const service = new ShellService(options.bus ?? MakaioBus, manager);
+  const service = new ShellService(options.bus, manager);
   return { toolset: shellToolset, manager, service };
 }

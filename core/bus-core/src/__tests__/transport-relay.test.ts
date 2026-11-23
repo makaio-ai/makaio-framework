@@ -16,6 +16,7 @@ import {
   type BusTransportRegistry,
   NoHandlerError,
 } from '../index.js';
+import { busContextOf } from '../kernel-api.js';
 import { DEFAULT_REQUEST_TIMEOUT_MS } from '../types/options.js';
 import { MockTransport, createStubTransport } from './helpers/transport-fixtures.js';
 
@@ -89,7 +90,7 @@ declare module '../index.js' {
   }
 }
 
-const { registerTransport } = MakaioBus.getContext().transportRegistry;
+const { registerTransport } = busContextOf(MakaioBus).transportRegistry;
 
 describe('Transport relay and subscription propagation', () => {
   let sourceTransport: MockTransport;

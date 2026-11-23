@@ -34,6 +34,7 @@
   },
   "peerDependencies": {
     "@makaio/bus-core": "*",
+    "@makaio/framework": "workspace:*",
     "react": "^19.2.6",
     "react-dom": "^19.2.6"
   },

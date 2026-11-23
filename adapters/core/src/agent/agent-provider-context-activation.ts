@@ -1,5 +1,6 @@
 import type { IMakaioBus } from '@makaio/bus-core';
 import type { ProviderContext } from '@makaio/contracts';
+import type { CallContext } from '@makaio/core';
 import {
   prepareProviderContextActivation,
   type ProviderContextActivationTransaction,
@@ -19,22 +20,27 @@ export class AgentProviderContextActivation {
 
   /**
    * Prepare the selected managed account, if the provider context requires one.
+   * @param call - Call context of the message requesting activation
    * @param bus - Host-local bus owning account-manager transactions
    * @param providerContext - Provider context selected for the replacement
    * @returns Prepared activation owner, including a no-op owner for non-managed auth
    */
   public static async prepare(
+    call: CallContext,
     bus: IMakaioBus,
     providerContext: ProviderContext,
   ): Promise<AgentProviderContextActivation> {
-    return new AgentProviderContextActivation(await prepareProviderContextActivation(bus, providerContext));
+    return new AgentProviderContextActivation(await prepareProviderContextActivation(call, bus, providerContext));
   }
 
-  /** Commit the prepared account immediately before connector publication. */
-  public async commit(): Promise<void> {
+  /**
+   * Commit the prepared account immediately before connector publication.
+   * @param call - Call context of the message requesting commit
+   */
+  public async commit(call: CallContext): Promise<void> {
     if (this.transaction === undefined) return;
     try {
-      await this.transaction.commit();
+      await this.transaction.commit(call);
     } finally {
       // A commit attempt is terminal: the account manager performs its own
       // rollback when commit cannot persist the prepared native state.
@@ -42,11 +48,14 @@ export class AgentProviderContextActivation {
     }
   }
 
-  /** Roll back a prepared account that has not reached a commit attempt. */
-  public async rollbackPending(): Promise<void> {
+  /**
+   * Roll back a prepared account that has not reached a commit attempt.
+   * @param call - Call context of the message whose activation failed
+   */
+  public async rollbackPending(call: CallContext): Promise<void> {
     if (this.transaction === undefined || this.terminal) return;
     try {
-      await this.transaction.rollback();
+      await this.transaction.rollback(call);
     } finally {
       this.terminal = true;
     }

@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
 import { McpSubjects } from '@makaio/contracts';
+import type { CallContext } from '@makaio/contracts';
+import { createTestCall } from '@makaio/test-utils';
 import { ClaudeCliSession } from '../session.js';
 
 /**
@@ -34,9 +36,10 @@ type McpConfigResult = { config: string; hasBridge: boolean } | undefined;
  */
 function registerMcpContextForTest(session: ClaudeCliSession, sessionIdForMcp: string): Promise<McpConfigResult> {
   const register = Reflect.get(session, 'registerMcpContextAndBuildConfig') as (
+    call: CallContext,
     sessionIdForMcp: string,
   ) => Promise<McpConfigResult>;
-  return register.call(session, sessionIdForMcp);
+  return register.call(session, createTestCall(), sessionIdForMcp);
 }
 
 /**

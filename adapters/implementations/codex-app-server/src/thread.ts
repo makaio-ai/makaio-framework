@@ -10,6 +10,7 @@
  * - No separate "session_configured" event - threadId comes from thread/started
  */
 
+import type { CallContext } from '@makaio/contracts';
 import type { CodexAppServerBus } from './namespaces/index.js';
 import { CodexAppServerSubjects } from './namespaces/index.js';
 
@@ -127,13 +128,14 @@ export class CodexAppServerThread {
   /**
    * Handle thread/started notification.
    * Sets threadId and transitions to active state.
+   * @param call - Call of the message causing the update
    * @param threadId - Thread ID from thread/started notification
    */
-  public async handleThreadStarted(threadId: string): Promise<void> {
+  public async handleThreadStarted(call: CallContext, threadId: string): Promise<void> {
     this._threadId = threadId;
     this._state = 'active';
 
-    await this.bus.emit(CodexAppServerSubjects.thread_started, {
+    await this.bus.emit(call, CodexAppServerSubjects.thread_started, {
       agentId: this.agentId,
       threadId: this._threadId,
       timestamp: Date.now(),
@@ -143,16 +145,20 @@ export class CodexAppServerThread {
   /**
    * Handle thread completion or archival.
    * Transitions state and emits completion event.
+   * @param call - Call of the message causing the update
    * @param newState - New thread state (completed or archived)
    */
-  public async handleThreadCompleted(newState: 'completed' | 'archived' = 'completed'): Promise<void> {
+  public async handleThreadCompleted(
+    call: CallContext,
+    newState: 'completed' | 'archived' = 'completed',
+  ): Promise<void> {
     if (!this._threadId) {
       throw new Error('Cannot complete thread: threadId not set');
     }
 
     this._state = newState;
 
-    await this.bus.emit(CodexAppServerSubjects.thread_completed, {
+    await this.bus.emit(call, CodexAppServerSubjects.thread_completed, {
       agentId: this.agentId,
       threadId: this._threadId,
       timestamp: Date.now(),
@@ -162,6 +168,7 @@ export class CodexAppServerThread {
   /**
    * Handle thread/tokenUsage/updated notification.
    * Updates token usage tracking.
+   * @param call - Call of the message causing the update
    * @param promptTokens - Prompt/input tokens used
    * @param inputCachedTokens - Cached input tokens reused for this update
    * @param completionTokens - Completion/output tokens used
@@ -170,6 +177,7 @@ export class CodexAppServerThread {
    * @param modelContextWindow - Optional model context window size
    */
   public async handleTokenUsageUpdated(
+    call: CallContext,
     promptTokens: number,
     inputCachedTokens: number,
     completionTokens: number,
@@ -186,7 +194,7 @@ export class CodexAppServerThread {
       modelContextWindow,
     };
 
-    await this.bus.emit(CodexAppServerSubjects.token_usage, {
+    await this.bus.emit(call, CodexAppServerSubjects.token_usage, {
       agentId: this.agentId,
       threadId: this._threadId ?? '',
       promptTokens,

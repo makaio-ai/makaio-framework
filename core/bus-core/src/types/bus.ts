@@ -5,10 +5,11 @@ import type { TransportRegistry, NamespaceRegistry } from '../registries/index.j
 import type {
   AnyHandler,
   BusNamespaceDefinition,
+  CallContext,
   EventHandler,
   FilterablePayloadIntersection,
   HandlerForSubjectDefinition,
-  OptionalResult,
+  OwnWorkPurpose,
   PayloadFilter,
   RegistrableBusNamespaceDefinition,
   RequestHandler,
@@ -16,46 +17,23 @@ import type {
   SubjectRecord,
   SubjectRecordFromSchemaRecord,
   SubjectSchema,
-  TransportReceiveContext,
   TypedPayloadFilter,
-  WildcardSubject,
 } from '@makaio/core';
 import type { OnceOptions } from '../methods/once.js';
 import type { BusTransport } from './transports.js';
 import type { SubscriptionDeliveryClass } from './transports.js';
-import type { BroadcastResult } from '../methods/broadcast.js';
+import type { BusSendOperations } from './bus-send.js';
 
 import type { ScopedBus } from '../scoped-bus.js';
 import type { IFilteredBus } from '../filtered-bus.js';
 import type { BusNamespace } from './namespace.js';
-import type { EmitOptions, OnOptions, RequestOptions } from './options.js';
+import type { OnOptions } from './options.js';
 
 import type { HandlerEntry } from './handler-entry.js';
 import type { InterceptOptions, InterceptorEntry, InterceptorHandler } from './interceptor.js';
+import type { BusMessageObserver } from './observed-bus-message.js';
 
-/**
- * Production-capable observation record for local bus API entrypoints.
- *
- * Unlike `AnyMessageContext`, this is not debug-only and is safe for runtime
- * services that need to derive sanitized telemetry.
- */
-export interface ObservedBusMessage {
-  readonly type: 'event' | 'request' | 'broadcast';
-  readonly subject: string;
-  readonly namespace: string;
-  readonly payload: unknown;
-  readonly messageId: string;
-  readonly correlationId?: string;
-  readonly transport?: TransportReceiveContext;
-  /** True when the originating bus call was explicitly or inherently local-only. */
-  readonly localOnly?: boolean;
-}
-
-/**
- * Observer callback invoked for each local bus API message after validation
- * has succeeded. Observers must not mutate the payload.
- */
-export type BusMessageObserver = (message: ObservedBusMessage) => void | Promise<void>;
+export type { ObservedBusMessage, BusMessageObserver } from './observed-bus-message.js';
 
 /**
  * Internal bus context containing handler registries and shared state.
@@ -313,195 +291,8 @@ export type IMakaioBus<
     subject: IsChannel extends true ? never : IsRequest extends false ? Subject : never,
     options?: Subject extends SubjectDefinition ? OnceOptions<Subject> : never,
   ): Promise<Subject extends SubjectDefinition ? Parameters<HandlerForSubjectDefinition<Subject>>[0] : never>;
-  /**
-   * Emit an event to all registered handlers.
-   *
-   * All local handlers execute in parallel with fail-fast settlement: on
-   * success the returned promise resolves only after every local handler has
-   * settled and every transport send has been attempted, but the first
-   * handler rejection rejects it immediately — slower siblings keep running
-   * unawaited, and no transport send is attempted. `await emit(...)` is
-   * therefore an ordering guarantee only for the success path; after a
-   * rejection, the remaining handlers' effects may not have settled.
-   *
-   * Handler errors are logged and never stop sibling handlers, but they DO
-   * reject the returned promise. Callers that emit for ordering rather than for
-   * correctness must therefore either ignore the promise (`void emit(...)`) or
-   * catch it — an awaited emit propagates a consumer's failure back to the
-   * producer.
-   *
-   * Remote handlers are not awaited: only delivery to the transport is, so the
-   * ordering guarantee is local to this bus instance.
-   *
-   * **Note:** You cannot emit to wildcard patterns. Use concrete subject keys only.
-   * Handlers registered with wildcards will still receive the event if it matches.
-   * @param subject - Concrete event subject (wildcards not allowed)
-   * @param payload - Event payload
-   * @param options - Emit options (messageId, correlationId, transports)
-   *
-   * ## Transport Routing
-   * - `transports: undefined` - Send to ALL registered transports (default)
-   * - `transports: []` - Local only, don't send to any transports
-   * - `transports: ['ws', 'nats']` - Send only to specified transports
-   * @example
-   * ```typescript
-   * const { subjects: AgentSubjects } = MakaioBus.registerNamespace('agent', {
-   *   started: z.object({ agentId: z.string() }),
-   * });
-   *
-   * // Send to all transports (default)
-   * await emit(AgentSubjects.started, { agentId: 'agent-123' });
-   *
-   * // Local only, no transports
-   * await emit(
-   *   AgentSubjects.started,
-   *   { agentId: 'agent-123' },
-   *   { transports: [] }
-   * );
-   *
-   * // Send to specific transports
-   * await emit(
-   *   AgentSubjects.started,
-   *   { agentId: 'agent-123' },
-   *   { transports: ['websocket'] }
-   * );
-   *
-   * // With tracking IDs:
-   * await emit(
-   *   AgentSubjects.started,
-   *   { agentId: 'agent-123' },
-   *   { correlationId: 'user-action-123' }
-   * );
-   * ```
-   */
-  emit<
-    Subject extends Subjects & StrictNamespace,
-    IsRequest = Subject['$meta']['isRequest'],
-    IsWildcard = Subject['subject'] extends WildcardSubject ? true : false,
-    IsChannel = Subject['$meta']['channel'],
-  >(
-    subject: IsChannel extends true
-      ? never
-      : IsRequest extends false
-        ? IsWildcard extends false
-          ? Subject
-          : never
-        : never,
-    payload: Subject['$meta']['payload'],
-    options?: EmitOptions,
-  ): Promise<void>;
-  /**
-   * Execute a request and wait for a response.
-   *
-   * Requests follow a middleware chain pattern - handlers are called in order
-   * until one calls setResult() or all handlers complete.
-   *
-   * **Note:** You cannot request via wildcard patterns. Use concrete subject keys only.
-   * Handlers registered with wildcards will still match if the subject matches their pattern.
-   * @param subject - Concrete request subject (wildcards not allowed)
-   * @param payload - Request payload
-   * @param options - Request options (timeout, correlationId, transports)
-   * @returns Response value
-   * @throws \{NoHandlerError\} If no handler is registered
-   * @throws \{TimeoutError\} If request times out
-   * @throws \{ValidationError\} If payload validation fails
-   * @throws \{RequestError\} If handler throws an error
-   *
-   * ## Transport Routing
-   * - `transports: undefined` - Send to ALL registered transports (default)
-   * - `transports: []` - Local only, don't send to any transports
-   * - `transports: ['ws', 'nats']` - Send only to specified transports
-   * @example
-   * ```typescript
-   * // ✅ Concrete subject
-   * const result = await request(
-   *   AgentSubjects.toolApprove,
-   *   { toolName: 'deleteFile', args: {}, toolCallId: 'call_123' },
-   *   { timeout: 10000 }
-   * );
-   * console.debug(result.approved);
-   *
-   * // ❌ Cannot use wildcards
-   * // await request('agent.*', { ... }); // Type error
-   *
-   * // With specific transports
-   * const result = await request(
-   *   AgentSubjects.toolApprove,
-   *   { toolName: 'deleteFile', args: {}, toolCallId: 'call_123' },
-   *   { transports: ['websocket'], timeout: 10000 }
-   * );
-   * ```
-   */
-  request<
-    Subject extends Subjects & StrictNamespace,
-    IsRequest = Subject['$meta']['isRequest'],
-    IsChannel = Subject['$meta']['channel'],
-  >(
-    subject: IsChannel extends true ? never : IsRequest extends true ? Subject : never,
-    payload: Subject['$meta']['payload']['request'],
-    options?: RequestOptions,
-  ): Promise<IsRequest extends true ? Subject['$meta']['payload']['response'] : never>;
-
-  /**
-   * Execute a request, returning a discriminated union instead of throwing for missing handlers.
-   *
-   * Use for optional services. Only NoHandlerError is caught - other errors propagate.
-   * @see {@link OptionalResult} for return type details
-   */
-  requestOptional<
-    Subject extends Subjects & StrictNamespace,
-    IsRequest = Subject['$meta']['isRequest'],
-    IsChannel = Subject['$meta']['channel'],
-  >(
-    subject: IsChannel extends true ? never : IsRequest extends true ? Subject : never,
-    payload: Subject['$meta']['payload']['request'],
-    options?: RequestOptions,
-  ): Promise<OptionalResult<IsRequest extends true ? Subject['$meta']['payload']['response'] : never>>;
-
-  /**
-   * Execute a broadcast request and collect responses from ALL handlers.
-   *
-   * Unlike `request()` which uses a middleware chain and returns the first result,
-   * `broadcast()` executes all handlers in parallel and aggregates their responses.
-   *
-   * Use for discovery patterns where multiple nodes may respond (e.g., fs.listSources).
-   *
-   * **Note:** You cannot broadcast via wildcard patterns. Use concrete subject keys only.
-   * Handlers registered with wildcards will still match if the subject matches their pattern.
-   *
-   * **Handler Usage:**
-   * Handlers should call `ctx.identify(nodeId)` before `ctx.setResult()` to tag their response.
-   * If `identify()` is not called, the response is tagged as 'anonymous'.
-   * @param subject - Concrete request subject (wildcards not allowed)
-   * @param payload - Request payload
-   * @param options - Request options (timeout, correlationId)
-   * @returns Array of \{ nodeId, payload \} responses from all handlers
-   * @example
-   * ```typescript
-   * // Discover all filesystem sources from all nodes
-   * const results = await MakaioBus.broadcast(FileSystemSubjects.listSources, \{\});
-   * // results: [
-   * //   \{ nodeId: 'local', payload: \{ sources: [...] \} \},
-   * //   \{ nodeId: 'container-1', payload: \{ sources: [...] \} \},
-   * // ]
-   *
-   * // Aggregate sources
-   * const allSources = results.flatMap(r => r.payload.sources);
-   * ```
-   */
-  broadcast<
-    Subject extends Subjects & StrictNamespace,
-    IsRequest = Subject['$meta']['isRequest'],
-    IsChannel = Subject['$meta']['channel'],
-  >(
-    subject: IsChannel extends true ? never : IsRequest extends true ? Subject : never,
-    payload: Subject['$meta']['payload']['request'],
-    options?: RequestOptions,
-  ): Promise<BroadcastResult<IsRequest extends true ? Subject['$meta']['payload']['response'] : never>[]>;
-
   scoped: <Domain extends string, Subjects extends SubjectRecord, F, Sc extends Record<string, SubjectSchema>>(
     input: BusNamespace<Domain, Subjects, F, Sc>,
-    context?: MakaioBusContext,
   ) => ScopedBus<Domain>;
 
   /**
@@ -565,7 +356,7 @@ export type IMakaioBus<
   /**
    * Register a transport by its name property.
    *
-   * Convenience method that delegates to `getContext().transportRegistry.registerTransport()`.
+   * Convenience method that delegates to the transport registry's `registerTransport()`.
    * The transport's `name` property is used as the registry key.
    * @param transport - Transport to register
    * @returns Registration object with `unregister` and `ready` promise
@@ -627,7 +418,15 @@ export type IMakaioBus<
    */
   connect(options?: ConnectOptions): Promise<void>;
 
-  getContext(): MakaioBusContext;
+  /**
+   * Acquire the call context for work this bus instance's carrier starts itself.
+   *
+   * The only way to obtain the carrier's own context. Sending with it requires this
+   * instance (a context acquired from another carrier's instance is rejected).
+   * @param purpose - Why the carrier works without an incoming message
+   * @returns The carrier's own call context for that purpose
+   */
+  own(purpose: OwnWorkPurpose): CallContext;
 
   /**
    * Register a namespace from a `BusNamespaceDefinition` created by `createBusNamespace()`.
@@ -677,4 +476,4 @@ export type IMakaioBus<
     subject: SD,
     extensions: Ext,
   ): import('../extend-subject.js').ExtendedSubjectDefinition<SD, Ext>;
-};
+} & BusSendOperations<Subjects, StrictNamespace>;

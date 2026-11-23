@@ -1,4 +1,5 @@
 import type { IMakaioBus } from '@makaio/bus-core';
+import type { CallContext } from '@makaio/core';
 import { AdapterSubsystemSubjects } from '@makaio/services-core/adapter-subsystem';
 import type { AdapterRuntimeSnapshot, AdapterRuntimeSnapshotErrorCode } from '@makaio/services-core/adapter-subsystem';
 import { bindProviderAuth, type BoundProviderAuthContext } from './resolve-adapter-auth.js';
@@ -29,15 +30,17 @@ export class AdapterRuntimeSnapshotError extends Error {
  * The response carries refs and runtime-only delivery declarations but never
  * plaintext. Binding remains in Adapter Core so the lower subsystem does not
  * depend on this host-layer package.
+ * @param call - Call context of the work this snapshot resolution belongs to
  * @param bus - Runtime bus serving the adapter subsystem
  * @param input - Exact adapter name and provider config selection
  * @returns Atomic runtime metadata plus immutable refs-only auth binding
  */
 export async function resolveAdapterRuntimeSnapshot(
+  call: CallContext,
   bus: IMakaioBus,
   input: { readonly adapterName: string; readonly providerConfigId: string },
 ): Promise<BoundAdapterRuntimeSnapshot> {
-  const resolution = await bus.request(AdapterSubsystemSubjects.resolveAdapterRuntimeSnapshot, input);
+  const resolution = await bus.request(call, AdapterSubsystemSubjects.resolveAdapterRuntimeSnapshot, input);
   if (resolution.status === 'error') {
     throw new AdapterRuntimeSnapshotError(resolution.code);
   }

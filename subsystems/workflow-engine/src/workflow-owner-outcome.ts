@@ -1,3 +1,4 @@
+import type { CallContext } from '@makaio/core';
 import type { OutcomeAcceptance, WorkflowExecution, WorkflowRunResult } from '@makaio/contracts';
 import type { OutcomeConvergenceInput } from './outcome-convergence.js';
 import type {
@@ -14,22 +15,30 @@ import {
 import { parkExecution } from './workflow-execution-pause.js';
 import { WorkflowStorageSubjects } from './storage/namespace.js';
 
-/** Existing workflow projections used only after owner policy permits them. */
+/**
+ * Existing workflow projections used only after owner policy permits them.
+ *
+ * Each projection takes the call of the outcome it projects first, so one bundle can
+ * serve several submissions without finalizing one run under another run's call.
+ */
 export interface WorkflowOwnerOutcomeDeps {
   /** Shared owner lifecycle serialization and storage. */
   readonly lifecycle: FinalizerDeps;
   /** Accept a terminal workflow result through its existing finalizer. */
   readonly acceptTerminalResult: (
+    call: CallContext,
     executionId: string,
     result: WorkflowRunResult,
   ) => Promise<{ accepted: boolean; status: WorkflowExecution['status'] }>;
   /** Preserve a technical failure and converge its owner. */
   readonly acceptTechnicalFailure: (
+    call: CallContext,
     executionId: string,
     failure: WorkflowAttemptTechnicalFailure,
   ) => Promise<{ accepted: boolean; status: WorkflowExecution['status'] }>;
   /** Converge an observed cancellation, not a request to stop. */
   readonly acceptCancellation: (
+    call: CallContext,
     executionId: string,
     cancellation: WorkflowAttemptCancellation,
   ) => Promise<{ accepted: boolean; status: WorkflowExecution['status'] }>;
@@ -37,12 +46,14 @@ export interface WorkflowOwnerOutcomeDeps {
 
 /**
  * Resolve an already terminal runner result through existing success-finalizer recovery.
+ * @param call - Call context of the work that replays the runner result.
  * @param deps - Owner storage and registered success finalizers.
  * @param execution - Durable execution read before result acceptance.
  * @param result - Correlated terminal workflow result.
  * @returns Compatible terminal status, or undefined for a not-yet-terminal owner.
  */
 export async function resolveAuthorityRunnerReplay(
+  call: CallContext,
   deps: FinalizerDeps,
   execution: WorkflowExecution,
   result: WorkflowRunResult,
@@ -51,8 +62,8 @@ export async function resolveAuthorityRunnerReplay(
     if (result.status !== 'completed') {
       throw new Error('authority runner result conflicts with terminal execution');
     }
-    await recoverSuccessFinalizations(deps);
-    const replayed = await deps.bus.request(WorkflowStorageSubjects.getExecution, { executionId: execution.id });
+    await recoverSuccessFinalizations(call, deps);
+    const replayed = await deps.bus.request(call, WorkflowStorageSubjects.getExecution, { executionId: execution.id });
     if (!replayed.execution) throw new Error('Authority runner success finalization execution is missing');
     if (!isAcceptedRunnerResultStatus(replayed.execution.status, result.status)) {
       throw new Error('authority runner result conflicts with terminal execution');
@@ -69,13 +80,18 @@ export async function resolveAuthorityRunnerReplay(
 
 /**
  * Read the owner after any already pending lifecycle decision has committed.
+ * @param call - Call context of the work that reads the owner.
  * @param deps - Owner lifecycle dependencies.
  * @param input - Canonical correlated outcome and its immutable observation.
  * @returns Current durable owner state.
  */
-async function readOwner(deps: FinalizerDeps, input: OutcomeConvergenceInput<WorkflowAttemptOutcome>) {
+async function readOwner(
+  call: CallContext,
+  deps: FinalizerDeps,
+  input: OutcomeConvergenceInput<WorkflowAttemptOutcome>,
+) {
   return withExecutionDurableTransition(deps, input.executionId, async () => {
-    const { execution } = await deps.bus.request(WorkflowStorageSubjects.getExecution, {
+    const { execution } = await deps.bus.request(call, WorkflowStorageSubjects.getExecution, {
       executionId: input.executionId,
     });
     if (!execution) throw new Error(`Authority execution not found: ${input.executionId}`);
@@ -92,15 +108,17 @@ async function readOwner(deps: FinalizerDeps, input: OutcomeConvergenceInput<Wor
 /**
  * Accept a technical fact without allowing it to reverse a durable owner Cancel.
  * The observation is frozen at commit; a later cleanup request never rewrites it.
+ * @param call - Call context of the submission that carries the outcome.
  * @param deps - Existing owner projections and lifecycle ordering.
  * @param input - Canonical outcome, immutable control observation and identity.
  * @returns Whether this fact projected lifecycle state or was only recorded.
  */
 export async function acceptWorkflowOwnerOutcome(
+  call: CallContext,
   deps: WorkflowOwnerOutcomeDeps,
   input: OutcomeConvergenceInput<WorkflowAttemptOutcome>,
 ): Promise<OutcomeAcceptance> {
-  const owner = await readOwner(deps.lifecycle, input);
+  const owner = await readOwner(call, deps.lifecycle, input);
   const cancellation =
     'kind' in input.outcome ? input.outcome.kind === 'cancelled' : input.outcome.status === 'cancelled';
   if (owner.status === 'cancelled' && !cancellation) return 'recorded-only';
@@ -116,10 +134,10 @@ export async function acceptWorkflowOwnerOutcome(
     // existing finalizer; a success/failure fact cannot invent a stopped worker.
     throw new Error(`Workflow owner cancellation is not durably settled for '${input.executionId}'`);
   }
-  const accepted = await projectOutcome(deps, input);
+  const accepted = await projectOutcome(call, deps, input);
   // Projection functions use the same queue themselves. Do not hold its lock
   // while calling them: Cancel may win that gap and explicitly refuse projection.
-  const settled = await readOwner(deps.lifecycle, input);
+  const settled = await readOwner(call, deps.lifecycle, input);
   if (settled.status === 'cancelled' && !cancellation) return 'recorded-only';
   if (!accepted) throw new Error(`Workflow outcome did not converge execution '${input.executionId}'`);
   return 'projected';
@@ -127,19 +145,21 @@ export async function acceptWorkflowOwnerOutcome(
 
 /**
  * Delegate to the existing owner projection without fabricating workflow results.
+ * @param call - Call context bound into the finalizer parked-result projection.
  * @param deps - Owner's projection callbacks.
  * @param input - Committed technical outcome.
  * @returns Whether the corresponding projection accepted the fact.
  */
 async function projectOutcome(
+  call: CallContext,
   deps: WorkflowOwnerOutcomeDeps,
   input: OutcomeConvergenceInput<WorkflowAttemptOutcome>,
 ): Promise<boolean> {
   if ('kind' in input.outcome) {
     const accepted =
       input.outcome.kind === 'cancelled'
-        ? await deps.acceptCancellation(input.executionId, input.outcome)
-        : await deps.acceptTechnicalFailure(input.executionId, input.outcome);
+        ? await deps.acceptCancellation(call, input.executionId, input.outcome)
+        : await deps.acceptTechnicalFailure(call, input.executionId, input.outcome);
     return (
       accepted.accepted &&
       (input.outcome.kind === 'cancelled'
@@ -148,8 +168,8 @@ async function projectOutcome(
     );
   }
   if (input.outcome.status === 'paused') {
-    return parkExecution(deps.lifecycle, input.outcome);
+    return parkExecution(call, deps.lifecycle, input.outcome);
   }
-  const accepted = await deps.acceptTerminalResult(input.executionId, input.outcome);
+  const accepted = await deps.acceptTerminalResult(call, input.executionId, input.outcome);
   return accepted.accepted && isAcceptedRunnerResultStatus(accepted.status, input.outcome.status);
 }

@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
 import { z } from 'zod';
-import { createBusInstance } from '@makaio/bus-core';
+import { ForeignOwnContextError, createBusInstance } from '@makaio/bus-core';
+import { mintCallContext } from '@makaio/bus-core/kernel-api';
 import type { IMakaioBus } from '@makaio/bus-core';
 import {
   defineAutomationTrigger,
@@ -72,7 +73,10 @@ async function withinTimeout<TResult>(operation: Promise<TResult>, label: string
 // ---------------------------------------------------------------------------
 
 /** Emit channel signature exposed by a probe for direct source simulation. */
-type ProbeEmit = (payload: JsonValue, metadata?: { readonly correlationId?: string }) => Promise<void>;
+type ProbeEmit = (
+  payload: JsonValue,
+  metadata?: Parameters<AutomationTriggerActivationContext<unknown>['emit']>[1],
+) => Promise<void>;
 
 /** Activation signature of a probe, matching the registry-boundary contract. */
 type ProbeActivate = (
@@ -524,6 +528,31 @@ describe('AutomationTriggerBindingRuntime', () => {
 
       await assignment.emit({ issueId: 'SHOP-1' });
       expect(listener).toHaveBeenCalledTimes(1);
+    });
+
+    it('rejects an own context as the causing call at the emitting trigger', async () => {
+      const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+      const listener = vi.fn();
+      await runtime.subscribe({ kind: 'demo.assignment', params: { projectKey: 'shop' } }, listener);
+
+      await expect(assignment.emit({ issueId: 'SHOP-1' }, { call: bus.own('observer') })).rejects.toThrow(
+        ForeignOwnContextError,
+      );
+      expect(listener).not.toHaveBeenCalled();
+      consoleError.mockRestore();
+    });
+
+    it('carries a received call to the listener', async () => {
+      const listener = vi.fn<AutomationTriggerListener>();
+      await runtime.subscribe({ kind: 'demo.assignment', params: { projectKey: 'shop' } }, listener);
+      const received = mintCallContext({
+        caller: { kind: 'acme.remote', id: 'remote-1' },
+        principal: { kind: 'acme.user', id: 'person-a' },
+      });
+
+      await assignment.emit({ issueId: 'SHOP-1' }, { call: received });
+
+      expect(firstEvent(listener).call).toBe(received);
     });
 
     it('isolates a failing listener from its siblings and keeps the source alive', async () => {

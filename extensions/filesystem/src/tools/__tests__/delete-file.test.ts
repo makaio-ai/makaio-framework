@@ -2,6 +2,7 @@ import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { createMakaioContext } from '@makaio/core';
+import { createTestCall } from '@makaio/test-utils';
 import { deleteFileTool } from '../delete-file.js';
 import { useTempDir } from './test-helpers.js';
 
@@ -13,7 +14,7 @@ describe('delete_file tool', () => {
     const filePath = path.join(dir, 'target.txt');
     await fs.writeFile(filePath, 'content');
 
-    const context = createMakaioContext({ cwd: dir });
+    const context = { ...createMakaioContext({ cwd: dir }), call: createTestCall() };
     const result = await deleteFileTool.execute({ path: filePath }, context);
 
     expect(result.success).toBe(true);
@@ -32,7 +33,7 @@ describe('delete_file tool', () => {
     await fs.writeFile(targetPath, 'content');
     await fs.symlink(targetPath, linkPath);
 
-    const context = createMakaioContext({ cwd: dir });
+    const context = { ...createMakaioContext({ cwd: dir }), call: createTestCall() };
     const result = await deleteFileTool.execute({ path: linkPath }, context);
 
     expect(result.success).toBe(false);
@@ -49,7 +50,7 @@ describe('delete_file tool', () => {
     const dir = await createTempDir();
     const missingPath = path.join(dir, 'missing.txt');
 
-    const context = createMakaioContext({ cwd: dir });
+    const context = { ...createMakaioContext({ cwd: dir }), call: createTestCall() };
     const result = await deleteFileTool.execute({ path: missingPath }, context);
 
     expect(result.success).toBe(false);
@@ -65,7 +66,7 @@ describe('delete_file tool', () => {
     const subdirPath = path.join(dir, 'subdir');
     await fs.mkdir(subdirPath);
 
-    const context = createMakaioContext({ cwd: dir });
+    const context = { ...createMakaioContext({ cwd: dir }), call: createTestCall() };
     const result = await deleteFileTool.execute({ path: subdirPath }, context);
 
     expect(result.success).toBe(false);

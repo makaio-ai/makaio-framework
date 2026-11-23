@@ -1,4 +1,5 @@
 import type { IMakaioBus } from '@makaio/bus-core';
+import type { CallContext } from '@makaio/core';
 import { CredentialSubjects, SessionSubjects, type ResolvedProviderContext } from '@makaio/contracts';
 import { nextCredentialChangeSequence } from '@makaio/services-core/credential-change';
 import { resolveRuntimeProviderContext } from '@makaio/services-core/provider-context';
@@ -8,18 +9,20 @@ import { authFollowsActivatedAccount, resolveProviderConfigsForAccount } from '.
 /**
  * Fan credential rotation out to active sessions using normalized inferred
  * configs for this client and account.
+ * @param call - Call context of the handled message this fan-out serves.
  * @param bus - Bus used for config/session discovery and fan-out.
  * @param clientId - Account-manager client identifier.
  * @param activeAccountId - Newly active account ID.
  */
 export async function emitCredentialChangedForClient(
+  call: CallContext,
   bus: IMakaioBus,
   clientId: string,
   activeAccountId: string,
 ): Promise<void> {
   const [relevantConfigs, sessionListResult] = await Promise.all([
-    resolveProviderConfigsForAccount(bus, clientId, activeAccountId),
-    bus.requestOptional(SessionSubjects.list, { status: 'active' }),
+    resolveProviderConfigsForAccount(call, bus, clientId, activeAccountId),
+    bus.requestOptional(call, SessionSubjects.list, { status: 'active' }),
   ]);
 
   if (relevantConfigs.length === 0) {
@@ -55,7 +58,7 @@ export async function emitCredentialChangedForClient(
     for (const [adapterName, affectedSessions] of sessionsByAdapter) {
       let providerContext: ResolvedProviderContext;
       try {
-        providerContext = await resolveRuntimeProviderContext(bus, {
+        providerContext = await resolveRuntimeProviderContext(call, bus, {
           adapterName,
           providerConfigId: config.providerConfigId,
         });
@@ -80,7 +83,7 @@ export async function emitCredentialChangedForClient(
         deliveredDispatches.add(dispatchKey);
 
         await bus
-          .request(CredentialSubjects.changed, {
+          .request(call, CredentialSubjects.changed, {
             sessionId: session.sessionId,
             changeSequence,
             providerContext,

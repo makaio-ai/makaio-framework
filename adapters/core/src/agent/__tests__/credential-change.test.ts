@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
 import { AgentSubjects, CredentialSubjects, type ResolvedProviderContext } from '@makaio/contracts';
 import { buildStoredCredentialRef } from '@makaio/contracts/config';
-import { createMockScopedBus } from '@makaio/test-utils';
+import { createMockScopedBus, createTestCall } from '@makaio/test-utils';
 
 import type { AIAgentConfig } from '../types.js';
 import { AgentTeardownArbiter } from '../agent-teardown-arbiter.js';
@@ -166,7 +166,7 @@ describe('AIAgent credential.change handler', () => {
       initialModel: 'test-model-1',
       initialCwd: '/test/cwd',
     });
-    await ctx.agent.init();
+    await ctx.agent.init(createTestCall());
 
     await expect(sendCredentialChange()).resolves.toEqual({ success: true, swapped: true });
     expect(ctx.createdConnectors).toHaveLength(2);
@@ -179,7 +179,7 @@ describe('AIAgent credential.change handler', () => {
       initialModel: 'test-model-1',
       initialCwd: '/test/cwd',
     });
-    await ctx.agent.init();
+    await ctx.agent.init(createTestCall());
     persistenceCleanup();
     persistenceCleanup = () => undefined;
 
@@ -196,7 +196,7 @@ describe('AIAgent credential.change handler', () => {
       mockConnectorFactory: ctx.mockFactory,
       providerContext: makeExplicitContext('other-config'),
     });
-    await ctx.agent.init();
+    await ctx.agent.init(createTestCall());
 
     await expect(sendCredentialChange()).resolves.toEqual({ success: false, reason: 'provider_mismatch' });
     expect(ctx.createdConnectors).toHaveLength(1);
@@ -204,7 +204,7 @@ describe('AIAgent credential.change handler', () => {
 
   it('rejects credential changes while a turn is active', async () => {
     ctx.agent = createTestableAgent({ agentId: TEST_AGENT_ID, mockConnectorFactory: ctx.mockFactory });
-    await ctx.agent.init();
+    await ctx.agent.init(createTestCall());
     ctx.agent.currentConnector.setProcessingState('processing_started');
 
     await expect(sendCredentialChange()).resolves.toEqual({ success: false, reason: 'turn_active' });
@@ -213,7 +213,7 @@ describe('AIAgent credential.change handler', () => {
 
   it('ignores a stale sequence after a newer normalized selection was applied', async () => {
     ctx.agent = createTestableAgent({ agentId: TEST_AGENT_ID, mockConnectorFactory: ctx.mockFactory });
-    await ctx.agent.init();
+    await ctx.agent.init(createTestCall());
 
     await expect(
       sendCredentialChange({ changeSequence: 2, providerContext: makeExplicitContext('test-config', 'newer') }),
@@ -226,7 +226,7 @@ describe('AIAgent credential.change handler', () => {
 
   it('rejects an older in-flight account selection once a newer sequence supersedes it', async () => {
     ctx.agent = createTestableAgent({ agentId: TEST_AGENT_ID, mockConnectorFactory: ctx.mockFactory });
-    await ctx.agent.init();
+    await ctx.agent.init(createTestCall());
     const firstActivationStarted = createDeferred();
     const releaseFirstActivation = createDeferred();
     const rolledBackAccounts: string[] = [];
@@ -265,7 +265,7 @@ describe('AIAgent credential.change handler', () => {
 
   it('prepares account state before replacement creation and commits only after initialization', async () => {
     ctx.agent = createTestableAgent({ agentId: TEST_AGENT_ID, mockConnectorFactory: ctx.mockFactory });
-    await ctx.agent.init();
+    await ctx.agent.init(createTestCall());
     const order: string[] = [];
     const providerContext = makeInferredContext('account-1');
     registerActivationTransaction(
@@ -299,7 +299,7 @@ describe('AIAgent credential.change handler', () => {
 
   it('returns a typed credential-free failure when account activation fails', async () => {
     ctx.agent = createTestableAgent({ agentId: TEST_AGENT_ID, mockConnectorFactory: ctx.mockFactory });
-    await ctx.agent.init();
+    await ctx.agent.init(createTestCall());
     registerActivationTransaction({ prepare: () => 'account-not-found' }, ctx.cleanupFns);
 
     await expect(
@@ -310,7 +310,7 @@ describe('AIAgent credential.change handler', () => {
 
   it('rolls back when connector idleness changes after account preparation', async () => {
     ctx.agent = createTestableAgent({ agentId: TEST_AGENT_ID, mockConnectorFactory: ctx.mockFactory });
-    await ctx.agent.init();
+    await ctx.agent.init(createTestCall());
     const agent = ctx.agent;
     const rollback = vi.fn();
     registerActivationTransaction(
@@ -333,7 +333,7 @@ describe('AIAgent credential.change handler', () => {
 
   it('holds a turn arriving during account preparation until the transaction commits', async () => {
     ctx.agent = createTestableAgent({ agentId: TEST_AGENT_ID, mockConnectorFactory: ctx.mockFactory });
-    await ctx.agent.init();
+    await ctx.agent.init(createTestCall());
     const prepareStarted = createDeferred();
     const releasePrepare = createDeferred();
     registerActivationTransaction(
@@ -365,7 +365,7 @@ describe('AIAgent credential.change handler', () => {
 
   it('holds a turn while the replacement initializes and dispatches it on the committed primary', async () => {
     ctx.agent = createTestableAgent({ agentId: TEST_AGENT_ID, mockConnectorFactory: ctx.mockFactory });
-    await ctx.agent.init();
+    await ctx.agent.init(createTestCall());
     registerActivationTransaction({}, ctx.cleanupFns);
     const replacementInitializeStarted = createDeferred();
     const releaseReplacementInitialize = createDeferred();
@@ -398,7 +398,7 @@ describe('AIAgent credential.change handler', () => {
 
   it('rolls back an initialized replacement when the original connector becomes active before commit', async () => {
     ctx.agent = createTestableAgent({ agentId: TEST_AGENT_ID, mockConnectorFactory: ctx.mockFactory });
-    await ctx.agent.init();
+    await ctx.agent.init(createTestCall());
     const originalConnector = ctx.createdConnectors[0]!;
     const rollback = vi.fn();
     registerActivationTransaction({ rollback }, ctx.cleanupFns);
@@ -423,7 +423,7 @@ describe('AIAgent credential.change handler', () => {
 
   it('rolls back a ready stale replacement before applying the newer sequence', async () => {
     ctx.agent = createTestableAgent({ agentId: TEST_AGENT_ID, mockConnectorFactory: ctx.mockFactory });
-    await ctx.agent.init();
+    await ctx.agent.init(createTestCall());
     const rollback = vi.fn();
     registerActivationTransaction({ rollback }, ctx.cleanupFns);
     const replacementInitializeStarted = createDeferred();
@@ -463,7 +463,7 @@ describe('AIAgent credential.change handler', () => {
 
   it('surfaces a sanitized AggregateError when swap failure and account rollback both fail', async () => {
     ctx.agent = createTestableAgent({ agentId: TEST_AGENT_ID, mockConnectorFactory: ctx.mockFactory });
-    await ctx.agent.init();
+    await ctx.agent.init(createTestCall());
     registerActivationTransaction({ rollback: () => 'rollback-failed' }, ctx.cleanupFns);
     ctx.mockFactory.mockImplementation(() => {
       throw new Error('connector failure containing secret-value');
@@ -499,6 +499,7 @@ describe('AIAgent credential.change handler', () => {
         capturedContexts.push(input.providerContext);
         return {
           bus: mockBus,
+          globalBus: MakaioBus,
           agentId: TEST_AGENT_ID,
           adapterId: 'test-adapter',
           adapterName: 'test',
@@ -510,11 +511,11 @@ describe('AIAgent credential.change handler', () => {
         asAgentConnector(ctx.mockFactory({ model: factoryConfig.model, cwd: factoryConfig.cwd })),
     };
     ctx.agent = new TestableAgent(config, ctx.mockFactory);
-    await ctx.agent.init();
+    await ctx.agent.init(createTestCall());
     const rotatedContext = makeExplicitContext('test-config', 'rotated');
 
     await sendCredentialChange({ providerContext: rotatedContext });
-    await ctx.agent.swapConnector();
+    await ctx.agent.swapConnector(createTestCall());
 
     expect(capturedContexts).toHaveLength(3);
     expect(capturedContexts[1]).toEqual(rotatedContext);
@@ -523,7 +524,7 @@ describe('AIAgent credential.change handler', () => {
 
   it('does not expose connector failure messages in the response', async () => {
     ctx.agent = createTestableAgent({ agentId: TEST_AGENT_ID, mockConnectorFactory: ctx.mockFactory });
-    await ctx.agent.init();
+    await ctx.agent.init(createTestCall());
     ctx.mockFactory.mockImplementation(() => {
       throw new Error('connector error containing secret-value');
     });

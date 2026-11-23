@@ -9,7 +9,7 @@ import { fetchSessionEnrichment, EMPTY_ENRICHMENT } from './session-enrichment.j
  * Extracts step completion data and provides a clean API for hooks.
  * Enriches with session, recentHistory, project, and step content.
  * @param rawCtx - Interceptor context from step.finished event
- * @param bus - Bus instance for making requests
+ * @param bus - Bus of the registering extension; the enrichment requests and `ctx.bus` use this instance, with `rawCtx.call` as call context
  * @returns PostStepContext for hook handlers
  */
 export async function buildPostStepContext(
@@ -19,7 +19,9 @@ export async function buildPostStepContext(
   const payload = rawCtx.payload;
 
   // Fetch session enrichment (step content is already in payload)
-  const enriched = payload.sessionId ? await fetchSessionEnrichment(bus, payload.sessionId) : EMPTY_ENRICHMENT;
+  const enriched = payload.sessionId
+    ? await fetchSessionEnrichment(bus, rawCtx.call, payload.sessionId)
+    : EMPTY_ENRICHMENT;
 
   return {
     // Host extensions first — framework fields below take precedence.
@@ -43,6 +45,7 @@ export async function buildPostStepContext(
     recentHistory: enriched.recentHistory,
     contextExtensions: enriched.contextExtensions,
     bus,
+    call: rawCtx.call,
     // Interceptor controls
     async next() {
       await rawCtx.next();

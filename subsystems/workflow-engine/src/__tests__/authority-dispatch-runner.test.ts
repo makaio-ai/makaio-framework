@@ -1,3 +1,4 @@
+import { createTestCall } from '@makaio/test-utils';
 import { describe, expect, it } from 'vitest';
 import { runAuthorityDispatchedAttempt } from '../authority-dispatch-runner.js';
 import { ExecutionAttemptAuthority } from '../execution-attempt-authority.js';
@@ -24,7 +25,7 @@ describe('Authority-dispatched Attempt instruction', () => {
         expect((await authority.getInstruction({ executionId, executionAttemptId }))?.revision).toBe('1');
         await submitAttemptOutcome(
           { authority, convergence: { converge: async () => 'projected' } },
-          { executionId, executionAttemptId, outcome },
+          { call: createTestCall(), executionId, executionAttemptId, outcome },
         );
       },
     });
@@ -84,7 +85,7 @@ describe('Authority-dispatched Attempt instruction', () => {
         await driveTestAttemptToAllocated(authority, executionAttemptId, executionId);
         await submitAttemptOutcome(
           { authority, convergence: { converge: async () => 'projected' } },
-          { executionId, executionAttemptId, outcome },
+          { call: createTestCall(), executionId, executionAttemptId, outcome },
         );
         throw new Error('Dispatch acknowledgement lost');
       },

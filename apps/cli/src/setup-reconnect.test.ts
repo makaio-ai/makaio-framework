@@ -25,7 +25,7 @@ describe('createSetupRestartAndReconnect', () => {
     const oldBus = createMockBus();
     const freshBus = createMockBus();
     const disconnectSpy = vi.spyOn(oldBus.bus, 'disconnect');
-    freshBus.request.mockImplementation((subject: unknown) => {
+    freshBus.request.mockImplementation((_call: unknown, subject: unknown) => {
       if (subject === KernelSubjects.isReady) {
         return Promise.resolve({ ready: true, machineId: 'machine-1' });
       }
@@ -45,13 +45,15 @@ describe('createSetupRestartAndReconnect', () => {
     const result = await restartAndReconnect(oldBus.bus, 'setup');
 
     expect(result).toBe(freshBus.bus);
-    expect(deps.requestKernelRestart).toHaveBeenCalledWith(oldBus.bus, 'setup');
+    expect(oldBus.own).toHaveBeenCalledWith('root');
+    expect(deps.requestKernelRestart).toHaveBeenCalledWith(oldBus.own.mock.results[0]?.value, oldBus.bus, 'setup');
     expect(disconnectSpy).toHaveBeenCalledOnce();
     expect(deps.connectBusClient).toHaveBeenCalledWith('ws://127.0.0.1:6252/bus', {
       auth: undefined,
       autoReconnect: true,
     });
-    expect(freshBus.request).toHaveBeenCalledWith(KernelSubjects.isReady, {});
+    expect(freshBus.own).toHaveBeenCalledWith('start');
+    expect(freshBus.request).toHaveBeenCalledWith(freshBus.own.mock.results[0]?.value, KernelSubjects.isReady, {});
   });
 
   it('uses auth resolved from the restarted health response', async () => {

@@ -16,7 +16,11 @@ import {
   type BusReceiveHandler,
   type CorrelationTracker,
 } from '@makaio/bus-core';
-import type { TransportReceiveContext } from '@makaio/core';
+import {
+  ATTESTING_CONNECTION_ROLES,
+  type OutboundAttestingConnectionRole,
+  type TransportReceiveContext,
+} from '@makaio/core';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -43,6 +47,7 @@ export interface InboundMessageHandlerDeps {
    * Optional authentication strategy; handles pre-connect auth frames.
    */
   readonly auth: TransportAuth | undefined;
+  readonly attestingRole: OutboundAttestingConnectionRole | undefined;
   /**
    * Codec used to decode wire frames into `BusMessage` objects.
    */
@@ -111,14 +116,18 @@ async function dispatchToHandlers(
 
 /**
  * Build the receive context passed to bus handlers.
- * @param name - Transport name used for diagnostics.
- * @param auth - Optional auth strategy that may expose peer identity.
+ * @param options - Transport name, peer authentication and local attestation policy.
  * @returns Receive context for handlers invoked by this transport.
  */
-function buildReceiveContext(name: string, auth: TransportAuth | undefined): TransportReceiveContext {
+function buildReceiveContext(
+  options: Pick<InboundMessageHandlerDeps, 'name' | 'auth' | 'attestingRole'>,
+): TransportReceiveContext {
+  const { name, auth, attestingRole } = options;
+  const { attests: _peerAttestation, ...peer } = auth?.getReceiveContext?.() ?? {};
   return {
-    ...auth?.getReceiveContext?.(),
+    ...peer,
     transportName: name,
+    ...(attestingRole === undefined ? {} : { attests: ATTESTING_CONNECTION_ROLES[attestingRole] }),
   };
 }
 
@@ -228,7 +237,7 @@ async function processCorrelationFrame(
  * @param deps - Handler dependencies
  */
 export async function handleInboundMessage(data: string | Buffer, deps: InboundMessageHandlerDeps): Promise<void> {
-  const { name, debug, auth, handlers } = deps;
+  const { name, debug, handlers } = deps;
 
   let decoded: BusMessage | null = null;
   try {
@@ -248,7 +257,7 @@ export async function handleInboundMessage(data: string | Buffer, deps: InboundM
   // Application handler dispatch runs fire-and-forget so that a stuck handler
   // does not block the caller's inFlightMessages tracking (which only awaits
   // the promise returned by handleInboundMessage, i.e. the correlation phase).
-  const receiveContext = buildReceiveContext(name, auth);
+  const receiveContext = buildReceiveContext(deps);
   const message = decoded;
   void dispatchToHandlers(message, handlers, { debug, name, receiveContext })
     .then(async (handlersApplied) => {

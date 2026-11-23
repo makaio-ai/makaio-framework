@@ -31,6 +31,17 @@ const adapterOpenAINamespace = MakaioBus.registerNamespace(
 
 const _AdapterOpenAISubjects = adapterOpenAINamespace.subjects;
 
+const requestNamespace = MakaioBus.registerNamespace(
+  createBusNamespace('scopedTest:requests', {
+    load: {
+      request: z.object({ id: z.string() }),
+      response: z.object({ value: z.string() }),
+    },
+  }),
+);
+
+const _RequestSubjects = requestNamespace.subjects;
+
 describe('ScopedBus', () => {
   beforeEach(() => {
     MakaioBus.__resetHandlers?.();
@@ -50,7 +61,7 @@ describe('ScopedBus', () => {
       });
 
       // Emit via scoped bus
-      await scopedBus.emit(_AdapterClaudeSubjects.initialized, { timestamp: 12345 });
+      await scopedBus.emit(MakaioBus.own('root'), _AdapterClaudeSubjects.initialized, { timestamp: 12345 });
 
       expect(received).toEqual(['12345']);
     });
@@ -65,7 +76,7 @@ describe('ScopedBus', () => {
       });
 
       // Emit via scoped bus
-      await scopedBus.emit(_AdapterClaudeSdkSubjects.thinking, { content: 'analyzing...' });
+      await scopedBus.emit(MakaioBus.own('root'), _AdapterClaudeSdkSubjects.thinking, { content: 'analyzing...' });
 
       expect(received).toEqual([{ content: 'analyzing...' }]);
     });
@@ -82,7 +93,7 @@ describe('ScopedBus', () => {
       });
 
       // Emit via global bus
-      await MakaioBus.emit(_AdapterClaudeSubjects.initialized, { timestamp: 12345 });
+      await MakaioBus.emit(MakaioBus.own('root'), _AdapterClaudeSubjects.initialized, { timestamp: 12345 });
 
       expect(received).toEqual([{ timestamp: 12345 }]);
     });
@@ -97,7 +108,7 @@ describe('ScopedBus', () => {
       });
 
       // Emit via scoped bus
-      await scopedBus.emit(_AdapterClaudeSubjects.initialized, { timestamp: 67890 });
+      await scopedBus.emit(MakaioBus.own('root'), _AdapterClaudeSubjects.initialized, { timestamp: 67890 });
 
       expect(received).toEqual([{ timestamp: 67890 }]);
     });
@@ -118,7 +129,7 @@ describe('ScopedBus', () => {
       });
 
       // Emit via scoped bus
-      await scopedBus.emit(_AdapterClaudeSubjects.initialized, { timestamp: 11111 });
+      await scopedBus.emit(MakaioBus.own('root'), _AdapterClaudeSubjects.initialized, { timestamp: 11111 });
 
       // Both handlers should receive the event
       expect(scopedReceived).toEqual([{ timestamp: 11111 }]);
@@ -127,7 +138,7 @@ describe('ScopedBus', () => {
       // Clear and emit via global bus
       scopedReceived.length = 0;
       globalReceived.length = 0;
-      await MakaioBus.emit(_AdapterClaudeSubjects.initialized, { timestamp: 22222 });
+      await MakaioBus.emit(MakaioBus.own('root'), _AdapterClaudeSubjects.initialized, { timestamp: 22222 });
 
       // Both handlers should receive the event again
       expect(scopedReceived).toEqual([{ timestamp: 22222 }]);
@@ -135,9 +146,65 @@ describe('ScopedBus', () => {
     });
   });
 
-  // Note: Request tests are omitted as they require proper type scaffolding.
-  // The scoped bus forwards all calls to MakaioBus, so request() works the same way
-  // as emit() and on() - it just prefixes the subject.
+  describe('send kinds through the scoped view', () => {
+    it('request reaches the handler', async () => {
+      const scopedBus = MakaioBus.scoped(requestNamespace);
+      MakaioBus.on(_RequestSubjects.load, (ctx) => {
+        ctx.setResult({ value: `loaded-${ctx.payload.id}` });
+      });
+
+      const result = await scopedBus.request(MakaioBus.own('root'), _RequestSubjects.load, { id: '1' });
+
+      expect(result).toEqual({ value: 'loaded-1' });
+    });
+
+    it('requestOptional reaches the handler', async () => {
+      const scopedBus = MakaioBus.scoped(requestNamespace);
+      MakaioBus.on(_RequestSubjects.load, (ctx) => {
+        ctx.setResult({ value: `loaded-${ctx.payload.id}` });
+      });
+
+      const result = await scopedBus.requestOptional(MakaioBus.own('root'), _RequestSubjects.load, { id: '2' });
+
+      expect(result).toEqual({ handled: true, data: { value: 'loaded-2' } });
+    });
+  });
+
+  describe('send kinds through the filtered view', () => {
+    it('emit reaches the handler', async () => {
+      const filteredBus = MakaioBus.scoped(adapterClaudeCodeNamespace).withFilter({ timestamp: 5 });
+      const received: unknown[] = [];
+      MakaioBus.on(_AdapterClaudeSubjects.initialized, ({ payload }) => {
+        received.push(payload);
+      });
+
+      await filteredBus.emit(MakaioBus.own('root'), _AdapterClaudeSubjects.initialized, { timestamp: 5 });
+
+      expect(received).toEqual([{ timestamp: 5 }]);
+    });
+
+    it('request reaches the handler', async () => {
+      const filteredBus = MakaioBus.scoped(requestNamespace).withFilter({ id: '3' });
+      MakaioBus.on(_RequestSubjects.load, (ctx) => {
+        ctx.setResult({ value: `loaded-${ctx.payload.id}` });
+      });
+
+      const result = await filteredBus.request(MakaioBus.own('root'), _RequestSubjects.load, { id: '3' });
+
+      expect(result).toEqual({ value: 'loaded-3' });
+    });
+
+    it('requestOptional reaches the handler', async () => {
+      const filteredBus = MakaioBus.scoped(requestNamespace).withFilter({ id: '4' });
+      MakaioBus.on(_RequestSubjects.load, (ctx) => {
+        ctx.setResult({ value: `loaded-${ctx.payload.id}` });
+      });
+
+      const result = await filteredBus.requestOptional(MakaioBus.own('root'), _RequestSubjects.load, { id: '4' });
+
+      expect(result).toEqual({ handled: true, data: { value: 'loaded-4' } });
+    });
+  });
 
   describe('unsubscribe', () => {
     it('returns unsubscribe function that works correctly', async () => {
@@ -150,14 +217,14 @@ describe('ScopedBus', () => {
       });
 
       // Emit - handler should receive
-      await scopedBus.emit(_AdapterClaudeSubjects.initialized, { timestamp: 1 });
+      await scopedBus.emit(MakaioBus.own('root'), _AdapterClaudeSubjects.initialized, { timestamp: 1 });
       expect(received).toEqual([{ timestamp: 1 }]);
 
       // Unsubscribe
       unsubscribe();
 
       // Emit again - handler should not receive
-      await scopedBus.emit(_AdapterClaudeSubjects.initialized, { timestamp: 2 });
+      await scopedBus.emit(MakaioBus.own('root'), _AdapterClaudeSubjects.initialized, { timestamp: 2 });
       expect(received).toEqual([{ timestamp: 1 }]);
     });
   });
@@ -179,13 +246,13 @@ describe('ScopedBus', () => {
       });
 
       // Emit to Claude bus
-      await scopedBusA.emit(_AdapterClaudeSubjects.initialized, { timestamp: 1 });
+      await scopedBusA.emit(MakaioBus.own('root'), _AdapterClaudeSubjects.initialized, { timestamp: 1 });
 
       expect(receivedA).toEqual([{ timestamp: 1 }]);
       expect(receivedB).toEqual([]); // Should not receive
 
       // Emit to OpenAI bus
-      await scopedBusB.emit(_AdapterOpenAISubjects.initialized, { timestamp: 2 });
+      await scopedBusB.emit(MakaioBus.own('root'), _AdapterOpenAISubjects.initialized, { timestamp: 2 });
 
       expect(receivedA).toEqual([{ timestamp: 1 }]); // Should not receive new event
       expect(receivedB).toEqual([{ timestamp: 2 }]);
@@ -211,8 +278,8 @@ describe('ScopedBus', () => {
       });
 
       // Adapter emits through scoped bus (clean internal code)
-      await adapterBus.emit(_AdapterClaudeSubjects.initialized, { timestamp: Date.now() });
-      await adapterBus.emit(_AdapterClaudeSubjects.sdk.thinking, { content: 'analyzing...' });
+      await adapterBus.emit(MakaioBus.own('root'), _AdapterClaudeSubjects.initialized, { timestamp: Date.now() });
+      await adapterBus.emit(MakaioBus.own('root'), _AdapterClaudeSubjects.sdk.thinking, { content: 'analyzing...' });
 
       expect(allAdapterEvents).toHaveLength(1);
       expect(sdkEvents).toHaveLength(1);

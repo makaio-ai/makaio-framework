@@ -1,4 +1,4 @@
-import { createBusContext, createBusInstance } from '@makaio/bus-core';
+import { createBusInstance } from '@makaio/bus-core';
 import { startBusServer, type BusServer } from '@makaio/bus-server';
 import { HostSubjects } from '@makaio/contracts';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -29,7 +29,7 @@ async function startFocusBusServer(focused: boolean): Promise<FocusBusServer> {
     throw new Error('Failed to resolve WebSocket server address');
   }
 
-  const bus = createBusInstance({ context: createBusContext() });
+  const bus = createBusInstance();
   const unsubscribeFocus = bus.on(HostSubjects.app.focus, (ctx) => {
     ctx.setResult({ focused, windowId: focused ? 1 : null });
   });

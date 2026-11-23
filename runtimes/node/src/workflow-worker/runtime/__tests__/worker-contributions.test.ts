@@ -58,6 +58,35 @@ describe('loadWorkerRuntimeContributions', () => {
     expect(result.toolsets[0]?.metadata.name).toBe('present');
   });
 
+  it('binds the worker bus to the loaded extension as its carrier', async () => {
+    const carrierEntrypoint = path.join(root, 'carrier.mjs');
+    await fs.writeFile(
+      carrierEntrypoint,
+      `export default { name: 'carrier-ext', displayName: 'Carrier', tools: { createToolsets: (ctx) => [{ metadata: { name: JSON.stringify({ caller: ctx.bus.own('start').caller, extensionName: ctx.identity.extensionName }), description: 'carrier', version: '1.0.0' }, tools: {} }] } };`,
+    );
+    const result = await loadWorkerRuntimeContributions([carrierEntrypoint], {
+      bus: createBusInstance(),
+      signal: new AbortController().signal,
+    });
+
+    const reported: unknown = JSON.parse(result.toolsets[0]?.metadata.name ?? 'null');
+    expect(reported).toEqual({
+      caller: { kind: 'makaio.extension', id: 'carrier-ext' },
+      extensionName: 'carrier-ext',
+    });
+  });
+
+  it('leaves the bus unset when no worker-local bus is supplied', async () => {
+    const noBusEntrypoint = path.join(root, 'no-bus.mjs');
+    await fs.writeFile(
+      noBusEntrypoint,
+      `export default { name: 'no-bus', displayName: 'NoBus', tools: { createToolsets: (ctx) => [{ metadata: { name: ctx.bus === undefined ? 'unset' : 'set', description: 'no bus', version: '1.0.0' }, tools: {} }] } };`,
+    );
+    const result = await loadWorkerRuntimeContributions([noBusEntrypoint]);
+
+    expect(result.toolsets[0]?.metadata.name).toBe('unset');
+  });
+
   it('throws a clear error when a toolset factory reads open contributions', async () => {
     const readerEntrypoint = path.join(root, 'reader.mjs');
     await fs.writeFile(

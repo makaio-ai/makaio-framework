@@ -11,13 +11,13 @@ import { fetchSessionEnrichment, EMPTY_ENRICHMENT, type SessionEnrichment } from
  * When sessionId is present in the payload, queries the bus to enrich
  * context with session, recentHistory, and project data.
  * @param rawCtx - Request context from agent.sendMessage RPC middleware
- * @param _options - Hook configuration options (currently unused)
- * @param bus - Bus instance for making requests
+ * @param options - Hook configuration options; `options.bus` becomes `ctx.bus` of the hook
+ * @param bus - Bus the session enrichment is sent on, with `rawCtx.call`
  * @returns PreUserMessage context with session enrichment when available
  */
 export async function buildPreUserMessageContext(
   rawCtx: RequestContext<SendMessageRequest, SendMessageResponse>,
-  _options: PreUserMessageHookOptions,
+  options: PreUserMessageHookOptions,
   bus: IMakaioBus,
 ): Promise<PreUserMessageContext> {
   // Turn context storage - populated by setTurnContext()
@@ -25,15 +25,15 @@ export async function buildPreUserMessageContext(
 
   // Attempt session enrichment if sessionId is provided
   const sessionId = rawCtx.payload.sessionId;
-  const enriched = sessionId ? await fetchSessionEnrichment(bus, sessionId) : EMPTY_ENRICHMENT;
+  const enriched = sessionId ? await fetchSessionEnrichment(bus, rawCtx.call, sessionId) : EMPTY_ENRICHMENT;
 
-  return buildContextObject(rawCtx, bus, turnContext, enriched);
+  return buildContextObject(rawCtx, options.bus, turnContext, enriched);
 }
 
 /**
  * Build the PreUserMessageContext object.
  * @param rawCtx - Request context from agent.sendMessage RPC middleware
- * @param bus - Bus instance for making requests
+ * @param bus - Bus of the registering extension (`ctx.bus` of the hook)
  * @param turnContext - Mutable storage for turn context
  * @param enriched - Enriched session/history/project data
  * @returns PreUserMessageContext object
@@ -71,6 +71,7 @@ function buildContextObject(
     recentHistory: enriched.recentHistory,
     contextExtensions: enriched.contextExtensions,
     bus,
+    call: rawCtx.call,
 
     // Turn context API - stores locally, merged after handler completes
     setTurnContext(key: string, value: JsonValue) {

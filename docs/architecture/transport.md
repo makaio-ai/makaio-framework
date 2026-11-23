@@ -19,6 +19,7 @@ Every transport implements `BusTransport`
 ```ts
 interface BusTransport {
   name: string;
+  declaredCaller?: Party;
 
   // Lifecycle
   connect(): Promise<void>;
@@ -54,6 +55,20 @@ The contract has three concerns:
 `onReceive()` registers the callback that handles incoming messages. The bus
 calls `onReceive()` once during registration and routes all incoming messages
 through it.
+
+The receiving transport derives `TransportReceiveContext` from local connection
+or authentication state and passes it as the second argument to the receive
+callback. This trusted context is never serialized into `BusMessage`. The core
+uses its `caller` if supplied, falls back to the transport's `declaredCaller`,
+and otherwise assigns `makaio.anonymous`, with the connection ID or transport
+name as its ID. It also downgrades receive-side `makaio.host` and
+`makaio.extension` callers to anonymous because those parties exist only
+in-process.
+
+Handlers read the resulting identity from `ctx.call.caller`, the party the work
+is for from `ctx.call.principal`, and any attesting party from
+`ctx.call.attestedBy`. `ctx.transport` describes the receiving connection and is
+absent for in-process sends.
 
 **Subscriptions** — `subscribe()` and `unsubscribe()` advertise which subjects
 this node can handle. Request priorities populate the peer's remote handler
@@ -124,6 +139,11 @@ The WebSocket transport is duck-typed — it works with the browser's native
 | `E2ERelayAuth` | E2E via relay server (browser-to-machine through cloud) |
 | `DispatchingAuth` | Hot-swaps between auth strategies at runtime |
 
+Identity-bound HMAC looks up the authenticated identity in a trusted registry
+to derive `TransportReceiveContext.caller`. Shared-secret HMAC alone supplies
+no per-identity caller. E2E auth derives the caller from the verified remote
+identity.
+
 #### Workflow Execution Attempt Access
 
 Node hosts can provision the canonical restricted identity for a remote workflow
@@ -139,10 +159,11 @@ const registration = registerWorkflowExecutionBusSecret({
 });
 ```
 
-The registration uses peer kind `workflow-execution-attempt`, attaches
-`executionId` as an authenticated claim, and defaults to the framework's
-execution-attempt subject set. Call `registration.cleanup()` when the attempt
-ends to revoke that exact secret.
+The registration sets the authenticated caller's kind to `makaio.job-run` and
+its ID to `executionAttemptId`. It attaches `executionId` as an authenticated
+claim, available as `ctx.call.caller.claims.executionId`, and defaults to the
+framework's execution-attempt subject set. Call `registration.cleanup()` when
+the attempt ends to revoke that exact secret.
 
 `allowedSubjects` has been removed. Use the directional authorization fields
 instead:
@@ -167,7 +188,7 @@ only after it has advertised a matching request subscription.
 Attempt identity. The WebSocket server evaluates the current required recipient
 filter for every outbound request, event, and broadcast delivery independently
 of subscription advertisements. An attempt cannot receive another Attempt's
-delivery by omitting or withdrawing subscriptions or forging a peer filter.
+delivery by omitting or withdrawing subscriptions or forging a subscription filter.
 
 Attempt-owned gates persist their `executionAttemptId` and require responses
 with that exact target. Web and GitHub gate producers preserve the ID from the
@@ -336,7 +357,7 @@ valid responder and produce an incomplete result array.
 `ServerTransport` adds per-client filtering inside a WebSocket server transport:
 event, broadcast, and request delivery use each client's subscriptions and
 payload filters. Requests require an explicit matching subscription and never
-route back to their origin socket. A request moves on to the next matching
+route back to the socket that sent them. A request moves on to the next matching
 client in connection order only when the send fails or the client answers
 `NoHandlerError`; a timeout or caller cancellation ends routing, because the
 client may already be running the handler. All attempts share the caller's
@@ -431,7 +452,7 @@ directly to the owning runtime.
 | Behavior | `localSubject()` | `hostLocalRequest()` |
 |----------|-----------------|---------------------|
 | Schema constraint | Events and requests | Requests only |
-| Local origin | Stays local | Stays local |
+| In-process send | Stays local | Stays local |
 | Remote ingress | Rejected | Allowed (direct only) |
 | Advertisement | Not advertised | Local priorities only |
 | Relay (A→B→C) | N/A | Forbidden |
@@ -484,7 +505,9 @@ This makes transport names type-safe. When accessing a transport by name, only
 declared names are accepted:
 
 ```ts
-const registry = bus.getContext().transportRegistry;
+import { busContextOf } from '@makaio/bus-core/kernel-api';
+
+const registry = busContextOf(bus).transportRegistry;
 const ws = registry.getTransport('websocket'); // typed
 ```
 
@@ -496,6 +519,7 @@ To build a new transport (e.g., gRPC, Unix socket, SharedWorker):
 
 ```ts
 import type { BusTransport, BusMessage, PayloadFilter } from '@makaio/bus-core';
+import type { TransportReceiveContext } from '@makaio/core';
 import {
   CorrelationTracker,
   DEFAULT_REQUEST_TIMEOUT_MS,
@@ -524,8 +548,8 @@ export class MyTransport implements BusTransport {
 
   public async connect(): Promise<void> {
     // Open your connection here
-    // When you receive a message from the remote peer:
-    //   await this.receiveHandler?.(message);
+    // On receipt, derive connection context from local session state:
+    //   await this.receiveHandler?.(message, { transportName: this.name });
     // When you receive subscribe-sync-complete:
     //   this.readyResolve();
   }
@@ -575,6 +599,10 @@ await bus.connect();
   request and `handleCorrelationResponse()` to resolve it when the response
   arrives.
 
+- **`TransportReceiveContext`** — Supply local connection facts and a verified
+  or declared caller when available. Derive both from transport configuration or
+  session state. Treat the decoded wire message and its payload as untrusted.
+
 - **`subscribe-sync-complete`** — After sending your initial handler set via
   `subscribe()` calls, send a `{ type: 'subscribe-sync-complete' }` message.
   Resolve your `ready` promise when you receive one from the remote peer.
@@ -598,10 +626,10 @@ Messages on the wire are discriminated by `type`:
 
 | Type | Key fields | Purpose |
 |------|------------|---------|
-| `event` | `subject`, `namespace`, `payload`, `messageId`, `correlationId?` | Fire-and-forget event delivery |
-| `request` | `subject`, `namespace`, `payload`, `correlationId`, `messageId`, `timeout?`, `priority?`, `deadline?` | RPC request with priority cursor and optional hop deadline |
+| `event` | `subject`, `namespace`, `payload`, `messageId`, `correlationId?`, `metadata?` | Fire-and-forget event delivery |
+| `request` | `subject`, `namespace`, `payload`, `correlationId`, `messageId`, `timeout?`, `priority?`, `deadline?`, `metadata?` | RPC request with priority cursor and optional hop deadline |
 | `response` | `correlationId`, `result?`, `error?` | Reply to a request |
-| `broadcast` | `subject`, `namespace`, `payload`, `correlationId`, `messageId`, `timeout?` | Multi-handler request |
+| `broadcast` | `subject`, `namespace`, `payload`, `correlationId`, `messageId`, `timeout?`, `metadata?` | Multi-handler request |
 | `broadcast-response` | `correlationId`, `results?`, `error?` | Broadcast results as `{ nodeId, payload }[]`, or a structured error |
 | `subscribe` | `subjects`, `filters?` | Advertise subject priorities with `Record<string, number[]>`; empty arrays mean event-only handlers |
 | `unsubscribe` | `subjects` | Remove subject advertisements with `Record<string, number[]>` |
@@ -611,6 +639,12 @@ Messages on the wire are discriminated by `type`:
 Only `event`, `request`, and `broadcast` messages carry `namespace` and
 `messageId`. Responses are keyed by `correlationId`; subscription, handshake,
 and heartbeat messages use their own compact shapes.
+
+Optional `metadata.principal` carries a party reference (`kind` and `id`). The
+core uses a valid reference as the principal and records the receive-side caller
+as `attestedBy`. With no valid principal reference, the caller is also the
+principal. `CallContext`, party claims, and `TransportReceiveContext` stay local
+to each runtime.
 
 <!-- web:hide -->
 

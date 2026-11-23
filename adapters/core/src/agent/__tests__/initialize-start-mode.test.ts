@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { createTestCall } from '@makaio/test-utils';
 import { createTestableAgent, createAgentTestLifecycle } from './helpers/mock-agent.js';
 
 describe('AIAgent.initialize() start mode derivation', () => {
@@ -19,7 +20,7 @@ describe('AIAgent.initialize() start mode derivation', () => {
     });
 
     const spy = vi.spyOn(ctx.agent, 'setPendingStartMode');
-    await ctx.agent.initialize();
+    await ctx.agent.initialize(createTestCall());
 
     expect(spy).toHaveBeenCalledWith('fresh');
   });
@@ -31,7 +32,7 @@ describe('AIAgent.initialize() start mode derivation', () => {
     });
 
     const spy = vi.spyOn(ctx.agent, 'setPendingStartMode');
-    await ctx.agent.initialize({
+    await ctx.agent.initialize(createTestCall(), {
       sessionContext: {
         isFirstTurn: true,
         nativeFork: {
@@ -56,7 +57,7 @@ describe('AIAgent.initialize() start mode derivation', () => {
 
     const spy = vi.spyOn(ctx.agent, 'setPendingStartMode');
     // Pass sessionContext without nativeFork — config.nativeFork should be used
-    await ctx.agent.initialize({ sessionContext: { isFirstTurn: true } });
+    await ctx.agent.initialize(createTestCall(), { sessionContext: { isFirstTurn: true } });
 
     expect(spy).toHaveBeenCalledWith('fork');
   });
@@ -68,7 +69,7 @@ describe('AIAgent.initialize() start mode derivation', () => {
     });
 
     const spy = vi.spyOn(ctx.agent, 'setPendingStartMode');
-    await ctx.agent.initialize({
+    await ctx.agent.initialize(createTestCall(), {
       sessionContext: { isFirstTurn: true },
     });
 
@@ -82,7 +83,7 @@ describe('AIAgent.initialize() start mode derivation', () => {
     });
 
     const spy = vi.spyOn(ctx.agent, 'setPendingStartMode');
-    await ctx.agent.initialize({
+    await ctx.agent.initialize(createTestCall(), {
       sessionContext: { isFirstTurn: false },
     });
 
@@ -101,7 +102,7 @@ describe('AIAgent.initialize() start mode derivation', () => {
     });
 
     const spy = vi.spyOn(ctx.agent, 'setPendingStartMode');
-    await ctx.agent.initialize();
+    await ctx.agent.initialize(createTestCall());
 
     expect(spy).toHaveBeenCalledWith('resume');
   });
@@ -115,7 +116,7 @@ describe('AIAgent.initialize() start mode derivation', () => {
     });
 
     const spy = vi.spyOn(ctx.agent, 'setPendingStartMode');
-    await ctx.agent.initialize();
+    await ctx.agent.initialize(createTestCall());
 
     expect(spy).toHaveBeenCalledWith('fresh');
   });

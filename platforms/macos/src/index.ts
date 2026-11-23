@@ -43,13 +43,13 @@ export function createPlatformMacOSPackage(options: PlatformMacOSPackageOptions 
           if (!provider) return;
 
           handlerCleanup = registerAutoLaunchHandlers(ctx.bus, provider);
-          registerAutoLaunchProvider(ctx.bus, provider);
+          registerAutoLaunchProvider(ctx.bus.own('start'), ctx.bus, provider);
         },
         destroy() {
           handlerCleanup?.();
           if (!provider) return;
 
-          ctx.bus.emit(CapabilitySubjects.unregister, {
+          ctx.bus.emit(ctx.bus.own('stop'), CapabilitySubjects.unregister, {
             capabilityId: AUTO_LAUNCH_CAPABILITY_ID,
             providerId: provider.id,
           });

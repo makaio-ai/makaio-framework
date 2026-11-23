@@ -1,4 +1,5 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+import { createTestBusInstance, createTestCall } from '@makaio/test-utils';
 import { createMakaioContext } from '@makaio/core';
 import {
   ArtifactKindRegistrationSchema,
@@ -88,7 +89,7 @@ function host(
 }
 
 function execute(input: ReadArtifactsInput, artifactHost?: ArtifactReadHost) {
-  return executeReadArtifacts(input, createMakaioContext(), artifactHost);
+  return executeReadArtifacts(input, { ...createMakaioContext(), call: createTestCall() }, artifactHost);
 }
 
 function successfulData(result: Awaited<ReturnType<typeof execute>>) {
@@ -98,16 +99,11 @@ function successfulData(result: Awaited<ReturnType<typeof execute>>) {
 
 describe('artifacts_read', () => {
   it('fails closed without a host before any raw bus request and leaves the default package unbound', async () => {
-    let rawBusRequests = 0;
-    const context = {
-      ...createMakaioContext(),
-      bus: {
-        request: () => {
-          rawBusRequests += 1;
-          throw new Error('An unbound selected reader must not use a raw bus.');
-        },
-      },
-    } as unknown as ToolExecutionContext;
+    const bus = createTestBusInstance();
+    const request = vi.spyOn(bus, 'request').mockImplementation(() => {
+      throw new Error('An unbound selected reader must not use a raw bus.');
+    });
+    const context: ToolExecutionContext = { ...createMakaioContext(), call: createTestCall(), bus };
 
     const result = await executeReadArtifacts(
       { purpose: 'I need to read a decision.', reads: [{ ref: { kind: 'decision', id: 'current-id' } }] },
@@ -115,7 +111,7 @@ describe('artifacts_read', () => {
     );
 
     expect(result).toMatchObject({ success: false, error: { code: 'PERMISSION_DENIED' } });
-    expect(rawBusRequests).toBe(0);
+    expect(request).not.toHaveBeenCalled();
     // The unbound contribution must remain empty even before activation provides a context.
     expect(Reflect.apply(artifactQueryPackage.tools!.createToolsets!, undefined, [])).toEqual([]);
     expect(Reflect.apply(createArtifactQueryPackage().tools!.createToolsets!, undefined, [])).toEqual([]);
@@ -175,6 +171,7 @@ describe('artifacts_read', () => {
     };
     const contextFor = (repository: string): ToolExecutionContext => ({
       ...createMakaioContext(),
+      call: createTestCall(),
       turnContext: { repository },
     });
     const resultA = successfulData(await executeReadArtifacts(input, contextFor('A'), readHost));

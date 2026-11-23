@@ -8,6 +8,8 @@
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
+import type { CallContext } from '@makaio/core';
+import { createTestCall } from '@makaio/test-utils';
 import { AgentSubjects, SessionSubjects, type AgentRole } from '@makaio/contracts';
 import { MakaioSessionService } from '../session-service.js';
 import { registerMemorySessionEventStorage } from '../session-events/memory-handler.js';
@@ -47,6 +49,7 @@ describe('adapter-session-ID reconciliation', () => {
    * The agent is seeded with `adapterSessionId` set to the given value (defaults
    * to `undefined`, simulating a fork idle-start).  Pass `emitAdded: false` for
    * secondary / foreign agents that should not influence session-level metadata.
+   * @param call - Call context for the seeded agent lifecycle.
    * @param sessionId - Makaio session ID the agent belongs to
    * @param agentId - Unique agent identifier
    * @param adapterId - Adapter instance identifier
@@ -57,6 +60,7 @@ describe('adapter-session-ID reconciliation', () => {
    *   emitted (default: `true`)
    */
   async function seedAgent(
+    call: CallContext,
     sessionId: string,
     agentId: string,
     adapterId: string,
@@ -68,7 +72,7 @@ describe('adapter-session-ID reconciliation', () => {
     const emitAdded = opts?.emitAdded ?? true;
     const now = Date.now();
 
-    await MakaioBus.request(AgentStorageSubjects.set, {
+    await MakaioBus.request(call, AgentStorageSubjects.set, {
       agentId,
       agent: {
         agentId,
@@ -84,7 +88,7 @@ describe('adapter-session-ID reconciliation', () => {
     });
 
     if (emitAdded) {
-      await MakaioBus.emit(SessionSubjects.agent.added, {
+      await MakaioBus.emit(call, SessionSubjects.agent.added, {
         sessionId,
         agentId,
         adapterId,
@@ -100,6 +104,7 @@ describe('adapter-session-ID reconciliation', () => {
   /**
    * Emit `agent.started` with a provider-confirmed session ID and wait for
    * async handlers to settle.
+   * @param call - Call context for the started event.
    * @param agentId - Agent identifier
    * @param adapterId - Adapter instance identifier
    * @param adapterName - Adapter type name (e.g. `'claude-code'`)
@@ -109,6 +114,7 @@ describe('adapter-session-ID reconciliation', () => {
    *   `cwd` sets the working directory (default: `'/tmp'`)
    */
   async function emitAgentStarted(
+    call: CallContext,
     agentId: string,
     adapterId: string,
     adapterName: string,
@@ -116,7 +122,7 @@ describe('adapter-session-ID reconciliation', () => {
     sessionId: string,
     opts?: { model?: string; cwd?: string },
   ): Promise<void> {
-    await MakaioBus.emit(AgentSubjects.started, {
+    await MakaioBus.emit(call, AgentSubjects.started, {
       agentId,
       adapterId,
       adapterName,
@@ -132,18 +138,24 @@ describe('adapter-session-ID reconciliation', () => {
   /**
    * Seed a session and an agent with undefined adapterSessionId,
    * simulating the fork idle-start state.
+   * @param call - Call context for the initial session and agent state.
    * @param sessionId - Makaio session ID
    * @param agentId - Agent identifier
    * @param adapterId - Adapter identifier
    */
-  async function seedIdleForkState(sessionId: string, agentId: string, adapterId: string): Promise<void> {
+  async function seedIdleForkState(
+    call: CallContext,
+    sessionId: string,
+    agentId: string,
+    adapterId: string,
+  ): Promise<void> {
     await sessionService.init();
 
     // Create session
-    await MakaioBus.request(SessionSubjects.create, { sessionId });
+    await MakaioBus.request(call, SessionSubjects.create, { sessionId });
 
     // Persist agent with undefined adapterSessionId (fork idle start) and emit agent.added
-    await seedAgent(sessionId, agentId, adapterId, 'test-adapter', 'lead');
+    await seedAgent(call, sessionId, agentId, adapterId, 'test-adapter', 'lead');
   }
 
   // ===========================================================================
@@ -151,73 +163,77 @@ describe('adapter-session-ID reconciliation', () => {
   // ===========================================================================
 
   it('back-fills agent storage on first confirmed agent.started', async () => {
+    const call = createTestCall();
     const sessionId = 'session-recon-1';
     const agentId = 'agent-recon-1';
     const adapterId = 'adapter-recon-1';
     const confirmedId = 'provider-confirmed-session-id';
 
-    await seedIdleForkState(sessionId, agentId, adapterId);
+    await seedIdleForkState(call, sessionId, agentId, adapterId);
 
     // Verify agent has no adapterSessionId yet
-    const before = await MakaioBus.request(AgentStorageSubjects.get, { agentId });
+    const before = await MakaioBus.request(call, AgentStorageSubjects.get, { agentId });
     expect(before.agent?.adapterSessionId).toBeUndefined();
 
     // Simulate first agent.started with confirmed ID (emitted by enrichPayload)
-    await emitAgentStarted(agentId, adapterId, 'test-adapter', confirmedId, sessionId);
+    await emitAgentStarted(call, agentId, adapterId, 'test-adapter', confirmedId, sessionId);
 
     // Agent storage must now hold the confirmed ID
-    const after = await MakaioBus.request(AgentStorageSubjects.get, { agentId });
+    const after = await MakaioBus.request(call, AgentStorageSubjects.get, { agentId });
     expect(after.agent?.adapterSessionId).toBe(confirmedId);
   });
 
   it('back-fills session storage for the lead agent', async () => {
+    const call = createTestCall();
     const sessionId = 'session-recon-2';
     const agentId = 'agent-recon-2';
     const adapterId = 'adapter-recon-2';
     const confirmedId = 'provider-confirmed-session-id-2';
 
-    await seedIdleForkState(sessionId, agentId, adapterId);
+    await seedIdleForkState(call, sessionId, agentId, adapterId);
 
     // Verify session has no adapterSessionId
-    const sessionBefore = await MakaioBus.request(SessionSubjects.get, { sessionId });
+    const sessionBefore = await MakaioBus.request(call, SessionSubjects.get, { sessionId });
     expect(sessionBefore.session?.adapterSessionId).toBeUndefined();
 
-    await emitAgentStarted(agentId, adapterId, 'test-adapter', confirmedId, sessionId);
+    await emitAgentStarted(call, agentId, adapterId, 'test-adapter', confirmedId, sessionId);
 
     // Session storage must now hold the confirmed ID
-    const sessionAfter = await MakaioBus.request(SessionSubjects.get, { sessionId });
+    const sessionAfter = await MakaioBus.request(call, SessionSubjects.get, { sessionId });
     expect(sessionAfter.session?.adapterSessionId).toBe(confirmedId);
   });
 
   it('is idempotent — second agent.started does not overwrite', async () => {
+    const call = createTestCall();
     const sessionId = 'session-recon-3';
     const agentId = 'agent-recon-3';
     const adapterId = 'adapter-recon-3';
     const confirmedId = 'first-confirmed-id';
 
-    await seedIdleForkState(sessionId, agentId, adapterId);
+    await seedIdleForkState(call, sessionId, agentId, adapterId);
 
     // First confirmation
-    await emitAgentStarted(agentId, adapterId, 'test-adapter', confirmedId, sessionId);
+    await emitAgentStarted(call, agentId, adapterId, 'test-adapter', confirmedId, sessionId);
 
     // Second agent.started with a different ID (e.g. turn 2)
-    await emitAgentStarted(agentId, adapterId, 'test-adapter', 'different-id', sessionId);
+    await emitAgentStarted(call, agentId, adapterId, 'test-adapter', 'different-id', sessionId);
 
     // Agent storage retains the first confirmed ID (idempotent)
-    const agent = await MakaioBus.request(AgentStorageSubjects.get, { agentId });
+    const agent = await MakaioBus.request(call, AgentStorageSubjects.get, { agentId });
     expect(agent.agent?.adapterSessionId).toBe(confirmedId);
 
     // Session storage also retains the first confirmed ID
-    const session = await MakaioBus.request(SessionSubjects.get, { sessionId });
+    const session = await MakaioBus.request(call, SessionSubjects.get, { sessionId });
     expect(session.session?.adapterSessionId).toBe(confirmedId);
   });
 
   it('does not overwrite a peer reconciliation that lands while agent.started is being handled', async () => {
+    const call = createTestCall();
     const sessionId = 'session-recon-race';
     const agentId = 'agent-recon-race';
     const adapterId = 'adapter-recon-race';
 
-    await seedIdleForkState(sessionId, agentId, adapterId);
+    await seedIdleForkState(call, sessionId, agentId, adapterId);
 
     // The service handler awaits the agent-row read before it reaches session
     // storage. A peer can therefore settle the session in that interval. The
@@ -225,8 +241,8 @@ describe('adapter-session-ID reconciliation', () => {
     // through `set`; its own operation must be refused by storage instead.
     const unsubscribePeer = MakaioBus.on(
       AgentSubjects.started,
-      async () => {
-        await MakaioBus.request(SessionStorageSubjects.update, {
+      async (ctx) => {
+        await MakaioBus.request(ctx.call, SessionStorageSubjects.update, {
           sessionId,
           reconcileAdapterSession: {
             agentId,
@@ -241,18 +257,19 @@ describe('adapter-session-ID reconciliation', () => {
     );
 
     try {
-      await emitAgentStarted(agentId, adapterId, 'test-adapter', 'announcement-provider-session', sessionId);
+      await emitAgentStarted(call, agentId, adapterId, 'test-adapter', 'announcement-provider-session', sessionId);
     } finally {
       unsubscribePeer();
     }
 
-    const { session } = await MakaioBus.request(SessionSubjects.get, { sessionId });
+    const { session } = await MakaioBus.request(call, SessionSubjects.get, { sessionId });
     expect(session?.adapterSessionId).toBe('peer-provider-session');
     expect(session?.adapterName).toBe('test-adapter');
     expect(session?.adapterId).toBe(adapterId);
   });
 
   it('does not overwrite session adapterSessionId once it is already set', async () => {
+    const call = createTestCall();
     const sessionId = 'session-recon-4';
     const leadAgentId = 'lead-agent';
     const memberAgentId = 'member-agent';
@@ -261,33 +278,34 @@ describe('adapter-session-ID reconciliation', () => {
     await sessionService.init();
 
     // Create session
-    await MakaioBus.request(SessionSubjects.create, { sessionId });
+    await MakaioBus.request(call, SessionSubjects.create, { sessionId });
 
     // Lead agent with confirmed ID
-    await seedAgent(sessionId, leadAgentId, adapterId, 'test-adapter', 'lead', {
+    await seedAgent(call, sessionId, leadAgentId, adapterId, 'test-adapter', 'lead', {
       adapterSessionId: 'lead-confirmed-id',
     });
 
     // Member agent with undefined adapterSessionId (fork child)
-    await seedAgent(sessionId, memberAgentId, adapterId, 'test-adapter', 'member');
+    await seedAgent(call, sessionId, memberAgentId, adapterId, 'test-adapter', 'member');
 
     // Session should have lead's adapterSessionId already set
-    const sessionBefore = await MakaioBus.request(SessionSubjects.get, { sessionId });
+    const sessionBefore = await MakaioBus.request(call, SessionSubjects.get, { sessionId });
     expect(sessionBefore.session?.adapterSessionId).toBe('lead-confirmed-id');
 
     // Member agent gets confirmed — session already has an ID, so it must not change
-    await emitAgentStarted(memberAgentId, adapterId, 'test-adapter', 'member-confirmed-id', sessionId);
+    await emitAgentStarted(call, memberAgentId, adapterId, 'test-adapter', 'member-confirmed-id', sessionId);
 
     // Member agent storage is updated
-    const memberAgent = await MakaioBus.request(AgentStorageSubjects.get, { agentId: memberAgentId });
+    const memberAgent = await MakaioBus.request(call, AgentStorageSubjects.get, { agentId: memberAgentId });
     expect(memberAgent.agent?.adapterSessionId).toBe('member-confirmed-id');
 
     // Session adapterSessionId must NOT change (write-once: first writer wins)
-    const sessionAfter = await MakaioBus.request(SessionSubjects.get, { sessionId });
+    const sessionAfter = await MakaioBus.request(call, SessionSubjects.get, { sessionId });
     expect(sessionAfter.session?.adapterSessionId).toBe('lead-confirmed-id');
   });
 
   it('refuses a member as first writer, and takes the lead that follows it', async () => {
+    const call = createTestCall();
     // The exception this used to pin — "no lead named yet, so whoever confirms
     // first speaks for the session" — is unreachable as a *signal*: a start that
     // carries an initial message emits `agent.started` from inside its own start
@@ -301,28 +319,29 @@ describe('adapter-session-ID reconciliation', () => {
     const adapterId = 'adapter-recon-5';
 
     await sessionService.init();
-    await MakaioBus.request(SessionSubjects.create, { sessionId });
+    await MakaioBus.request(call, SessionSubjects.create, { sessionId });
 
     // A member on the session's adapter, confirming before any lead exists.
-    await seedAgent(sessionId, memberAgentId, adapterId, 'test-adapter', 'member');
-    await emitAgentStarted(memberAgentId, adapterId, 'test-adapter', 'member-first-confirmed-id', sessionId);
+    await seedAgent(call, sessionId, memberAgentId, adapterId, 'test-adapter', 'member');
+    await emitAgentStarted(call, memberAgentId, adapterId, 'test-adapter', 'member-first-confirmed-id', sessionId);
 
     // Its own row is reconciled — each agent owns its provider session.
-    const memberAgent = await MakaioBus.request(AgentStorageSubjects.get, { agentId: memberAgentId });
+    const memberAgent = await MakaioBus.request(call, AgentStorageSubjects.get, { agentId: memberAgentId });
     expect(memberAgent.agent?.adapterSessionId).toBe('member-first-confirmed-id');
     // The session's is not: that column is the lead's.
-    const afterMember = await MakaioBus.request(SessionSubjects.get, { sessionId });
+    const afterMember = await MakaioBus.request(call, SessionSubjects.get, { sessionId });
     expect(afterMember.session?.adapterSessionId).toBeUndefined();
 
     // The lead arrives and confirms — and the session takes its key.
-    await seedAgent(sessionId, leadAgentId, adapterId, 'test-adapter', 'lead');
-    await emitAgentStarted(leadAgentId, adapterId, 'test-adapter', 'lead-confirmed-id', sessionId);
+    await seedAgent(call, sessionId, leadAgentId, adapterId, 'test-adapter', 'lead');
+    await emitAgentStarted(call, leadAgentId, adapterId, 'test-adapter', 'lead-confirmed-id', sessionId);
 
-    const afterLead = await MakaioBus.request(SessionSubjects.get, { sessionId });
+    const afterLead = await MakaioBus.request(call, SessionSubjects.get, { sessionId });
     expect(afterLead.session?.adapterSessionId).toBe('lead-confirmed-id');
   });
 
   it('skips session-level backfill when the emitting agent belongs to a different adapter', async () => {
+    const call = createTestCall();
     const sessionId = 'session-recon-6';
     const leadAgentId = 'lead-agent-6';
     const foreignAgentId = 'foreign-agent-6';
@@ -330,42 +349,51 @@ describe('adapter-session-ID reconciliation', () => {
     const foreignAdapterId = 'adapter-foreign-6';
 
     await sessionService.init();
-    await MakaioBus.request(SessionSubjects.create, { sessionId });
+    await MakaioBus.request(call, SessionSubjects.create, { sessionId });
 
     // Lead agent added with adapterSessionId: undefined (idle fork)
     // This sets session.adapterName = 'claude-code' via registerAgentAddedHandler.
-    await seedAgent(sessionId, leadAgentId, leadAdapterId, 'claude-code', 'lead');
+    await seedAgent(call, sessionId, leadAgentId, leadAdapterId, 'claude-code', 'lead');
 
     // Foreign member agent on a different adapter — no agent.added to avoid
     // overwriting session-level adapterName already set by the lead.
-    await seedAgent(sessionId, foreignAgentId, foreignAdapterId, 'codex-mcp', 'member', {
+    await seedAgent(call, sessionId, foreignAgentId, foreignAdapterId, 'codex-mcp', 'member', {
       emitAdded: false,
     });
 
     // Verify session has adapterName set but no adapterSessionId
-    const sessionBefore = await MakaioBus.request(SessionSubjects.get, { sessionId });
+    const sessionBefore = await MakaioBus.request(call, SessionSubjects.get, { sessionId });
     expect(sessionBefore.session?.adapterName).toBe('claude-code');
     expect(sessionBefore.session?.adapterSessionId).toBeUndefined();
 
     // Foreign agent confirms first — its provider session ID belongs to codex-mcp,
     // NOT to the session's claude-code adapter. Must NOT backfill session.
-    await emitAgentStarted(foreignAgentId, foreignAdapterId, 'codex-mcp', 'codex-provider-session-42', sessionId, {
-      model: 'gpt-4.1',
-    });
+    await emitAgentStarted(
+      call,
+      foreignAgentId,
+      foreignAdapterId,
+      'codex-mcp',
+      'codex-provider-session-42',
+      sessionId,
+      {
+        model: 'gpt-4.1',
+      },
+    );
 
     // Agent-level backfill IS applied (each agent owns its own ID)
-    const foreignAgent = await MakaioBus.request(AgentStorageSubjects.get, {
+    const foreignAgent = await MakaioBus.request(call, AgentStorageSubjects.get, {
       agentId: foreignAgentId,
     });
     expect(foreignAgent.agent?.adapterSessionId).toBe('codex-provider-session-42');
 
     // Session-level adapterSessionId must remain unset — foreign adapter skipped
-    const sessionAfter = await MakaioBus.request(SessionSubjects.get, { sessionId });
+    const sessionAfter = await MakaioBus.request(call, SessionSubjects.get, { sessionId });
     expect(sessionAfter.session?.adapterSessionId).toBeUndefined();
     expect(sessionAfter.session?.adapterName).toBe('claude-code');
   });
 
   it('skips a lead that runs on a sibling instance of the session’s own adapter', async () => {
+    const call = createTestCall();
     // The instance half of the same rule, and it needs the *lead* to be the one
     // mismatching — a member is refused for being a member. A replacement lead
     // is exactly that: the designation moves to it, while the session's adapter
@@ -380,24 +408,32 @@ describe('adapter-session-ID reconciliation', () => {
     const siblingAdapterId = 'adapter-instance-b';
 
     await sessionService.init();
-    await MakaioBus.request(SessionSubjects.create, { sessionId });
+    await MakaioBus.request(call, SessionSubjects.create, { sessionId });
 
     // The session's identity: one adapter name, on instance A.
-    await seedAgent(sessionId, firstLeadId, sessionAdapterId, 'claude-code', 'lead');
+    await seedAgent(call, sessionId, firstLeadId, sessionAdapterId, 'claude-code', 'lead');
     // The replacement takes the designation; the identity stays put.
-    await seedAgent(sessionId, replacementLeadId, siblingAdapterId, 'claude-code', 'lead');
-    const before = await MakaioBus.request(SessionSubjects.get, { sessionId });
+    await seedAgent(call, sessionId, replacementLeadId, siblingAdapterId, 'claude-code', 'lead');
+    const before = await MakaioBus.request(call, SessionSubjects.get, { sessionId });
     expect(before.session?.leadAgentId).toBe(replacementLeadId);
     expect(before.session?.adapterId).toBe(sessionAdapterId);
 
-    await emitAgentStarted(replacementLeadId, siblingAdapterId, 'claude-code', 'sibling-provider-session', sessionId);
+    await emitAgentStarted(
+      call,
+      replacementLeadId,
+      siblingAdapterId,
+      'claude-code',
+      'sibling-provider-session',
+      sessionId,
+    );
 
-    const afterSibling = await MakaioBus.request(SessionSubjects.get, { sessionId });
+    const afterSibling = await MakaioBus.request(call, SessionSubjects.get, { sessionId });
     expect(afterSibling.session?.adapterSessionId).toBeUndefined();
     expect(afterSibling.session?.adapterId).toBe(sessionAdapterId);
   });
 
   it('backfills session-level ID when matching-adapter agent confirms', async () => {
+    const call = createTestCall();
     const sessionId = 'session-recon-7';
     const foreignAgentId = 'foreign-agent-7';
     const matchingAgentId = 'matching-agent-7';
@@ -405,35 +441,38 @@ describe('adapter-session-ID reconciliation', () => {
     const foreignAdapterId = 'adapter-foreign-7';
 
     await sessionService.init();
-    await MakaioBus.request(SessionSubjects.create, { sessionId });
+    await MakaioBus.request(call, SessionSubjects.create, { sessionId });
 
     // First agent.added sets session.adapterName = 'claude-code'
-    await seedAgent(sessionId, matchingAgentId, adapterId, 'claude-code', 'lead');
+    await seedAgent(call, sessionId, matchingAgentId, adapterId, 'claude-code', 'lead');
 
     // Foreign member agent added (different adapter) — no agent.added to preserve
     // session-level adapterName already set by the matching agent.
-    await seedAgent(sessionId, foreignAgentId, foreignAdapterId, 'codex-mcp', 'member', {
+    await seedAgent(call, sessionId, foreignAgentId, foreignAdapterId, 'codex-mcp', 'member', {
       emitAdded: false,
     });
 
     // Foreign agent confirms first — skipped by ownership guard
-    await emitAgentStarted(foreignAgentId, foreignAdapterId, 'codex-mcp', 'codex-session-ignored', sessionId, {
+    await emitAgentStarted(call, foreignAgentId, foreignAdapterId, 'codex-mcp', 'codex-session-ignored', sessionId, {
       model: 'gpt-4.1',
     });
 
-    expect((await MakaioBus.request(SessionSubjects.get, { sessionId })).session?.adapterSessionId).toBeUndefined();
+    expect(
+      (await MakaioBus.request(call, SessionSubjects.get, { sessionId })).session?.adapterSessionId,
+    ).toBeUndefined();
 
     // Matching-adapter agent confirms — should succeed
-    await emitAgentStarted(matchingAgentId, adapterId, 'claude-code', 'claude-provider-session-99', sessionId, {
+    await emitAgentStarted(call, matchingAgentId, adapterId, 'claude-code', 'claude-provider-session-99', sessionId, {
       model: 'claude-sonnet-4-20250514',
     });
 
-    const sessionAfter = await MakaioBus.request(SessionSubjects.get, { sessionId });
+    const sessionAfter = await MakaioBus.request(call, SessionSubjects.get, { sessionId });
     expect(sessionAfter.session?.adapterSessionId).toBe('claude-provider-session-99');
     expect(sessionAfter.session?.adapterName).toBe('claude-code');
   });
 
   it('sets the atomic adapter identity triplet when session.adapterName is unset', async () => {
+    const call = createTestCall();
     const sessionId = 'session-recon-8';
     const agentId = 'agent-recon-8';
     const adapterId = 'adapter-recon-8';
@@ -442,17 +481,17 @@ describe('adapter-session-ID reconciliation', () => {
     await sessionService.init();
 
     // Create a bare session — no agent.added, so adapterName is unset (legacy path)
-    await MakaioBus.request(SessionSubjects.create, { sessionId });
+    await MakaioBus.request(call, SessionSubjects.create, { sessionId });
 
     // Seed agent storage directly (bypass agent.added to keep session bare) and
     // name the agent as the session's lead on the row itself — which is what a
     // legacy session is: one whose designation exists without the announcement
     // that would have established its identity.
-    await seedAgent(sessionId, agentId, adapterId, 'claude-code', 'lead', { emitAdded: false });
+    await seedAgent(call, sessionId, agentId, adapterId, 'claude-code', 'lead', { emitAdded: false });
     // Through the reserving transaction, which is the designation's one writer —
     // a whole-record `set` deliberately preserves the stored lead instead of
     // carrying one in.
-    const designated = await designateSessionLead(MakaioBus, {
+    const designated = await designateSessionLead(call, MakaioBus, {
       sessionId,
       agentId,
       expectedLeadAgentId: null,
@@ -460,17 +499,17 @@ describe('adapter-session-ID reconciliation', () => {
     expect(designated?.outcome).toBe('claimed');
 
     // Verify session has no adapter identity at all
-    const sessionBefore = await MakaioBus.request(SessionSubjects.get, { sessionId });
+    const sessionBefore = await MakaioBus.request(call, SessionSubjects.get, { sessionId });
     expect(sessionBefore.session?.adapterName).toBeUndefined();
     expect(sessionBefore.session?.adapterId).toBeUndefined();
     expect(sessionBefore.session?.adapterSessionId).toBeUndefined();
 
     // Agent confirms — should set the full triplet atomically
-    await emitAgentStarted(agentId, adapterId, 'claude-code', confirmedId, sessionId, {
+    await emitAgentStarted(call, agentId, adapterId, 'claude-code', confirmedId, sessionId, {
       model: 'claude-sonnet-4-20250514',
     });
 
-    const sessionAfter = await MakaioBus.request(SessionSubjects.get, { sessionId });
+    const sessionAfter = await MakaioBus.request(call, SessionSubjects.get, { sessionId });
     expect(sessionAfter.session?.adapterSessionId).toBe(confirmedId);
     expect(sessionAfter.session?.adapterName).toBe('claude-code');
     expect(sessionAfter.session?.adapterId).toBe(adapterId);

@@ -7,6 +7,7 @@
  */
 
 import type { IMakaioBus } from '@makaio/bus-core';
+import type { CallContext } from '@makaio/core';
 import { PackageSubjects } from '@makaio/services-package-manager';
 import type { InstallProgress } from '../types.js';
 
@@ -25,6 +26,7 @@ export interface InstalledExtensionPackage {
  * surfaces a clear error identifying the offending package. On the first
  * failure the function throws immediately without attempting the remaining
  * packages.
+ * @param call - Call context for this operation.
  * @param bus - The bus instance.
  * @param packageNames - Package names to install (in order).
  * @returns Install progress entries for each package, up to and including
@@ -32,13 +34,14 @@ export interface InstalledExtensionPackage {
  * @throws If any package installation fails.
  */
 export async function installExtensionPackages(
+  call: CallContext,
   bus: IMakaioBus,
   packageNames: readonly string[],
 ): Promise<InstallProgress[]> {
   const results: InstallProgress[] = [];
 
   for (const packageName of packageNames) {
-    const response = await bus.request(PackageSubjects.install, {
+    const response = await bus.request(call, PackageSubjects.install, {
       packageNames: [packageName],
       source: 'npm' as const,
     });
@@ -62,10 +65,14 @@ export async function installExtensionPackages(
 
 /**
  * Lists installed extensions through the package-manager service.
+ * @param call - Call context for this operation.
  * @param bus - The bus instance.
  * @returns Installed package names and versions.
  */
-export async function listInstalledExtensionPackages(bus: IMakaioBus): Promise<readonly InstalledExtensionPackage[]> {
-  const response = await bus.request(PackageSubjects.list, {});
+export async function listInstalledExtensionPackages(
+  call: CallContext,
+  bus: IMakaioBus,
+): Promise<readonly InstalledExtensionPackage[]> {
+  const response = await bus.request(call, PackageSubjects.list, {});
   return response.packages.map((pkg) => ({ name: pkg.name, version: pkg.version }));
 }

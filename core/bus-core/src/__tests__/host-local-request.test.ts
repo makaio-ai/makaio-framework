@@ -25,7 +25,6 @@ import { z } from 'zod';
 import { createBusNamespace } from '@makaio/core';
 import {
   createBusInstance,
-  createBusContext,
   hostLocalRequest,
   localSubject,
   NoHandlerError,
@@ -34,6 +33,7 @@ import {
   type BusRequestMessage,
   type BusTransport,
 } from '../index.js';
+import { busContextOf, createBusContext } from '../kernel-api.js';
 import { createBidirectionalTransportPair, MockTransport } from './helpers/transport-fixtures.js';
 
 // ---------------------------------------------------------------------------
@@ -117,7 +117,7 @@ describe('Proof 1: local handler advertised to connected transports', () => {
     );
 
     // Register transport — syncAllSubjectsToTransport will push advertised state
-    const reg = busA.getContext().transportRegistry.registerTransport('test-transport' as never, transport);
+    const reg = busContextOf(busA).transportRegistry.registerTransport('test-transport' as never, transport);
 
     // Allow the microtask chain to settle
     await new Promise<void>((resolve) => setTimeout(resolve, 50));
@@ -155,7 +155,7 @@ describe('Proof 1: local handler advertised to connected transports', () => {
       unsubscribe: vi.fn(async () => {}),
     };
 
-    const reg = busA.getContext().transportRegistry.registerTransport('test-transport-2' as never, transport);
+    const reg = busContextOf(busA).transportRegistry.registerTransport('test-transport-2' as never, transport);
 
     await new Promise<void>((resolve) => setTimeout(resolve, 20));
     subscribeSpy.mockClear();
@@ -218,16 +218,16 @@ describe('Proof 2: foreign priorities never re-advertised for hostLocalRequest',
     try {
       await waitForSubscriptionPropagation(cleanup);
 
-      expect(busB.getContext().remoteRequestHandlers.get('hostLocal.resolve')).toEqual([
+      expect(busContextOf(busB).remoteRequestHandlers.get('hostLocal.resolve')).toEqual([
         { transport: pairAB.sideB.name, priority: 0 },
       ]);
-      expect(busC.getContext().remoteRequestHandlers.has('hostLocal.resolve')).toBe(false);
+      expect(busContextOf(busC).remoteRequestHandlers.has('hostLocal.resolve')).toBe(false);
 
       cleanup();
       await new Promise<void>((resolve) => queueMicrotask(resolve));
 
-      expect(busB.getContext().remoteRequestHandlers.has('hostLocal.resolve')).toBe(false);
-      expect(busC.getContext().remoteRequestHandlers.has('hostLocal.resolve')).toBe(false);
+      expect(busContextOf(busB).remoteRequestHandlers.has('hostLocal.resolve')).toBe(false);
+      expect(busContextOf(busC).remoteRequestHandlers.has('hostLocal.resolve')).toBe(false);
     } finally {
       busA.disconnect();
       busB.disconnect();
@@ -249,7 +249,7 @@ describe('Proof 2: foreign priorities never re-advertised for hostLocalRequest',
     );
 
     // Simulate that busB has learned foreign priorities from busA
-    busB.getContext().remoteRequestHandlers.set('hostLocal.resolve', [{ transport: 'transport-to-a', priority: 300 }]);
+    busContextOf(busB).remoteRequestHandlers.set('hostLocal.resolve', [{ transport: 'transport-to-a', priority: 300 }]);
 
     // Now connect a new transport (to busC) and observe what is advertised
     const subscribeSpy = vi.fn<BusTransport['subscribe']>();
@@ -263,7 +263,7 @@ describe('Proof 2: foreign priorities never re-advertised for hostLocalRequest',
       unsubscribe: vi.fn(async () => {}),
     };
 
-    const reg = busB.getContext().transportRegistry.registerTransport('transport-to-c' as never, transportToC);
+    const reg = busContextOf(busB).transportRegistry.registerTransport('transport-to-c' as never, transportToC);
 
     await new Promise<void>((resolve) => setTimeout(resolve, 50));
 
@@ -298,10 +298,13 @@ describe('Proof 2: foreign priorities never re-advertised for hostLocalRequest',
     );
 
     // Simulate that busB has learned foreign priorities from busA for ordinary
-    busB.getContext().remoteRequestHandlers.set('hostLocal.ordinary', [{ transport: 'transport-to-a', priority: 300 }]);
-    busB
-      .getContext()
-      .remoteSubscriptionDeliveryClasses.set('hostLocal.ordinary', new Map([['transport-to-a', 'relayable']]));
+    busContextOf(busB).remoteRequestHandlers.set('hostLocal.ordinary', [
+      { transport: 'transport-to-a', priority: 300 },
+    ]);
+    busContextOf(busB).remoteSubscriptionDeliveryClasses.set(
+      'hostLocal.ordinary',
+      new Map([['transport-to-a', 'relayable']]),
+    );
 
     const subscribeSpy = vi.fn<BusTransport['subscribe']>();
     const transportToC: BusTransport = {
@@ -314,7 +317,7 @@ describe('Proof 2: foreign priorities never re-advertised for hostLocalRequest',
       unsubscribe: vi.fn(async () => {}),
     };
 
-    const reg = busB.getContext().transportRegistry.registerTransport('transport-to-c-2' as never, transportToC);
+    const reg = busContextOf(busB).transportRegistry.registerTransport('transport-to-c-2' as never, transportToC);
 
     await new Promise<void>((resolve) => setTimeout(resolve, 50));
 
@@ -361,10 +364,12 @@ describe('Proof 3: local request reaches directly advertised remote handler', ()
     busB.registerTransport(sideB);
 
     // Seed remote handler knowledge on busA
-    busA.getContext().remoteRequestHandlers.set('hostLocal.resolve', [{ transport: sideA.name, priority: 0 }]);
+    busContextOf(busA).remoteRequestHandlers.set('hostLocal.resolve', [{ transport: sideA.name, priority: 0 }]);
 
     try {
-      const result = await busA.request(HostLocalNamespaceDef.subjects.resolve, { capabilityId: 'test-cap' });
+      const result = await busA.request(busA.own('root'), HostLocalNamespaceDef.subjects.resolve, {
+        capabilityId: 'test-cap',
+      });
       expect(result.available).toBe(true);
     } finally {
       cleanupB();
@@ -396,15 +401,15 @@ describe('Proof 3: local request reaches directly advertised remote handler', ()
 
     try {
       await waitForSubscriptionPropagation(cleanup);
-      expect(busA.getContext().remoteRequestHandlers.get('hostLocal.*')).toEqual([
+      expect(busContextOf(busA).remoteRequestHandlers.get('hostLocal.*')).toEqual([
         { transport: pair.sideA.name, priority: 0 },
       ]);
-      expect(busA.getContext().remoteRequestHandlers.get('hostLocal.resolve')).toEqual([
+      expect(busContextOf(busA).remoteRequestHandlers.get('hostLocal.resolve')).toEqual([
         { transport: pair.sideA.name, priority: 0 },
       ]);
 
       await expect(
-        busA.request(HostLocalNamespaceDef.subjects.resolve, { capabilityId: 'direct-wildcard' }),
+        busA.request(busA.own('root'), HostLocalNamespaceDef.subjects.resolve, { capabilityId: 'direct-wildcard' }),
       ).rejects.toThrow(NoHandlerError);
       expect(handlerSpy).toHaveBeenCalledOnce();
     } finally {
@@ -448,15 +453,17 @@ describe('Proof 4: inbound hostLocalRequest uses only local handlers', () => {
     busC.registerTransport(sideBC_C);
 
     // busA knows busB has a handler
-    busA.getContext().remoteRequestHandlers.set('hostLocal.resolve', [{ transport: sideAB_A.name, priority: 0 }]);
+    busContextOf(busA).remoteRequestHandlers.set('hostLocal.resolve', [{ transport: sideAB_A.name, priority: 0 }]);
 
     // busB also knows busC has a handler (via subscribe propagation for ordinary
     // subjects, but for hostLocalRequest these are NOT re-advertised; we seed
     // them manually to prove dispatch suppression regardless)
-    busB.getContext().remoteRequestHandlers.set('hostLocal.resolve', [{ transport: sideBC_B.name, priority: 0 }]);
+    busContextOf(busB).remoteRequestHandlers.set('hostLocal.resolve', [{ transport: sideBC_B.name, priority: 0 }]);
 
     try {
-      const result = await busA.request(HostLocalNamespaceDef.subjects.resolve, { capabilityId: 'test-cap' });
+      const result = await busA.request(busA.own('root'), HostLocalNamespaceDef.subjects.resolve, {
+        capabilityId: 'test-cap',
+      });
 
       // busB's handler should have responded
       expect(result.available).toBe(true);
@@ -506,7 +513,7 @@ describe('Proof 5: receiver resolves hostLocalRequest from metadata, not wire fl
     busC.registerTransport(sideBC_C);
 
     // Seed busB's knowledge of busC's handler
-    busB.getContext().remoteRequestHandlers.set('hostLocal.resolve', [{ transport: sideBC_B.name, priority: 0 }]);
+    busContextOf(busB).remoteRequestHandlers.set('hostLocal.resolve', [{ transport: sideBC_B.name, priority: 0 }]);
 
     try {
       // Inject a request directly into busB's transport — the wire message
@@ -570,9 +577,10 @@ describe('Proof 6: inbound hostLocalRequest skips readiness gate', () => {
       ready: new Promise<void>(() => {}), // never resolves
     };
 
-    const neverReadyReg = busB
-      .getContext()
-      .transportRegistry.registerTransport('never-ready-transport' as never, neverReady);
+    const neverReadyReg = busContextOf(busB).transportRegistry.registerTransport(
+      'never-ready-transport' as never,
+      neverReady,
+    );
 
     try {
       // Inject an inbound request. With localOnly: true (from hostLocalRequest
@@ -653,10 +661,12 @@ describe('Proof 7: priority-cursor semantics intact for hostLocalRequest', () =>
     busB.registerTransport(sideB);
 
     // busA knows about busB's handler (advertised priorities)
-    busA.getContext().remoteRequestHandlers.set('hostLocal.resolve', [{ transport: sideA.name, priority: 200 }]);
+    busContextOf(busA).remoteRequestHandlers.set('hostLocal.resolve', [{ transport: sideA.name, priority: 200 }]);
 
     try {
-      const result = await busA.request(HostLocalNamespaceDef.subjects.resolve, { capabilityId: 'cursor-test' });
+      const result = await busA.request(busA.own('root'), HostLocalNamespaceDef.subjects.resolve, {
+        capabilityId: 'cursor-test',
+      });
 
       // Both busB handlers should run in priority order
       expect(executionOrder).toEqual(['busB-200', 'busB-0']);
@@ -688,10 +698,12 @@ describe('Proof 7: priority-cursor semantics intact for hostLocalRequest', () =>
     busB.registerTransport(sideB);
 
     // busA knows about busB's handler at priority 0
-    busA.getContext().remoteRequestHandlers.set('hostLocal.resolve', [{ transport: sideA.name, priority: 0 }]);
+    busContextOf(busA).remoteRequestHandlers.set('hostLocal.resolve', [{ transport: sideA.name, priority: 0 }]);
 
     try {
-      const result = await busA.request(HostLocalNamespaceDef.subjects.resolve, { capabilityId: 'no-cursor-test' });
+      const result = await busA.request(busA.own('root'), HostLocalNamespaceDef.subjects.resolve, {
+        capabilityId: 'no-cursor-test',
+      });
 
       // Direct first hop — no cursor sent, terminal handler must run
       expect(result.available).toBe(true);
@@ -739,36 +751,38 @@ describe('Proof 8: A—B—C topology prevents relay through B', () => {
     try {
       await waitForSubscriptionPropagation(cleanupC);
 
-      expect(busB.getContext().remoteRequestHandlers.get('hostLocal.resolve')).toEqual([
+      expect(busContextOf(busB).remoteRequestHandlers.get('hostLocal.resolve')).toEqual([
         { transport: pairBC.sideA.name, priority: 0 },
       ]);
-      expect(busB.getContext().remoteSubscriptionDeliveryClasses.get('hostLocal.resolve')?.get(pairBC.sideA.name)).toBe(
-        'first-hop-only',
-      );
-      expect(busA.getContext().remoteRequestHandlers.has('hostLocal.resolve')).toBe(false);
+      expect(
+        busContextOf(busB).remoteSubscriptionDeliveryClasses.get('hostLocal.resolve')?.get(pairBC.sideA.name),
+      ).toBe('first-hop-only');
+      expect(busContextOf(busA).remoteRequestHandlers.has('hostLocal.resolve')).toBe(false);
 
       // Force a stale/forged A→B route. B must still enforce the owner-derived
       // subscription provenance and refuse to turn ingress into a second hop.
-      busA.getContext().remoteRequestHandlers.set('hostLocal.resolve', [{ transport: pairAB.sideA.name, priority: 0 }]);
+      busContextOf(busA).remoteRequestHandlers.set('hostLocal.resolve', [
+        { transport: pairAB.sideA.name, priority: 0 },
+      ]);
 
       await expect(
-        busA.request(HostLocalNamespaceDef.subjects.resolve, { capabilityId: 'schema-less-relay' }),
+        busA.request(busA.own('root'), HostLocalNamespaceDef.subjects.resolve, { capabilityId: 'schema-less-relay' }),
       ).rejects.toThrow(NoHandlerError);
       expect(handlerCSpy).not.toHaveBeenCalled();
 
       cleanupC();
       await vi.waitFor(() => {
-        expect(busB.getContext().remoteSubscriptionDeliveryClasses.has('hostLocal.resolve')).toBe(false);
+        expect(busContextOf(busB).remoteSubscriptionDeliveryClasses.has('hostLocal.resolve')).toBe(false);
       });
 
       cleanupC = busC.on(HostLocalNamespaceDef.subjects.resolve, (ctx) => {
         ctx.setResult({ available: true });
       });
       await waitForSubscriptionPropagation(cleanupC);
-      expect(busB.getContext().remoteSubscriptionDeliveryClasses.has('hostLocal.resolve')).toBe(true);
+      expect(busContextOf(busB).remoteSubscriptionDeliveryClasses.has('hostLocal.resolve')).toBe(true);
 
       registrationBC.unregister();
-      expect(busB.getContext().remoteSubscriptionDeliveryClasses.has('hostLocal.resolve')).toBe(false);
+      expect(busContextOf(busB).remoteSubscriptionDeliveryClasses.has('hostLocal.resolve')).toBe(false);
     } finally {
       cleanupC();
       busA.disconnect();
@@ -808,18 +822,18 @@ describe('Proof 8: A—B—C topology prevents relay through B', () => {
     try {
       await waitForSubscriptionPropagation(cleanupC);
 
-      expect(busB.getContext().remoteSubscriptionDeliveryClasses.get('hostLocal.*')?.get(pairBC.sideA.name)).toBe(
+      expect(busContextOf(busB).remoteSubscriptionDeliveryClasses.get('hostLocal.*')?.get(pairBC.sideA.name)).toBe(
         'relayable',
       );
-      expect(busB.getContext().remoteSubscriptionDeliveryClasses.get('hostLocal.resolve')?.get(pairBC.sideA.name)).toBe(
-        'first-hop-only',
-      );
-      expect(busA.getContext().remoteRequestHandlers.get('hostLocal.*')).toEqual([
+      expect(
+        busContextOf(busB).remoteSubscriptionDeliveryClasses.get('hostLocal.resolve')?.get(pairBC.sideA.name),
+      ).toBe('first-hop-only');
+      expect(busContextOf(busA).remoteRequestHandlers.get('hostLocal.*')).toEqual([
         { transport: pairAB.sideA.name, priority: 0 },
       ]);
 
       await expect(
-        busA.request(HostLocalNamespaceDef.subjects.resolve, { capabilityId: 'wildcard-relay' }),
+        busA.request(busA.own('root'), HostLocalNamespaceDef.subjects.resolve, { capabilityId: 'wildcard-relay' }),
       ).rejects.toThrow(NoHandlerError);
       expect(handlerCSpy).not.toHaveBeenCalled();
     } finally {
@@ -858,16 +872,21 @@ describe('Proof 8: A—B—C topology prevents relay through B', () => {
     // would not happen because busB does not re-advertise foreign priorities
     // for hostLocalRequest subjects, but we seed it to prove dispatch-level
     // suppression as a defense-in-depth)
-    busA.getContext().remoteRequestHandlers.set('hostLocal.resolve', [{ transport: pairAB.sideA.name, priority: 0 }]);
+    busContextOf(busA).remoteRequestHandlers.set('hostLocal.resolve', [{ transport: pairAB.sideA.name, priority: 0 }]);
 
     // busB has learned about busC's handler
-    busB.getContext().remoteRequestHandlers.set('hostLocal.resolve', [{ transport: pairBC.sideA.name, priority: 0 }]);
+    busContextOf(busB).remoteRequestHandlers.set('hostLocal.resolve', [{ transport: pairBC.sideA.name, priority: 0 }]);
 
     try {
       // busA's request should get NoHandlerError because busB has no local
       // handler and cannot relay to busC.
       await expect(
-        busA.request(HostLocalNamespaceDef.subjects.resolve, { capabilityId: 'test' }, { timeout: 2000 }),
+        busA.request(
+          busA.own('root'),
+          HostLocalNamespaceDef.subjects.resolve,
+          { capabilityId: 'test' },
+          { timeout: 2000 },
+        ),
       ).rejects.toThrow(NoHandlerError);
 
       // busC's handler must NOT have been invoked
@@ -901,16 +920,18 @@ describe('Proof 8: A—B—C topology prevents relay through B', () => {
     busC.registerTransport(pairBC.sideB);
 
     // busA knows busB has a handler (or relay) for ordinary
-    busA.getContext().remoteRequestHandlers.set('hostLocal.ordinary', [{ transport: pairAB.sideA.name, priority: 0 }]);
+    busContextOf(busA).remoteRequestHandlers.set('hostLocal.ordinary', [{ transport: pairAB.sideA.name, priority: 0 }]);
 
     // busB knows about busC's handler for ordinary subject
-    busB.getContext().remoteRequestHandlers.set('hostLocal.ordinary', [{ transport: pairBC.sideA.name, priority: 0 }]);
-    busB
-      .getContext()
-      .remoteSubscriptionDeliveryClasses.set('hostLocal.ordinary', new Map([[pairBC.sideA.name, 'relayable']]));
+    busContextOf(busB).remoteRequestHandlers.set('hostLocal.ordinary', [{ transport: pairBC.sideA.name, priority: 0 }]);
+    busContextOf(busB).remoteSubscriptionDeliveryClasses.set(
+      'hostLocal.ordinary',
+      new Map([[pairBC.sideA.name, 'relayable']]),
+    );
 
     try {
       const result = await busA.request(
+        busA.own('root'),
         HostLocalNamespaceDef.subjects.ordinary,
         { id: 'relay-test' },
         { timeout: 2000 },
@@ -939,7 +960,12 @@ describe('Proof 9: missing direct ownership returns NoHandler promptly', () => {
     // No handler registered — should get NoHandlerError immediately
     try {
       await expect(
-        busA.request(HostLocalNamespaceDef.subjects.resolve, { capabilityId: 'missing' }, { timeout: 2000 }),
+        busA.request(
+          busA.own('root'),
+          HostLocalNamespaceDef.subjects.resolve,
+          { capabilityId: 'missing' },
+          { timeout: 2000 },
+        ),
       ).rejects.toThrow(NoHandlerError);
     } finally {
       busA.disconnect();
@@ -962,7 +988,7 @@ describe('Proof 9: missing direct ownership returns NoHandler promptly', () => {
       ready: deferred.promise,
     };
 
-    const reg = busA.getContext().transportRegistry.registerTransport('deferred-transport' as never, transport);
+    const reg = busContextOf(busA).transportRegistry.registerTransport('deferred-transport' as never, transport);
 
     // Resolve ready quickly but without seeding any handlers
     setTimeout(() => {
@@ -975,7 +1001,12 @@ describe('Proof 9: missing direct ownership returns NoHandler promptly', () => {
       // dispatch. Without a local handler or remote handler, it should fail
       // promptly after the readiness gate resolves.
       await expect(
-        busA.request(HostLocalNamespaceDef.subjects.resolve, { capabilityId: 'no-handler' }, { timeout: 2000 }),
+        busA.request(
+          busA.own('root'),
+          HostLocalNamespaceDef.subjects.resolve,
+          { capabilityId: 'no-handler' },
+          { timeout: 2000 },
+        ),
       ).rejects.toThrow(NoHandlerError);
     } finally {
       reg.unregister();
@@ -1006,10 +1037,10 @@ describe('Proof 10: existing routing behaviors unchanged', () => {
     busA.registerTransport(sideA);
     busB.registerTransport(sideB);
 
-    busA.getContext().remoteRequestHandlers.set('hostLocal.ordinary', [{ transport: sideA.name, priority: 0 }]);
+    busContextOf(busA).remoteRequestHandlers.set('hostLocal.ordinary', [{ transport: sideA.name, priority: 0 }]);
 
     try {
-      const result = await busA.request(HostLocalNamespaceDef.subjects.ordinary, { id: 'test' });
+      const result = await busA.request(busA.own('root'), HostLocalNamespaceDef.subjects.ordinary, { id: 'test' });
       expect(result.value).toBe('ordinary-works');
     } finally {
       cleanupB();
@@ -1069,7 +1100,7 @@ describe('Proof 10: existing routing behaviors unchanged', () => {
     const bus = createBusInstance({ context: createBusContext() });
     registerTestNamespace(bus);
 
-    const registry = bus.getContext().namespaceRegistry;
+    const registry = busContextOf(bus).namespaceRegistry;
 
     // hostLocalRequest subject
     expect(registry.isHostLocalRequestSubject('hostLocal.resolve')).toBe(true);
@@ -1090,7 +1121,7 @@ describe('Proof 10: existing routing behaviors unchanged', () => {
     const bus = createBusInstance({ context: createBusContext() });
     registerTestNamespace(bus);
 
-    const registry = bus.getContext().namespaceRegistry;
+    const registry = busContextOf(bus).namespaceRegistry;
     const subjects = registry.listRegisteredSubjects();
 
     const resolveSubject = subjects.find((s) => s.fullSubject === 'hostLocal.resolve');

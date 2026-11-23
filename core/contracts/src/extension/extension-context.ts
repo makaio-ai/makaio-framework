@@ -1,4 +1,4 @@
-import type { MakaioBusLike } from '@makaio/core';
+import type { CallContext, MakaioBusLike } from '@makaio/core';
 import type { CredentialRef } from '../config/credential-ref.js';
 import type { ExtensionToken } from './extension-token.js';
 import type { ExtensionIdentity } from './extension-lifecycle.js';
@@ -29,10 +29,15 @@ export interface CredentialResolver {
    * Returns `null` when the referenced credential is unavailable (environment
    * variable unset, file missing, keychain entry absent, or `stored:` service
    * not registered).
+   *
+   * The resolver is bound per extension: the core knows which carrier asks and
+   * sets the requesting carrier itself, so the passed context only names the
+   * work the lookup belongs to.
+   * @param call - Call context of the work this lookup belongs to.
    * @param ref - Branded credential reference string.
    * @returns Resolved plaintext value, or `null` when unavailable.
    */
-  resolve(ref: CredentialRef): Promise<string | null>;
+  resolve(call: CallContext, ref: CredentialRef): Promise<string | null>;
 }
 
 /**
@@ -44,7 +49,11 @@ export interface CredentialResolver {
  * context extensions such as {@link NodeExtensionContext}.
  */
 export interface ExtensionContext<TBus extends MakaioBusLike = MakaioBusLike> {
-  /** Bus instance for registering handlers and emitting events. */
+  /**
+   * Bus instance for registering handlers and emitting events, bound to this
+   * extension: the extension is the caller of every message it sends. Its own
+   * call context comes from `bus.own(purpose)`.
+   */
   readonly bus: TBus;
   /** Coordinator-minted identity for the extension being created. */
   readonly identity: ExtensionIdentity;
@@ -147,6 +156,9 @@ export interface NodeExtensionContext<TBus extends MakaioBusLike = MakaioBusLike
    * `stored:providerConfig:<configId>:<key>` through the host's credential
    * service when one is registered, returning `null` with a warning when none
    * is available (bare headless hosts).
+   *
+   * The resolver is bound to this extension: the core sets the requesting
+   * carrier, the extension does not name itself.
    *
    * Absent when the host does not provide one (e.g., browser-only contexts).
    * Extensions **must never log resolved values**.

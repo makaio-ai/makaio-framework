@@ -9,6 +9,7 @@
 
 import type { IMakaioBus } from '@makaio/bus-core';
 import { SessionSubjects } from '@makaio/contracts';
+import type { CallContext } from '@makaio/core';
 
 /**
  * Announce that a session's compaction ordinal advanced.
@@ -26,11 +27,12 @@ import { SessionSubjects } from '@makaio/contracts';
  *
  * Fire-and-forget, exactly as on the rebind path: entity-cache reactivity is
  * best-effort and must not fail the write that already landed.
+ * @param call - Call context of the handled session update
  * @param bus - Bus to emit on
  * @param sessionId - Session whose ordinal advanced
  */
-export function emitSessionGenerationAdvanced(bus: IMakaioBus, sessionId: string): void {
+export function emitSessionGenerationAdvanced(call: CallContext, bus: IMakaioBus, sessionId: string): void {
   void bus
-    .emit(SessionSubjects.updated, { sessionId, changedProperties: ['generation'] })
+    .emit(call, SessionSubjects.updated, { sessionId, changedProperties: ['generation'] })
     .catch((err) => console.error('[SessionStorage] Failed to emit session.updated:', err));
 }

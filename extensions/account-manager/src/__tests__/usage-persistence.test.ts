@@ -1,6 +1,8 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { createBusInstance } from '@makaio/bus-core';
 import type { IMakaioBus } from '@makaio/bus-core';
+import type { CallContext } from '@makaio/contracts';
+import { createTestCall } from '@makaio/test-utils';
 import { AccountManagerSubjects } from '../bus/namespace.js';
 import type { AccountUsage, UsageWindow } from '../bus/schemas.js';
 import { UsageTracker } from '../handlers/usage-tracker.js';
@@ -221,7 +223,8 @@ function buildTracker(
     writer === undefined
       ? store.usageSnapshotStore
       : {
-          append: (_clientId: string, _accountId: string, entry: UsageEntry) => writer.append(entry),
+          append: (_call: CallContext, _clientId: string, _accountId: string, entry: UsageEntry) =>
+            writer.append(entry),
           read: async function* () {},
           hasAnySnapshots: async () => false,
         };
@@ -260,10 +263,11 @@ async function seedAccount(store: InMemoryAccountStore): Promise<void> {
 
 /**
  * Emits a `credentials.detected` event for the default test client/account.
+ * @param call - Call context of the simulated message
  * @param bus - Bus instance to emit on
  */
-async function emitDetected(bus: IMakaioBus): Promise<void> {
-  await bus.emit(AccountManagerSubjects.credentials.detected, {
+async function emitDetected(call: CallContext, bus: IMakaioBus): Promise<void> {
+  await bus.emit(call, AccountManagerSubjects.credentials.detected, {
     clientId: CLIENT_ID,
     account: {
       id: ACCOUNT_ID,
@@ -277,10 +281,11 @@ async function emitDetected(bus: IMakaioBus): Promise<void> {
 
 /**
  * Emits a `credentials.refreshed` event for the default test client/account.
+ * @param call - Call context of the simulated message
  * @param bus - Bus instance to emit on
  */
-async function emitRefreshed(bus: IMakaioBus): Promise<void> {
-  await bus.emit(AccountManagerSubjects.credentials.refreshed, {
+async function emitRefreshed(call: CallContext, bus: IMakaioBus): Promise<void> {
+  await bus.emit(call, AccountManagerSubjects.credentials.refreshed, {
     clientId: CLIENT_ID,
     account: {
       id: ACCOUNT_ID,
@@ -322,7 +327,7 @@ describe('UsageTracker persistence / delta-filter integration', () => {
     const provider = makeProvider(async () => makeUsage([window5h, window7d], { fetchedAt }));
 
     tracker = buildTracker(bus, store, provider, writer);
-    await emitDetected(bus);
+    await emitDetected(createTestCall(), bus);
 
     expect(writer.entries).toHaveLength(2);
     const ids = writer.entries.map((entry) => entry.windowId);
@@ -348,14 +353,14 @@ describe('UsageTracker persistence / delta-filter integration', () => {
     tracker = buildTracker(bus, store, provider, writer);
 
     // First fetch — both windows written.
-    await emitDetected(bus);
+    await emitDetected(createTestCall(), bus);
     expect(writer.entries).toHaveLength(2);
 
     writer.clear();
 
     // Advance past the throttle and emit again — same utilization and resetsAt.
     await vi.advanceTimersByTimeAsync(PAST_THROTTLE_MS);
-    await emitDetected(bus);
+    await emitDetected(createTestCall(), bus);
 
     expect(writer.entries).toHaveLength(0);
   });
@@ -374,7 +379,7 @@ describe('UsageTracker persistence / delta-filter integration', () => {
     tracker = buildTracker(bus, store, provider, writer);
 
     // First fetch.
-    await emitDetected(bus);
+    await emitDetected(createTestCall(), bus);
     expect(writer.entries).toHaveLength(2);
 
     writer.clear();
@@ -382,7 +387,7 @@ describe('UsageTracker persistence / delta-filter integration', () => {
 
     // Second fetch after throttle — only 5h changed.
     await vi.advanceTimersByTimeAsync(PAST_THROTTLE_MS);
-    await emitDetected(bus);
+    await emitDetected(createTestCall(), bus);
 
     expect(writer.entries).toHaveLength(1);
     expect(writer.entries[0].windowId).toBe('5h');
@@ -406,7 +411,7 @@ describe('UsageTracker persistence / delta-filter integration', () => {
     tracker = buildTracker(bus, store, provider, writer);
 
     // First fetch — not blocked.
-    await emitDetected(bus);
+    await emitDetected(createTestCall(), bus);
     expect(writer.entries).toHaveLength(2);
 
     writer.clear();
@@ -414,7 +419,7 @@ describe('UsageTracker persistence / delta-filter integration', () => {
 
     // Second fetch after throttle — blocked flipped, utilization unchanged.
     await vi.advanceTimersByTimeAsync(PAST_THROTTLE_MS);
-    await emitDetected(bus);
+    await emitDetected(createTestCall(), bus);
 
     // Both windows must be written because the blocked flag changed.
     expect(writer.entries).toHaveLength(2);
@@ -429,7 +434,7 @@ describe('UsageTracker persistence / delta-filter integration', () => {
     tracker = buildTracker(bus, store, provider, writer);
 
     // First fetch.
-    await emitDetected(bus);
+    await emitDetected(createTestCall(), bus);
     expect(writer.entries).toHaveLength(1);
 
     writer.clear();
@@ -437,7 +442,7 @@ describe('UsageTracker persistence / delta-filter integration', () => {
 
     // Second fetch after throttle — resetsAt changed, utilization still 0.
     await vi.advanceTimersByTimeAsync(PAST_THROTTLE_MS);
-    await emitDetected(bus);
+    await emitDetected(createTestCall(), bus);
 
     expect(writer.entries).toHaveLength(1);
     expect(writer.entries[0].windowId).toBe('5h');
@@ -458,7 +463,7 @@ describe('UsageTracker persistence / delta-filter integration', () => {
     });
 
     try {
-      await emitDetected(bus);
+      await emitDetected(createTestCall(), bus);
       // Drain microtasks so schedulePersistence's fire-and-forget chain
       // reaches the (throwing) writer.
       await vi.advanceTimersByTimeAsync(0);
@@ -480,9 +485,9 @@ describe('UsageTracker persistence / delta-filter integration', () => {
     const provider = makeProvider(async () => currentUsage);
 
     tracker = buildTracker(bus, store, provider, writer);
-    await emitDetected(bus);
+    await emitDetected(createTestCall(), bus);
 
-    let result = await bus.request(AccountManagerSubjects.usage.get, {
+    let result = await bus.request(createTestCall(), AccountManagerSubjects.usage.get, {
       clientId: CLIENT_ID,
       accountId: ACCOUNT_ID,
     });
@@ -493,9 +498,9 @@ describe('UsageTracker persistence / delta-filter integration', () => {
     currentUsage = null;
 
     await vi.advanceTimersByTimeAsync(PAST_THROTTLE_MS);
-    await emitDetected(bus);
+    await emitDetected(createTestCall(), bus);
 
-    result = await bus.request(AccountManagerSubjects.usage.get, {
+    result = await bus.request(createTestCall(), AccountManagerSubjects.usage.get, {
       clientId: CLIENT_ID,
       accountId: ACCOUNT_ID,
     });
@@ -519,19 +524,19 @@ describe('UsageTracker persistence / delta-filter integration', () => {
     });
 
     tracker = buildTracker(bus, store, provider, writer);
-    await emitDetected(bus);
+    await emitDetected(createTestCall(), bus);
     expect(resolveCount).toBe(1);
 
     currentUsage = null;
     await vi.advanceTimersByTimeAsync(PAST_THROTTLE_MS);
-    await emitDetected(bus);
+    await emitDetected(createTestCall(), bus);
     expect(resolveCount).toBe(2);
 
-    await emitRefreshed(bus);
+    await emitRefreshed(createTestCall(), bus);
     expect(resolveCount).toBe(2);
 
     await vi.advanceTimersByTimeAsync(PAST_THROTTLE_MS);
-    await emitRefreshed(bus);
+    await emitRefreshed(createTestCall(), bus);
     expect(resolveCount).toBe(3);
   });
 
@@ -552,10 +557,10 @@ describe('UsageTracker persistence / delta-filter integration', () => {
     });
 
     try {
-      const fetchPromise = emitDetected(bus);
+      const fetchPromise = emitDetected(createTestCall(), bus);
       await started.promise;
 
-      const clearPromise = tracker.clearAccountStateAndWait(CLIENT_ID, ACCOUNT_ID);
+      const clearPromise = tracker.clearAccountStateAndWait(createTestCall(), CLIENT_ID, ACCOUNT_ID);
       let cleared = false;
       void clearPromise.then(() => {
         cleared = true;
@@ -589,7 +594,7 @@ describe('UsageTracker persistence / delta-filter integration', () => {
     });
 
     try {
-      const fetchPromise = emitDetected(bus);
+      const fetchPromise = emitDetected(createTestCall(), bus);
       await delayedWriter.started.promise;
       await fetchPromise;
 
@@ -609,11 +614,11 @@ describe('UsageTracker persistence / delta-filter integration', () => {
     tracker = buildTracker(bus, store, provider, delayedWriter);
 
     try {
-      await emitDetected(bus);
+      await emitDetected(createTestCall(), bus);
       await delayedWriter.started.promise;
 
       let cleared = false;
-      const clearPromise = tracker.clearAccountStateAndWait(CLIENT_ID, ACCOUNT_ID).then(() => {
+      const clearPromise = tracker.clearAccountStateAndWait(createTestCall(), CLIENT_ID, ACCOUNT_ID).then(() => {
         cleared = true;
       });
 
@@ -637,7 +642,7 @@ describe('UsageTracker persistence / delta-filter integration', () => {
     tracker = buildTracker(bus, store, provider, delayedWriter);
 
     try {
-      await emitDetected(bus);
+      await emitDetected(createTestCall(), bus);
       await delayedWriter.started.promise;
 
       let stopped = false;
@@ -665,12 +670,12 @@ describe('UsageTracker persistence / delta-filter integration', () => {
 
     tracker = buildTracker(bus, store, provider, flakyWriter);
 
-    await emitDetected(bus);
+    await emitDetected(createTestCall(), bus);
     expect(flakyWriter.attempts).toBe(1);
     expect(flakyWriter.entries).toHaveLength(0);
 
     await vi.advanceTimersByTimeAsync(PAST_THROTTLE_MS);
-    await emitDetected(bus);
+    await emitDetected(createTestCall(), bus);
 
     expect(flakyWriter.attempts).toBe(2);
     expect(flakyWriter.entries).toHaveLength(1);
@@ -690,13 +695,13 @@ describe('UsageTracker persistence / delta-filter integration', () => {
 
     tracker = buildTracker(bus, store, provider, partialThrowWriter);
 
-    await emitDetected(bus);
+    await emitDetected(createTestCall(), bus);
     expect(partialThrowWriter.attempts).toEqual(['5h', '7d']);
     expect(partialThrowWriter.entries).toHaveLength(1);
     expect(partialThrowWriter.entries[0].windowId).toBe('5h');
 
     await vi.advanceTimersByTimeAsync(PAST_THROTTLE_MS);
-    await emitDetected(bus);
+    await emitDetected(createTestCall(), bus);
 
     expect(partialThrowWriter.attempts).toEqual(['5h', '7d', '7d']);
     expect(partialThrowWriter.entries).toHaveLength(2);
@@ -709,7 +714,7 @@ describe('UsageTracker persistence / delta-filter integration', () => {
     const provider = makeProvider(async () => makeUsage([makeWindow()]));
 
     tracker = buildTracker(bus, store, provider, writer);
-    await emitDetected(bus);
+    await emitDetected(createTestCall(), bus);
 
     expect(writer.entries).toHaveLength(1);
     expect(writer.entries[0].blocked).toBe(false);
@@ -728,7 +733,7 @@ describe('UsageTracker persistence / delta-filter integration', () => {
     });
 
     try {
-      await emitDetected(bus);
+      await emitDetected(createTestCall(), bus);
       expect(updates).toHaveLength(1);
     } finally {
       cleanup();
@@ -751,7 +756,7 @@ describe('UsageTracker persistence / delta-filter integration', () => {
       });
 
       try {
-        await emitDetected(bus);
+        await emitDetected(createTestCall(), bus);
 
         expect(patched).toHaveLength(1);
         const payload = patched[0] as { clientId: string; account: { metadata: Record<string, unknown> } };
@@ -781,15 +786,15 @@ describe('UsageTracker persistence / delta-filter integration', () => {
       const originalBumpMetadataGeneration = store.metadataStore.bumpMetadataGeneration.bind(store.metadataStore);
       const patchSpy = vi
         .spyOn(store.metadataStore, 'patchMetadata')
-        .mockImplementation(async (clientId: string, accountId: string, expectedGeneration: number, patches) => {
+        .mockImplementation(async (call, clientId, accountId, expectedGeneration, patches) => {
           patchStarted.resolve();
           await patchGate.promise;
-          return originalPatchMetadata(clientId, accountId, expectedGeneration, patches);
+          return originalPatchMetadata(call, clientId, accountId, expectedGeneration, patches);
         });
       const bumpSpy = vi
         .spyOn(store.metadataStore, 'bumpMetadataGeneration')
-        .mockImplementation(async (clientId: string, accountId: string) => {
-          const generation = await originalBumpMetadataGeneration(clientId, accountId);
+        .mockImplementation(async (call, clientId, accountId) => {
+          const generation = await originalBumpMetadataGeneration(call, clientId, accountId);
           invalidationApplied.resolve();
           return generation;
         });
@@ -800,7 +805,7 @@ describe('UsageTracker persistence / delta-filter integration', () => {
       });
 
       try {
-        const fetchPromise = emitDetected(bus);
+        const fetchPromise = emitDetected(createTestCall(), bus);
         await patchStarted.promise;
 
         tracker.requestStop();
@@ -814,7 +819,7 @@ describe('UsageTracker persistence / delta-filter integration', () => {
         expect(bumpSpy).toHaveBeenCalled();
         expect(patched).toHaveLength(0);
 
-        const stored = await store.metadataStore.get(CLIENT_ID, ACCOUNT_ID);
+        const stored = await store.metadataStore.get(createTestCall(), CLIENT_ID, ACCOUNT_ID);
         expect(stored?.metadata).not.toMatchObject({ planType: 'plus' });
       } finally {
         patchGate.resolve();
@@ -833,15 +838,15 @@ describe('UsageTracker persistence / delta-filter integration', () => {
 
       tracker = buildTracker(bus, store, provider);
       const patchSpy = vi.spyOn(store.metadataStore, 'patchMetadata');
-      const cleanup = bus.on(AccountManagerSubjects.usage.updated, () => {
-        void tracker?.clearAccountState(CLIENT_ID, ACCOUNT_ID);
+      const cleanup = bus.on(AccountManagerSubjects.usage.updated, (ctx) => {
+        void tracker?.clearAccountState(ctx.call, CLIENT_ID, ACCOUNT_ID);
       });
 
       try {
-        await emitDetected(bus);
+        await emitDetected(createTestCall(), bus);
 
         expect(patchSpy).not.toHaveBeenCalled();
-        const stored = await store.metadataStore.get(CLIENT_ID, ACCOUNT_ID);
+        const stored = await store.metadataStore.get(createTestCall(), CLIENT_ID, ACCOUNT_ID);
         expect(stored?.metadata).not.toMatchObject({ planType: 'plus' });
       } finally {
         cleanup();
@@ -863,10 +868,10 @@ describe('UsageTracker persistence / delta-filter integration', () => {
       const originalPatchMetadata = store.metadataStore.patchMetadata.bind(store.metadataStore);
       const patchSpy = vi
         .spyOn(store.metadataStore, 'patchMetadata')
-        .mockImplementation(async (clientId, accountId, expectedGeneration, patches) => {
+        .mockImplementation(async (call, clientId, accountId, expectedGeneration, patches) => {
           patchStarted.resolve();
           await patchGate.promise;
-          return originalPatchMetadata(clientId, accountId, expectedGeneration, patches);
+          return originalPatchMetadata(call, clientId, accountId, expectedGeneration, patches);
         });
 
       const patched: unknown[] = [];
@@ -875,10 +880,10 @@ describe('UsageTracker persistence / delta-filter integration', () => {
       });
 
       try {
-        const fetchPromise = emitDetected(bus);
+        const fetchPromise = emitDetected(createTestCall(), bus);
         await patchStarted.promise;
 
-        const clearPromise = tracker.clearAccountStateAndWait(CLIENT_ID, ACCOUNT_ID);
+        const clearPromise = tracker.clearAccountStateAndWait(createTestCall(), CLIENT_ID, ACCOUNT_ID);
         patchGate.resolve();
         await clearPromise;
         await fetchPromise;
@@ -886,7 +891,7 @@ describe('UsageTracker persistence / delta-filter integration', () => {
         expect(patchSpy).toHaveBeenCalledOnce();
         expect(patched).toHaveLength(0);
 
-        const stored = await store.metadataStore.get(CLIENT_ID, ACCOUNT_ID);
+        const stored = await store.metadataStore.get(createTestCall(), CLIENT_ID, ACCOUNT_ID);
         expect(stored?.metadata).not.toMatchObject({ planType: 'plus' });
       } finally {
         patchGate.resolve();
@@ -927,7 +932,7 @@ describe('UsageTracker persistence / delta-filter integration', () => {
       });
 
       try {
-        await emitDetected(bus);
+        await emitDetected(createTestCall(), bus);
 
         // No metadata change — patchMetadata must not be called and no event emitted.
         expect(patchSpy).not.toHaveBeenCalled();
@@ -961,7 +966,7 @@ describe('UsageTracker persistence / delta-filter integration', () => {
 
       tracker = buildTracker(bus, store, provider);
 
-      await emitDetected(bus);
+      await emitDetected(createTestCall(), bus);
 
       const stored = await store.get(CLIENT_ID, ACCOUNT_ID);
       // The patch must update planType while leaving authMode intact.

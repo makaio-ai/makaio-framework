@@ -1,4 +1,4 @@
-import { MakaioBus, type ScopedBusFor, type BusNamespace } from '@makaio/bus-core';
+import type { ScopedBusFor, BusNamespace } from '@makaio/bus-core';
 import {
   createBusNamespace,
   type CreateBusNamespaceOptions,
@@ -25,14 +25,21 @@ export type AdapterNamespace<Domain extends string = string> = Omit<BusNamespace
 /**
  * Creates an adapter namespace with typed subject definitions.
  *
- * **Seam:** Thin wrapper around MakaioBus.registerNamespace that:
- * - Delegates to bus-core for namespace registration
- * - Preserves FilterPayload type for type-safe withFilter()
- * - Provides extension point for future adapter-specific features
+ * **Pure:** the factory builds the namespace definition and registers nothing, so it is safe to
+ * call at module level (a constant evaluated at import time). Registration happens on a bus the
+ * caller passes, later:
+ * - `AIAdapter` registers `definition` on its host bus during `initializeGeneration`.
+ * - `scopedBus(bus)` registers the definition on the passed bus (idempotent, a carrier bus shares
+ *   the registry of its host) and returns the scoped view with type-safe `withFilter()`.
+ * - Tests that rely on a registered namespace call `bus.registerNamespace(ns.definition)` themselves.
+ *
+ * **Seam:** thin wrapper around `createBusNamespace` and `IMakaioBus.registerNamespace` that
+ * preserves FilterPayload type for type-safe withFilter() and provides an extension point for
+ * future adapter-specific features.
  * @param domain - Namespace domain (e.g., 'adapter:claudeCode')
  * @param schemas - Record of subject schemas (events and requests)
  * @param options - Registration and routing options (e.g., busValidationMode for Zod version conflicts)
- * @returns Adapter namespace with typed subjects and pre-computed FilterPayload
+ * @returns Adapter namespace with typed subjects, the registrable definition and `scopedBus(bus)`
  * @example
  * ```typescript
  * const ClaudeCodeNamespace = createAdapterNamespace('adapter:claudeCode', {
@@ -43,12 +50,12 @@ export type AdapterNamespace<Domain extends string = string> = Omit<BusNamespace
  *   },
  * });
  *
- * // Access typed subjects
+ * // Access typed subjects (no registration needed)
  * ClaudeCodeNamespace.subjects.thinking;
  *
- * // Get scoped bus with type-safe filtering
- * const bus = await ClaudeCodeNamespace.scopedBus();
- * bus.withFilter({ content: 'test' }); // ✅ Type-checked
+ * // Register on the given bus and get a scoped bus with type-safe filtering
+ * const scoped = await ClaudeCodeNamespace.scopedBus(bus);
+ * scoped.withFilter({ content: 'test' }); // Type-checked
  *
  * // For adapters whose SDK bundles a conflicting Zod version:
  * const LegacyNamespace = createAdapterNamespace('adapter:legacy', schemas, {
@@ -75,8 +82,12 @@ export function createAdapterNamespace<N extends string, Schemas extends SchemaR
   readonly definition: RegistrableBusNamespaceDefinition;
 } {
   const definition = createBusNamespace(domain, schemas, options);
-  const namespace = MakaioBus.registerNamespace(definition);
-  return Object.assign(namespace, { definition });
+  return {
+    name: definition.name,
+    subjects: definition.subjects,
+    definition,
+    scopedBus: (bus) => bus.registerNamespace(definition).scopedBus(bus),
+  };
 }
 
 // Re-export ScopedBusFor for convenience

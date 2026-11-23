@@ -1,3 +1,4 @@
+import type { CallContext } from '@makaio/core';
 import { z } from 'zod';
 import { zodSchemaToJsonRecord } from '../shared/zod-json-schema.js';
 import {
@@ -94,6 +95,16 @@ export interface AutomationTriggerEvent<TPayload extends JsonValue = JsonValue> 
    * (e.g. a webhook request with a trace header).
    */
   readonly correlationId?: string;
+  /**
+   * Optional call context of the occurrence that caused this event.
+   *
+   * Present when the emitting trigger passed one through
+   * {@link AutomationTriggerActivationContext.emit} `metadata.call` (for example a
+   * trigger reacting to a bus message forwards that message's call). Listeners
+   * read it and never mint it; schedule-driven triggers that have no causing
+   * message leave it absent.
+   */
+  readonly call?: CallContext;
 }
 
 /**
@@ -137,9 +148,15 @@ export interface AutomationTriggerActivationContext<TPayloadInput = JsonValue> {
    * @param payload - Event payload input validated and transformed by the
    *   trigger's live `eventSchema`.
    * @param metadata - Optional envelope metadata to attach to the emitted event.
+   *   `call` is the call context of the occurrence that caused the emission; the
+   *   runtime carries it onto {@link AutomationTriggerEvent.call}. It must be a received
+   *   call; an own context (`bus.own`) rejects the emit.
    * @returns Resolves when the event has been accepted by the bus.
    */
-  readonly emit: (payload: TPayloadInput, metadata?: { readonly correlationId?: string }) => Promise<void>;
+  readonly emit: (
+    payload: TPayloadInput,
+    metadata?: { readonly correlationId?: string; readonly call?: CallContext },
+  ) => Promise<void>;
 }
 
 /**

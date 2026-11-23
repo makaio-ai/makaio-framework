@@ -1,4 +1,5 @@
 import type { IMakaioBus } from '@makaio/bus-core';
+import type { CallContext } from '@makaio/core';
 import { ProviderDefinitionSchema, type ProviderDefinitionInput } from '@makaio/contracts';
 import { ExtensionSubjects } from '@makaio/kernel';
 import { ProviderStorageSubjects, type ProviderRecord } from '@makaio/services-core/settings/storage';
@@ -27,7 +28,7 @@ export function registerProviderStorageFallbackHandlers(
   const getCleanup = bus.on(
     ProviderStorageSubjects.get,
     async (ctx) => {
-      const provider = (await buildProviderRecordMap(bus, getLoadedAdapters())).get(ctx.payload.id) ?? null;
+      const provider = (await buildProviderRecordMap(ctx.call, bus, getLoadedAdapters())).get(ctx.payload.id) ?? null;
       ctx.setResult({ provider });
     },
     { priority },
@@ -35,14 +36,14 @@ export function registerProviderStorageFallbackHandlers(
   const listCleanup = bus.on(
     ProviderStorageSubjects.list,
     async (ctx) => {
-      ctx.setResult({ providers: [...(await buildProviderRecordMap(bus, getLoadedAdapters())).values()] });
+      ctx.setResult({ providers: [...(await buildProviderRecordMap(ctx.call, bus, getLoadedAdapters())).values()] });
     },
     { priority },
   );
   const listByProtocolCleanup = bus.on(
     ProviderStorageSubjects.listByProtocol,
     async (ctx) => {
-      const providers = [...(await buildProviderRecordMap(bus, getLoadedAdapters())).values()].filter(
+      const providers = [...(await buildProviderRecordMap(ctx.call, bus, getLoadedAdapters())).values()].filter(
         (provider) => provider.endpoints !== undefined && ctx.payload.protocol in provider.endpoints,
       );
       ctx.setResult({ providers });
@@ -59,11 +60,13 @@ export function registerProviderStorageFallbackHandlers(
 
 /**
  * Build provider records from currently loaded adapter definitions.
+ * @param call - Call of the handled provider-storage request.
  * @param bus - Bus used to read the current extension contribution catalog.
  * @param adapters - Loaded adapter registry snapshot.
  * @returns Provider records keyed by stable provider definition ID.
  */
 async function buildProviderRecordMap(
+  call: CallContext,
   bus: IMakaioBus,
   adapters: readonly LoadedAdapter[],
 ): Promise<Map<string, ProviderRecord>> {
@@ -81,7 +84,7 @@ async function buildProviderRecordMap(
 
   const unresolvedProviderIds = [...declaredProviderIds].filter((id) => !providers.has(id));
   if (unresolvedProviderIds.length > 0) {
-    const catalog = await bus.request(ExtensionSubjects.contributions.catalog, {});
+    const catalog = await bus.request(call, ExtensionSubjects.contributions.catalog, {});
     for (const provider of catalog.providers) {
       if (unresolvedProviderIds.includes(provider.definition.id)) {
         addProviderRecord(providers, provider.packageName, provider.definition);

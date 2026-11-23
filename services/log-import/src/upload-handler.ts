@@ -46,6 +46,7 @@ export function registerGenericUploadFilesHandler(
       try {
         const content = Buffer.from(file.contentBase64, 'base64').toString('utf8');
         await importFromFileContent({
+          call: ctx.call,
           bus,
           importer,
           content,

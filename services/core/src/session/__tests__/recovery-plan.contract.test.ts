@@ -9,7 +9,8 @@
  */
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createBusInstance, type IMakaioBus } from '@makaio/bus-core';
-import { AdapterSubjects, type MakaioSessionAgent, type SessionContext } from '@makaio/contracts';
+import { AdapterSubjects, type CallContext, type MakaioSessionAgent, type SessionContext } from '@makaio/contracts';
+import { createTestCall } from '@makaio/test-utils';
 import { AdapterRuntimeSubjects } from '../../adapter-runtime/namespace.js';
 import { MessageStorageSubjects } from '../messages/namespace.js';
 import { registerMemoryMessageStorage } from '../messages/memory-handler.js';
@@ -77,7 +78,7 @@ describe('recovery plan', () => {
     ];
     service = new MakaioSessionService(bus, { machineId: MACHINE_ID });
     await service.init();
-    await seedConversation(bus);
+    await seedConversation(createTestCall(), bus);
   });
 
   afterEach(() => {
@@ -109,7 +110,7 @@ describe('recovery plan', () => {
 
   describe('the two consumers read one decision', () => {
     it('warm-fresh recovery starts the agent with the full stored conversation and no provider resume', async () => {
-      const outcome = await executeRecovery(bus, FRESH_WITH_HISTORY_RECOVERY_PLAN, rehydratePayloads);
+      const outcome = await executeRecovery(createTestCall(), bus, FRESH_WITH_HISTORY_RECOVERY_PLAN, rehydratePayloads);
 
       expect(outcome.rehydratedWith).toBeUndefined();
       expect(outcome.context?.isFirstTurn).toBe(true);
@@ -119,7 +120,7 @@ describe('recovery plan', () => {
     it('native-resume recovery resumes the provider session and replays no history', async () => {
       const plan: RecoveryPlan = { kind: 'native-resume', resumeAdapterSessionId: PROVIDER_SESSION_ID };
 
-      const outcome = await executeRecovery(bus, plan, rehydratePayloads);
+      const outcome = await executeRecovery(createTestCall(), bus, plan, rehydratePayloads);
 
       expect(outcome.rehydratedWith).toBe(PROVIDER_SESSION_ID);
       expect(outcome.context).toBeUndefined();
@@ -137,7 +138,7 @@ describe('recovery plan', () => {
         expect(recoveryPlanRequiresHistory(plan)).toBe(recoveryPlanResumeTarget(plan) === undefined);
 
         rehydratePayloads.length = 0;
-        const outcome = await executeRecovery(bus, plan, rehydratePayloads);
+        const outcome = await executeRecovery(createTestCall(), bus, plan, rehydratePayloads);
         expect(outcome.rehydratedWith === undefined).toBe(outcome.context !== undefined);
       }
     });
@@ -146,17 +147,19 @@ describe('recovery plan', () => {
 
 /**
  * Run a recovery exactly the way a caller must: one plan, both consumers.
+ * @param call - Call context of the simulated operation
  * @param bus - Test bus instance
  * @param plan - Recovery plan under test
  * @param rehydratePayloads - Mutable log the adapter stub appends rehydrate payloads to
  * @returns What the adapter was asked to resume and what context the caller assembled
  */
 async function executeRecovery(
+  call: CallContext,
   bus: IMakaioBus,
   plan: RecoveryPlan,
   rehydratePayloads: Array<{ agentId: string; resumeAdapterSessionId?: string }>,
 ): Promise<RecoveryOutcome> {
-  const { session } = await bus.request(SessionStorageSubjects.get, { sessionId: SESSION_ID });
+  const { session } = await bus.request(call, SessionStorageSubjects.get, { sessionId: SESSION_ID });
   if (!session) throw new Error(`Session not found: ${SESSION_ID}`);
   const agent: MakaioSessionAgent = createTestAgent(AGENT_ID, {
     sessionId: SESSION_ID,
@@ -165,9 +168,9 @@ async function executeRecovery(
     role: 'lead',
   });
 
-  await bus.request(AgentStorageSubjects.set, { agentId: AGENT_ID, agent });
-  await recoverAgent(bus, agent, { plan, machineId: MACHINE_ID });
-  const context = await buildPlannedRecoveryContext(bus, session, plan);
+  await bus.request(call, AgentStorageSubjects.set, { agentId: AGENT_ID, agent });
+  await recoverAgent(call, bus, agent, { plan, machineId: MACHINE_ID });
+  const context = await buildPlannedRecoveryContext(call, bus, session, plan);
 
   const payload = rehydratePayloads.at(-1);
   if (payload === undefined) throw new Error('adapter.rehydrateAgent was not called');
@@ -179,10 +182,11 @@ async function executeRecovery(
  *
  * The memory message store emits the matching `message` session events itself,
  * which is what `getFullConversation` projects the conversation from.
+ * @param call - Call context of the simulated operation
  * @param bus - Test bus instance
  */
-async function seedConversation(bus: IMakaioBus): Promise<void> {
-  await bus.request(SessionStorageSubjects.set, {
+async function seedConversation(call: CallContext, bus: IMakaioBus): Promise<void> {
+  await bus.request(call, SessionStorageSubjects.set, {
     sessionId: SESSION_ID,
     session: {
       sessionId: SESSION_ID,
@@ -201,7 +205,7 @@ async function seedConversation(bus: IMakaioBus): Promise<void> {
   ];
 
   for (const entry of turns) {
-    await bus.request(MessageStorageSubjects.append, {
+    await bus.request(call, MessageStorageSubjects.append, {
       message: {
         messageId: entry.messageId,
         sessionId: SESSION_ID,

@@ -18,9 +18,11 @@ import {
   SessionOwnershipStorageSubjects,
   SessionSubjects,
   type AdapterSessionClaimRecord,
+  type CallContext,
   type MakaioSessionAgent,
 } from '@makaio/contracts';
 import type { ExtractSubjectResponse } from '@makaio/core';
+import { createTestCall } from '@makaio/test-utils';
 import { AdapterRuntimeSubjects } from '../../adapter-runtime/namespace.js';
 import { MakaioSessionService } from '../session-service.js';
 import { AgentStorageSubjects } from '../storage/agent-namespace.js';
@@ -69,7 +71,10 @@ export interface ReservedRehydrateContext {
    * @param respond - What the adapter answers, and any side effect it performs first.
    */
   registerAdapter: (
-    respond?: (agentId: string) => Promise<RehydrateAnswer | undefined> | RehydrateAnswer | undefined,
+    respond?: (
+      call: CallContext,
+      agentId: string,
+    ) => Promise<RehydrateAnswer | undefined> | RehydrateAnswer | undefined,
   ) => void;
   /**
    * Seed a session and one agent row with a provider session of its own.
@@ -146,7 +151,7 @@ export async function createReservedRehydrateContext(): Promise<ReservedRehydrat
       cleanups.push(
         bus.on(AdapterSubjects.rehydrateAgent, async (ctx) => {
           dispatched.push(ctx.payload);
-          const answer = await respond?.(ctx.payload.agentId);
+          const answer = await respond?.(ctx.call, ctx.payload.agentId);
           const resolved = answer ?? { success: true };
           ctx.setResult(
             resolved.success
@@ -204,7 +209,7 @@ export async function createReservedRehydrateContext(): Promise<ReservedRehydrat
       const { agent } = await bus.request(AgentStorageSubjects.get, { agentId });
       return agent?.status;
     },
-    recover: (agent, plan) => recoverAgent(bus, agent, { plan, machineId: MACHINE_ID }),
+    recover: (agent, plan) => recoverAgent(createTestCall(), bus, agent, { plan, machineId: MACHINE_ID }),
     destroy: () => {
       service.destroy();
       for (let index = cleanups.length - 1; index >= 0; index -= 1) cleanups[index]?.();

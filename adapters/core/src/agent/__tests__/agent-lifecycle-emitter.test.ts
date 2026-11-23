@@ -1,4 +1,5 @@
-import { describe, expect, it, vi } from 'vitest';
+import { createTestBusInstance, createTestCall } from '@makaio/test-utils';
+import { describe, expect, it } from 'vitest';
 import { AgentLifecycleEmitter } from '../agent-lifecycle-emitter.js';
 import type { AgentLifecycleEmitterConfig } from '../agent-lifecycle-emitter.js';
 
@@ -18,10 +19,10 @@ function createTestEmitter(
   const emittedCompletePayloads: Array<{ messageId: string; error?: string; errorCategory?: string }> = [];
   const emitter = new AgentLifecycleEmitter({
     agentId,
-    globalBus: { requestOptional: vi.fn().mockResolvedValue(undefined) } as never,
+    globalBus: createTestBusInstance(),
     emitStarted: async () => {},
-    emitComplete: async (payload) => {
-      emittedCompletePayloads.push(payload as { messageId: string; error?: string; errorCategory?: string });
+    emitComplete: async (_call, payload) => {
+      emittedCompletePayloads.push(payload);
     },
     emitSessionClosed: async () => {},
     onBeforeEmitCompletion: async () => {},
@@ -42,10 +43,10 @@ describe('AgentLifecycleEmitter', () => {
       clearMessageToolCalls: (messageId) => clearedMessageIds.push(messageId),
     });
 
-    await emitter.emitStart({ model: 'test-model', cwd: '/tmp', startMode: 'fresh' });
-    await emitter.emitCompletion({ messageId: 'm-1' });
-    await emitter.emitCompletion({ messageId: 'm-1' });
-    await emitter.emitCompletion({ messageId: 'm-2' });
+    await emitter.emitStart(createTestCall(), { model: 'test-model', cwd: '/tmp', startMode: 'fresh' });
+    await emitter.emitCompletion(createTestCall(), { messageId: 'm-1' });
+    await emitter.emitCompletion(createTestCall(), { messageId: 'm-1' });
+    await emitter.emitCompletion(createTestCall(), { messageId: 'm-2' });
 
     expect(beforeEmitCount).toBe(2);
     expect(clearedMessageIds).toEqual(['m-1', 'm-2']);
@@ -55,9 +56,9 @@ describe('AgentLifecycleEmitter', () => {
   it('keeps sequential completion dedup bounded while suppressing a recent duplicate', async () => {
     const { emitter, emittedCompletePayloads } = createTestEmitter('agent-1');
     for (let index = 0; index < 1100; index += 1) {
-      await emitter.emitCompletion({ messageId: `m-${index}` });
+      await emitter.emitCompletion(createTestCall(), { messageId: `m-${index}` });
     }
-    await emitter.emitCompletion({ messageId: 'm-1099' });
+    await emitter.emitCompletion(createTestCall(), { messageId: 'm-1099' });
 
     expect(emittedCompletePayloads).toHaveLength(1100);
   });
@@ -71,8 +72,8 @@ describe('AgentLifecycleEmitter', () => {
       onBeforeEmitCompletion: async () => gate,
     });
 
-    const first = emitter.emitCompletion({ messageId: 'm-race' });
-    const duplicate = emitter.emitCompletion({ messageId: 'm-race' });
+    const first = emitter.emitCompletion(createTestCall(), { messageId: 'm-race' });
+    const duplicate = emitter.emitCompletion(createTestCall(), { messageId: 'm-race' });
     release();
     await Promise.all([first, duplicate]);
 
@@ -88,17 +89,17 @@ describe('AgentLifecycleEmitter', () => {
       onBeforeEmitCompletion: async () => gate,
     });
 
-    const rateLimited = emitter.emitCompletion({
+    const rateLimited = emitter.emitCompletion(createTestCall(), {
       messageId: 'm-rate-limit',
       error: 'rate limited',
       errorCategory: 'rate_limit',
     });
-    const authenticationFailed = emitter.emitCompletion({
+    const authenticationFailed = emitter.emitCompletion(createTestCall(), {
       messageId: 'm-auth',
       error: 'authentication failed',
       errorCategory: 'auth',
     });
-    const duplicateRateLimited = emitter.emitCompletion({
+    const duplicateRateLimited = emitter.emitCompletion(createTestCall(), {
       messageId: 'm-rate-limit',
       error: 'rate limited',
       errorCategory: 'rate_limit',

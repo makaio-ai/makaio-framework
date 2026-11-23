@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
+import { createTestCall } from '@makaio/test-utils';
 import { createHook } from '../create-hook.js';
 import {
   runPostUserMessageHooks,
@@ -31,13 +32,15 @@ describe('PostUserMessage hook (runner-based)', () => {
   describe('basic hook registration', () => {
     it('calls handler when runPostUserMessageHooks is invoked', async () => {
       const handler = vi.fn();
-      const { unsubscribe } = createHook('PostUserMessage', { handler });
+      const { unsubscribe } = createHook('PostUserMessage', { bus: MakaioBus, handler });
 
-      await runPostUserMessageHooks(createRunnerInput(), MakaioBus);
+      const call = createTestCall();
+      await runPostUserMessageHooks(call, createRunnerInput());
 
       expect(handler).toHaveBeenCalledTimes(1);
       const ctx = handler.mock.calls[0][0] as PostUserMessageContext;
       expect(ctx.hookEvent).toBe('PostUserMessage');
+      expect(ctx.call).toBe(call);
       expect(ctx.agentId).toBe('agent-1');
       expect(ctx.adapterId).toBe('adapter-1');
       expect(ctx.sessionId).toBe('session-1');
@@ -49,14 +52,14 @@ describe('PostUserMessage hook (runner-based)', () => {
 
     it('provides correct context with optional fields undefined', async () => {
       const handler = vi.fn();
-      const { unsubscribe } = createHook('PostUserMessage', { handler });
+      const { unsubscribe } = createHook('PostUserMessage', { bus: MakaioBus, handler });
 
       await runPostUserMessageHooks(
+        createTestCall(),
         createRunnerInput({
           sessionId: undefined,
           messageId: undefined,
         }),
-        MakaioBus,
       );
 
       const ctx = handler.mock.calls[0][0] as PostUserMessageContext;
@@ -70,11 +73,11 @@ describe('PostUserMessage hook (runner-based)', () => {
 
     it('unsubscribe prevents handler from being called', async () => {
       const handler = vi.fn();
-      const { unsubscribe } = createHook('PostUserMessage', { handler });
+      const { unsubscribe } = createHook('PostUserMessage', { bus: MakaioBus, handler });
 
       unsubscribe();
 
-      await runPostUserMessageHooks(createRunnerInput(), MakaioBus);
+      await runPostUserMessageHooks(createTestCall(), createRunnerInput());
 
       expect(handler).not.toHaveBeenCalled();
     });
@@ -85,6 +88,7 @@ describe('PostUserMessage hook (runner-based)', () => {
       const order: string[] = [];
 
       const unsub1 = createHook('PostUserMessage', {
+        bus: MakaioBus,
         handler: () => {
           order.push('low');
         },
@@ -92,6 +96,7 @@ describe('PostUserMessage hook (runner-based)', () => {
       }).unsubscribe;
 
       const unsub2 = createHook('PostUserMessage', {
+        bus: MakaioBus,
         handler: () => {
           order.push('high');
         },
@@ -99,13 +104,14 @@ describe('PostUserMessage hook (runner-based)', () => {
       }).unsubscribe;
 
       const unsub3 = createHook('PostUserMessage', {
+        bus: MakaioBus,
         handler: () => {
           order.push('med');
         },
         priority: 50,
       }).unsubscribe;
 
-      await runPostUserMessageHooks(createRunnerInput(), MakaioBus);
+      await runPostUserMessageHooks(createTestCall(), createRunnerInput());
 
       // Higher priority runs first
       expect(order).toEqual(['high', 'med', 'low']);
@@ -121,6 +127,7 @@ describe('PostUserMessage hook (runner-based)', () => {
       const order: string[] = [];
 
       createHook('PostUserMessage', {
+        bus: MakaioBus,
         handler: () => {
           order.push('first');
         },
@@ -128,6 +135,7 @@ describe('PostUserMessage hook (runner-based)', () => {
       });
 
       createHook('PostUserMessage', {
+        bus: MakaioBus,
         handler: () => {
           order.push('throws');
           throw new Error('test error');
@@ -137,6 +145,7 @@ describe('PostUserMessage hook (runner-based)', () => {
       });
 
       createHook('PostUserMessage', {
+        bus: MakaioBus,
         handler: () => {
           order.push('third');
         },
@@ -144,7 +153,7 @@ describe('PostUserMessage hook (runner-based)', () => {
       });
 
       // Should not throw - errors are caught and logged
-      await runPostUserMessageHooks(createRunnerInput(), MakaioBus);
+      await runPostUserMessageHooks(createTestCall(), createRunnerInput());
 
       // All handlers should run despite the error
       expect(order).toEqual(['first', 'throws', 'third']);
@@ -154,6 +163,7 @@ describe('PostUserMessage hook (runner-based)', () => {
       const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
 
       createHook('PostUserMessage', {
+        bus: MakaioBus,
         handler: () => {
           throw new Error('intentional error');
         },
@@ -161,7 +171,7 @@ describe('PostUserMessage hook (runner-based)', () => {
       });
 
       // Should not throw
-      await expect(runPostUserMessageHooks(createRunnerInput(), MakaioBus)).resolves.toBeUndefined();
+      await expect(runPostUserMessageHooks(createTestCall(), createRunnerInput())).resolves.toBeUndefined();
 
       expect(consoleErrorSpy).toHaveBeenCalledWith(
         expect.stringContaining('[PostUserMessage] Hook "error-hook" failed:'),
@@ -177,6 +187,7 @@ describe('PostUserMessage hook (runner-based)', () => {
       const results: string[] = [];
 
       createHook('PostUserMessage', {
+        bus: MakaioBus,
         handler: () => {
           results.push('hook1');
         },
@@ -184,13 +195,14 @@ describe('PostUserMessage hook (runner-based)', () => {
       });
 
       createHook('PostUserMessage', {
+        bus: MakaioBus,
         handler: () => {
           results.push('hook2');
         },
         priority: 50,
       });
 
-      await runPostUserMessageHooks(createRunnerInput(), MakaioBus);
+      await runPostUserMessageHooks(createTestCall(), createRunnerInput());
 
       expect(results).toEqual(['hook1', 'hook2']);
     });
@@ -199,13 +211,14 @@ describe('PostUserMessage hook (runner-based)', () => {
       let busUsed = false;
 
       createHook('PostUserMessage', {
+        bus: MakaioBus,
         handler: (ctx) => {
           expect(ctx.bus).toBeDefined();
           busUsed = true;
         },
       });
 
-      await runPostUserMessageHooks(createRunnerInput(), MakaioBus);
+      await runPostUserMessageHooks(createTestCall(), createRunnerInput());
 
       expect(busUsed).toBe(true);
     });

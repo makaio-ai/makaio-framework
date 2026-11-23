@@ -6,6 +6,7 @@
  */
 
 import type { IMakaioBus } from '@makaio/bus-core';
+import type { CallContext } from '@makaio/core';
 import { SessionSubjects } from '@makaio/contracts';
 import type {
   IMakaioSession,
@@ -37,11 +38,16 @@ interface PreparedInitialAttachTurn {
  * adapter is still starting. In that case the close event cannot evict an
  * agent that has not entered the adapter registry yet, so the completed start
  * must be rolled back here.
+ * @param call - Call context of the handled attach message.
  * @param bus - Bus used for session lookup.
  * @param sessionId - Session that must still accept the attachment.
  */
-export async function assertSessionActiveAfterStart(bus: IMakaioBus, sessionId: string): Promise<void> {
-  const { session } = await bus.request(SessionSubjects.get, { sessionId });
+export async function assertSessionActiveAfterStart(
+  call: CallContext,
+  bus: IMakaioBus,
+  sessionId: string,
+): Promise<void> {
+  const { session } = await bus.request(call, SessionSubjects.get, { sessionId });
   if (session?.status === 'active') return;
   const sessionStatus =
     session?.status === 'closed' || session?.status === 'archived' || session?.status === 'discovered'
@@ -58,6 +64,7 @@ export async function assertSessionActiveAfterStart(bus: IMakaioBus, sessionId: 
 
 /**
  * Set up initial-message turn tracking.
+ * @param call - Call context of the handled attach message
  * @param bus - Bus instance for storage
  * @param turnManager - Shared owner of attach turn lifecycle state
  * @param reservation - Exclusive session turn slot reserved before agent startup
@@ -70,6 +77,7 @@ export async function assertSessionActiveAfterStart(bus: IMakaioBus, sessionId: 
  * @returns Turn tracking info
  */
 async function setupInitialAttachTurnForStartedAttach(
+  call: CallContext,
   bus: IMakaioBus,
   turnManager: SessionTurnManager,
   reservation: TurnReservation,
@@ -82,6 +90,7 @@ async function setupInitialAttachTurnForStartedAttach(
 ): Promise<PreparedInitialAttachTurn> {
   try {
     return await setupInitialAttachTurn(
+      call,
       bus,
       turnManager,
       reservation,
@@ -107,6 +116,7 @@ async function setupInitialAttachTurnForStartedAttach(
  *
  * The message identity is created before provider dispatch and is forwarded
  * unchanged through the ordinary agent routing pipeline.
+ * @param call - Call context of the handled attach message
  * @param bus - Bus for turn persistence and agent routing
  * @param turnManager - Shared owner of the session turn lifecycle
  * @param reservation - Exclusive session turn slot reserved before agent startup
@@ -120,6 +130,7 @@ async function setupInitialAttachTurnForStartedAttach(
  * @returns Canonical identifiers for the newly created turn and message
  */
 export async function dispatchInitialAttachMessage(
+  call: CallContext,
   bus: IMakaioBus,
   turnManager: SessionTurnManager,
   reservation: TurnReservation,
@@ -133,6 +144,7 @@ export async function dispatchInitialAttachMessage(
 ): Promise<{ messageId: string; turnId: string }> {
   assertAdmission?.();
   const prepared = await setupInitialAttachTurnForStartedAttach(
+    call,
     bus,
     turnManager,
     reservation,
@@ -146,6 +158,7 @@ export async function dispatchInitialAttachMessage(
   let outcomes;
   try {
     outcomes = await routeToAgentsCore(
+      call,
       bus,
       session,
       [{ agentId: startResult.agentId, adapterId: startResult.adapterId }],
@@ -161,7 +174,7 @@ export async function dispatchInitialAttachMessage(
     );
   } catch (error) {
     try {
-      await turnManager.retryTurnCompletion(prepared.turn.turnId);
+      await turnManager.retryTurnCompletion(call, prepared.turn.turnId);
     } catch (retryError) {
       console.error('[attach-handler] Failed to retry initial-message completion after routing failure', {
         sessionId: session.sessionId,
@@ -184,6 +197,7 @@ export async function dispatchInitialAttachMessage(
  *
  * Persists the turn via storage to obtain a monotonic `turnNumber` before
  * emitting lifecycle events (which include `turnNumber` in their schema).
+ * @param call - Call context of the handled attach message
  * @param bus - Bus instance for event emission and storage
  * @param turnManager - Shared owner of attach turn lifecycle state
  * @param reservation - Exclusive session turn slot reserved before agent startup
@@ -195,6 +209,7 @@ export async function dispatchInitialAttachMessage(
  * @returns Turn tracking info
  */
 async function setupInitialAttachTurn(
+  call: CallContext,
   bus: IMakaioBus,
   turnManager: SessionTurnManager,
   reservation: TurnReservation,
@@ -204,11 +219,11 @@ async function setupInitialAttachTurn(
   content: MessageInput,
   initiator: TurnInitiator,
 ): Promise<PreparedInitialAttachTurn> {
-  const turn = await turnManager.createReservedTurn(reservation, [agentId], initiator);
+  const turn = await turnManager.createReservedTurn(call, reservation, [agentId], initiator);
   const admission = turnManager.admitReservedMessage(turn, messageId, [agentId]);
 
   try {
-    const append = await bus.requestOptional(MessageStorageSubjects.append, {
+    const append = await bus.requestOptional(call, MessageStorageSubjects.append, {
       message: {
         messageId,
         turnId: turn.turnId,
@@ -227,7 +242,7 @@ async function setupInitialAttachTurn(
       error: error instanceof Error ? error.message : String(error),
     });
     try {
-      await admission.rollback('initial-message-persistence-failed');
+      await admission.rollback(call, 'initial-message-persistence-failed');
     } catch (cleanupError) {
       console.error('[attach-handler] Failed to finalize rejected initial-message persistence:', cleanupError);
     }
@@ -235,10 +250,10 @@ async function setupInitialAttachTurn(
   }
 
   try {
-    await emitInitialMessageEvents(bus, sessionId, turn, messageId, content, initiator.source);
+    await emitInitialMessageEvents(call, bus, sessionId, turn, messageId, content, initiator.source);
   } catch (error) {
     try {
-      await admission.rollback('initial-message-lifecycle-failed');
+      await admission.rollback(call, 'initial-message-lifecycle-failed');
     } catch (cleanupError) {
       console.error('[attach-handler] Failed to finalize rejected initial-message lifecycle:', cleanupError);
     }
@@ -252,6 +267,7 @@ async function setupInitialAttachTurn(
 
 /**
  * Emit the attach initial-message lifecycle and user-message events.
+ * @param call - Call context of the handled attach message
  * @param bus - Bus instance for event emission
  * @param sessionId - Target session ID
  * @param turn - Active turn
@@ -260,6 +276,7 @@ async function setupInitialAttachTurn(
  * @param source - Origin of the initial turn
  */
 async function emitInitialMessageEvents(
+  call: CallContext,
   bus: IMakaioBus,
   sessionId: string,
   turn: Turn,
@@ -267,7 +284,7 @@ async function emitInitialMessageEvents(
   content: MessageInput,
   source: 'extension' | 'user' | 'system',
 ): Promise<void> {
-  await emitSessionTurnStarted(bus, {
+  await emitSessionTurnStarted(call, bus, {
     sessionId,
     turnId: turn.turnId,
     turnNumber: turn.turnNumber,
@@ -276,7 +293,7 @@ async function emitInitialMessageEvents(
     initiator: turn.initiator,
     ingestionMarker: 'live',
   });
-  await emitSessionUserMessageSent(bus, {
+  await emitSessionUserMessageSent(call, bus, {
     sessionId,
     turnId: turn.turnId,
     turnNumber: turn.turnNumber,

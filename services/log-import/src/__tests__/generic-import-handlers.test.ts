@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it, expect, afterEach } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
+import { createTestCall } from '@makaio/test-utils';
 import { LogImportSubjects } from '../namespace.js';
 import {
   MessageStorageSubjects,
@@ -169,6 +170,7 @@ describe('generic-import-handlers', () => {
     });
 
     const result = await importFromFileContent({
+      call: createTestCall(),
       bus: MakaioBus,
       importer,
       content: '{"type":"user"}\n{"type":"assistant"}\n',

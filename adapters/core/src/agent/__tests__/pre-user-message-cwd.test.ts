@@ -1,13 +1,19 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import os from 'node:os';
 import { MakaioBus } from '@makaio/bus-core';
-import { createMockScopedBus } from '@makaio/test-utils';
-import { AgentSubjects, type ConnectorTeardownResult } from '@makaio/contracts';
+import { createMockScopedBus, createTestCall } from '@makaio/test-utils';
+import { AgentSubjects, type CallContext, type ConnectorTeardownResult } from '@makaio/contracts';
 import { registerPreUserMessageHook, resetPreUserMessageHooks } from '@makaio/hooks';
 import { AIAgent } from '../ai-agent.js';
 import { AIAgentConnector } from '../../connector/agent-connector.js';
 import { MessageHandle } from '../../message-handle/index.js';
-import type { AIAgentConfig, AgentStartResult, BaseAgentConnectorConfig } from '../types.js';
+import type {
+  AIAgentConfig,
+  AgentStartResult,
+  BaseAgentConnectorConfig,
+  ConnectorStartOptions,
+  ConnectorSendMessageOptions,
+} from '../types.js';
 import type { NormalizedMessageInput } from '../../utils/normalizeMessageInput.js';
 import { AgentTeardownArbiter } from '../agent-teardown-arbiter.js';
 
@@ -20,16 +26,19 @@ class HookTestConnector extends AIAgentConnector {
 
   public async initialize(): Promise<void> {}
 
-  public async start(message: NormalizedMessageInput): Promise<AgentStartResult> {
+  public async start(message: NormalizedMessageInput, options: ConnectorStartOptions): Promise<AgentStartResult> {
     return {
       adapterSessionId: 'session-from-start',
       agentId: this.getAgentId(),
-      messageHandle: new MessageHandle('start-message', message, 'enqueue'),
+      messageHandle: new MessageHandle(options.call, 'start-message', message, 'enqueue'),
     };
   }
 
-  public async sendMessage(message: NormalizedMessageInput): Promise<MessageHandle> {
-    return new MessageHandle('send-message', message, 'enqueue');
+  public async sendMessage(
+    message: NormalizedMessageInput,
+    options: ConnectorSendMessageOptions,
+  ): Promise<MessageHandle> {
+    return new MessageHandle(options.call, 'send-message', message, 'enqueue');
   }
 
   public abort(): void {}
@@ -55,8 +64,8 @@ class HookTestConnector extends AIAgentConnector {
 class HookTestAgent extends AIAgent<TestBus, HookTestConnector> {
   protected async wireEvents(_connector: HookTestConnector): Promise<void> {}
 
-  public async emitUsageForTest(): Promise<void> {
-    await this.trackUsage({
+  public async emitUsageForTest(call: CallContext): Promise<void> {
+    await this.trackUsage(call, {
       provider: 'test-provider',
       granularity: 'provider-call',
       inputTokens: 1,
@@ -88,6 +97,7 @@ function createHookTestAgent(): HookTestAgent {
     cwd: os.tmpdir(),
     configFactory: async (input) => ({
       bus: mockBus,
+      globalBus: MakaioBus,
       agentId: input.agentId ?? 'hook-test-agent',
       adapterId: input.adapterId ?? 'hook-test-adapter',
       adapterName: 'hook-test',
@@ -130,15 +140,15 @@ describe('AIAgent pre-user hook payload', () => {
           seenCwds.push(ctx.payload.cwd);
           await ctx.next();
         },
-        {},
+        { bus: MakaioBus },
       ),
     );
 
     agent = createHookTestAgent();
 
-    await agent.start('hello from start');
+    await agent.start(createTestCall(), 'hello from start');
 
-    await MakaioBus.request(AgentSubjects.sendMessage, {
+    await MakaioBus.request(createTestCall(), AgentSubjects.sendMessage, {
       agentId: agent.agentId,
       adapterId: agent.adapterId,
       message: 'hello from send',
@@ -156,15 +166,16 @@ describe('AIAgent pre-user hook payload', () => {
     );
 
     agent = createHookTestAgent();
-    await agent.initialize();
+    await agent.initialize(createTestCall());
 
-    await MakaioBus.request(AgentSubjects.sendMessage, {
+    const call = createTestCall();
+    await MakaioBus.request(call, AgentSubjects.sendMessage, {
       agentId: agent.agentId,
       adapterId: agent.adapterId,
       message: 'hello from send',
       turnId: 'turn-1',
     });
-    await agent.emitUsageForTest();
+    await agent.emitUsageForTest(call);
 
     expect(usagePayloads).toEqual([
       expect.objectContaining({

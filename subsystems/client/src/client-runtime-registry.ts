@@ -18,6 +18,7 @@
 
 import { randomUUID } from 'node:crypto';
 import type { IMakaioBus } from '@makaio/bus-core';
+import type { CallContext } from '@makaio/core';
 import type { ClientRuntimeObserveRequest } from '@makaio/contracts/client';
 import { SerialLane } from '@makaio/utils';
 import type { ClientRuntimeRecord, RuntimeUpsertResult } from './client-runtime-registry-types.js';
@@ -217,16 +218,17 @@ export class ClientRuntimeRegistry {
    *
    * Must be called once at service boot before accepting observations. When
    * no bus is wired in, this is a no-op.
+   * @param call - Call context forwarded to the storage request
    */
-  public async loadFromStorage(): Promise<void> {
-    await this.mutationLane.run(() => this.loadFromStorageInLane());
+  public async loadFromStorage(call: CallContext): Promise<void> {
+    await this.mutationLane.run(() => this.loadFromStorageInLane(call));
   }
 
-  private async loadFromStorageInLane(): Promise<void> {
+  private async loadFromStorageInLane(call: CallContext): Promise<void> {
     if (!this.bus) {
       return;
     }
-    const result = await this.bus.requestOptional(ClientRuntimeStorageSubjects.loadAll, {});
+    const result = await this.bus.requestOptional(call, ClientRuntimeStorageSubjects.loadAll, {});
     if (!result.handled) {
       return;
     }
@@ -248,14 +250,18 @@ export class ClientRuntimeRegistry {
    * When no existing record matches, a new runtime is created. When a match
    * is found, the record is enriched with any new evidence fields and promoted
    * to `'started'` when the incoming evidence warrants it.
+   * @param call - Call context forwarded to the persistence request
    * @param input - Runtime observation evidence
    * @returns Upsert result with the stable `clientRuntimeId` and change flags
    */
-  public async upsertRuntime(input: ClientRuntimeObserveRequest): Promise<RuntimeUpsertResult> {
-    return this.mutationLane.run(() => this.upsertRuntimeInLane(input));
+  public async upsertRuntime(call: CallContext, input: ClientRuntimeObserveRequest): Promise<RuntimeUpsertResult> {
+    return this.mutationLane.run(() => this.upsertRuntimeInLane(call, input));
   }
 
-  private async upsertRuntimeInLane(input: ClientRuntimeObserveRequest): Promise<RuntimeUpsertResult> {
+  private async upsertRuntimeInLane(
+    call: CallContext,
+    input: ClientRuntimeObserveRequest,
+  ): Promise<RuntimeUpsertResult> {
     // Priority-based lookup: returns the strongest single match. When multiple
     // evidence fields point to different records, the strongest wins and weaker
     // records remain unreferenced. Multi-match merging is a v2 concern.
@@ -289,7 +295,7 @@ export class ClientRuntimeRegistry {
         if (refreshObserved) {
           candidate.observedAt = input.observedAt;
         }
-        await this.persistRecord(candidate);
+        await this.persistRecord(call, candidate);
         // Commit the persisted candidate and update indexes from the prior snapshot.
         this.runtimeMap.set(candidate, existing);
       }
@@ -323,7 +329,7 @@ export class ClientRuntimeRegistry {
       updatedAt: now,
     };
 
-    await this.persistRecord(newRecord);
+    await this.persistRecord(call, newRecord);
     this.runtimeMap.set(newRecord);
 
     return {
@@ -451,11 +457,15 @@ export class ClientRuntimeRegistry {
     return this.latestCreatedAt;
   }
 
-  private async persistRecord(record: ClientRuntimeRecord): Promise<void> {
+  private async persistRecord(call: CallContext, record: ClientRuntimeRecord): Promise<void> {
     if (!this.bus) {
       return;
     }
-    const result = await this.bus.requestOptional(ClientRuntimeStorageSubjects.upsert, cloneRuntimeRecord(record));
+    const result = await this.bus.requestOptional(
+      call,
+      ClientRuntimeStorageSubjects.upsert,
+      cloneRuntimeRecord(record),
+    );
     if (result.handled && !result.data.success) {
       throw new Error(`client runtime storage rejected persistence for '${record.clientRuntimeId}'`);
     }

@@ -1,4 +1,4 @@
-import type { IMakaioBus } from '@makaio/bus-core';
+import type { CallContext } from '@makaio/core';
 import type { PostUserMessageHookOptions } from '../types/hook-options.js';
 import type { PostUserMessageContext } from '../types/hook-context.js';
 import { HookRegistry } from './hook-registry.js';
@@ -39,19 +39,24 @@ export interface PostUserMessageInput {
 
 /**
  * Run all registered PostUserMessage hooks.
+ *
+ * Each hook receives the bus of the extension that registered it
+ * (`options.bus`), never a bus of the caller of this runner. The runner does not
+ * send itself.
+ * @param call - Call context of the message that triggered the turn; carried on every hook context
  * @param input - Input containing agent/session identifiers
- * @param bus - Bus instance for making requests
  * @returns Promise that resolves when all hooks complete
  */
-export async function runPostUserMessageHooks(input: PostUserMessageInput, bus: IMakaioBus): Promise<void> {
-  for (const { name, handler } of registry) {
+export async function runPostUserMessageHooks(call: CallContext, input: PostUserMessageInput): Promise<void> {
+  for (const { name, handler, options } of registry) {
     const ctx: PostUserMessageContext = {
       hookEvent: 'PostUserMessage',
       agentId: input.agentId,
       adapterId: input.adapterId,
       sessionId: input.sessionId,
       messageId: input.messageId,
-      bus,
+      bus: options.bus,
+      call,
     };
 
     try {

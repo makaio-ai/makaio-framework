@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest';
+import { createTestCall } from '@makaio/test-utils';
 import { shellKillTool } from '../../src/tools/shell-kill.js';
 import { createDefaultCreateOptions, setupShellToolTest } from './shared.js';
 
@@ -22,6 +23,7 @@ describe('shellKillTool', () => {
       expect(ctx.instance.getStatus()).toBe('running');
 
       const result = await ctx.registry.execute(
+        createTestCall(),
         'shell_kill',
         {
           shellId: ctx.instance.shellId,
@@ -48,6 +50,7 @@ describe('shellKillTool', () => {
       });
 
       const result = await ctx.registry.execute(
+        createTestCall(),
         'shell_kill',
         {
           shellId: ctx.instance.shellId,
@@ -76,6 +79,7 @@ describe('shellKillTool', () => {
       await ctx.instance.waitForExit();
 
       const result = await ctx.registry.execute(
+        createTestCall(),
         'shell_kill',
         {
           shellId: ctx.instance.shellId,
@@ -99,6 +103,7 @@ describe('shellKillTool', () => {
       });
 
       const result = await ctx.registry.execute(
+        createTestCall(),
         'shell_kill',
         {
           shellId: ctx.instance.shellId,
@@ -121,6 +126,7 @@ describe('shellKillTool', () => {
   describe('error handling', () => {
     it('errors for unknown shell ID', async () => {
       const result = await ctx.registry.execute(
+        createTestCall(),
         'shell_kill',
         {
           shellId: 'nonexistent-shell-id',

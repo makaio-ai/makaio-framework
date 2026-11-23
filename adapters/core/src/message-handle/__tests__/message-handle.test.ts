@@ -1,3 +1,4 @@
+import { createTestCall } from '@makaio/test-utils';
 import { describe, expect, it, vi } from 'vitest';
 import { markCompletedWithFinalResult, MessageHandle } from '../message-handle.js';
 import type { MessageResult } from '../types.js';
@@ -17,6 +18,7 @@ function createDeferred<T>(): Deferred<T> {
 
 function createHandle(messageId: string): MessageHandle {
   return new MessageHandle(
+    createTestCall(),
     messageId,
     {
       role: 'user',

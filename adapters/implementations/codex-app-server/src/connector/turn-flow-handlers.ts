@@ -10,7 +10,7 @@
  * @packageDocumentation
  */
 
-import type { ProcessingState, MessageHandle, MessageResult } from '@makaio/ai-adapters-core';
+import type { ProcessingState, MessageHandle, MessageResult, Forbid, ForbiddenKeys } from '@makaio/ai-adapters-core';
 import { UserMessageQueue, markCompletedWithFinalResult } from '@makaio/ai-adapters-core';
 import type {
   ThreadForkResponse,
@@ -28,8 +28,31 @@ import { fetchToolsForCodex, type ThreadStartParamsWithDynamicTools } from '../d
 import type { JsonRpcClient } from '../utils/jsonRpcClient.js';
 import type { ApprovalPolicy, SandboxMode, ReasoningEffort } from './types.js';
 import type { ReasoningEffort as CodexReasoningEffort } from '../protocol/generated/ReasoningEffort.js';
-import type { AIReasoningLevel, NativeForkDirective } from '@makaio/contracts';
-import type { IMakaioBus } from '@makaio/bus-core';
+import type { AIReasoningLevel, CallContext, NativeForkDirective } from '@makaio/contracts';
+import type { EmitSubject, IMakaioBus } from '@makaio/bus-core';
+import type { ScopedSubjectDefinition } from '@makaio/core';
+
+/**
+ * Emitter bound to the operation of one notification callback.
+ *
+ * The connector binds it either to the call of the handle the notification belongs to
+ * or, when no handle is attributable, to the observer context.
+ * @typeParam S - Subject definition of the emitted event
+ */
+export type CodexTurnEmit = <S extends ScopedSubjectDefinition<CodexAppServerBus['namespace']>>(
+  subject: EmitSubject<S>,
+  payload: Forbid<S['$meta']['payload'], ForbiddenKeys>,
+) => Promise<void>;
+
+/**
+ * Emitter that sends for the handled message whose `call` is passed first.
+ * @typeParam S - Subject definition of the emitted event
+ */
+export type CodexCallEmit = <S extends ScopedSubjectDefinition<CodexAppServerBus['namespace']>>(
+  call: CallContext,
+  subject: EmitSubject<S>,
+  payload: Forbid<S['$meta']['payload'], ForbiddenKeys>,
+) => Promise<void>;
 
 type ThreadLifecycleResponse = ThreadForkResponse | ThreadResumeResponse | ThreadStartResponse;
 
@@ -55,6 +78,8 @@ export interface TurnFlowContext {
   getCurrentTurn: () => CodexAppServerTurn | undefined;
   /** Replaces (or clears) the active turn. */
   setCurrentTurn: (turn: CodexAppServerTurn | undefined) => void;
+  /** Provider turn IDs announced as started or resumed in progress and still awaiting completion. */
+  unfinishedProviderTurnIds: Set<string>;
   /** Returns the active thread, or `undefined` before thread startup completes. */
   getThread: () => CodexAppServerThread | undefined;
   /** Replaces (or clears) the active thread. */
@@ -84,8 +109,10 @@ export interface TurnFlowContext {
   messageQueue: UserMessageQueue;
   /** The JSON-RPC client, guaranteed non-null when turn flow methods are called. */
   getJsonRpcClient: () => JsonRpcClient;
-  /** Scoped bus for event emission. */
-  emit: CodexAppServerBus['emit'];
+  /** Emits an event for the handled message whose call is passed first. */
+  emit: CodexCallEmit;
+  /** Emits an observation that no live operation can be attributed to (observer context). */
+  emitObserved: CodexTurnEmit;
   /** Updates the connector's processing state. */
   updateProcessingState: (state: ProcessingState) => Promise<void>;
   /** Agent ID for turn and thread construction. */
@@ -168,10 +195,11 @@ function extractResponseThreadId(response: ThreadLifecycleResponse): string {
 
 /**
  * Register a thread ID from either the JSON-RPC response or the later notification.
+ * @param call - Call causing thread startup or the notification observer origin
  * @param ctx - Turn flow context
  * @param threadId - Provider thread ID to register
  */
-async function registerThreadStarted(ctx: TurnFlowContext, threadId: string): Promise<void> {
+async function registerThreadStarted(call: CallContext, ctx: TurnFlowContext, threadId: string): Promise<void> {
   const existingThread = ctx.getThread();
   if (existingThread?.threadId !== undefined) {
     if (existingThread.threadId === threadId) {
@@ -196,7 +224,7 @@ async function registerThreadStarted(ctx: TurnFlowContext, threadId: string): Pr
     });
   ctx.setThread(thread);
 
-  await thread.handleThreadStarted(threadId);
+  await thread.handleThreadStarted(call, threadId);
 }
 
 /**
@@ -229,9 +257,10 @@ function assertSupportedNativeFork(nativeFork: NativeForkDirective): void {
  * for startup completion; a later matching `thread/started` notification is an
  * idempotent confirmation.
  * On error the deferred is cleared to prevent `getAdapterSessionId()` from hanging.
+ * @param call - Call requesting thread startup
  * @param ctx - Turn flow context
  */
-export async function startThread(ctx: TurnFlowContext): Promise<void> {
+export async function startThread(call: CallContext, ctx: TurnFlowContext): Promise<void> {
   ctx.setThreadStartedDeferred(createThreadStartedDeferred());
 
   try {
@@ -248,8 +277,11 @@ export async function startThread(ctx: TurnFlowContext): Promise<void> {
         threadId: ctx.resumeAdapterSessionId,
         ...(cwd !== undefined && { cwd }),
       });
+      for (const turn of response.thread.turns) {
+        if (turn.status === 'inProgress') ctx.unfinishedProviderTurnIds.add(turn.id);
+      }
     } else {
-      const dynamicTools = await fetchToolsForCodex(ctx.globalBus, ctx.adapterId, ctx.adapterName, {
+      const dynamicTools = await fetchToolsForCodex(call, ctx.globalBus, ctx.adapterId, ctx.adapterName, {
         allowedTools: ctx.allowedTools,
         disallowedTools: ctx.disallowedTools,
       });
@@ -270,7 +302,7 @@ export async function startThread(ctx: TurnFlowContext): Promise<void> {
       response = await ctx.getJsonRpcClient().request<ThreadStartResponse>('thread/start', threadStartParams);
     }
 
-    await registerThreadStarted(ctx, extractResponseThreadId(response));
+    await registerThreadStarted(call, ctx, extractResponseThreadId(response));
     ctx.setThreadStartedDeferred(undefined);
   } catch (error) {
     // Clear deferred so getAdapterSessionId() throws rather than awaiting a hung promise.
@@ -308,7 +340,7 @@ export async function startTurn(
   ctx.setPendingMessageHandle(messageHandle);
   ctx.setAgentMessageContent('');
 
-  await ctx.getCurrentTurn()!.start();
+  await ctx.getCurrentTurn()!.start(messageHandle.call);
   const userInputs = buildUserInputs(messageHandle, mergedContent);
   const effort = ctx.getReasoningEffort();
   await ctx.getJsonRpcClient().request('turn/start', {
@@ -329,10 +361,15 @@ export async function startTurn(
  *
  * Late-arriving `immediate` messages (arriving after a turn has already completed)
  * are rejected and the queue is re-drained to unblock any remaining entries.
+ *
+ * Returns while the dispatch slot (`ctx.getCurrentTurn()`) is held, regardless of the
+ * held turn's own completed flag: `onTurnCompleted` clears the slot only as the last step
+ * of its finishing sequence, immediately followed by its own dispatch decision, so this
+ * function never needs to race that decision.
  * @param ctx - Turn flow context
  */
 export async function processQueue(ctx: TurnFlowContext): Promise<void> {
-  if (ctx.getCurrentTurn() && !ctx.getCurrentTurn()!.isCompleted()) return;
+  if (ctx.getCurrentTurn()) return;
 
   const nextMessage = ctx.messageQueue.peek();
   if (!nextMessage) return;
@@ -368,13 +405,18 @@ export async function processQueue(ctx: TurnFlowContext): Promise<void> {
  * Resolves the deferred thread-started promise, sets the adapter session ID,
  * creates and registers the {@link CodexAppServerThread}, and fires the thread
  * lifecycle handler.
+ * @param call - Call attributable to the notification or its observer origin
  * @param ctx - Turn flow context
  * @param notification - Parsed notification payload
  */
-export async function onThreadStarted(ctx: TurnFlowContext, notification: ThreadStartedNotification): Promise<void> {
+export async function onThreadStarted(
+  call: CallContext,
+  ctx: TurnFlowContext,
+  notification: ThreadStartedNotification,
+): Promise<void> {
   const threadId = extractThreadId(notification);
 
-  await registerThreadStarted(ctx, threadId);
+  await registerThreadStarted(call, ctx, threadId);
 }
 
 /** Map the provider terminal status and final message to the canonical connector result.
@@ -394,80 +436,162 @@ function createTerminalMessageResult(notification: TurnCompletedNotification, co
 }
 
 /**
- * Handle the `turn/completed` notification from the Codex server.
+ * Emit the final agent message of a completed turn, when its content is available.
  *
- * Manages the superseded-message / merged-message fast path (when an `immediate`
- * message is waiting), then settles the pending handle with its outcome. Drains
- * the queue or transitions to idle when no further messages are queued.
+ * `agent_message` carries no message identifier, so it is expressible without a live
+ * operation: with the `handle` captured at notification ingress it is sent under that
+ * handle's call, without one it is sent in the observer context. Callers emit it before
+ * settling the handle so that consumers accumulate blocks before `agent.complete` fires.
  * @param ctx - Turn flow context
- * @param notification - Parsed notification carrying the terminal item snapshot when available
+ * @param notification - Parsed `turn/completed` notification
+ * @param handle - Handle of the operation the notification belongs to, or `undefined` when none is attributable
+ * @param content - Final agent message text (empty when the turn produced none)
  */
-export async function onTurnCompleted(ctx: TurnFlowContext, notification: TurnCompletedNotification): Promise<void> {
-  if (!ctx.getCurrentTurn()) return;
+async function emitFinalAgentMessage(
+  ctx: TurnFlowContext,
+  notification: TurnCompletedNotification,
+  handle: MessageHandle | undefined,
+  content: string,
+): Promise<void> {
+  const threadId = ctx.getThread()?.threadId;
+  if (!content || !threadId) return;
 
-  await ctx.getCurrentTurn()!.handleTurnCompleted();
-
-  const immediateMsg = ctx.messageQueue.findImmediate();
-  if (immediateMsg && ctx.getPendingMessageHandle()) {
-    ctx.messageQueue.removeImmediate(immediateMsg);
-
-    const mergedContent: string[] = [];
-    const currentHandle = ctx.getPendingMessageHandle()!;
-    if (currentHandle.message.message) {
-      mergedContent.push(currentHandle.message.message);
-    }
-
-    currentHandle.supersededBy = immediateMsg.messageId;
-    currentHandle.markCompleted({ outcome: 'superseded', supersededBy: immediateMsg.messageId });
-
-    const enqueuedHandles = ctx.messageQueue.drainEnqueued();
-    for (const handle of enqueuedHandles) {
-      if (handle.message.message) mergedContent.push(handle.message.message);
-      handle.supersededBy = immediateMsg.messageId;
-      handle.markCompleted({ outcome: 'merged', mergedInto: immediateMsg.messageId });
-    }
-
-    ctx.setLastResult({ outcome: 'superseded', supersededBy: immediateMsg.messageId });
-    ctx.setPendingMessageHandle(undefined);
-    ctx.setCurrentTurn(undefined);
-
-    await ctx.updateProcessingState('turn_finished');
-    await ctx.updateProcessingState('processing_finished');
-    await startTurn(ctx, immediateMsg, mergedContent);
-    return;
+  const payload = { threadId, turnId: notification.turn.id, message: content, timestamp: Date.now() };
+  if (handle) {
+    await ctx.emit(handle.call, CodexAppServerSubjects.agent_message, payload);
+  } else {
+    await ctx.emitObserved(CodexAppServerSubjects.agent_message, payload);
   }
+}
 
-  const pendingHandle = ctx.getPendingMessageHandle();
-  if (pendingHandle) {
-    // Emit the final agent_message before markCompleted so SessionBridge
-    // accumulates blocks before agent.complete fires.
-    const turnId = ctx.getCurrentTurn()?.getTurnId();
-    const threadId = ctx.getThread()?.threadId;
-    const completedItemContent = notification.turn.items?.findLast((item) => item.type === 'agentMessage')?.text;
-    const agentMessageContent = completedItemContent ?? ctx.getAgentMessageContent();
-    if (agentMessageContent && threadId && turnId) {
-      await ctx.emit(CodexAppServerSubjects.agent_message, {
-        threadId,
-        turnId,
-        message: agentMessageContent,
-        timestamp: Date.now(),
-      });
-    }
-    const result = createTerminalMessageResult(notification, agentMessageContent);
-    await markCompletedWithFinalResult(pendingHandle, result, (_handle, finalResult) => {
-      ctx.setLastResult(finalResult);
-    });
-    ctx.setPendingMessageHandle(undefined);
-  }
-
-  ctx.setCurrentTurn(undefined);
-
-  await ctx.updateProcessingState('turn_finished');
-  await ctx.updateProcessingState('processing_finished');
-
+/**
+ * Dispatch decision after an ordinary completion: start the next queued message, or go idle.
+ * @param ctx - Turn flow context
+ */
+async function dispatchQueuedOrIdle(ctx: TurnFlowContext): Promise<void> {
   if (!ctx.messageQueue.isEmpty()) {
     await processQueue(ctx);
   } else {
     await ctx.updateProcessingState('idle');
   }
+}
+
+/**
+ * Handle the `turn/completed` notification from the Codex server.
+ *
+ * The handle captured at notification ingress must still match the pending handle at the
+ * time this handler runs: between ingress and execution, a later turn may already have
+ * become current (e.g. after an immediate supersede), and a stale or duplicate notification
+ * for the earlier turn must never settle or complete the newer one. Accept one completion
+ * per announced start or in-progress resume snapshot, consuming the ID before any awaits.
+ * Completions without a matching pending handle can still emit as observations.
+ *
+ * Once the match holds, this is the only code that clears the connector's dispatch slot
+ * (`currentTurn` / pending message handle), and it holds that slot for the handler's entire
+ * finishing sequence: the turn's own completion, settling the captured handle (or the
+ * superseded-message fast path when an `immediate` message is waiting), then the
+ * `turn_finished` / `processing_finished` state transitions. The slot is released exactly once,
+ * after that sequence settles — also when any await of it rejects — immediately followed, with no
+ * await in between, by the dispatch decision for that path: `startTurn` for a superseding
+ * immediate message, or `processQueue` / the `idle` transition for an ordinary completion; a
+ * completion rejection still propagates after that decision (as an `AggregateError` together
+ * with the dispatch failure when the decision rejects too). `sendMessage`'s admission
+ * check and `processQueue` both test the slot itself, not the turn's own completed flag (which
+ * `turn.handleTurnCompleted()` flips synchronously, before this handler's own lifecycle awaits
+ * run), so no concurrent send can observe the slot empty, start a second turn, or overwrite this
+ * handle while any part of this sequence is still suspended on an await or stranded by a
+ * rejected emission.
+ * @param ctx - Turn flow context
+ * @param notification - Parsed notification carrying the terminal item snapshot when available
+ * @param handle - Handle of the operation this notification belongs to, captured at notification ingress
+ *   before any await; `undefined` when no live operation is attributable
+ */
+export async function onTurnCompleted(
+  ctx: TurnFlowContext,
+  notification: TurnCompletedNotification,
+  handle: MessageHandle | undefined,
+): Promise<void> {
+  if (!ctx.unfinishedProviderTurnIds.delete(notification.turn.id)) return;
+
+  if (handle === undefined || handle !== ctx.getPendingMessageHandle()) {
+    const observedContent = notification.turn.items?.findLast((item) => item.type === 'agentMessage')?.text;
+    await emitFinalAgentMessage(ctx, notification, undefined, observedContent ?? '');
+    return;
+  }
+
+  // Captured once, before the first await below: every settlement and clearing further down
+  // uses these references instead of rereading the connector's mutable current-turn / pending-
+  // handle / message-content state, which `startTurn` resets once this handler's own dispatch
+  // decision installs the next turn.
+  const turn = ctx.getCurrentTurn();
+  const completedItemContent = notification.turn.items?.findLast((item) => item.type === 'agentMessage')?.text;
+  const agentMessageContent = completedItemContent ?? ctx.getAgentMessageContent();
+  if (!turn) {
+    // No turn holds the slot: there is no lifecycle to finish and nothing to release.
+    await emitFinalAgentMessage(ctx, notification, handle, agentMessageContent);
+    return;
+  }
+
+  // The slot is held until the completion sequence below has settled (fulfilled or rejected);
+  // it is then released exactly once and the dispatch decision runs immediately after, with no
+  // await in between. The decision defaults to the ordinary one; the superseding path replaces
+  // it. A completion rejection propagates after the decision, together with a dispatch failure.
+  let dispatchNext: () => Promise<void> = () => dispatchQueuedOrIdle(ctx);
+  let completionFailed = false;
+  let completionError: unknown;
+  try {
+    await turn.handleTurnCompleted(handle.call);
+
+    const immediateMsg = ctx.messageQueue.findImmediate();
+    if (immediateMsg) {
+      ctx.messageQueue.removeImmediate(immediateMsg);
+
+      const mergedContent: string[] = [];
+      if (handle.message.message) {
+        mergedContent.push(handle.message.message);
+      }
+
+      handle.supersededBy = immediateMsg.messageId;
+      handle.markCompleted({ outcome: 'superseded', supersededBy: immediateMsg.messageId });
+
+      const enqueuedHandles = ctx.messageQueue.drainEnqueued();
+      for (const enqueued of enqueuedHandles) {
+        if (enqueued.message.message) mergedContent.push(enqueued.message.message);
+        enqueued.supersededBy = immediateMsg.messageId;
+        enqueued.markCompleted({ outcome: 'merged', mergedInto: immediateMsg.messageId });
+      }
+
+      ctx.setLastResult({ outcome: 'superseded', supersededBy: immediateMsg.messageId });
+      // `startTurn` installs the new turn synchronously before its own first await.
+      dispatchNext = () => startTurn(ctx, immediateMsg, mergedContent);
+    } else {
+      // Emit the final agent_message before markCompleted so SessionBridge
+      // accumulates blocks before agent.complete fires.
+      await emitFinalAgentMessage(ctx, notification, handle, agentMessageContent);
+
+      const result = createTerminalMessageResult(notification, agentMessageContent);
+      await markCompletedWithFinalResult(handle, result, (_handle, finalResult) => {
+        ctx.setLastResult(finalResult);
+      });
+    }
+
+    await ctx.updateProcessingState('turn_finished');
+    await ctx.updateProcessingState('processing_finished');
+  } catch (error) {
+    completionFailed = true;
+    completionError = error;
+  }
+
+  ctx.setPendingMessageHandle(undefined);
+  ctx.setCurrentTurn(undefined);
+  try {
+    await dispatchNext();
+  } catch (dispatchError) {
+    // A failing dispatch decision must not mask the completion failure that preceded it.
+    if (completionFailed) {
+      throw new AggregateError([completionError, dispatchError], 'Turn completion and next dispatch failed');
+    }
+    throw dispatchError;
+  }
+  if (completionFailed) throw completionError;
 }

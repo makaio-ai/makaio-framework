@@ -5,10 +5,11 @@ import { join } from 'node:path';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { MessageHandle, type MessageResult, type NormalizedMessageInput } from '@makaio/ai-adapters-core';
 import { createBusInstance, type IMakaioBus, MakaioBus } from '@makaio/bus-core';
-import { ToolSubjects } from '@makaio/contracts';
+import { ToolSubjects, type Party } from '@makaio/contracts';
+import { createTestCall } from '@makaio/test-utils';
 import { TerminalManager } from '@makaio/ai-adapters-acp-client';
 import type { AcpConnectionHandle } from '@makaio/ai-adapters-acp-client';
-import { QwenAcpNamespace, QwenAcpSubjects } from '../namespaces/index.js';
+import { QwenAcpNamespace, QwenAcpSubjects, type QwenAcpBus } from '../namespaces/index.js';
 import { QwenAcpConnector } from '../connector.js';
 import { QwenAcpTurn } from '../turn.js';
 
@@ -49,6 +50,19 @@ const TEST_MESSAGE: NormalizedMessageInput = {
   blocks: [{ type: 'text', content: 'Hello' }],
 };
 
+const TEST_CALL = createTestCall();
+const TURN_PRINCIPAL: Party = { kind: 'acme.person', id: 'person-turn' };
+
+/**
+ * Build a pending operation handle for a call.
+ * @param call - Call context the handle serves
+ * @param messageId - Message identifier of the handle
+ * @returns Message handle for the call
+ */
+function makeHandle(call = TEST_CALL, messageId = 'msg-test'): MessageHandle {
+  return new MessageHandle(call, messageId, TEST_MESSAGE, 'enqueue');
+}
+
 const NATIVE_AUTH = { processEnv: {}, connectorDeliveries: [], configInheritance: 'auth-only' as const };
 
 interface ToolApprovalRequester {
@@ -73,7 +87,7 @@ function createDeferred<T>(): Deferred<T> {
  * @param options - Optional connector overrides.
  */
 async function makeConnector(options: { globalBus?: IMakaioBus } = {}) {
-  const bus = await QwenAcpNamespace.scopedBus();
+  const bus = await QwenAcpNamespace.scopedBus(options.globalBus ?? MakaioBus);
   return new QwenAcpConnector({
     bus,
     adapterId: 'adapter-1',
@@ -85,7 +99,7 @@ async function makeConnector(options: { globalBus?: IMakaioBus } = {}) {
     env: {},
     adapterAuth: NATIVE_AUTH,
     allowedDirectories: ['/workspace/project'],
-    globalBus: options.globalBus,
+    globalBus: options.globalBus ?? MakaioBus,
   });
 }
 
@@ -113,7 +127,7 @@ describe('QwenAcpConnector', () => {
     const connector = await makeConnector();
 
     await connector.initialize();
-    await connector.initialize({ systemPrompt: 'Follow the repository policies strictly.' });
+    await connector.initialize({ call: TEST_CALL, systemPrompt: 'Follow the repository policies strictly.' });
 
     expect(mockCreateAcpConnection).toHaveBeenCalledTimes(2);
     expect(firstHandle.kill).toHaveBeenCalledTimes(1);
@@ -132,6 +146,7 @@ describe('QwenAcpConnector', () => {
     const hostBus = createBusInstance();
     const connector = await makeConnector({ globalBus: hostBus });
     allowToolApproval(connector);
+    connector['pendingMessageHandle'] = makeHandle();
     const requestSpy = vi.spyOn(hostBus, 'request').mockResolvedValue({
       success: true,
       data: { content: 'file contents', path: '/workspace/project/notes.md', size: 13, truncated: false },
@@ -146,6 +161,7 @@ describe('QwenAcpConnector', () => {
 
     expect(response).toEqual({ content: 'file contents' });
     expect(requestSpy).toHaveBeenCalledWith(
+      TEST_CALL,
       ToolSubjects.execute,
       expect.objectContaining({
         toolName: 'read_file',
@@ -165,6 +181,7 @@ describe('QwenAcpConnector', () => {
   it('normalizes ACP null line and limit fields before tool execution', async () => {
     const connector = await makeConnector();
     allowToolApproval(connector);
+    connector['pendingMessageHandle'] = makeHandle();
     const requestSpy = vi.spyOn(MakaioBus, 'request').mockResolvedValue({
       success: true,
       data: { content: 'file contents', path: '/workspace/project/notes.md', size: 13, truncated: false },
@@ -179,6 +196,7 @@ describe('QwenAcpConnector', () => {
 
     expect(response).toEqual({ content: 'file contents' });
     expect(requestSpy).toHaveBeenCalledWith(
+      TEST_CALL,
       ToolSubjects.execute,
       expect.objectContaining({
         toolName: 'read_file',
@@ -191,6 +209,7 @@ describe('QwenAcpConnector', () => {
     const hostBus = createBusInstance();
     const connector = await makeConnector({ globalBus: hostBus });
     allowToolApproval(connector);
+    connector['pendingMessageHandle'] = makeHandle();
     const requestSpy = vi.spyOn(hostBus, 'request').mockResolvedValue({
       success: true,
       data: { path: '/workspace/project/out.txt', bytesWritten: 7, created: true },
@@ -204,6 +223,7 @@ describe('QwenAcpConnector', () => {
 
     expect(response).toEqual({});
     expect(requestSpy).toHaveBeenCalledWith(
+      TEST_CALL,
       ToolSubjects.execute,
       expect.objectContaining({
         toolName: 'write_file',
@@ -250,7 +270,7 @@ describe('QwenAcpConnector', () => {
     mockCreateAcpConnection.mockResolvedValueOnce(handle);
 
     const connector = await makeConnector();
-    const messageHandle = await connector.sendMessage(TEST_MESSAGE);
+    const messageHandle = await connector.sendMessage(TEST_MESSAGE, { call: TEST_CALL });
 
     await expect(connector.getAdapterSessionId()).resolves.toBe('session-send');
     expect(messageHandle.adapterSessionId).toBe('session-send');
@@ -283,7 +303,10 @@ describe('QwenAcpConnector', () => {
 
     const connector = await makeConnector();
     const firstInitialize = connector.initialize();
-    const secondInitialize = connector.initialize({ systemPrompt: 'Apply this prompt after startup.' });
+    const secondInitialize = connector.initialize({
+      call: TEST_CALL,
+      systemPrompt: 'Apply this prompt after startup.',
+    });
 
     // Yield enough microtasks for credential resolution and the optional
     // client.resolveBinary requestOptional to complete so that createAcpConnection()
@@ -317,7 +340,7 @@ describe('QwenAcpConnector', () => {
 
     const connector = await makeConnector();
 
-    await expect(connector.initialize({ systemPrompt: 'Fail once, then recover.' })).rejects.toThrow(
+    await expect(connector.initialize({ call: TEST_CALL, systemPrompt: 'Fail once, then recover.' })).rejects.toThrow(
       'session creation failed',
     );
 
@@ -327,7 +350,7 @@ describe('QwenAcpConnector', () => {
     expect(promptFile).toBeTruthy();
     await expect(access(promptFile, fsConstants.F_OK)).rejects.toThrow();
 
-    await connector.initialize({ systemPrompt: 'Fail once, then recover.' });
+    await connector.initialize({ call: TEST_CALL, systemPrompt: 'Fail once, then recover.' });
 
     expect(mockCreateAcpConnection).toHaveBeenCalledTimes(2);
     await expect(connector.getAdapterSessionId()).resolves.toBe('session-recovered');
@@ -339,7 +362,7 @@ describe('QwenAcpConnector', () => {
     mockCreateAcpConnection.mockResolvedValueOnce(handle);
 
     const connector = await makeConnector();
-    const messageHandle = await connector.sendMessage(TEST_MESSAGE);
+    const messageHandle = await connector.sendMessage(TEST_MESSAGE, { call: TEST_CALL });
 
     const result = await messageHandle.waitForCompletion();
     expect(result).toMatchObject({ outcome: 'error' });
@@ -357,7 +380,7 @@ describe('QwenAcpConnector', () => {
     const connector = await makeConnector();
 
     try {
-      const messageHandle = await connector.sendMessage(TEST_MESSAGE);
+      const messageHandle = await connector.sendMessage(TEST_MESSAGE, { call: TEST_CALL });
       await vi.waitFor(() => {
         expect(handle.connection.prompt).toHaveBeenCalledTimes(1);
       });
@@ -397,7 +420,7 @@ describe('QwenAcpConnector', () => {
     const connector = await makeConnector();
 
     try {
-      const messageHandle = await connector.sendMessage(TEST_MESSAGE);
+      const messageHandle = await connector.sendMessage(TEST_MESSAGE, { call: TEST_CALL });
       await vi.waitFor(() => {
         expect(handle.connection.prompt).toHaveBeenCalledTimes(1);
       });
@@ -405,6 +428,7 @@ describe('QwenAcpConnector', () => {
       let retryHandle: MessageHandle | undefined;
       messageHandle.addCompletionTransform(async () => {
         retryHandle = await connector.sendMessage(TEST_MESSAGE, {
+          call: TEST_CALL,
           deliveryMode: 'enqueue',
           internalRetry: true,
           messageId: 'message-structured-output-retry',
@@ -451,9 +475,10 @@ describe('QwenAcpConnector', () => {
   });
 
   it('reopens a text step after a tool step completes', async () => {
-    const bus = await QwenAcpNamespace.scopedBus();
+    const bus = await QwenAcpNamespace.scopedBus(MakaioBus);
     const connector = new QwenAcpConnector({
       bus,
+      globalBus: MakaioBus,
       adapterId: 'adapter-1',
       adapterName: 'qwen-acp',
       agentId: 'agent-1',
@@ -464,15 +489,11 @@ describe('QwenAcpConnector', () => {
       adapterAuth: NATIVE_AUTH,
       allowedDirectories: ['/workspace/project'],
     });
-    const turn = new QwenAcpTurn(
-      new MessageHandle('msg-test', TEST_MESSAGE, 'enqueue'),
-      bus,
-      'adapter-1',
-      'qwen-acp',
-      'agent-1',
-    );
+    const handle = makeHandle();
+    const turn = new QwenAcpTurn(handle, bus, 'adapter-1', 'qwen-acp', 'agent-1');
     connector['currentTurn'] = turn;
-    await turn.start();
+    connector['pendingMessageHandle'] = handle;
+    await turn.start(handle.call);
 
     const stepStarts: string[] = [];
     bus.on(QwenAcpSubjects.turn_step_started, (ctx) => {
@@ -517,9 +538,10 @@ describe('QwenAcpConnector', () => {
   });
 
   it('does not emit session_update_usage during streaming chunks', async () => {
-    const bus = await QwenAcpNamespace.scopedBus();
+    const bus = await QwenAcpNamespace.scopedBus(MakaioBus);
     const connector = new QwenAcpConnector({
       bus,
+      globalBus: MakaioBus,
       adapterId: 'adapter-1',
       adapterName: 'qwen-acp',
       agentId: 'agent-1',
@@ -559,9 +581,10 @@ describe('QwenAcpConnector', () => {
   });
 
   it('emits a single consolidated session_update_usage event on flush', async () => {
-    const bus = await QwenAcpNamespace.scopedBus();
+    const bus = await QwenAcpNamespace.scopedBus(MakaioBus);
     const connector = new QwenAcpConnector({
       bus,
+      globalBus: MakaioBus,
       adapterId: 'adapter-1',
       adapterName: 'qwen-acp',
       agentId: 'agent-1',
@@ -596,7 +619,7 @@ describe('QwenAcpConnector', () => {
       },
     });
 
-    await connector['flushAccumulatedUsage'](12345);
+    await connector['flushAccumulatedUsage'](TEST_CALL, 12345);
 
     // Exactly one consolidated event, using the last-seen value for each field
     expect(usageEvents).toHaveLength(1);
@@ -610,9 +633,10 @@ describe('QwenAcpConnector', () => {
   });
 
   it('does not emit usage when no usage data was seen in any chunk', async () => {
-    const bus = await QwenAcpNamespace.scopedBus();
+    const bus = await QwenAcpNamespace.scopedBus(MakaioBus);
     const connector = new QwenAcpConnector({
       bus,
+      globalBus: MakaioBus,
       adapterId: 'adapter-1',
       adapterName: 'qwen-acp',
       agentId: 'agent-1',
@@ -638,15 +662,16 @@ describe('QwenAcpConnector', () => {
       },
     });
 
-    await connector['flushAccumulatedUsage'](99999);
+    await connector['flushAccumulatedUsage'](TEST_CALL, 99999);
 
     expect(usageEvents).toHaveLength(0);
   });
 
   it('resets the accumulator after flush so a second flush emits nothing', async () => {
-    const bus = await QwenAcpNamespace.scopedBus();
+    const bus = await QwenAcpNamespace.scopedBus(MakaioBus);
     const connector = new QwenAcpConnector({
       bus,
+      globalBus: MakaioBus,
       adapterId: 'adapter-1',
       adapterName: 'qwen-acp',
       agentId: 'agent-1',
@@ -673,10 +698,144 @@ describe('QwenAcpConnector', () => {
       },
     });
 
-    await connector['flushAccumulatedUsage'](1000);
-    await connector['flushAccumulatedUsage'](2000);
+    await connector['flushAccumulatedUsage'](TEST_CALL, 1000);
+    await connector['flushAccumulatedUsage'](TEST_CALL, 2000);
 
     // Only the first flush should produce an event
     expect(usageEvents).toHaveLength(1);
+  });
+
+  describe('call attribution of connector callbacks', () => {
+    /**
+     * Collect the principal each delivery of a subject was sent under.
+     * @param bus - Scoped bus to listen on
+     * @param subject - Subject to record
+     * @returns Recorded deliveries (principal and payload)
+     */
+    function recordPrincipals(
+      bus: QwenAcpBus,
+      subject: typeof QwenAcpSubjects.session_update_message_chunk,
+    ): Array<{ principal: Party; payload: unknown }> {
+      const seen: Array<{ principal: Party; payload: unknown }> = [];
+      bus.on(subject, (ctx) => {
+        seen.push({ principal: ctx.call.principal, payload: ctx.payload });
+      });
+      return seen;
+    }
+
+    it('R1: usage flush, chunk emissions and turn_text_completed go out under the turn call', async () => {
+      const handle = makeAcpHandle('session-r1');
+      const promptReleased = createDeferred<void>();
+      handle.connection.prompt = vi.fn().mockReturnValue(promptReleased.promise);
+      mockCreateAcpConnection.mockResolvedValueOnce(handle);
+      const connector = await makeConnector();
+      const bus = connector['config'].bus;
+      const chunks = recordPrincipals(bus, QwenAcpSubjects.session_update_message_chunk);
+      const thoughts: Party[] = [];
+      bus.on(QwenAcpSubjects.session_update_thought_chunk, (ctx) => void thoughts.push(ctx.call.principal));
+      const texts: Party[] = [];
+      bus.on(QwenAcpSubjects.turn_text_completed, (ctx) => void texts.push(ctx.call.principal));
+      const usages: Party[] = [];
+      bus.on(QwenAcpSubjects.session_update_usage, (ctx) => void usages.push(ctx.call.principal));
+
+      try {
+        const messageHandle = await connector.sendMessage(TEST_MESSAGE, {
+          call: createTestCall({ principal: TURN_PRINCIPAL }),
+        });
+        await vi.waitFor(() => expect(handle.connection.prompt).toHaveBeenCalledTimes(1));
+        await connector['onSessionUpdate']({
+          sessionId: 'session-r1',
+          update: {
+            sessionUpdate: 'agent_message_chunk',
+            content: { type: 'text', text: 'answer' },
+            _meta: { usage: { inputTokens: 1, outputTokens: 2, totalTokens: 3 } },
+          },
+        });
+        await connector['onSessionUpdate']({
+          sessionId: 'session-r1',
+          update: { sessionUpdate: 'agent_thought_chunk', content: { type: 'text', text: 'thinking' } },
+        });
+        promptReleased.resolve();
+        await messageHandle.waitForCompletion();
+
+        expect(chunks.map((entry) => entry.principal)).toEqual([TURN_PRINCIPAL]);
+        expect(thoughts).toEqual([TURN_PRINCIPAL]);
+        expect(texts).toEqual([TURN_PRINCIPAL]);
+        expect(usages).toEqual([TURN_PRINCIPAL]);
+      } finally {
+        await connector.close();
+      }
+    });
+
+    it('R2: a notification without a pending handle is emitted observed, not under a turn call', async () => {
+      const connector = await makeConnector();
+      const chunks = recordPrincipals(connector['config'].bus, QwenAcpSubjects.session_update_message_chunk);
+
+      await connector['onSessionUpdate']({
+        sessionId: 'adapter-session',
+        update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'orphan' } },
+      });
+
+      expect(chunks).toHaveLength(1);
+      expect(chunks[0]?.principal).not.toEqual(TURN_PRINCIPAL);
+      expect(chunks[0]?.payload).toMatchObject({ delta: 'orphan' });
+    });
+
+    it('attributes a tool update to the handle its tool call was announced under', async () => {
+      const connector = await makeConnector();
+      const bus = connector['config'].bus;
+      const updates: Array<{ principal: Party; messageId: string }> = [];
+      bus.on(QwenAcpSubjects.session_update_tool_call_update, (ctx) => {
+        updates.push({ principal: ctx.call.principal, messageId: ctx.payload.messageId });
+      });
+      connector['pendingMessageHandle'] = makeHandle(createTestCall({ principal: TURN_PRINCIPAL }), 'msg-announce');
+      await connector['onSessionUpdate']({
+        sessionId: 'adapter-session',
+        update: { sessionUpdate: 'tool_call', toolCallId: 'tool-9', title: 'read_file', kind: 'read', rawInput: {} },
+      });
+      // A later turn becomes pending; the update still belongs to the announcing operation.
+      connector['pendingMessageHandle'] = makeHandle(createTestCall(), 'msg-later');
+
+      await connector['onSessionUpdate']({
+        sessionId: 'adapter-session',
+        update: { sessionUpdate: 'tool_call_update', toolCallId: 'tool-9', status: 'in_progress' },
+      });
+
+      expect(updates).toEqual([{ principal: TURN_PRINCIPAL, messageId: 'msg-announce' }]);
+    });
+
+    it('does not emit or attribute a tool update without a mapped handle and logs the dropped tool id', async () => {
+      const connector = await makeConnector();
+      const bus = connector['config'].bus;
+      const emitted: unknown[] = [];
+      bus.on(QwenAcpSubjects.session_update_tool_call_update, (ctx) => void emitted.push(ctx.payload));
+      bus.on(QwenAcpSubjects.session_update_tool_call, (ctx) => void emitted.push(ctx.payload));
+      const debugSpy = vi.spyOn(console, 'debug').mockImplementation(() => undefined);
+      vi.stubEnv('MAKAIO_DEBUG', 'true');
+
+      try {
+        await connector['onSessionUpdate']({
+          sessionId: 'adapter-session',
+          update: {
+            sessionUpdate: 'tool_call',
+            toolCallId: 'tool-orphan-call',
+            title: 't',
+            kind: 'read',
+            rawInput: {},
+          },
+        });
+        await connector['onSessionUpdate']({
+          sessionId: 'adapter-session',
+          update: { sessionUpdate: 'tool_call_update', toolCallId: 'tool-orphan-update', status: 'completed' },
+        });
+      } finally {
+        vi.unstubAllEnvs();
+      }
+
+      expect(emitted).toEqual([]);
+      const logged = debugSpy.mock.calls.map((args) => String(args[0]));
+      expect(logged.some((line) => line.includes('tool-orphan-call'))).toBe(true);
+      expect(logged.some((line) => line.includes('tool-orphan-update'))).toBe(true);
+    });
   });
 });

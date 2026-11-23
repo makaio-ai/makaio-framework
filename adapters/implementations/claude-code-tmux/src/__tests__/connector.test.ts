@@ -9,6 +9,7 @@
 import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest';
 import type { IPtyProcess } from '@makaio/subsystem-native-session-supervisor';
 import { MakaioBus } from '@makaio/bus-core';
+import { createTestCall } from '@makaio/test-utils';
 import { McpSubjects } from '@makaio/contracts';
 import { CONNECTOR_EXIT_OBSERVATION_MS } from '@makaio/ai-adapters-core';
 import { ClaudeCodeClientSubjects, CLAUDE_CODE_HOOK_SESSION_START } from '@makaio/client-claude-code/runtime';
@@ -175,9 +176,10 @@ import type { ClaudeCodeTmuxAgentConfig } from '../types.js';
 const TEST_CWD = '/tmp';
 
 async function makeConnector(overrides: Partial<ClaudeCodeTmuxAgentConfig> = {}): Promise<ClaudeCodeTmuxConnector> {
-  const bus = await ClaudeCodeTmuxConnectorNamespace.scopedBus();
+  const bus = await ClaudeCodeTmuxConnectorNamespace.scopedBus(MakaioBus);
   return new ClaudeCodeTmuxConnector({
     bus,
+    globalBus: MakaioBus,
     adapterId: 'test-adapter-id',
     cwd: TEST_CWD,
     model: 'claude-sonnet',
@@ -236,7 +238,7 @@ describe('ClaudeCodeTmuxConnector', () => {
       const connector = await makeConnector();
       fireSessionStart();
 
-      await connector.initialize();
+      await connector.initialize({ call: createTestCall() });
 
       expect(mockSpawn).toHaveBeenCalledOnce();
       expect(mockState.subscribeUnsubscribe).toBeDefined();
@@ -246,7 +248,7 @@ describe('ClaudeCodeTmuxConnector', () => {
       const connector = await makeConnector();
       const claudeSessionId = connector.adapterSessionId;
       mockSpawn.mockImplementationOnce(async () => {
-        await MakaioBus.emit(ClaudeCodeClientSubjects.hook.received, {
+        await MakaioBus.emit(MakaioBus.own('observer'), ClaudeCodeClientSubjects.hook.received, {
           eventName: CLAUDE_CODE_HOOK_SESSION_START,
           receivedAt: Date.now(),
           payload: { session_id: claudeSessionId, model: 'claude-sonnet' },
@@ -264,7 +266,7 @@ describe('ClaudeCodeTmuxConnector', () => {
         } as IPtyProcess;
       });
 
-      await expect(connector.initialize()).resolves.toBeUndefined();
+      await expect(connector.initialize({ call: createTestCall() })).resolves.toBeUndefined();
       expect(mockState.observeSessionStart).toHaveBeenCalledWith(claudeSessionId);
     });
 
@@ -272,8 +274,8 @@ describe('ClaudeCodeTmuxConnector', () => {
       const connector = await makeConnector();
       fireSessionStart();
 
-      await connector.initialize();
-      await connector.initialize();
+      await connector.initialize({ call: createTestCall() });
+      await connector.initialize({ call: createTestCall() });
 
       expect(mockSpawn).toHaveBeenCalledOnce();
     });
@@ -288,7 +290,7 @@ describe('ClaudeCodeTmuxConnector', () => {
       });
       fireSessionStart();
 
-      await connector.initialize();
+      await connector.initialize({ call: createTestCall() });
 
       const spawnOptions = mockSpawn.mock.calls[0]?.[2] as { env: Record<string, string> };
       expect(spawnOptions.env).toMatchObject({ ANTHROPIC_API_KEY: 'api-secret' });
@@ -305,7 +307,7 @@ describe('ClaudeCodeTmuxConnector', () => {
       });
       fireSessionStart();
 
-      await connector.initialize();
+      await connector.initialize({ call: createTestCall() });
 
       const spawnOptions = mockSpawn.mock.calls[0]?.[2] as { env: Record<string, string> };
       expect(spawnOptions.env).toMatchObject({ CLAUDE_CODE_OAUTH_TOKEN: 'oauth-secret' });
@@ -316,7 +318,7 @@ describe('ClaudeCodeTmuxConnector', () => {
       const connector = await makeConnector();
       fireSessionStart();
 
-      await connector.initialize();
+      await connector.initialize({ call: createTestCall() });
 
       const spawnOptions = mockSpawn.mock.calls[0]?.[2] as { env: Record<string, string> };
       expect(spawnOptions.env).toMatchObject({ CLAUDE_CONFIG_DIR: '/tmp/claude-session-config' });
@@ -347,7 +349,7 @@ describe('ClaudeCodeTmuxConnector', () => {
       });
       fireSessionStart();
 
-      await connector.initialize();
+      await connector.initialize({ call: createTestCall() });
 
       expect(resolveBinary).not.toHaveBeenCalled();
       expect(mockSpawn).toHaveBeenCalledWith('/selected/bin/claude', expect.any(Array), expect.any(Object));
@@ -385,7 +387,7 @@ describe('ClaudeCodeTmuxConnector', () => {
       });
       fireSessionStart();
 
-      await connector.initialize();
+      await connector.initialize({ call: createTestCall() });
 
       expect(registrations).toHaveLength(1);
       expect(registrations[0]).toMatchObject({
@@ -429,7 +431,7 @@ describe('ClaudeCodeTmuxConnector', () => {
       });
       fireSessionStart();
 
-      await expect(connector.initialize()).resolves.toBeUndefined();
+      await expect(connector.initialize({ call: createTestCall() })).resolves.toBeUndefined();
 
       expect(registrations).toHaveLength(1);
       expect(sessionConfigRequests).not.toHaveBeenCalled();
@@ -440,7 +442,9 @@ describe('ClaudeCodeTmuxConnector', () => {
       MakaioBus.__resetHandlers?.();
       const connector = await makeConnector();
 
-      await expect(connector.initialize()).rejects.toThrow('requires active Claude Code wiring support');
+      await expect(connector.initialize({ call: createTestCall() })).rejects.toThrow(
+        'requires active Claude Code wiring support',
+      );
       expect(mockSpawn).not.toHaveBeenCalled();
     });
 
@@ -451,7 +455,7 @@ describe('ClaudeCodeTmuxConnector', () => {
       });
       const connector = await makeConnector({ env: { PATH: '/usr/bin' } });
 
-      await expect(connector.initialize()).rejects.toThrow(
+      await expect(connector.initialize({ call: createTestCall() })).rejects.toThrow(
         'requires CLAUDE_CONFIG_DIR from the central client config lease',
       );
 
@@ -479,7 +483,7 @@ describe('ClaudeCodeTmuxConnector', () => {
       });
       fireSessionStart();
 
-      await connector.initialize();
+      await connector.initialize({ call: createTestCall() });
 
       expect(wiringRequests).toHaveLength(1);
       expect(wiringRequests.at(-1)).toMatchObject({
@@ -507,7 +511,7 @@ describe('ClaudeCodeTmuxConnector', () => {
       });
       fireSessionStart();
 
-      await connector.initialize();
+      await connector.initialize({ call: createTestCall() });
 
       expect(sessionConfigRequests).toHaveLength(0);
     });
@@ -516,7 +520,9 @@ describe('ClaudeCodeTmuxConnector', () => {
       const connector = await makeConnector();
       mockState.tmuxAvailable = false;
 
-      await expect(connector.initialize()).rejects.toThrow('Claude Code tmux adapter requires tmux on PATH');
+      await expect(connector.initialize({ call: createTestCall() })).rejects.toThrow(
+        'Claude Code tmux adapter requires tmux on PATH',
+      );
 
       expect(mockSpawn).not.toHaveBeenCalled();
     });
@@ -525,7 +531,7 @@ describe('ClaudeCodeTmuxConnector', () => {
       const connector = await makeConnector();
       fireSessionStart();
 
-      await connector.initialize();
+      await connector.initialize({ call: createTestCall() });
 
       expect(mockState.callOrder).toEqual(expect.arrayContaining(['spawn', 'subscribeToHooks', 'waitForSessionStart']));
       expect(mockState.callOrder.indexOf('subscribeToHooks')).toBeLessThan(
@@ -555,7 +561,9 @@ describe('ClaudeCodeTmuxConnector', () => {
         ctx.setResult({});
       });
 
-      await expect(connector.initialize()).rejects.toThrow('requires active Claude Code wiring support');
+      await expect(connector.initialize({ call: createTestCall() })).rejects.toThrow(
+        'requires active Claude Code wiring support',
+      );
 
       expect(mockSpawn).not.toHaveBeenCalled();
       expect(removals).toHaveLength(1);
@@ -579,7 +587,7 @@ describe('ClaudeCodeTmuxConnector', () => {
         ctx.setResult({});
       });
 
-      const failure = await connector.initialize().catch((error: unknown) => error);
+      const failure = await connector.initialize({ call: createTestCall() }).catch((error: unknown) => error);
 
       expect(failure).toBeInstanceOf(AggregateError);
       const aggregate = failure as AggregateError;
@@ -620,14 +628,17 @@ describe('ClaudeCodeTmuxConnector', () => {
     it('sends text via tmux send-keys', async () => {
       const connector = await makeConnector();
       fireSessionStart();
-      await connector.initialize();
+      await connector.initialize({ call: createTestCall() });
 
       // Fire Stop hook shortly after send so the turn completes.
       setTimeout(() => {
         mockState.hooks.onStop?.('claude-session-abc', 'Hello back!');
       }, 10);
 
-      const handle = await connector.sendMessage({ role: 'user', blocks: [], message: 'Hello Claude!' });
+      const handle = await connector.sendMessage(
+        { role: 'user', blocks: [], message: 'Hello Claude!' },
+        { call: createTestCall() },
+      );
 
       expect(mockState.sendMessage).toHaveBeenCalledWith('Hello Claude!');
       expect(handle.message.message).toBe('Hello Claude!');
@@ -637,11 +648,12 @@ describe('ClaudeCodeTmuxConnector', () => {
     it('materializes turnContext and messageHistory into the prompt', async () => {
       const connector = await makeConnector();
       fireSessionStart();
-      await connector.initialize();
+      await connector.initialize({ call: createTestCall() });
 
       await connector.sendMessage(
         { role: 'user', blocks: [{ type: 'text', content: 'What code do you see?' }], message: 'fallback' },
         {
+          call: createTestCall(),
           turnContext: { testMarker: 'TC-unit-123' },
           messageHistory: [{ role: 'user', blocks: { type: 'text', content: 'My name is Alice.' } }],
         },
@@ -666,7 +678,7 @@ describe('ClaudeCodeTmuxConnector', () => {
         mockState.hooks.onStop?.('claude-session-abc', 'done');
       }, 20);
 
-      await connector.sendMessage({ role: 'user', blocks: [], message: 'ping' });
+      await connector.sendMessage({ role: 'user', blocks: [], message: 'ping' }, { call: createTestCall() });
 
       expect(mockSpawn).toHaveBeenCalledOnce();
       await connector.complete();
@@ -675,10 +687,13 @@ describe('ClaudeCodeTmuxConnector', () => {
     it('returns a handle immediately without waiting for turn completion', async () => {
       const connector = await makeConnector();
       fireSessionStart();
-      await connector.initialize();
+      await connector.initialize({ call: createTestCall() });
 
       // Do NOT fire Stop — handle should still be returned immediately.
-      const handlePromise = connector.sendMessage({ role: 'user', blocks: [], message: 'test' });
+      const handlePromise = connector.sendMessage(
+        { role: 'user', blocks: [], message: 'test' },
+        { call: createTestCall() },
+      );
 
       // Resolve quickly by firing stop after we've gotten the handle.
       const handle = await handlePromise;
@@ -691,17 +706,20 @@ describe('ClaudeCodeTmuxConnector', () => {
     it('interrupts an active turn before sending an immediate replacement', async () => {
       const connector = await makeConnector();
       fireSessionStart();
-      await connector.initialize();
+      await connector.initialize({ call: createTestCall() });
 
-      const initial = await connector.sendMessage({ role: 'user', blocks: [], message: 'Peter gave me 5 apples.' });
+      const initial = await connector.sendMessage(
+        { role: 'user', blocks: [], message: 'Peter gave me 5 apples.' },
+        { call: createTestCall() },
+      );
       const queued = await connector.sendMessage(
         { role: 'user', blocks: [], message: 'Alice gave me 3 apples.' },
-        { deliveryMode: 'enqueue' },
+        { call: createTestCall(), deliveryMode: 'enqueue' },
       );
 
       const immediatePromise = connector.sendMessage(
         { role: 'user', blocks: [], message: 'How many apples total? Respond only with the number.' },
-        { deliveryMode: 'immediate' },
+        { call: createTestCall(), deliveryMode: 'immediate' },
       );
 
       expect(mockState.sendEscape).toHaveBeenCalledOnce();
@@ -733,9 +751,12 @@ describe('ClaudeCodeTmuxConnector', () => {
     it('completes the message handle when Stop fires', async () => {
       const connector = await makeConnector();
       fireSessionStart();
-      await connector.initialize();
+      await connector.initialize({ call: createTestCall() });
 
-      const handlePromise = connector.sendMessage({ role: 'user', blocks: [], message: 'Do something' });
+      const handlePromise = connector.sendMessage(
+        { role: 'user', blocks: [], message: 'Do something' },
+        { call: createTestCall() },
+      );
 
       setTimeout(() => {
         mockState.hooks.onStop?.('claude-session-abc', 'Task completed!');
@@ -754,9 +775,12 @@ describe('ClaudeCodeTmuxConnector', () => {
         completions.push(ctx.payload.message);
       });
       fireSessionStart();
-      await connector.initialize();
+      await connector.initialize({ call: createTestCall() });
 
-      const handlePromise = connector.sendMessage({ role: 'user', blocks: [], message: 'Do something' });
+      const handlePromise = connector.sendMessage(
+        { role: 'user', blocks: [], message: 'Do something' },
+        { call: createTestCall() },
+      );
 
       setTimeout(() => {
         mockState.hooks.onStop?.('claude-session-abc', 'Task completed!');
@@ -771,9 +795,12 @@ describe('ClaudeCodeTmuxConnector', () => {
     it('acknowledges the active message on UserPromptSubmit', async () => {
       const connector = await makeConnector();
       fireSessionStart();
-      await connector.initialize();
+      await connector.initialize({ call: createTestCall() });
 
-      const handle = await connector.sendMessage({ role: 'user', blocks: [], message: 'Do something' });
+      const handle = await connector.sendMessage(
+        { role: 'user', blocks: [], message: 'Do something' },
+        { call: createTestCall() },
+      );
       await mockState.hooks.onUserPromptSubmit?.('claude-session-abc');
 
       await expect(handle.waitForAcknowledgment()).resolves.toBe(true);
@@ -788,9 +815,9 @@ describe('ClaudeCodeTmuxConnector', () => {
         transitions.push(state);
       });
       fireSessionStart();
-      await connector.initialize();
+      await connector.initialize({ call: createTestCall() });
 
-      await connector.sendMessage({ role: 'user', blocks: [], message: 'Say HI' });
+      await connector.sendMessage({ role: 'user', blocks: [], message: 'Say HI' }, { call: createTestCall() });
       await mockState.hooks.onUserPromptSubmit?.('claude-session-abc');
       mockState.hooks.onStop?.('claude-session-abc', 'HI');
       await connector.complete();
@@ -804,9 +831,9 @@ describe('ClaudeCodeTmuxConnector', () => {
     it('returns to idle state after turn completes', async () => {
       const connector = await makeConnector();
       fireSessionStart();
-      await connector.initialize();
+      await connector.initialize({ call: createTestCall() });
 
-      connector.sendMessage({ role: 'user', blocks: [], message: 'Q' }).catch(() => {});
+      connector.sendMessage({ role: 'user', blocks: [], message: 'Q' }, { call: createTestCall() }).catch(() => {});
 
       await new Promise<void>((resolve) => setTimeout(resolve, 5));
       mockState.hooks.onStop?.('claude-session-abc', 'A');
@@ -819,9 +846,11 @@ describe('ClaudeCodeTmuxConnector', () => {
     it('transitions through step_started / step_finished on tool use', async () => {
       const connector = await makeConnector();
       fireSessionStart();
-      await connector.initialize();
+      await connector.initialize({ call: createTestCall() });
 
-      connector.sendMessage({ role: 'user', blocks: [], message: 'Run a tool' }).catch(() => {});
+      connector
+        .sendMessage({ role: 'user', blocks: [], message: 'Run a tool' }, { call: createTestCall() })
+        .catch(() => {});
 
       // Simulate: PreToolUse → PostToolUse → Stop
       await new Promise<void>((resolve) => setTimeout(resolve, 5));
@@ -845,9 +874,9 @@ describe('ClaudeCodeTmuxConnector', () => {
     it('kills the tmux session', async () => {
       const connector = await makeConnector();
       fireSessionStart();
-      await connector.initialize();
+      await connector.initialize({ call: createTestCall() });
 
-      connector.abort();
+      connector.abort(createTestCall());
 
       expect(mockState.kill).toHaveBeenCalled();
     });
@@ -857,9 +886,9 @@ describe('ClaudeCodeTmuxConnector', () => {
     it('disposes the tmux session and backend', async () => {
       const connector = await makeConnector();
       fireSessionStart();
-      await connector.initialize();
+      await connector.initialize({ call: createTestCall() });
 
-      await connector.close();
+      await connector.close(createTestCall());
 
       expect(mockState.dispose).toHaveBeenCalled();
       expect(mockBackendDispose).toHaveBeenCalled();
@@ -885,9 +914,9 @@ describe('ClaudeCodeTmuxConnector', () => {
         ctx.setResult({});
       });
       fireSessionStart();
-      await connector.initialize();
+      await connector.initialize({ call: createTestCall() });
 
-      await connector.close();
+      await connector.close(createTestCall());
 
       expect(removals).toHaveLength(1);
       expect(removals[0]).toMatchObject({ projectDir: TEST_CWD });
@@ -922,9 +951,9 @@ describe('ClaudeCodeTmuxConnector', () => {
         ctx.setResult({});
       });
       fireSessionStart();
-      await connector.initialize();
+      await connector.initialize({ call: createTestCall() });
 
-      await expect(connector.close()).rejects.toThrow('settings removal failed');
+      await expect(connector.close(createTestCall())).rejects.toThrow('settings removal failed');
 
       expect(unregisters).toEqual([{ adapterSessionId: connector.adapterSessionId }]);
       expect(mockBackendDispose).toHaveBeenCalled();
@@ -944,12 +973,12 @@ describe('ClaudeCodeTmuxConnector', () => {
         throw new Error('connector must not release the central lease');
       });
       fireSessionStart();
-      await connector.initialize();
+      await connector.initialize({ call: createTestCall() });
 
       // The class is asserted rather than the old "resolved with nothing": the
       // connector-owned lease question this test protects is unchanged, and the
       // report is what replaced the `void` return.
-      await expect(connector.close()).resolves.toEqual({ evidence: 'exited' });
+      await expect(connector.close(createTestCall())).resolves.toEqual({ evidence: 'exited' });
       expect(mockBackendDispose).toHaveBeenCalled();
       expect(destroyRequests).not.toHaveBeenCalled();
     });
@@ -957,7 +986,7 @@ describe('ClaudeCodeTmuxConnector', () => {
     it('is safe to call without initialization, and reports that nothing was spawned', async () => {
       const connector = await makeConnector();
 
-      await expect(connector.close()).resolves.toEqual({ evidence: 'released' });
+      await expect(connector.close(createTestCall())).resolves.toEqual({ evidence: 'released' });
     });
 
     it('caps a close that raced the spawn at detached, rather than claiming nothing was started', async () => {
@@ -982,10 +1011,10 @@ describe('ClaudeCodeTmuxConnector', () => {
         throw new Error('spawn abandoned after the close');
       });
 
-      const initialization = connector.initialize().catch((error: unknown) => error);
+      const initialization = connector.initialize({ call: createTestCall() }).catch((error: unknown) => error);
       await entered;
 
-      const report = await connector.close();
+      const report = await connector.close(createTestCall());
 
       expect(mockState.exitListeners).toEqual([]);
       expect(report).toEqual({
@@ -1003,13 +1032,13 @@ describe('ClaudeCodeTmuxConnector', () => {
     it('resolves with the last message result after Stop fires', async () => {
       const connector = await makeConnector();
       fireSessionStart();
-      await connector.initialize();
+      await connector.initialize({ call: createTestCall() });
 
       setTimeout(() => {
         mockState.hooks.onStop?.('claude-session-abc', 'Final answer');
       }, 5);
 
-      await connector.sendMessage({ role: 'user', blocks: [], message: 'Q?' });
+      await connector.sendMessage({ role: 'user', blocks: [], message: 'Q?' }, { call: createTestCall() });
       const result = await connector.complete();
 
       expect(result?.outcome).toBe('completed');
@@ -1032,7 +1061,7 @@ describe('ClaudeCodeTmuxConnector', () => {
     it('sends Escape to the tmux session', async () => {
       const connector = await makeConnector();
       fireSessionStart();
-      await connector.initialize();
+      await connector.initialize({ call: createTestCall() });
 
       await expect(connector.interrupt()).resolves.toBeUndefined();
       expect(mockState.sendEscape).toHaveBeenCalledOnce();
@@ -1066,14 +1095,14 @@ describe('ClaudeCodeTmuxConnector teardown evidence', () => {
   it('206b arm 1 — resolves `exited` only after the pane exit has been published', async () => {
     const connector = await makeConnector();
     fireSessionStart();
-    await connector.initialize();
+    await connector.initialize({ call: createTestCall() });
 
     // Delayed publication, so "resolves only after the exit" is an ordering fact
     // rather than a coincidence of both happening in the same synchronous turn.
     mockState.publishExitDelayMs = 5;
     mockState.callOrder = [];
 
-    const report = await connector.close();
+    const report = await connector.close(createTestCall());
     mockState.callOrder.push('close-resolved');
 
     expect(report).toEqual({ evidence: 'exited' });
@@ -1083,11 +1112,11 @@ describe('ClaudeCodeTmuxConnector teardown evidence', () => {
   it('206b arm 2 — a kill whose exit never arrives resolves `detached` at the budget', async () => {
     const connector = await makeConnector();
     fireSessionStart();
-    await connector.initialize();
+    await connector.initialize({ call: createTestCall() });
     mockState.publishExitOnKill = false;
 
     vi.useFakeTimers();
-    const closing = connector.close();
+    const closing = connector.close(createTestCall());
     await vi.advanceTimersByTimeAsync(CONNECTOR_EXIT_OBSERVATION_MS);
     const report = await closing;
 
@@ -1099,10 +1128,10 @@ describe('ClaudeCodeTmuxConnector teardown evidence', () => {
   it('206c — a crash arriving inside the teardown finalisation finalises the turn once', async () => {
     const connector = await makeConnector();
     fireSessionStart();
-    await connector.initialize();
+    await connector.initialize({ call: createTestCall() });
 
     const turnFinished: unknown[] = [];
-    const bus = await ClaudeCodeTmuxConnectorNamespace.scopedBus();
+    const bus = await ClaudeCodeTmuxConnectorNamespace.scopedBus(MakaioBus);
     let injectedCrash = false;
     bus.on(ClaudeCodeTmuxConnectorSubjects.turn.turn_finished, (ctx) => {
       turnFinished.push(ctx.payload);
@@ -1114,8 +1143,8 @@ describe('ClaudeCodeTmuxConnector teardown evidence', () => {
       for (const listener of mockState.exitListeners) listener({ exitCode: 1, signal: 9 });
     });
 
-    await connector.sendMessage({ role: 'user', blocks: [], message: 'Q?' });
-    await connector.close();
+    await connector.sendMessage({ role: 'user', blocks: [], message: 'Q?' }, { call: createTestCall() });
+    await connector.close(createTestCall());
 
     expect(turnFinished).toHaveLength(1);
   });

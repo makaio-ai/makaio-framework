@@ -17,6 +17,7 @@
  */
 
 import type { IMakaioBus } from '@makaio/bus-core';
+import type { CallContext } from '@makaio/core';
 import { SessionStorageSubjects } from './storage/namespace.js';
 
 /**
@@ -26,16 +27,18 @@ import { SessionStorageSubjects } from './storage/namespace.js';
  * reuses the seam that already owns the ordinal instead of adding a second
  * writer for it. A `'not-found'` outcome (or absent storage) is left alone: the
  * row a continuation has never seen is not invented here.
+ * @param call - Call of the handled message this advance serves
  * @param bus - Bus the write is issued on
  * @param adapterSessionId - External session id whose row should advance
  * @param source - Import identity the row is stored under
  */
 export async function advanceObservedGeneration(
+  call: CallContext,
   bus: IMakaioBus,
   adapterSessionId: string,
   source: string,
 ): Promise<void> {
-  await bus.requestOptional(SessionStorageSubjects.rebindObserved, {
+  await bus.requestOptional(call, SessionStorageSubjects.rebindObserved, {
     externalSessionId: adapterSessionId,
     source,
     startMode: 'compact',
@@ -56,16 +59,18 @@ export async function advanceObservedGeneration(
  * id onto the session row. A compaction that resolves to no row is not counted
  * rather than fabricating one, which is the same rule the hook-observed path
  * follows.
+ * @param call - Call of the handled message this advance serves
  * @param bus - Bus the lookup and write are issued on
  * @param adapterSessionId - Provider session id reported by the hook
  * @param knownSessionId - Framework session id from the gate, when one is known
  */
 export async function advanceManagedGeneration(
+  call: CallContext,
   bus: IMakaioBus,
   adapterSessionId: string,
   knownSessionId: string | undefined,
 ): Promise<void> {
-  const sessionId = knownSessionId ?? (await resolveManagedSessionId(bus, adapterSessionId));
+  const sessionId = knownSessionId ?? (await resolveManagedSessionId(call, bus, adapterSessionId));
   if (sessionId === undefined) {
     if (process.env['MAKAIO_DEBUG'] === 'true') {
       console.debug('[ObservedSessionIngestion] Managed compaction reached no row; ordinal not advanced', {
@@ -74,7 +79,7 @@ export async function advanceManagedGeneration(
     }
     return;
   }
-  await bus.requestOptional(SessionStorageSubjects.update, { sessionId, advanceGeneration: true });
+  await bus.requestOptional(call, SessionStorageSubjects.update, { sessionId, advanceGeneration: true });
 }
 
 /**
@@ -82,12 +87,17 @@ export async function advanceManagedGeneration(
  *
  * The source-less lookup the managed path requires: managed rows carry no
  * `source`, so the two-column import identity cannot address them.
+ * @param call - Call of the handled message this lookup serves
  * @param bus - Bus the lookup is issued on
  * @param adapterSessionId - Provider session id reported by the hook
  * @returns The framework session id, or `undefined` when no row matches
  */
-async function resolveManagedSessionId(bus: IMakaioBus, adapterSessionId: string): Promise<string | undefined> {
-  const lookup = await bus.requestOptional(SessionStorageSubjects.getByAdapterSessionId, { adapterSessionId });
+async function resolveManagedSessionId(
+  call: CallContext,
+  bus: IMakaioBus,
+  adapterSessionId: string,
+): Promise<string | undefined> {
+  const lookup = await bus.requestOptional(call, SessionStorageSubjects.getByAdapterSessionId, { adapterSessionId });
   if (!lookup.handled || lookup.data.session === null) return undefined;
   return lookup.data.session.sessionId;
 }

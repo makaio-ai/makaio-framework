@@ -10,6 +10,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import type { TransportReceiveContext } from '@makaio/core';
 import { DispatchingAuth } from './dispatching-auth.js';
 import { HmacAuth } from './hmac-auth.js';
 import { E2EAuth } from './e2e-auth.js';
@@ -344,9 +345,10 @@ describe('DispatchingAuth', () => {
 
   describe('receive context and liveness delegation', () => {
     it('delegates context and liveness checks to the sole HMAC strategy', () => {
-      const context = {
+      const context: TransportReceiveContext = {
         transportName: '',
-        peer: { kind: 'hmac', id: 'lan-device', authenticated: true },
+        authenticated: true,
+        caller: { kind: 'makaio.loopback', id: 'lan-device' },
       };
       const getReceiveContext = vi.fn().mockReturnValue(context);
       const isSocketAuthenticated = vi.fn().mockReturnValue(false);
@@ -363,13 +365,16 @@ describe('DispatchingAuth', () => {
     it('delegates each mixed-route socket to its selected HMAC or E2E strategy', async () => {
       const hmacSocket = createSocket();
       const e2eSocket = createSocket();
-      const hmacContext = {
+      const hmacContext: TransportReceiveContext = {
         transportName: '',
-        peer: { kind: 'hmac', id: 'lan-device', authenticated: true },
+        authenticated: true,
+        caller: { kind: 'makaio.loopback', id: 'lan-device' },
       };
-      const e2eContext = {
+      const e2eContext: TransportReceiveContext = {
         transportName: '',
-        peer: { kind: 'e2e', id: 'remote-device', authenticated: true, encrypted: true },
+        authenticated: true,
+        encrypted: true,
+        caller: { kind: 'makaio.e2e-peer', id: 'remote-device' },
       };
       const getHmacContext = vi.fn().mockReturnValue(hmacContext);
       const getE2EContext = vi.fn().mockReturnValue(e2eContext);

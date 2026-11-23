@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
 import { CapabilitySubjects } from '@makaio/contracts';
+import { createTestCall } from '@makaio/test-utils';
 import { LogImportSubjects } from '../namespace.js';
 import type {
   LogImportConfig,
@@ -501,7 +502,7 @@ describe('LogImportRegistry', () => {
       // Confirm the orchestrator started after restoring 'import' mode
       expect(registry.listImporters()).toEqual([expect.objectContaining({ id: 'provider-importer', isRunning: true })]);
 
-      await registry.switchMode('provider-importer', 'disabled');
+      await registry.switchMode(createTestCall(), 'provider-importer', 'disabled');
 
       expect(registry.listImporters()).toEqual([
         expect.objectContaining({ id: 'provider-importer', isRunning: false }),
@@ -530,14 +531,14 @@ describe('LogImportRegistry', () => {
       expect(registry.listImporters()).toEqual([expect.objectContaining({ id: 'provider-importer', isRunning: true })]);
 
       // Step c: switch to 'disabled' — orchestrator should stop
-      await registry.switchMode('provider-importer', 'disabled');
+      await registry.switchMode(createTestCall(), 'provider-importer', 'disabled');
 
       expect(registry.listImporters()).toEqual([
         expect.objectContaining({ id: 'provider-importer', isRunning: false }),
       ]);
 
       // Step d: switch back to 'import' — orchestrator should restart
-      await registry.switchMode('provider-importer', 'import');
+      await registry.switchMode(createTestCall(), 'provider-importer', 'import');
 
       expect(registry.listImporters()).toEqual([expect.objectContaining({ id: 'provider-importer', isRunning: true })]);
     });

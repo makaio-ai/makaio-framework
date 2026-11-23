@@ -1,4 +1,5 @@
 import type { IMakaioBus } from '@makaio/bus-core';
+import type { CallContext } from '@makaio/core';
 import type { WorkflowExecution, WorkflowGateInstance, WorkflowRunContext } from '@makaio/contracts';
 import { WorkflowStorageSubjects } from './storage/namespace.js';
 import type { ActiveExecution } from './types.js';
@@ -38,6 +39,7 @@ function isWaitingGateInstance(gate: WorkflowGateInstance | null): gate is Waiti
  * another response or timeout can retry the same gate.
  * Restoration shares the owner's lifecycle queue with cancellation and refuses
  * terminal owners; a delayed preparation failure must not resurrect stale state.
+ * @param call - Call context of the message that triggered the rollback.
  * @param deps - Storage bus and the current owner's lifecycle transition queue.
  * @param activeExecutions - Active execution ownership map maintained by the executor.
  * @param executionTasks - In-flight execution task map maintained by the executor.
@@ -47,6 +49,7 @@ function isWaitingGateInstance(gate: WorkflowGateInstance | null): gate is Waiti
  * @param gateId - Gate node ID used in rollback diagnostics.
  */
 export async function restorePausedGateAfterResumeFailure(
+  call: CallContext,
   deps: Pick<FinalizerDeps, 'bus' | 'durableLifecycleTransitions'>,
   activeExecutions: Map<string, ActiveExecution>,
   executionTasks: Map<string, Promise<void>>,
@@ -57,12 +60,12 @@ export async function restorePausedGateAfterResumeFailure(
 ): Promise<void> {
   try {
     await withExecutionDurableTransition(deps, execution.id, async () => {
-      const current = await deps.bus.request(WorkflowStorageSubjects.getExecution, { executionId: execution.id });
+      const current = await deps.bus.request(call, WorkflowStorageSubjects.getExecution, { executionId: execution.id });
       if (current.execution?.status !== 'paused' && current.execution?.status !== 'running') return;
       activeExecutions.delete(execution.id);
       executionTasks.delete(execution.id);
       workflowAbortControllers.delete(execution.id);
-      await deps.bus.request(WorkflowStorageSubjects.restorePausedGateResumeState, { execution, gate });
+      await deps.bus.request(call, WorkflowStorageSubjects.restorePausedGateResumeState, { execution, gate });
     });
   } catch (rollbackError: unknown) {
     console.error(
@@ -74,16 +77,18 @@ export async function restorePausedGateAfterResumeFailure(
 
 /**
  * Ensure exit-based resumes have durable frame state before dispatch.
+ * @param call - Call context of the message that triggers the resume.
  * @param bus - Workflow storage bus used to inspect persisted frames.
  * @param runContext - Persisted context for the paused execution.
  */
 export async function assertDurableResumeFramesPresent(
+  call: CallContext,
   bus: IMakaioBus,
   runContext: Pick<WorkflowRunContext, 'executionId' | 'suspensionStrategy'>,
 ): Promise<void> {
   if (runContext.suspensionStrategy === 'wait-in-process') return;
 
-  const { frames } = await bus.request(WorkflowStorageSubjects.listFrames, {
+  const { frames } = await bus.request(call, WorkflowStorageSubjects.listFrames, {
     executionId: runContext.executionId,
   });
   if (frames.length === 0) {
@@ -113,20 +118,22 @@ export function toGateTimeoutPayload(gate: WorkflowGateInstance): WorkflowGateTi
  * one are accepted only when the execution has exactly one waiting instance
  * for the requested gate node, preserving the public contract while rejecting
  * iterate-expanded ambiguity.
+ * @param call - Call context of the message that carries the gate response.
  * @param bus - Workflow storage bus used to inspect gate instances.
  * @param target - Gate identity from the response payload.
  * @returns The unique waiting gate instance, or `null` when absent or ambiguous.
  */
 export async function loadUniqueWaitingGateInstance(
+  call: CallContext,
   bus: IMakaioBus,
   target: { readonly executionId: string; readonly nodeId: string; readonly frameId?: string },
 ): Promise<WaitingWorkflowGateInstance | null> {
   if (target.frameId !== undefined) {
-    const { gate } = await bus.request(WorkflowStorageSubjects.getGateInstance, target);
+    const { gate } = await bus.request(call, WorkflowStorageSubjects.getGateInstance, target);
     return isWaitingGateInstance(gate) ? gate : null;
   }
 
-  const { gates } = await bus.request(WorkflowStorageSubjects.listGateInstances, {
+  const { gates } = await bus.request(call, WorkflowStorageSubjects.listGateInstances, {
     executionId: target.executionId,
   });
   const matchingWaitingGates = gates.filter(

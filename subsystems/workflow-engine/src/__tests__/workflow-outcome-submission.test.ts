@@ -1,4 +1,4 @@
-import { createBusContext, createBusInstance } from '@makaio/bus-core';
+import { createBusInstance } from '@makaio/bus-core';
 import {
   ExecutionAttemptNamespace,
   ExecutionAttemptSubjects,
@@ -7,6 +7,8 @@ import {
   WorkflowWorkerConfigSchema,
   type ExecutionAttemptOutcomeSubmitRequest,
 } from '@makaio/contracts';
+import type { CallContext } from '@makaio/core';
+import { createTestCall } from '@makaio/test-utils';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { ExecutionAttemptAuthority } from '../execution-attempt-authority.js';
 import { WorkflowNamespace, WorkflowSubjects } from '../namespace.js';
@@ -30,7 +32,7 @@ const workflowId = 'workflow-1';
 
 /** Real Attempt persistence, workflow SQLite storage, Bus ingress, and workflow failure finalizer. */
 async function createHarness() {
-  const bus = createBusInstance({ context: createBusContext() });
+  const bus = createBusInstance();
   bus.registerNamespaces([ExecutionAttemptNamespace, WorkerNamespace, WorkflowNamespace]);
   const db = await createTestDbForBus(bus);
   const repository = createInMemoryAttemptRepository(workflowAttemptOutcomeCodec);
@@ -43,6 +45,7 @@ async function createHarness() {
     failedEvents: 0,
     cancelledEvents: 0,
     failAfterFinalization: false,
+    ownerCalls: [] as CallContext[],
   };
   const finalizer: FinalizerDeps = {
     bus,
@@ -59,44 +62,54 @@ async function createHarness() {
   const cleanupCancelledEvent = bus.on(WorkflowSubjects.execution.cancelled, () => {
     observations.cancelledEvents++;
   });
+  // One bundle serves every submission: each projection gets the call of the outcome it projects.
   const owner: WorkflowOwnerOutcomeDeps = {
     lifecycle: finalizer,
-    acceptTerminalResult: async (ownerId, result) => {
+    acceptTerminalResult: async (call, ownerId, result) => {
+      observations.ownerCalls.push(call);
       if (result.status !== 'failed') throw new Error('This fixture exercises failed workflow results');
-      const stored = await bus.request(WorkflowStorageSubjects.getExecution, { executionId: ownerId });
+      const stored = await bus.request(call, WorkflowStorageSubjects.getExecution, { executionId: ownerId });
       if (!stored.execution) throw new Error('Workflow execution is missing');
-      await completeExecutionWithFailure(finalizer, stored.execution, ownerId, result.error);
+      await completeExecutionWithFailure(call, finalizer, stored.execution, ownerId, result.error);
       return { accepted: true, status: 'failed' };
     },
-    acceptTechnicalFailure: async (ownerId, failure) => {
+    acceptTechnicalFailure: async (call, ownerId, failure) => {
+      observations.ownerCalls.push(call);
       expect([...repository.committedOutcomes.values()]).toEqual([JSON.stringify(failure)]);
       observations.failures.push(failure);
-      const stored = await bus.request(WorkflowStorageSubjects.getExecution, { executionId: ownerId });
+      const stored = await bus.request(call, WorkflowStorageSubjects.getExecution, { executionId: ownerId });
       if (!stored.execution) throw new Error('Workflow execution is missing');
-      await completeExecutionWithFailure(finalizer, stored.execution, ownerId, `${failure.stage}: ${failure.message}`);
+      await completeExecutionWithFailure(
+        call,
+        finalizer,
+        stored.execution,
+        ownerId,
+        `${failure.stage}: ${failure.message}`,
+      );
       if (observations.failAfterFinalization) {
         observations.failAfterFinalization = false;
         throw new Error('Owner acknowledgement interrupted');
       }
-      const settled = await bus.request(WorkflowStorageSubjects.getExecution, { executionId: ownerId });
+      const settled = await bus.request(call, WorkflowStorageSubjects.getExecution, { executionId: ownerId });
       return { accepted: settled.execution?.status === 'failed', status: settled.execution!.status };
     },
-    acceptCancellation: async (ownerId, cancellation) => {
+    acceptCancellation: async (call, ownerId, cancellation) => {
+      observations.ownerCalls.push(call);
       expect([...repository.committedOutcomes.values()]).toEqual([JSON.stringify(cancellation)]);
       observations.cancellations.push(cancellation);
-      await cancelExecution(finalizer, ownerId, cancellation.reason);
+      await cancelExecution(call, finalizer, ownerId, cancellation.reason);
       if (observations.failAfterFinalization) {
         observations.failAfterFinalization = false;
         throw new Error('Owner acknowledgement interrupted');
       }
-      const settled = await bus.request(WorkflowStorageSubjects.getExecution, { executionId: ownerId });
+      const settled = await bus.request(call, WorkflowStorageSubjects.getExecution, { executionId: ownerId });
       return { accepted: settled.execution?.status === 'cancelled', status: settled.execution!.status };
     },
   };
   const cleanupHandlers = registerOutcomeSubmissionHandler(bus, {
     bus,
     authority,
-    acceptOutcome: (input) => acceptWorkflowOwnerOutcome(owner, input),
+    acceptOutcome: (input) => acceptWorkflowOwnerOutcome(input.call, owner, input),
   });
   await bus.request(WorkflowStorageSubjects.setExecution, {
     execution: createWorkflowExecution({ id: executionId, workflowId }),
@@ -196,6 +209,9 @@ describe('workflow owner canonical outcome ingress', () => {
     expect(stored.execution).toMatchObject({ status: 'failed', error: 'startup: Adapter missing' });
     expect(JSON.parse(harness.repository.committedOutcomes.get(identity.executionAttemptId)!)).toEqual(failure);
     expect(harness.observations.failedEvents).toBe(1);
+    expect(harness.observations.ownerCalls.map((call) => call.principal)).toEqual([
+      attemptPeer(identity.executionAttemptId, executionId),
+    ]);
   });
 
   it('reconverges a duplicate Preparation failure after owner state changed without rerunning Preparation', async () => {
@@ -285,7 +301,7 @@ describe('workflow owner canonical outcome ingress', () => {
   it('routes the still-used workflow-only endpoint through the same frozen-instruction convergence', async () => {
     const identity = await readyAttempt(harness);
     const result = { executionId, workflowId, status: 'failed' as const, error: 'Workflow failed' };
-    const response = await harness.bus.request(WorkerSubjects.control.outcome.submit, {
+    const response = await harness.bus.request(createTestCall(), WorkerSubjects.control.outcome.submit, {
       executionId,
       executionAttemptId: identity.executionAttemptId,
       result,
@@ -300,7 +316,7 @@ describe('workflow owner canonical outcome ingress', () => {
   it('rejects a workflow result with another immutable identity before committing it', async () => {
     const identity = await readyAttempt(harness);
     await expect(
-      harness.bus.request(WorkerSubjects.control.outcome.submit, {
+      harness.bus.request(createTestCall(), WorkerSubjects.control.outcome.submit, {
         executionId,
         executionAttemptId: identity.executionAttemptId,
         result: { executionId, workflowId: 'another-workflow', status: 'completed' },

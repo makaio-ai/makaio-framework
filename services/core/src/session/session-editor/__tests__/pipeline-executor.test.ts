@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest';
+import { createTestCall } from '@makaio/test-utils';
 import { actionRegistry } from '../action-registry.js';
 import { resetBuiltInActionsRegistration } from '../actions/index.js';
 import { executePipeline } from '../pipeline-executor.js';
@@ -33,7 +34,7 @@ describe('executePipeline', () => {
   ];
 
   it('executes empty pipeline returning original messages', async () => {
-    const result = await executePipeline(mockMessages, []);
+    const result = await executePipeline(createTestCall(), mockMessages, []);
 
     expect(result.messages).toEqual(mockMessages);
     expect(result.contextJson).toBeUndefined();
@@ -45,7 +46,7 @@ describe('executePipeline', () => {
       label: 'Test Filter',
       description: 'Filters to user messages only',
       category: 'transformation',
-      execute: async (msgs) => ({
+      execute: async (_call, msgs) => ({
         kind: 'messages',
         messages: msgs.filter((m) => m.role === 'user'),
       }),
@@ -53,7 +54,7 @@ describe('executePipeline', () => {
 
     actionRegistry.register(filterAction);
 
-    const result = await executePipeline(mockMessages, [{ actionId: 'test-filter' }]);
+    const result = await executePipeline(createTestCall(), mockMessages, [{ actionId: 'test-filter' }]);
 
     expect(result.messages).toHaveLength(1);
     expect(result.messages[0].role).toBe('user');
@@ -65,7 +66,7 @@ describe('executePipeline', () => {
       label: 'Test Summarize',
       description: 'Produces context JSON',
       category: 'compression',
-      execute: async (msgs) => ({
+      execute: async (_call, msgs) => ({
         kind: 'context',
         json: { summary: 'Test summary', messageCount: msgs.length },
         tokenEstimate: 100,
@@ -74,7 +75,7 @@ describe('executePipeline', () => {
 
     actionRegistry.register(summarizeAction);
 
-    const result = await executePipeline(mockMessages, [{ actionId: 'test-summarize' }]);
+    const result = await executePipeline(createTestCall(), mockMessages, [{ actionId: 'test-summarize' }]);
 
     expect(result.messages).toHaveLength(0);
     expect(result.contextJson).toEqual({
@@ -85,6 +86,8 @@ describe('executePipeline', () => {
   });
 
   it('throws on unknown action', async () => {
-    await expect(executePipeline(mockMessages, [{ actionId: 'unknown' }])).rejects.toThrow('Unknown action: unknown');
+    await expect(executePipeline(createTestCall(), mockMessages, [{ actionId: 'unknown' }])).rejects.toThrow(
+      'Unknown action: unknown',
+    );
   });
 });

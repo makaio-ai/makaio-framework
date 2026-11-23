@@ -32,7 +32,7 @@ import { adapterDefinition } from './definition.js';
 export const createTestConfig = async (
   options?: CreateConformanceTestConfigOptions,
 ): Promise<ConformanceTestConfig<PiSdkBus, PiConnector, PiAgent>> => {
-  const bus = await PiSdkNamespace.scopedBus();
+  const bus = await PiSdkNamespace.scopedBus(MakaioBus);
   const testPreset = resolveConformanceTestPreset({
     adapterName: PiSdkAdapterName,
     testProviderDefinitionId: testPresetId,

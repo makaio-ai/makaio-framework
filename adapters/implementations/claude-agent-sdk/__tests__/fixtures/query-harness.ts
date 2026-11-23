@@ -2,6 +2,7 @@ import os from 'node:os';
 import { vi } from 'vitest';
 import { MessageHandle } from '@makaio/ai-adapters-core';
 import type { SDKMessage } from '@makaio/client-claude-code';
+import { createTestCall } from '@makaio/test-utils';
 
 /**
  * Standard usage payload shared across default query mock responses.
@@ -167,7 +168,7 @@ export function installDefaultQueryImpl(
 }
 
 /**
- * Create a minimal message handle for SDK session turn tests.
+ * Create a minimal message handle with a fresh test call for SDK session turn tests.
  * @param messageId - Handle identifier, defaults to `'message-1'`
  * @param deliveryMode - Delivery mode, defaults to `'enqueue'`
  * @param responseSchema - Optional structured-output schema for the handle
@@ -179,6 +180,7 @@ export function createMessageHandle(
   responseSchema?: MessageHandle['responseSchema'],
 ): MessageHandle {
   return new MessageHandle(
+    createTestCall(),
     messageId,
     {
       role: 'user',

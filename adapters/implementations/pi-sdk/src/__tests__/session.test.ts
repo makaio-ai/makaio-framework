@@ -1,4 +1,5 @@
 import { MessageHandle, UserMessageQueue, type NormalizedMessageInput } from '@makaio/ai-adapters-core';
+import { createTestBusInstance, createTestCall } from '@makaio/test-utils';
 import type { AgentSession, AgentSessionEvent } from '@mariozechner/pi-coding-agent';
 import { describe, expect, it } from 'vitest';
 import { PiSdkNamespace, PiSdkSubjects } from '../namespaces/index.js';
@@ -57,7 +58,7 @@ async function flushEvents(): Promise<void> {
 
 describe('PiConnectorSession tool event ownership', () => {
   it('keeps a delayed tool completion owned by the superseded message', async () => {
-    const bus = await PiSdkNamespace.scopedBus();
+    const bus = await PiSdkNamespace.scopedBus(createTestBusInstance());
     const piSession = new FakePiSession();
     const session = new PiConnectorSession({
       bus,
@@ -82,8 +83,8 @@ describe('PiConnectorSession tool event ownership', () => {
     try {
       await session.initialize();
       const queue = new UserMessageQueue();
-      const first = new MessageHandle('message-old', TEST_MESSAGE, 'enqueue');
-      const replacement = new MessageHandle('message-new', TEST_MESSAGE, 'immediate');
+      const first = new MessageHandle(createTestCall(), 'message-old', TEST_MESSAGE, 'enqueue');
+      const replacement = new MessageHandle(createTestCall(), 'message-new', TEST_MESSAGE, 'immediate');
       queue.enqueue(first);
       await session.processQueue(queue);
       await flushEvents();
@@ -127,7 +128,7 @@ describe('PiConnectorSession tool event ownership', () => {
     } finally {
       unsubscribeStarts();
       unsubscribe();
-      await session.close();
+      await session.close(createTestCall());
     }
   });
 });
@@ -141,7 +142,7 @@ describe('PiConnectorSession teardown evidence', () => {
    */
   async function makeSession(piSession: FakePiSession): Promise<PiConnectorSession> {
     const session = new PiConnectorSession({
-      bus: await PiSdkNamespace.scopedBus(),
+      bus: await PiSdkNamespace.scopedBus(createTestBusInstance()),
       agentId: 'agent-1',
       adapterId: 'adapter-1',
       adapterName: 'pi-sdk',
@@ -159,7 +160,7 @@ describe('PiConnectorSession teardown evidence', () => {
     const piSession = new FakePiSession();
     const session = await makeSession(piSession);
 
-    const report = await session.close();
+    const report = await session.close(createTestCall());
 
     // `released` rests on local evidence: the subscription this session created is
     // cancelled by this session, so no callback can reach it again.
@@ -172,7 +173,7 @@ describe('PiConnectorSession teardown evidence', () => {
     piSession.abortFailure = new Error('pi abort rejected');
     const session = await makeSession(piSession);
 
-    const report = await session.close();
+    const report = await session.close(createTestCall());
 
     // The disposal behind the abort still ran, which is why the failure is caught
     // at all; what may not survive it is the observed class.

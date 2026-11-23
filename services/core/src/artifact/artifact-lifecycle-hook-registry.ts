@@ -1,4 +1,5 @@
 import type { IMakaioBus } from '@makaio/bus-core';
+import type { CallContext } from '@makaio/core';
 import { ArtifactSubjects } from '@makaio/contracts';
 import { BaseService } from '@makaio/service-base';
 import type {
@@ -323,34 +324,38 @@ export class ArtifactLifecycleHookRegistry extends BaseService {
    * Hooks run in descending priority order (highest first). If any hook calls
    * {@link BeforeArtifactHookContext.rejectCreation}, the pipeline stops and
    * throws {@link ArtifactLifecycleHookRejectedError}.
+   * @param call - Call context of the act that triggered the write; handed to every hook as `ctx.call`.
    * @param input - The in-flight draft and optional kind metadata.
    * @returns The final patched revision and a flag indicating whether
    *   materialization should be skipped.
    * @throws {@link ArtifactLifecycleHookRejectedError} when a hook rejects the write.
    */
-  public async runBeforeCreate(input: RunBeforeInput): Promise<RunBeforeResult> {
-    return this.runBeforeHooks('beforeCreate', input);
+  public async runBeforeCreate(call: CallContext, input: RunBeforeInput): Promise<RunBeforeResult> {
+    return this.runBeforeHooks(call, 'beforeCreate', input);
   }
 
   /**
    * Build and run all `beforeRevise` hooks against the supplied draft revision.
    *
    * Semantics are identical to {@link runBeforeCreate}.
+   * @param call - Call context of the act that triggered the write; handed to every hook as `ctx.call`.
    * @param input - The in-flight draft and optional kind metadata.
    * @returns The final patched revision and skip-materialization flag.
    * @throws {@link ArtifactLifecycleHookRejectedError} when a hook rejects the write.
    */
-  public async runBeforeRevise(input: RunBeforeInput): Promise<RunBeforeResult> {
-    return this.runBeforeHooks('beforeRevise', input);
+  public async runBeforeRevise(call: CallContext, input: RunBeforeInput): Promise<RunBeforeResult> {
+    return this.runBeforeHooks(call, 'beforeRevise', input);
   }
 
   /**
    * Shared implementation for before-hook pipelines.
+   * @param call - Call context of the act that triggered the write.
    * @param event - The specific before-hook event type.
    * @param input - Input carrying the draft and context fields.
    * @returns The final patched revision and skip-materialization flag.
    */
   private async runBeforeHooks(
+    call: CallContext,
     event: 'beforeCreate' | 'beforeRevise',
     input: RunBeforeInput,
   ): Promise<RunBeforeResult> {
@@ -382,6 +387,7 @@ export class ArtifactLifecycleHookRegistry extends BaseService {
         previous,
         kindRegistration,
         bus: this.bus,
+        call,
         meta,
         rejectCreation(reason: string): void {
           rejected = { reason };
@@ -420,43 +426,49 @@ export class ArtifactLifecycleHookRegistry extends BaseService {
    * hooks in the negative-priority default-projection tier. Hooks at priority
    * `>= 0` still run. Errors thrown by individual hooks are caught and logged;
    * they never propagate to the caller.
+   * @param call - Call context of the act that triggered the write; handed to every hook as `ctx.call`.
    * @param input - After-hook context fields for the completed create.
    */
-  public async runAfterCreate(input: RunAfterInput): Promise<void> {
-    await this.runAfterHooks('afterCreate', 'created', input);
+  public async runAfterCreate(call: CallContext, input: RunAfterInput): Promise<void> {
+    await this.runAfterHooks(call, 'afterCreate', 'created', input);
   }
 
   /**
    * Run all `afterRevise` after hooks for a revised artifact.
+   * @param call - Call context of the act that triggered the write; handed to every hook as `ctx.call`.
    * @param input - After-hook context fields for the completed revise.
    */
-  public async runAfterRevise(input: RunAfterInput): Promise<void> {
-    await this.runAfterHooks('afterRevise', 'revised', input);
+  public async runAfterRevise(call: CallContext, input: RunAfterInput): Promise<void> {
+    await this.runAfterHooks(call, 'afterRevise', 'revised', input);
   }
 
   /**
    * Run all `afterStatusChanged` after hooks.
+   * @param call - Call context of the act that triggered the write; handed to every hook as `ctx.call`.
    * @param input - After-hook context fields for the status change.
    */
-  public async runAfterStatusChanged(input: RunAfterInput): Promise<void> {
-    await this.runAfterHooks('afterStatusChanged', 'status-changed', input);
+  public async runAfterStatusChanged(call: CallContext, input: RunAfterInput): Promise<void> {
+    await this.runAfterHooks(call, 'afterStatusChanged', 'status-changed', input);
   }
 
   /**
    * Run all `afterObservationAdded` after hooks.
+   * @param call - Call context of the act that triggered the write; handed to every hook as `ctx.call`.
    * @param input - After-hook context fields for the observation.
    */
-  public async runAfterObservationAdded(input: RunAfterInput): Promise<void> {
-    await this.runAfterHooks('afterObservationAdded', 'observation-added', input);
+  public async runAfterObservationAdded(call: CallContext, input: RunAfterInput): Promise<void> {
+    await this.runAfterHooks(call, 'afterObservationAdded', 'observation-added', input);
   }
 
   /**
    * Shared implementation for after-hook pipelines.
+   * @param call - Call context of the act that triggered the write.
    * @param event - The specific after-hook event type.
    * @param semanticEvent - The semantic event name passed to hook contexts.
    * @param input - After-hook context fields.
    */
   private async runAfterHooks(
+    call: CallContext,
     event: 'afterCreate' | 'afterRevise' | 'afterStatusChanged' | 'afterObservationAdded',
     semanticEvent: AfterArtifactHookContext['semanticEvent'],
     input: RunAfterInput,
@@ -484,6 +496,7 @@ export class ArtifactLifecycleHookRegistry extends BaseService {
         observation,
         kindRegistration,
         bus,
+        call,
         meta,
         preventDefault(): void {
           defaultPrevented = true;
@@ -495,7 +508,7 @@ export class ArtifactLifecycleHookRegistry extends BaseService {
             const t = target as ArtifactRelationTarget;
             if (t.refClass === 'artifact') {
               const artifactRef: ArtifactRef = t;
-              const { artifact: resolved } = await bus.request(ArtifactSubjects.resolve, { ref: artifactRef });
+              const { artifact: resolved } = await bus.request(call, ArtifactSubjects.resolve, { ref: artifactRef });
               if (resolved) revisions.push(resolved);
             }
           }

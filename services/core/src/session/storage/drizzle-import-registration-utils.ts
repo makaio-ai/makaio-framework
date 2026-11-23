@@ -1,6 +1,7 @@
 import { and, eq } from 'drizzle-orm';
 import { resolveSchema, type MakaioDatabase } from '@makaio/storage-drizzle';
 import type { IMakaioBus } from '@makaio/bus-core';
+import type { CallContext } from '@makaio/core';
 import { SessionSubjects, type BranchKind, type IMakaioSession, type ImportUpsertRequest } from '@makaio/contracts';
 import { sessionStorageSchema } from './schema.variants.js';
 import { kindToBranchKind } from '../import/lineage-utils.js';
@@ -73,6 +74,7 @@ export function buildInitialImportValues(
 
 /**
  * Emit the appropriate lifecycle event after an import registration operation.
+ * @param call - Call of the handled import registration message.
  * @param bus - Bus for event emission.
  * @param db - Database for parent resolution.
  * @param row - The registered row's key fields.
@@ -82,6 +84,7 @@ export function buildInitialImportValues(
  * @param source - Source tool identity for resolving imported parent links.
  */
 export async function emitImportUpsertLifecycleEvent(
+  call: CallContext,
   bus: IMakaioBus,
   db: MakaioDatabase,
   row: {
@@ -98,7 +101,7 @@ export async function emitImportUpsertLifecycleEvent(
   if (created) {
     const resolvedParentSessionId = await resolveParentSession(db, row.sessionId, row.parentExternalSessionId, source);
     void bus
-      .emit(SessionSubjects.created, {
+      .emit(call, SessionSubjects.created, {
         sessionId: row.sessionId,
         parentSessionId: resolvedParentSessionId,
         branchKind,
@@ -113,7 +116,7 @@ export async function emitImportUpsertLifecycleEvent(
   }
 
   void bus
-    .emit(SessionSubjects.updated, {
+    .emit(call, SessionSubjects.updated, {
       sessionId: row.sessionId,
       changedProperties: ['source', 'targetWorkingDirectory', 'title'],
     })

@@ -16,8 +16,8 @@ import {
   type ICapabilityProvider,
   type ICodeExecutionProvider,
 } from '@makaio/contracts';
-import type { ExtensionToken, NodeExtensionContext } from '@makaio/contracts';
-import { makeStubNodeExtensionContext } from '@makaio/test-utils';
+import type { CallContext, ExtensionToken, NodeExtensionContext } from '@makaio/contracts';
+import { createTestCall, makeStubNodeExtensionContext } from '@makaio/test-utils';
 import { DeferredPromise } from '@makaio/utils';
 import { CapabilityService } from '../../capability/capability-service.js';
 import { CapabilityToken } from '../../capability/package.js';
@@ -224,11 +224,15 @@ describe('CodeExecutionService', () => {
 
   /**
    * Run one invocation through the real bus subject.
+   * @param call - Call context for the invocation.
    * @param overrides - Request fields for this invocation.
    * @returns The normalized terminal outcome the handler produced.
    */
-  async function execute(overrides: Partial<CodeExecutionRequest> = {}): Promise<CodeExecutionOutcome> {
-    return bus.request(CodeExecutionSubjects.execute, makeRequest(overrides));
+  async function execute(
+    call: CallContext,
+    overrides: Partial<CodeExecutionRequest> = {},
+  ): Promise<CodeExecutionOutcome> {
+    return bus.request(call, CodeExecutionSubjects.execute, makeRequest(overrides));
   }
 
   beforeEach(async () => {
@@ -249,7 +253,7 @@ describe('CodeExecutionService', () => {
 
   describe('provider resolution through the capability registry', () => {
     it('fails with provider_unavailable when nothing is registered', async () => {
-      expect(await execute()).toEqual({
+      expect(await execute(createTestCall())).toEqual({
         status: 'failed',
         error: { code: 'provider_unavailable', message: expect.any(String) },
       });
@@ -257,9 +261,9 @@ describe('CodeExecutionService', () => {
 
     it('routes to a provider registered through the public helper', async () => {
       const provider = new TestCodeExecutionProvider({ id: 'node-runner' });
-      await registerCodeExecutionProvider(bus, provider);
+      await registerCodeExecutionProvider(createTestCall(), bus, provider);
 
-      expect(await execute()).toEqual({ status: 'completed', value: 'ran:node-runner' });
+      expect(await execute(createTestCall())).toEqual({ status: 'completed', value: 'ran:node-runner' });
       expect(provider.calls).toBe(1);
     });
 
@@ -269,10 +273,10 @@ describe('CodeExecutionService', () => {
         id: 'runner',
         behavior: () => Promise.resolve({ status: 'completed', value: 'replaced' }),
       });
-      await registerCodeExecutionProvider(bus, first);
-      await registerCodeExecutionProvider(bus, replacement);
+      await registerCodeExecutionProvider(createTestCall(), bus, first);
+      await registerCodeExecutionProvider(createTestCall(), bus, replacement);
 
-      expect(await execute()).toEqual({ status: 'completed', value: 'replaced' });
+      expect(await execute(createTestCall())).toEqual({ status: 'completed', value: 'replaced' });
       expect(first.calls).toBe(0);
       expect(replacement.calls).toBe(1);
       expect(capabilities.getProviders(CODE_EXECUTION_CAPABILITY_ID)).toHaveLength(1);
@@ -280,38 +284,48 @@ describe('CodeExecutionService', () => {
 
     it('stops routing once a provider unregisters', async () => {
       const provider = new TestCodeExecutionProvider({ id: 'runner' });
-      await registerCodeExecutionProvider(bus, provider);
-      await unregisterCodeExecutionProvider(bus, 'runner');
+      await registerCodeExecutionProvider(createTestCall(), bus, provider);
+      await unregisterCodeExecutionProvider(createTestCall(), bus, 'runner');
 
-      expect(await execute()).toMatchObject({ status: 'failed', error: { code: 'provider_unavailable' } });
+      expect(await execute(createTestCall())).toMatchObject({
+        status: 'failed',
+        error: { code: 'provider_unavailable' },
+      });
       expect(provider.calls).toBe(0);
     });
 
     it('keeps no registry of its own, so late registrations are picked up', async () => {
-      expect(await execute()).toMatchObject({ status: 'failed', error: { code: 'provider_unavailable' } });
+      expect(await execute(createTestCall())).toMatchObject({
+        status: 'failed',
+        error: { code: 'provider_unavailable' },
+      });
 
-      await registerCodeExecutionProvider(bus, new TestCodeExecutionProvider({ id: 'late' }));
+      await registerCodeExecutionProvider(createTestCall(), bus, new TestCodeExecutionProvider({ id: 'late' }));
 
-      expect(await execute()).toEqual({ status: 'completed', value: 'ran:late' });
+      expect(await execute(createTestCall())).toEqual({ status: 'completed', value: 'ran:late' });
     });
 
     it('admits the highest priority provider and pins an exact provider id on request', async () => {
       const low = new TestCodeExecutionProvider({ id: 'low', priority: 1 });
       const high = new TestCodeExecutionProvider({ id: 'high', priority: 10 });
-      await registerCodeExecutionProvider(bus, low);
-      await registerCodeExecutionProvider(bus, high);
+      await registerCodeExecutionProvider(createTestCall(), bus, low);
+      await registerCodeExecutionProvider(createTestCall(), bus, high);
 
-      expect(await execute()).toEqual({ status: 'completed', value: 'ran:high' });
-      expect(await execute({ requirements: { providerId: 'low' } })).toEqual({
+      expect(await execute(createTestCall())).toEqual({ status: 'completed', value: 'ran:high' });
+      expect(await execute(createTestCall(), { requirements: { providerId: 'low' } })).toEqual({
         status: 'completed',
         value: 'ran:low',
       });
     });
 
     it('fails with provider_unavailable when no provider satisfies the requirements', async () => {
-      await registerCodeExecutionProvider(bus, new TestCodeExecutionProvider({ id: 'node-only', runtime: 'node' }));
+      await registerCodeExecutionProvider(
+        createTestCall(),
+        bus,
+        new TestCodeExecutionProvider({ id: 'node-only', runtime: 'node' }),
+      );
 
-      expect(await execute({ requirements: { runtime: 'deno' } })).toMatchObject({
+      expect(await execute(createTestCall(), { requirements: { runtime: 'deno' } })).toMatchObject({
         status: 'failed',
         error: { code: 'provider_unavailable' },
       });
@@ -321,19 +335,19 @@ describe('CodeExecutionService', () => {
       // The capability registry stores live objects and validates none of them,
       // so a contract-violating registration reaches selection intact.
       const malformed: ICapabilityProvider = { id: 'broken', displayName: 'Broken' };
-      await bus.emit(CapabilitySubjects.register, {
+      await bus.emit(createTestCall(), CapabilitySubjects.register, {
         capabilityId: CODE_EXECUTION_CAPABILITY_ID,
         provider: malformed,
       });
 
-      expect(await execute()).toMatchObject({ status: 'failed', error: { code: 'invalid_provider' } });
+      expect(await execute(createTestCall())).toMatchObject({ status: 'failed', error: { code: 'invalid_provider' } });
     });
   });
 
   describe('request validation at the router boundary', () => {
     it('fails with invalid_program when an upstream handler replaced the payload', async () => {
       const provider = new TestCodeExecutionProvider({ id: 'runner' });
-      await registerCodeExecutionProvider(bus, provider);
+      await registerCodeExecutionProvider(createTestCall(), bus, provider);
 
       // The bus validated the original payload, but a higher-priority handler
       // may replace it before the router runs. A subject that executes
@@ -348,7 +362,7 @@ describe('CodeExecutionService', () => {
       );
 
       try {
-        expect(await execute()).toMatchObject({ status: 'failed', error: { code: 'invalid_program' } });
+        expect(await execute(createTestCall())).toMatchObject({ status: 'failed', error: { code: 'invalid_program' } });
         expect(provider.calls).toBe(0);
       } finally {
         stopRewriting();
@@ -357,7 +371,7 @@ describe('CodeExecutionService', () => {
 
     it('reports invalid_program for a payload that throws while being validated', async () => {
       const provider = new TestCodeExecutionProvider({ id: 'runner' });
-      await registerCodeExecutionProvider(bus, provider);
+      await registerCodeExecutionProvider(createTestCall(), bus, provider);
 
       const stopRewriting = bus.on(
         CodeExecutionSubjects.execute,
@@ -372,7 +386,7 @@ describe('CodeExecutionService', () => {
         // A payload the parser cannot even read is a validation failure like
         // any other. Letting the exception escape would reject the handler and
         // turn a hostile payload into a subject-level fault.
-        expect(await execute()).toMatchObject({ status: 'failed', error: { code: 'invalid_program' } });
+        expect(await execute(createTestCall())).toMatchObject({ status: 'failed', error: { code: 'invalid_program' } });
         expect(provider.calls).toBe(0);
       } finally {
         stopRewriting();
@@ -384,6 +398,7 @@ describe('CodeExecutionService', () => {
     it('normalizes a provider throw to provider_failed without leaking its internals', async () => {
       const secret = 'ENOENT: /srv/run/secrets/api-token at Object.<anonymous> (/srv/exec/42/entry.mjs:7:11)';
       await registerCodeExecutionProvider(
+        createTestCall(),
         bus,
         new TestCodeExecutionProvider({
           id: 'thrower',
@@ -391,7 +406,7 @@ describe('CodeExecutionService', () => {
         }),
       );
 
-      const outcome = await execute();
+      const outcome = await execute(createTestCall());
 
       expect(outcome).toMatchObject({ status: 'failed', error: { code: 'provider_failed' } });
       const message = outcome.status === 'failed' ? outcome.error.message : '';
@@ -407,6 +422,7 @@ describe('CodeExecutionService', () => {
 
       try {
         await registerCodeExecutionProvider(
+          createTestCall(),
           bus,
           new TestCodeExecutionProvider({
             id: 'mutates-request',
@@ -421,7 +437,7 @@ describe('CodeExecutionService', () => {
             },
           }),
         );
-        expect(await execute()).toMatchObject({ status: 'failed', error: { code: 'provider_failed' } });
+        expect(await execute(createTestCall())).toMatchObject({ status: 'failed', error: { code: 'provider_failed' } });
         await new Promise<void>((resolve) => setImmediate(resolve));
         expect(unhandled).not.toHaveBeenCalled();
       } finally {
@@ -450,9 +466,9 @@ describe('CodeExecutionService', () => {
           return 'fickle';
         },
       });
-      await registerCodeExecutionProvider(bus, provider);
+      await registerCodeExecutionProvider(createTestCall(), bus, provider);
 
-      const outcome = await execute();
+      const outcome = await execute(createTestCall());
 
       expect(outcome).toMatchObject({ status: 'failed', error: { code: 'provider_failed' } });
       // The snapshot is what the summary names, so the identifier survives even
@@ -483,9 +499,9 @@ describe('CodeExecutionService', () => {
           return admitted;
         },
       });
-      await registerCodeExecutionProvider(bus, provider);
+      await registerCodeExecutionProvider(createTestCall(), bus, provider);
 
-      expect(await execute()).toEqual({ status: 'completed', value: 'ran:fickle-entry' });
+      expect(await execute(createTestCall())).toEqual({ status: 'completed', value: 'ran:fickle-entry' });
       // The single read is the selection snapshot: nothing read it again.
       expect(reads).toBe(1);
       expect(provider.calls).toBe(1);
@@ -507,14 +523,15 @@ describe('CodeExecutionService', () => {
         },
       });
       Object.defineProperty(provider, 'execute', { enumerable: true, configurable: true, value: admitted });
-      await registerCodeExecutionProvider(bus, provider);
+      await registerCodeExecutionProvider(createTestCall(), bus, provider);
 
-      expect(await execute()).toEqual({ status: 'completed', value: 'ran:shadowed-call' });
+      expect(await execute(createTestCall())).toEqual({ status: 'completed', value: 'ran:shadowed-call' });
       expect(provider.calls).toBe(1);
     });
 
     it('normalizes an outcome that violates the response contract to invalid_provider', async () => {
       await registerCodeExecutionProvider(
+        createTestCall(),
         bus,
         new TestCodeExecutionProvider({
           id: 'liar',
@@ -524,7 +541,7 @@ describe('CodeExecutionService', () => {
         }),
       );
 
-      expect(await execute()).toMatchObject({ status: 'failed', error: { code: 'invalid_provider' } });
+      expect(await execute(createTestCall())).toMatchObject({ status: 'failed', error: { code: 'invalid_provider' } });
     });
 
     it('reports invalid_provider for a completed value the response contract cannot carry faithfully', async () => {
@@ -536,6 +553,7 @@ describe('CodeExecutionService', () => {
       const wireValue: unknown = JSON.parse('{"outer":{"__proto__":{"polluted":true}}}');
       if (typeof wireValue !== 'object' || wireValue === null) throw new Error('unreachable');
       await registerCodeExecutionProvider(
+        createTestCall(),
         bus,
         new TestCodeExecutionProvider({
           id: 'polluter',
@@ -543,23 +561,25 @@ describe('CodeExecutionService', () => {
         }),
       );
 
-      expect(await execute()).toMatchObject({ status: 'failed', error: { code: 'invalid_provider' } });
+      expect(await execute(createTestCall())).toMatchObject({ status: 'failed', error: { code: 'invalid_provider' } });
 
       // Discriminator: the identical value without the offending key completes,
       // so the rejection is the key and not the shape around it.
-      await unregisterCodeExecutionProvider(bus, 'polluter');
+      await unregisterCodeExecutionProvider(createTestCall(), bus, 'polluter');
       await registerCodeExecutionProvider(
+        createTestCall(),
         bus,
         new TestCodeExecutionProvider({
           id: 'clean',
           behavior: () => Promise.resolve({ status: 'completed', value: { outer: { polluted: true } } }),
         }),
       );
-      expect(await execute()).toEqual({ status: 'completed', value: { outer: { polluted: true } } });
+      expect(await execute(createTestCall())).toEqual({ status: 'completed', value: { outer: { polluted: true } } });
     });
 
     it('reports invalid_provider for an outcome that throws while being validated', async () => {
       await registerCodeExecutionProvider(
+        createTestCall(),
         bus,
         new TestCodeExecutionProvider({
           id: 'unreadable',
@@ -569,7 +589,7 @@ describe('CodeExecutionService', () => {
 
       // Same containment as the request boundary: an unreadable value is a
       // contract violation by the provider, not a fault of the subject.
-      expect(await execute()).toMatchObject({ status: 'failed', error: { code: 'invalid_provider' } });
+      expect(await execute(createTestCall())).toMatchObject({ status: 'failed', error: { code: 'invalid_provider' } });
     });
 
     it('never falls back to a second provider once one has been admitted', async () => {
@@ -579,20 +599,20 @@ describe('CodeExecutionService', () => {
         behavior: () => Promise.reject(new Error('boom')),
       });
       const standby = new TestCodeExecutionProvider({ id: 'standby', priority: 1 });
-      await registerCodeExecutionProvider(bus, admitted);
-      await registerCodeExecutionProvider(bus, standby);
+      await registerCodeExecutionProvider(createTestCall(), bus, admitted);
+      await registerCodeExecutionProvider(createTestCall(), bus, standby);
 
-      expect(await execute()).toMatchObject({ status: 'failed', error: { code: 'provider_failed' } });
+      expect(await execute(createTestCall())).toMatchObject({ status: 'failed', error: { code: 'provider_failed' } });
       expect(admitted.calls).toBe(1);
       expect(standby.calls).toBe(0);
     });
 
     it('passes the effective signal and deadline to the provider', async () => {
       const provider = new TestCodeExecutionProvider({ id: 'observer' });
-      await registerCodeExecutionProvider(bus, provider);
+      await registerCodeExecutionProvider(createTestCall(), bus, provider);
 
       const before = Date.now();
-      await execute({ timeoutMs: 5_000 });
+      await execute(createTestCall(), { timeoutMs: 5_000 });
 
       expect(provider.lastContext?.signal.aborted).toBe(false);
       expect(provider.lastContext?.deadlineEpochMs).toBeGreaterThanOrEqual(before + 5_000);
@@ -603,13 +623,18 @@ describe('CodeExecutionService', () => {
   describe('budget and cancellation ownership', () => {
     it('normalizes an exhausted budget to timed_out and stops waiting on the provider', async () => {
       const provider = new TestCodeExecutionProvider({ id: 'hangs', behavior: neverSettles });
-      await registerCodeExecutionProvider(bus, provider);
+      await registerCodeExecutionProvider(createTestCall(), bus, provider);
 
       vi.useFakeTimers();
       try {
         // `timeout: 0` removes the bus deadline so the request budget is the
         // only thing that can settle this invocation.
-        const pending = bus.request(CodeExecutionSubjects.execute, makeRequest({ timeoutMs: 1_000 }), { timeout: 0 });
+        const pending = bus.request(
+          createTestCall(),
+          CodeExecutionSubjects.execute,
+          makeRequest({ timeoutMs: 1_000 }),
+          { timeout: 0 },
+        );
         await vi.advanceTimersByTimeAsync(1_000);
 
         expect(await pending).toEqual({
@@ -633,11 +658,16 @@ describe('CodeExecutionService', () => {
           return neverSettles(_request, context);
         },
       });
-      await registerCodeExecutionProvider(bus, provider);
+      await registerCodeExecutionProvider(createTestCall(), bus, provider);
 
       vi.useFakeTimers();
       try {
-        const pending = bus.request(CodeExecutionSubjects.execute, makeRequest({ timeoutMs: 1_000 }), { timeout: 0 });
+        const pending = bus.request(
+          createTestCall(),
+          CodeExecutionSubjects.execute,
+          makeRequest({ timeoutMs: 1_000 }),
+          { timeout: 0 },
+        );
         await vi.advanceTimersByTimeAsync(1_000);
 
         expect(await pending).toEqual({
@@ -677,11 +707,16 @@ describe('CodeExecutionService', () => {
           return new Promise<CodeExecutionOutcome>((resolve) => stranded.push(resolve));
         },
       });
-      await registerCodeExecutionProvider(bus, provider);
+      await registerCodeExecutionProvider(createTestCall(), bus, provider);
 
       vi.useFakeTimers();
       try {
-        const pending = bus.request(CodeExecutionSubjects.execute, makeRequest({ timeoutMs: 1_000 }), { timeout: 0 });
+        const pending = bus.request(
+          createTestCall(),
+          CodeExecutionSubjects.execute,
+          makeRequest({ timeoutMs: 1_000 }),
+          { timeout: 0 },
+        );
         await vi.advanceTimersByTimeAsync(1_000);
 
         expect(await pending).toMatchObject({ status: 'timed_out' });
@@ -698,7 +733,7 @@ describe('CodeExecutionService', () => {
 
     it('settles a cancelled invocation as cancelled even though the caller sees a rejection', async () => {
       const provider = new TestCodeExecutionProvider({ id: 'cancellable', behavior: rejectsOnAbort });
-      await registerCodeExecutionProvider(bus, provider);
+      await registerCodeExecutionProvider(createTestCall(), bus, provider);
 
       // The typed `cancelled` outcome is an internal settlement invariant: an
       // aborted local caller observes a rejected request, so the outcome is
@@ -717,10 +752,15 @@ describe('CodeExecutionService', () => {
 
       try {
         const caller = new AbortController();
-        const pending = bus.request(CodeExecutionSubjects.execute, makeRequest({ timeoutMs: 60_000 }), {
-          timeout: 0,
-          signal: caller.signal,
-        });
+        const pending = bus.request(
+          createTestCall(),
+          CodeExecutionSubjects.execute,
+          makeRequest({ timeoutMs: 60_000 }),
+          {
+            timeout: 0,
+            signal: caller.signal,
+          },
+        );
         await provider.entered;
         caller.abort(new Error('caller went away'));
 
@@ -758,7 +798,7 @@ describe('CodeExecutionService', () => {
         const caller = new AbortController();
         caller.abort(new Error('caller went away before dispatch'));
 
-        const pending = bus.request(CodeExecutionSubjects.execute, makeRequest(), {
+        const pending = bus.request(createTestCall(), CodeExecutionSubjects.execute, makeRequest(), {
           timeout: 0,
           signal: caller.signal,
         });
@@ -778,23 +818,23 @@ describe('CodeExecutionService', () => {
 
   describe('lifecycle', () => {
     it('removes the execute handler on destroy and leaves the registry untouched', async () => {
-      await registerCodeExecutionProvider(bus, new TestCodeExecutionProvider({ id: 'runner' }));
-      expect(await execute()).toEqual({ status: 'completed', value: 'ran:runner' });
+      await registerCodeExecutionProvider(createTestCall(), bus, new TestCodeExecutionProvider({ id: 'runner' }));
+      expect(await execute(createTestCall())).toEqual({ status: 'completed', value: 'ran:runner' });
 
       await service.destroy();
 
-      await expect(execute()).rejects.toThrow();
+      await expect(execute(createTestCall())).rejects.toThrow();
       expect(capabilities.getProviders(CODE_EXECUTION_CAPABILITY_ID)).toHaveLength(1);
     });
 
     it('tolerates a repeated destroy and can be initialized again', async () => {
-      await registerCodeExecutionProvider(bus, new TestCodeExecutionProvider({ id: 'runner' }));
+      await registerCodeExecutionProvider(createTestCall(), bus, new TestCodeExecutionProvider({ id: 'runner' }));
 
       await service.destroy();
       await service.destroy();
       await service.init();
 
-      expect(await execute()).toEqual({ status: 'completed', value: 'ran:runner' });
+      expect(await execute(createTestCall())).toEqual({ status: 'completed', value: 'ran:runner' });
     });
   });
 
@@ -845,9 +885,13 @@ describe('CodeExecutionService', () => {
 
       try {
         await created.init();
-        await registerCodeExecutionProvider(hostBus, new TestCodeExecutionProvider({ id: 'host-runner' }));
+        await registerCodeExecutionProvider(
+          createTestCall(),
+          hostBus,
+          new TestCodeExecutionProvider({ id: 'host-runner' }),
+        );
 
-        expect(await hostBus.request(CodeExecutionSubjects.execute, makeRequest())).toEqual({
+        expect(await hostBus.request(createTestCall(), CodeExecutionSubjects.execute, makeRequest())).toEqual({
           status: 'completed',
           value: 'ran:host-runner',
         });

@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
-import { createMockScopedBus } from '@makaio/test-utils';
+import { createMockScopedBus, createTestCall } from '@makaio/test-utils';
 import { asAgentConnector, MockConnector } from './helpers/mock-agent.js';
 import { AIAgent } from '../ai-agent.js';
 import type { AgentConnectorConfigOverrides, AIAgentConfig } from '../types.js';
@@ -10,6 +10,7 @@ import {
   AdapterSubjects,
   AuthCredentialRefSchema,
   CredentialSubjects,
+  type CallContext,
   type NativeForkDirective,
   type ProviderAuthMethodDefinition,
   type ProviderContext,
@@ -94,10 +95,11 @@ class SwapTestAgent extends AIAgent {
 
   /**
    * Expose swapConnector for testing.
+   * @param call - Call context of the simulated swap request
    * @param configOverrides - Optional config overrides
    */
-  public async testSwapConnector(configOverrides?: AgentConnectorConfigOverrides): Promise<void> {
-    await this.swapConnector(configOverrides);
+  public async testSwapConnector(call: CallContext, configOverrides?: AgentConnectorConfigOverrides): Promise<void> {
+    await this.swapConnector(call, configOverrides);
   }
 
   /** Return the connector synchronously published as the active primary. */
@@ -156,6 +158,7 @@ function createSwapTestAgent(
       options?.onConfigInput?.(input);
       return {
         bus: mockBus,
+        globalBus: MakaioBus,
         agentId: 'test-agent-swap',
         adapterId: 'test-adapter',
         adapterName: 'test',
@@ -202,12 +205,12 @@ describe('AIAgent.swapConnector', () => {
     });
 
     agent = createSwapTestAgent(mockFactory);
-    await agent.init();
+    await agent.init(createTestCall());
 
     expect(createdConnectors).toHaveLength(1);
     const initialConnector = createdConnectors[0];
 
-    await agent.testSwapConnector({ model: 'test-model-2' });
+    await agent.testSwapConnector(createTestCall(), { model: 'test-model-2' });
 
     expect(createdConnectors).toHaveLength(2);
     expect(initialConnector.closeCalled).toBe(true);
@@ -221,14 +224,14 @@ describe('AIAgent.swapConnector', () => {
       resumeAdapterSessionId: 'start-time-resume',
       onConfigInput: (input) => observedResumeIds.push(input.resumeAdapterSessionId),
     });
-    await agent.init();
+    await agent.init(createTestCall());
 
     // Explicit fresh decision (key present, value undefined) — e.g. a
     // non-native warm rehydrate.
-    await agent.testSwapConnector({ resumeAdapterSessionId: undefined });
+    await agent.testSwapConnector(createTestCall(), { resumeAdapterSessionId: undefined });
     // Later mutation swap without the key must inherit the published fresh
     // decision, not the consumed start-time resume target.
-    await agent.testSwapConnector({ model: 'test-model-2' });
+    await agent.testSwapConnector(createTestCall(), { model: 'test-model-2' });
 
     expect(observedResumeIds).toEqual(['start-time-resume', undefined, undefined]);
   });
@@ -242,10 +245,10 @@ describe('AIAgent.swapConnector', () => {
       resumeAdapterSessionId: 'start-time-resume',
       onConfigInput: (input) => observedResumeIds.push(input.resumeAdapterSessionId),
     });
-    await agent.init();
+    await agent.init(createTestCall());
 
-    const freshSwap = agent.testSwapConnector({ resumeAdapterSessionId: undefined });
-    const queuedSwap = agent.testSwapConnector({ model: 'test-model-2' });
+    const freshSwap = agent.testSwapConnector(createTestCall(), { resumeAdapterSessionId: undefined });
+    const queuedSwap = agent.testSwapConnector(createTestCall(), { model: 'test-model-2' });
     await Promise.all([freshSwap, queuedSwap]);
 
     expect(observedResumeIds).toEqual(['start-time-resume', undefined, undefined]);
@@ -257,13 +260,13 @@ describe('AIAgent.swapConnector', () => {
       resumeAdapterSessionId: 'start-time-resume',
       onConfigInput: (input) => observedResumeIds.push(input.resumeAdapterSessionId),
     });
-    await agent.init();
+    await agent.init(createTestCall());
 
     // MockConnector confirms 'test-session-id' — the provider rotated the
     // session on resume. Later swaps must continue the live conversation,
     // not the abandoned requested target.
-    await agent.testSwapConnector({ resumeAdapterSessionId: 'resumed-session' });
-    await agent.testSwapConnector({ model: 'test-model-2' });
+    await agent.testSwapConnector(createTestCall(), { resumeAdapterSessionId: 'resumed-session' });
+    await agent.testSwapConnector(createTestCall(), { model: 'test-model-2' });
 
     expect(observedResumeIds).toEqual(['start-time-resume', 'resumed-session', 'test-session-id']);
   });
@@ -274,7 +277,7 @@ describe('AIAgent.swapConnector', () => {
       resumeAdapterSessionId: 'start-time-resume',
       onConfigInput: (input) => observedResumeIds.push(input.resumeAdapterSessionId),
     });
-    await agent.init();
+    await agent.init(createTestCall());
 
     // A mutation swap without a resume key consumes the still-pending
     // start-time target; its replacement confirms 'test-session-id'. The
@@ -282,8 +285,8 @@ describe('AIAgent.swapConnector', () => {
     // keyless swap continues the live thread — not the stale target the
     // provider has already rotated away from (or that a suppressed turn
     // abandoned).
-    await agent.testSwapConnector({ model: 'test-model-2' });
-    await agent.testSwapConnector({ cwd: '/test/cwd2' });
+    await agent.testSwapConnector(createTestCall(), { model: 'test-model-2' });
+    await agent.testSwapConnector(createTestCall(), { cwd: '/test/cwd2' });
 
     expect(observedResumeIds).toEqual(['start-time-resume', 'start-time-resume', 'test-session-id']);
   });
@@ -296,12 +299,12 @@ describe('AIAgent.swapConnector', () => {
     });
 
     agent = createSwapTestAgent(mockFactory);
-    await agent.init();
+    await agent.init(createTestCall());
 
     // Set connector to processing state
     agent.currentConnector.setProcessingState('processing_started');
 
-    await expect(agent.testSwapConnector({ model: 'test-model-2' })).rejects.toThrow(
+    await expect(agent.testSwapConnector(createTestCall(), { model: 'test-model-2' })).rejects.toThrow(
       /Cannot swap connector while processing/,
     );
   });
@@ -314,11 +317,11 @@ describe('AIAgent.swapConnector', () => {
     });
 
     agent = createSwapTestAgent(mockFactory);
-    await agent.init();
+    await agent.init(createTestCall());
 
     const initialAgentId = agent.agentId;
 
-    await agent.testSwapConnector({ cwd: '/test/cwd2' });
+    await agent.testSwapConnector(createTestCall(), { cwd: '/test/cwd2' });
 
     expect(agent.agentId).toBe(initialAgentId);
   });
@@ -331,11 +334,11 @@ describe('AIAgent.swapConnector', () => {
     });
 
     agent = createSwapTestAgent(mockFactory);
-    await agent.init();
+    await agent.init(createTestCall());
 
     expect(agent.wireEventsCalls).toBe(1);
 
-    await agent.testSwapConnector({ cwd: '/test/cwd2' });
+    await agent.testSwapConnector(createTestCall(), { cwd: '/test/cwd2' });
 
     expect(agent.wireEventsCalls).toBe(2);
   });
@@ -347,15 +350,15 @@ describe('AIAgent.swapConnector', () => {
       return connector;
     });
     const prepareAuthRuntime = vi.fn(
-      async (config: Parameters<NonNullable<AIAgentConfig['prepareAuthRuntime']>>[0]) => {
+      async (_call: CallContext, config: Parameters<NonNullable<AIAgentConfig['prepareAuthRuntime']>>[1]) => {
         const { boundProviderAuth: _boundProviderAuth, ...runtimeConfig } = config;
         return { config: { ...runtimeConfig, contextEnv: Object.freeze({}) } };
       },
     );
 
     agent = createSwapTestAgent(mockFactory, { prepareAuthRuntime });
-    await agent.init();
-    await agent.testSwapConnector({ model: 'test-model-2' });
+    await agent.init(createTestCall());
+    await agent.testSwapConnector(createTestCall(), { model: 'test-model-2' });
 
     expect(prepareAuthRuntime).toHaveBeenCalledTimes(2);
   });
@@ -368,9 +371,9 @@ describe('AIAgent.swapConnector', () => {
     });
 
     agent = createSwapTestAgent(mockFactory);
-    await agent.init();
+    await agent.init(createTestCall());
 
-    await agent.testSwapConnector({ model: 'test-model-3', cwd: '/test/cwd3' });
+    await agent.testSwapConnector(createTestCall(), { model: 'test-model-3', cwd: '/test/cwd3' });
 
     expect(agent.currentConnector.model).toBe('test-model-3');
     expect(agent.currentConnector.cwd).toBe('/test/cwd3');
@@ -384,19 +387,19 @@ describe('AIAgent.swapConnector', () => {
     });
 
     agent = createSwapTestAgent(mockFactory);
-    await agent.init();
+    await agent.init(createTestCall());
 
     // Initial state: model='test-model-1', cwd='/test/cwd1'
     expect(agent.currentConnector.model).toBe('test-model-1');
     expect(agent.currentConnector.cwd).toBe('/test/cwd1');
 
     // Swap 1: Change cwd only - model should be preserved
-    await agent.testSwapConnector({ cwd: '/test/cwd2' });
+    await agent.testSwapConnector(createTestCall(), { cwd: '/test/cwd2' });
     expect(agent.currentConnector.model).toBe('test-model-1');
     expect(agent.currentConnector.cwd).toBe('/test/cwd2');
 
     // Swap 2: Change model only - cwd should stay at '/test/cwd2', NOT reset to '/test/cwd1'
-    await agent.testSwapConnector({ model: 'test-model-2' });
+    await agent.testSwapConnector(createTestCall(), { model: 'test-model-2' });
     expect(agent.currentConnector.model).toBe('test-model-2');
     expect(agent.currentConnector.cwd).toBe('/test/cwd2');
 
@@ -423,11 +426,11 @@ describe('AIAgent.swapConnector', () => {
     });
 
     agent = createSwapTestAgent(mockFactory);
-    await agent.init();
+    await agent.init(createTestCall());
 
-    const cwdSwap = agent.testSwapConnector({ cwd: '/test/cwd2' });
+    const cwdSwap = agent.testSwapConnector(createTestCall(), { cwd: '/test/cwd2' });
     await firstInitializeStarted.promise;
-    const modelSwap = agent.testSwapConnector({ model: 'test-model-2' });
+    const modelSwap = agent.testSwapConnector(createTestCall(), { model: 'test-model-2' });
     await Promise.resolve();
 
     // The model swap cannot create from generation A while the CWD swap owns it.
@@ -466,9 +469,9 @@ describe('AIAgent.swapConnector', () => {
       }),
     );
     agent = createSwapTestAgent(mockFactory);
-    await agent.init();
+    await agent.init(createTestCall());
 
-    await agent.testSwapConnector({ providerContext: inferredProviderContext() });
+    await agent.testSwapConnector(createTestCall(), { providerContext: inferredProviderContext() });
 
     expect(order).toEqual(['prepare', 'commit']);
     expect(agent.currentConnector).toBe(createdConnectors[1]);
@@ -489,14 +492,14 @@ describe('AIAgent.swapConnector', () => {
     );
 
     agent = createSwapTestAgent(mockFactory);
-    await agent.init();
+    await agent.init(createTestCall());
 
     const initialConnector = createdConnectors[0];
     initialConnector.close = vi.fn(async () => {
       throw new Error('close failed');
     });
 
-    await expect(agent.testSwapConnector({ model: 'test-model-2' })).resolves.toBeUndefined();
+    await expect(agent.testSwapConnector(createTestCall(), { model: 'test-model-2' })).resolves.toBeUndefined();
 
     expect(agent.currentConnector.model).toBe('test-model-2');
     expect(diagnostics).toContain('previous-connector-cleanup-failed:swap-old-runtime');
@@ -535,6 +538,7 @@ describe('AIAgent.swapConnector', () => {
         capturedInputs.push(input as ConfigFactoryInput & { nativeFork?: NativeForkDirective });
         return {
           bus: mockBus,
+          globalBus: MakaioBus,
           agentId: 'test-agent-fork-swap',
           adapterId: 'test-adapter',
           adapterName: 'test',
@@ -553,14 +557,14 @@ describe('AIAgent.swapConnector', () => {
     };
 
     agent = new SwapTestAgent(config, mockFactory);
-    await agent.init();
+    await agent.init(createTestCall());
 
     // init() must have forwarded the fork directive to the first connector
     expect(capturedInputs).toHaveLength(1);
     expect(capturedInputs[0].nativeFork).toEqual(forkDirective);
 
     // Swap: the fork directive must NOT be forwarded to the replacement
-    await agent.testSwapConnector({ model: 'test-model-2' });
+    await agent.testSwapConnector(createTestCall(), { model: 'test-model-2' });
 
     expect(capturedInputs).toHaveLength(2);
     expect(capturedInputs[1].nativeFork).toBeUndefined();
@@ -603,9 +607,9 @@ describe('AIAgent.swapConnector', () => {
       onConfigInput: (input) => capturedInputs.push(input),
     });
 
-    await agent.init();
-    await agent.testSwapConnector({ model: 'test-model-2', providerContext: providerBContext });
-    await agent.testSwapConnector({ cwd: '/test/cwd2' });
+    await agent.init(createTestCall());
+    await agent.testSwapConnector(createTestCall(), { model: 'test-model-2', providerContext: providerBContext });
+    await agent.testSwapConnector(createTestCall(), { cwd: '/test/cwd2' });
 
     expect(capturedInputs).toHaveLength(3);
     expect(capturedInputs[0]?.adapterProviderAuth).toEqual(providerAAuth);
@@ -636,12 +640,12 @@ describe('AIAgent.swapConnector', () => {
       onConfigInput: (input) => capturedInputs.push(input),
     });
 
-    await agent.init();
-    await agent.testSwapConnector({ cwd: '/test/unresolved-swap' });
-    await agent.testSwapConnector({
+    await agent.init(createTestCall());
+    await agent.testSwapConnector(createTestCall(), { cwd: '/test/unresolved-swap' });
+    await agent.testSwapConnector(createTestCall(), {
       providerContext: explicitProviderContext('provider-b'),
     });
-    await agent.testSwapConnector({ model: 'test-model-after-mismatch' });
+    await agent.testSwapConnector(createTestCall(), { model: 'test-model-after-mismatch' });
 
     expect(capturedInputs).toHaveLength(4);
     expect(capturedInputs.map((input) => input.adapterProviderAuth)).toEqual([

@@ -96,6 +96,7 @@ describe('R7: cancel delivered during workload invocation', () => {
     });
 
     const reconcileResult = await reconcileAttemptCancellation(
+      authoritySide.bus.own('root'),
       { bus: authoritySide.bus, authority: authoritySide.attempt.authority },
       { executionId, executionAttemptId, timeoutMs: 10_000 },
     );
@@ -189,6 +190,7 @@ describe('R8: stable delivery replay', () => {
 
     // First reconcile — delivers the cancel and stores the receipt.
     const reconcile1 = await reconcileAttemptCancellation(
+      authoritySide.bus.own('root'),
       { bus: authoritySide.bus, authority: authoritySide.attempt.authority },
       { executionId, executionAttemptId, timeoutMs: 10_000 },
     );
@@ -205,6 +207,7 @@ describe('R8: stable delivery replay', () => {
     // Second reconcile — worker endpoint is still active (setup quiescence in progress).
     // Result is either 'received' (stable replay) or 'evidence-complete' (if report already landed).
     const reconcile2 = await reconcileAttemptCancellation(
+      authoritySide.bus.own('root'),
       { bus: authoritySide.bus, authority: authoritySide.attempt.authority },
       { executionId, executionAttemptId, timeoutMs: 10_000 },
     );
@@ -235,6 +238,7 @@ describe('R8: stable delivery replay', () => {
 
     // Third reconcile after completion must return evidence-complete.
     const reconcile3 = await reconcileAttemptCancellation(
+      authoritySide.bus.own('root'),
       { bus: authoritySide.bus, authority: authoritySide.attempt.authority },
       { executionId, executionAttemptId, timeoutMs: 5_000 },
     );
@@ -278,6 +282,7 @@ describe('R8: stable delivery replay', () => {
     });
 
     await reconcileAttemptCancellation(
+      authoritySide.bus.own('root'),
       { bus: authoritySide.bus, authority: authoritySide.attempt.authority },
       { executionId, executionAttemptId, timeoutMs: 10_000 },
     );
@@ -349,6 +354,7 @@ describe('R8: stable delivery replay', () => {
     });
 
     const reconcileResult = await reconcileAttemptCancellation(
+      side.bus.own('root'),
       { bus: side.bus, authority },
       { executionId, executionAttemptId, timeoutMs: 10_000 },
     );
@@ -439,13 +445,17 @@ describe('R9: stale / misrouted / late delivery', () => {
       runtimeGeneration: runtimeGeneration + 1,
       cancellation: controlState!.cancellation!,
     };
-    const response = await authoritySide.bus.request(ExecutionAttemptSubjects.control.deliver, staleDelivery, {
-      timeout: 5_000,
-    });
+    const response = await authoritySide.bus.request(
+      authoritySide.bus.own('root'),
+      ExecutionAttemptSubjects.control.deliver,
+      staleDelivery,
+      { timeout: 5_000 },
+    );
     expect(response).toMatchObject({ decision: 'refused', reason: 'stale-generation' });
 
     // Worker is unaffected — setup is still running; reconcile the real cancel to let it finish.
     const realReconcile = await reconcileAttemptCancellation(
+      authoritySide.bus.own('root'),
       { bus: authoritySide.bus, authority: authoritySide.attempt.authority },
       { executionId, executionAttemptId, timeoutMs: 10_000 },
     );
@@ -506,11 +516,19 @@ describe('R9: stale / misrouted / late delivery', () => {
       cancellation: controlState!.cancellation!,
     };
     await expect(
-      authoritySide.bus.request(ExecutionAttemptSubjects.control.deliver, wrongDelivery, { timeout: 500 }),
+      authoritySide.bus.request(
+        authoritySide.bus.own('root'),
+        ExecutionAttemptSubjects.control.deliver,
+        wrongDelivery,
+        {
+          timeout: 500,
+        },
+      ),
     ).rejects.toThrow();
 
     // Properly cancel so the worker can exit.
     await reconcileAttemptCancellation(
+      authoritySide.bus.own('root'),
       { bus: authoritySide.bus, authority: authoritySide.attempt.authority },
       { executionId, executionAttemptId, timeoutMs: 10_000 },
     );
@@ -558,6 +576,7 @@ describe('R9: stale / misrouted / late delivery', () => {
 
     // Reconcile: the worker endpoint is gone; delivery times out.
     const lateReconcile = await reconcileAttemptCancellation(
+      authoritySide.bus.own('root'),
       { bus: authoritySide.bus, authority: authoritySide.attempt.authority },
       { executionId, executionAttemptId, timeoutMs: 1_500 },
     );
@@ -646,6 +665,7 @@ describe('R10: report and outcome ACK are independent; orderly shutdown drains r
     });
 
     const reconcileResult = await reconcileAttemptCancellation(
+      side.bus.own('root'),
       { bus: side.bus, authority },
       { executionId, executionAttemptId, timeoutMs: 10_000 },
     );
@@ -725,6 +745,7 @@ describe('R10: report and outcome ACK are independent; orderly shutdown drains r
     });
 
     const reconcileResult = await reconcileAttemptCancellation(
+      side.bus.own('root'),
       { bus: side.bus, authority },
       { executionId, executionAttemptId, timeoutMs: 10_000 },
     );
@@ -792,6 +813,7 @@ describe('R10: report and outcome ACK are independent; orderly shutdown drains r
     });
 
     const reconcileResult = await reconcileAttemptCancellation(
+      side.bus.own('root'),
       { bus: side.bus, authority },
       { executionId, executionAttemptId, timeoutMs: 10_000 },
     );
@@ -870,6 +892,7 @@ describe('R11: listener and connection cleanup after run', () => {
     });
 
     await reconcileAttemptCancellation(
+      authoritySide.bus.own('root'),
       { bus: authoritySide.bus, authority: authoritySide.attempt.authority },
       { executionId, executionAttemptId, timeoutMs: 10_000 },
     );
@@ -883,6 +906,7 @@ describe('R11: listener and connection cleanup after run', () => {
 
     // A subsequent reconcile must return evidence-complete (not a stale runtime answer).
     const followUpReconcile = await reconcileAttemptCancellation(
+      authoritySide.bus.own('root'),
       { bus: authoritySide.bus, authority: authoritySide.attempt.authority },
       { executionId, executionAttemptId, timeoutMs: 2_000 },
     );
@@ -969,6 +993,7 @@ describe('R12: workspace directory is preserved after cancel', () => {
     });
 
     await reconcileAttemptCancellation(
+      authoritySide.bus.own('root'),
       { bus: authoritySide.bus, authority: authoritySide.attempt.authority },
       { executionId, executionAttemptId, timeoutMs: 10_000 },
     );
@@ -1043,6 +1068,7 @@ describe('SQLite recovery: evidence persists across database restart', () => {
       });
 
       await reconcileAttemptCancellation(
+        authoritySide.bus.own('root'),
         { bus: authoritySide.bus, authority: authoritySide.attempt.authority },
         { executionId, executionAttemptId, timeoutMs: 10_000 },
       );
@@ -1082,6 +1108,7 @@ describe('SQLite recovery: evidence persists across database restart', () => {
       const freshBus = createBusInstance();
       freshBus.registerNamespaces([...FrameworkContractNamespaces, ...FrameworkStorageNamespaces]);
       const freshReconcile = await reconcileAttemptCancellation(
+        freshBus.own('root'),
         { bus: freshBus, authority: freshAuthority },
         { executionId, executionAttemptId, timeoutMs: 1_000 },
       );

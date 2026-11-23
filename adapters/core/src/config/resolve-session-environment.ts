@@ -1,5 +1,6 @@
 import type { IMakaioBus } from '@makaio/bus-core';
 import type { ClientExecutionContext } from '@makaio/contracts/client';
+import type { CallContext } from '@makaio/core';
 import { resolveClientBinary } from '@makaio/subsystem-client';
 import { cleanEnvForAdapter } from '../utils/cleanEnvForAdapter.js';
 
@@ -72,10 +73,14 @@ export interface SessionEnvironmentResult {
  * delivery. Lease keys are connector-private capabilities: the same names are
  * removed from the shared view regardless of which environment source supplied
  * them, while the connector view still receives the scrubbed lease values.
+ * @param call - Call context of the message requesting environment resolution
  * @param options - Session environment resolution options
  * @returns Binary execution context and merged connector/context environments
  */
-export async function resolveSessionEnvironment(options: SessionEnvironmentOptions): Promise<SessionEnvironmentResult> {
+export async function resolveSessionEnvironment(
+  call: CallContext,
+  options: SessionEnvironmentOptions,
+): Promise<SessionEnvironmentResult> {
   const {
     globalBus,
     clientId,
@@ -92,7 +97,7 @@ export async function resolveSessionEnvironment(options: SessionEnvironmentOptio
     if (globalBus === undefined) {
       throw new Error('Client binary resolution requires the adapter runtime global bus.');
     }
-    resolvedBinary = await resolveClientBinary(globalBus, clientId);
+    resolvedBinary = await resolveClientBinary(call, globalBus, clientId);
   }
   const sharedEnv: Record<string, string> = {
     ...baseEnv,

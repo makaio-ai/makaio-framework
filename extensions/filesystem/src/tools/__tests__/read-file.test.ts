@@ -4,6 +4,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { describe, expect, it } from 'vitest';
 import { createMakaioContext } from '@makaio/core';
+import { createTestCall } from '@makaio/test-utils';
 import { FILE_ACCESS_RULES_KEY } from '../../types.js';
 import { readFileTool } from '../read-file.js';
 import { useTempDir } from './test-helpers.js';
@@ -23,7 +24,7 @@ describe('read_file tool containment', () => {
       constraints: { [FILE_ACCESS_RULES_KEY]: { allowedDirectories: [allowedDir], isDenied: () => false } },
     });
 
-    const result = await readFileTool.execute({ path: allowedPath }, context);
+    const result = await readFileTool.execute({ path: allowedPath }, { ...context, call: createTestCall() });
 
     expect(result).toMatchObject({ success: true, data: { content: 'inside content' } });
   });
@@ -41,7 +42,7 @@ describe('read_file tool containment', () => {
       constraints: { [FILE_ACCESS_RULES_KEY]: { allowedDirectories: [allowedDir], isDenied: () => false } },
     });
 
-    const result = await readFileTool.execute({ path: escapedPath }, context);
+    const result = await readFileTool.execute({ path: escapedPath }, { ...context, call: createTestCall() });
 
     expect(result).toMatchObject({ success: false, error: { code: 'PERMISSION_DENIED' } });
     expect(JSON.stringify(result)).not.toContain('outside secret');
@@ -64,7 +65,7 @@ describe('read_file tool containment', () => {
       },
     });
 
-    const result = await readFileTool.execute({ path: aliasPath }, context);
+    const result = await readFileTool.execute({ path: aliasPath }, { ...context, call: createTestCall() });
 
     expect(result).toMatchObject({ success: false, error: { code: 'PERMISSION_DENIED' } });
     expect(JSON.stringify(result)).not.toContain('ignored secret');
@@ -76,7 +77,7 @@ describe('read_file tool containment', () => {
     await fs.writeFile(filePath, 'too large');
     const context = createMakaioContext({ cwd: tempDir, constraints: { maxFileSize: 3 } });
 
-    const result = await readFileTool.execute({ path: filePath }, context);
+    const result = await readFileTool.execute({ path: filePath }, { ...context, call: createTestCall() });
 
     expect(result).toMatchObject({ success: false, error: { code: 'VALIDATION_FAILED' } });
     expect(JSON.stringify(result)).not.toContain('too large');
@@ -88,7 +89,7 @@ describe('read_file tool containment', () => {
     await execFileAsync('mkfifo', [fifoPath]);
     const context = createMakaioContext({ cwd: tempDir });
 
-    const result = await readFileTool.execute({ path: fifoPath }, context);
+    const result = await readFileTool.execute({ path: fifoPath }, { ...context, call: createTestCall() });
 
     expect(result).toMatchObject({ success: false, error: { code: 'VALIDATION_FAILED' } });
   });

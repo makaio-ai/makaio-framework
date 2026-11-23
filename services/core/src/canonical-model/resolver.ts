@@ -3,6 +3,7 @@ import type {
   CanonicalModelResolvedSelection,
   ResolvableCanonicalModel,
 } from '@makaio/contracts';
+import type { CallContext } from '@makaio/core';
 import type { BindingRecord } from '../adapter-subsystem/index.js';
 import type { CanonicalModelResolverDeps } from './resolver-deps.js';
 import { CanonicalModelResolutionError } from './errors.js';
@@ -27,28 +28,31 @@ export class CanonicalModelResolver {
    * Resolve a parsed canonical model to a concrete adapter selection.
    * @param parsed - The parsed canonical model ref
    * @param _context - Optional resolution context reserved for future framework seams
+   * @param call - Call context of the message being handled; every lookup is sent with it
    * @returns Resolved adapter selection
    * @throws CanonicalModelResolutionError when resolution fails
    */
   public async resolve(
     parsed: ResolvableCanonicalModel,
-    _context?: AgentResolutionContext,
+    _context: AgentResolutionContext | undefined,
+    call: CallContext,
   ): Promise<ResolvedSelection> {
     switch (parsed.kind) {
       case 'bare':
-        return this.resolveBare(parsed.model);
+        return this.resolveBare(call, parsed.model);
       case 'qualified':
-        return this.resolveQualified(parsed.segment1, parsed.segment2, parsed.model);
+        return this.resolveQualified(call, parsed.segment1, parsed.segment2, parsed.model);
     }
   }
 
   /**
    * Resolve a bare model name via the default chain.
+   * @param call - Call context of the message being handled
    * @param model - Verbatim model identifier
    * @returns Adapter resolution for the matching model
    */
-  private async resolveBare(model: string): Promise<ResolvedSelection> {
-    const result = await this.deps.resolveDefaultModelTarget(model);
+  private async resolveBare(call: CallContext, model: string): Promise<ResolvedSelection> {
+    const result = await this.deps.resolveDefaultModelTarget(call, model);
 
     switch (result.kind) {
       case 'resolved':
@@ -76,35 +80,39 @@ export class CanonicalModelResolver {
 
   /**
    * Resolve a qualified model reference with one or two routing segments.
+   * @param call - Call context of the message being handled
    * @param segment1 - First routing segment (lowercased by parser)
    * @param segment2 - Second routing segment when present (lowercased by parser)
    * @param model - Verbatim model name after `::`
    * @returns Adapter resolution for the matching target
    */
   private async resolveQualified(
+    call: CallContext,
     segment1: string,
     segment2: string | undefined,
     model: string,
   ): Promise<ResolvedSelection> {
     if (segment2 !== undefined) {
-      return this.resolveQualifiedTwoSegments(segment1, segment2, model);
+      return this.resolveQualifiedTwoSegments(call, segment1, segment2, model);
     }
-    return this.resolveQualifiedOneSegment(segment1, model);
+    return this.resolveQualifiedOneSegment(call, segment1, model);
   }
 
   /**
    * Resolve a two-segment qualified reference: `adapter/provider::model`.
+   * @param call - Call context of the message being handled
    * @param adapterSegment - Adapter name segment (lowercased)
    * @param providerSegment - Provider segment: config name or definition ID
    * @param model - Verbatim model name
    * @returns Adapter resolution with the verified adapter + provider + model
    */
   private async resolveQualifiedTwoSegments(
+    call: CallContext,
     adapterSegment: string,
     providerSegment: string,
     model: string,
   ): Promise<ResolvedSelection> {
-    const enabledAdapters = await this.deps.listEnabledAdapterNames();
+    const enabledAdapters = await this.deps.listEnabledAdapterNames(call);
     if (!enabledAdapters.includes(adapterSegment)) {
       throw new CanonicalModelResolutionError(
         `Adapter "${adapterSegment}" is not enabled or does not exist.`,
@@ -112,22 +120,27 @@ export class CanonicalModelResolver {
       );
     }
 
-    const configId = await this.resolveProviderSegment(providerSegment, adapterSegment, enabledAdapters);
+    const configId = await this.resolveProviderSegment(call, providerSegment, adapterSegment, enabledAdapters);
 
     return { kind: 'adapter', adapterName: adapterSegment, providerConfigId: configId, model };
   }
 
   /**
    * Resolve a single-segment qualified reference: `segment::model`.
+   * @param call - Call context of the message being handled
    * @param segment - The single routing segment (lowercased)
    * @param model - Verbatim model name
    * @returns Adapter resolution using the matched adapter or provider
    */
-  private async resolveQualifiedOneSegment(segment: string, model: string): Promise<ResolvedSelection> {
-    const enabledAdapters = await this.deps.listEnabledAdapterNames();
+  private async resolveQualifiedOneSegment(
+    call: CallContext,
+    segment: string,
+    model: string,
+  ): Promise<ResolvedSelection> {
+    const enabledAdapters = await this.deps.listEnabledAdapterNames(call);
 
     if (enabledAdapters.includes(segment)) {
-      const binding = await this.deps.getDefaultBinding(segment);
+      const binding = await this.deps.getDefaultBinding(call, segment);
       if (!binding) {
         throw new CanonicalModelResolutionError(
           `Adapter "${segment}" has no enabled provider binding. Configure or enable a provider binding first.`,
@@ -142,9 +155,9 @@ export class CanonicalModelResolver {
       };
     }
 
-    const configByName = await this.deps.findProviderConfigByName(segment);
+    const configByName = await this.deps.findProviderConfigByName(call, segment);
     if (configByName) {
-      const binding = await this.pickBindingForConfig(configByName.id, enabledAdapters);
+      const binding = await this.pickBindingForConfig(call, configByName.id, enabledAdapters);
       return {
         kind: 'adapter',
         adapterName: binding.adapterName,
@@ -153,16 +166,16 @@ export class CanonicalModelResolver {
       };
     }
 
-    const definition = await this.deps.findProviderDefinition(segment, enabledAdapters);
+    const definition = await this.deps.findProviderDefinition(call, segment, enabledAdapters);
     if (definition) {
-      const config = await this.deps.findDefaultConfigForDefinition(definition.id);
+      const config = await this.deps.findDefaultConfigForDefinition(call, definition.id);
       if (!config) {
         throw new CanonicalModelResolutionError(
           `Provider definition "${segment}" exists but has no configured provider config. Create a provider config first.`,
           'provider-not-found',
         );
       }
-      const binding = await this.pickBindingForConfig(config.id, enabledAdapters);
+      const binding = await this.pickBindingForConfig(call, config.id, enabledAdapters);
       return { kind: 'adapter', adapterName: binding.adapterName, providerConfigId: config.id, model };
     }
 
@@ -174,25 +187,27 @@ export class CanonicalModelResolver {
 
   /**
    * Resolve a provider segment (second routing segment) to a provider config ID.
+   * @param call - Call context of the message being handled
    * @param providerSegment - Provider routing segment (lowercased)
    * @param adapterName - Adapter name already validated as enabled
    * @param enabledAdapters - Enabled adapter names already loaded by the caller
    * @returns The resolved provider config ID
    */
   private async resolveProviderSegment(
+    call: CallContext,
     providerSegment: string,
     adapterName: string,
     enabledAdapters?: readonly string[],
   ): Promise<string> {
-    const configByName = await this.deps.findProviderConfigByName(providerSegment);
+    const configByName = await this.deps.findProviderConfigByName(call, providerSegment);
     if (configByName) {
-      await this.requireBindingForAdapterAndConfig(adapterName, configByName.id, providerSegment);
+      await this.requireBindingForAdapterAndConfig(call, adapterName, configByName.id, providerSegment);
       return configByName.id;
     }
 
-    const definition = await this.deps.findProviderDefinition(providerSegment, enabledAdapters);
+    const definition = await this.deps.findProviderDefinition(call, providerSegment, enabledAdapters);
     if (definition) {
-      const config = await this.deps.findConfigForDefinitionAndAdapter(definition.id, adapterName);
+      const config = await this.deps.findConfigForDefinitionAndAdapter(call, definition.id, adapterName);
       if (!config) {
         throw new CanonicalModelResolutionError(
           `Provider definition "${providerSegment}" has no enabled config bound to adapter "${adapterName}". Create a provider config and binding first.`,
@@ -210,17 +225,19 @@ export class CanonicalModelResolver {
 
   /**
    * Verify that a binding exists between the given adapter and provider config.
+   * @param call - Call context of the message being handled
    * @param adapterName - Adapter name to verify
    * @param configId - Provider config ID to verify
    * @param providerLabel - Human-readable label for the provider
    * @returns Void on success
    */
   private async requireBindingForAdapterAndConfig(
+    call: CallContext,
     adapterName: string,
     configId: string,
     providerLabel: string,
   ): Promise<void> {
-    const bindings = await this.deps.listBindingsForConfig(configId);
+    const bindings = await this.deps.listBindingsForConfig(call, configId);
     const hasBinding = bindings.some((binding) => binding.adapterName === adapterName);
     if (!hasBinding) {
       throw new CanonicalModelResolutionError(
@@ -232,12 +249,17 @@ export class CanonicalModelResolver {
 
   /**
    * Pick the best enabled binding for a provider config.
+   * @param call - Call context of the message being handled
    * @param configId - Provider config ID to find bindings for
    * @param enabledAdapters - Adapter names currently enabled for resolution
    * @returns The preferred binding record among enabled adapters
    */
-  private async pickBindingForConfig(configId: string, enabledAdapters: readonly string[]): Promise<BindingRecord> {
-    const allBindings = await this.deps.listBindingsForConfig(configId);
+  private async pickBindingForConfig(
+    call: CallContext,
+    configId: string,
+    enabledAdapters: readonly string[],
+  ): Promise<BindingRecord> {
+    const allBindings = await this.deps.listBindingsForConfig(call, configId);
     const bindings = allBindings.filter((binding) => enabledAdapters.includes(binding.adapterName));
     if (bindings.length === 0) {
       throw new CanonicalModelResolutionError(

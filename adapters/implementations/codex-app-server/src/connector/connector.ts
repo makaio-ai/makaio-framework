@@ -17,7 +17,13 @@ import { CodexAppServerThread } from '../thread.js';
 import { CodexAppServerTurn } from '../turn.js';
 import type { JsonRpcClient } from '../utils/jsonRpcClient.js';
 import { type CodexAppServerConfig, type ApprovalPolicy, type SandboxMode, type ReasoningEffort } from './types.js';
-import { handleDynamicToolCallApprovalRequest, type ApprovalContext } from './approval-handlers.js';
+import { handleDynamicToolCallApprovalRequest } from './approval-handlers.js';
+import {
+  resolveCodexTurnSettings,
+  resolveSystemPromptText,
+  TurnOrigin,
+  type CodexTurnSettings,
+} from './turn-origin.js';
 import { registerNotificationHandlers, registerServerRequestHandler } from './client-handlers.js';
 import {
   type DynamicToolCallCacheEntry,
@@ -73,14 +79,18 @@ export class CodexAppServerConnector extends AIAgentConnector<CodexAppServerBus>
     promise: Promise<string>;
     resolve: (threadId: string) => void;
   };
-  private readonly _approvalPolicy?: ApprovalPolicy;
-  private readonly _sandboxMode?: SandboxMode;
-  private readonly _reasoningEffort?: ReasoningEffort;
+  private readonly settings: CodexTurnSettings;
   private readonly commandInfo = new CommandInfoRegistry();
   private readonly dynamicToolCallByItemId = new Map<string, DynamicToolCallCacheEntry>();
   private disabledNativeTools: ReadonlySet<string> = new Set();
   /** Private connector delivery retained only until this connector closes. */
   private accountLogin: CodexApiKeyAccountLogin | undefined;
+  /** Decides the operation of every provider callback at ingress and binds its emitter. */
+  private readonly origin = new TurnOrigin(
+    () => this.pendingMessageHandle,
+    this.emit.bind(this),
+    this.emitObserved.bind(this),
+  );
 
   /** Stable contexts passed to connection-manager and turn-flow-handlers; state accessed via closures. */
   private readonly connCtx: ConnectionManagerContext;
@@ -94,15 +104,9 @@ export class CodexAppServerConnector extends AIAgentConnector<CodexAppServerBus>
     super({ ...baseConfig, env: baseConfig.env ?? {} });
     this.accountLogin = resolveCodexApiKeyAccountLogin(adapterAuth);
 
-    const fullConfig = config as CodexAppServerConfig & {
-      providerConfig?: { approvalPolicy?: string; sandboxMode?: string; reasoningEffort?: string };
-    };
-    this._approvalPolicy = (fullConfig.providerConfig?.approvalPolicy as ApprovalPolicy) ?? fullConfig.approvalPolicy;
-    this._sandboxMode = (fullConfig.providerConfig?.sandboxMode as SandboxMode) ?? fullConfig.sandboxMode;
-    this._reasoningEffort =
-      (fullConfig.providerConfig?.reasoningEffort as ReasoningEffort) ?? fullConfig.reasoningEffort;
+    this.settings = resolveCodexTurnSettings(config);
     // Sync base-class field with the resolved value (providerConfig may override config.reasoningEffort).
-    this.currentReasoningEffort = this._reasoningEffort;
+    this.currentReasoningEffort = this.settings.reasoningEffort;
 
     // Store injected test doubles; subprocess creation is deferred to initializeConnection().
     this._injectedJsonRpcClient = config.jsonRpcClient;
@@ -162,19 +166,14 @@ export class CodexAppServerConnector extends AIAgentConnector<CodexAppServerBus>
   private buildTurnFlowContext(config: CodexAppServerConfig): TurnFlowContext {
     return {
       getCurrentTurn: () => this.currentTurn,
-      setCurrentTurn: (turn) => {
-        this.currentTurn = turn;
-      },
+      setCurrentTurn: (turn) => (this.currentTurn = turn),
+      unfinishedProviderTurnIds: new Set(),
       getThread: () => this.thread,
-      setThread: (thread) => {
-        this.thread = thread;
-      },
+      setThread: (thread) => (this.thread = thread),
       getAgentMessageContent: () => this.agentMessageContent,
       setAgentMessageContent: (content) => (this.agentMessageContent = content),
       getPendingMessageHandle: () => this.pendingMessageHandle,
-      setPendingMessageHandle: (handle) => {
-        this.pendingMessageHandle = handle;
-      },
+      setPendingMessageHandle: (handle) => (this.pendingMessageHandle = handle),
       setLastResult: (result) => {
         this.lastResult = result;
       },
@@ -188,7 +187,7 @@ export class CodexAppServerConnector extends AIAgentConnector<CodexAppServerBus>
       },
       messageQueue: this.messageQueue,
       getJsonRpcClient: () => this.getJsonRpcClient(),
-      emit: this.emit.bind(this),
+      ...this.origin.emitters,
       updateProcessingState: this.updateProcessingState.bind(this),
       agentId: this.agentId,
       adapterId: this.adapterId,
@@ -197,9 +196,9 @@ export class CodexAppServerConnector extends AIAgentConnector<CodexAppServerBus>
       globalBus: this.globalBus,
       getModel: () => this.model,
       getReasoningEffort: () => this.currentReasoningEffort,
-      getApprovalPolicy: () => this._approvalPolicy,
-      getSandboxMode: () => this._sandboxMode,
-      resolveSystemPrompt: () => this.resolveSystemPrompt(),
+      getApprovalPolicy: () => this.settings.approvalPolicy,
+      getSandboxMode: () => this.settings.sandboxMode,
+      resolveSystemPrompt: () => resolveSystemPromptText(this.systemPrompt),
       cwd: this.cwd,
       allowedTools: this.config.allowedTools,
       disallowedTools: this.config.disallowedTools,
@@ -209,20 +208,15 @@ export class CodexAppServerConnector extends AIAgentConnector<CodexAppServerBus>
   }
 
   public get approvalPolicy(): ApprovalPolicy | undefined {
-    return this._approvalPolicy;
+    return this.settings.approvalPolicy;
   }
 
   public get sandboxMode(): SandboxMode | undefined {
-    return this._sandboxMode;
+    return this.settings.sandboxMode;
   }
 
   public get reasoningEffort(): ReasoningEffort | undefined {
-    return this._reasoningEffort;
-  }
-
-  private resolveSystemPrompt(): string | null {
-    if (this.systemPrompt === undefined) return null;
-    return typeof this.systemPrompt === 'string' ? this.systemPrompt : this.systemPrompt.content;
+    return this.settings.reasoningEffort;
   }
 
   private enqueueNotification(handler: () => Promise<void>): void {
@@ -245,9 +239,15 @@ export class CodexAppServerConnector extends AIAgentConnector<CodexAppServerBus>
     registerNotificationHandlers({
       client,
       enqueueNotification: this.enqueueNotification.bind(this),
-      onThreadStarted: (n: ThreadStartedNotification) => onThreadStarted(tfCtx, n),
+      onThreadStarted: (call, n: ThreadStartedNotification) => onThreadStarted(call, tfCtx, n),
       consumeTurnNumber: this.consumeTurnNumber.bind(this),
       getCurrentTurn: () => this.currentTurn,
+      ...this.origin.notificationHooks,
+      publishTurnAssociation: (turnId) => {
+        this.origin.publish(turnId);
+        tfCtx.unfinishedProviderTurnIds.add(turnId);
+      },
+      callForTurn: (turnId) => this.origin.handleFor(turnId)?.call ?? this.globalBus.own('observer'),
       emit: this.emit.bind(this),
       commandExecutionByItemId: this.commandInfo.byItemId,
       dynamicToolCallByItemId: this.dynamicToolCallByItemId,
@@ -256,7 +256,7 @@ export class CodexAppServerConnector extends AIAgentConnector<CodexAppServerBus>
         this.agentMessageContent += delta;
       },
       setAgentMessageContent: tfCtx.setAgentMessageContent,
-      onTurnCompleted: (n: TurnCompletedNotification) => onTurnCompleted(tfCtx, n),
+      onTurnCompleted: (n: TurnCompletedNotification, handle) => onTurnCompleted(tfCtx, n, handle),
       getThread: () => this.thread,
       handleAsyncError: (error) => this.handleError(error),
       onCommandInfoReady: (itemId, info) => this.commandInfo.notifyReady(itemId, info),
@@ -266,7 +266,8 @@ export class CodexAppServerConnector extends AIAgentConnector<CodexAppServerBus>
       agentId: this.agentId,
       cwd: this.cwd ?? '',
       commandExecutionByItemId: this.commandInfo.byItemId,
-      requestToolApproval: this.requestToolApproval.bind(this) as ApprovalContext['requestToolApproval'],
+      requestToolApproval: this.requestToolApproval.bind(this),
+      handleForTurn: this.origin.notificationHooks.handleForTurn,
       handleError: this.handleError.bind(this),
       getDisabledNativeTools: () => this.disabledNativeTools,
       handleDynamicToolCallRequest: this.handleDynamicToolCallRequest.bind(this),
@@ -278,13 +279,13 @@ export class CodexAppServerConnector extends AIAgentConnector<CodexAppServerBus>
   private async handleDynamicToolCallRequest(
     params: DynamicToolCallServerRequest['params'],
   ): Promise<DynamicToolCallResponse> {
+    // One lookup at request ingress serves the approval and the lifecycle emission of this request.
+    const handle = this.origin.handleFor(params.turnId);
     return handleDynamicToolCallApprovalRequest(params, {
       bus: this.globalBus,
-      requestToolApproval: this.requestToolApproval.bind(this) as (
-        subject: unknown,
-        payload: unknown,
-      ) => Promise<{ decision: 'accept' | 'decline'; message?: string }>,
-      emit: this.emit.bind(this),
+      requestToolApproval: this.requestToolApproval.bind(this),
+      handleForTurn: () => handle,
+      emit: this.origin.bindEmit(handle),
       sessionId: this.sessionId,
       adapterSessionId: this.adapterSessionId,
       agentId: this.agentId,
@@ -296,17 +297,15 @@ export class CodexAppServerConnector extends AIAgentConnector<CodexAppServerBus>
     });
   }
 
-  // Eager warmup path: connects and starts the thread without enqueuing a
-  // message. sendMessage() carries the same idempotent guards as lazy fallback,
-  // so calling initialize() followed by sendMessage() is safe (no double-init).
-  public async initialize(options?: ConnectorStartOptions): Promise<void> {
-    this.captureSystemPrompt(options?.systemPrompt);
-    if (!this.isConnected) await initializeConnection(this.connCtx, this.initConnectionInflight);
-    if (!this.thread) await startThread(this.turnCtx);
+  // Eager warmup; sendMessage() shares the connection/thread guards, so subsequent sends do not initialize twice.
+  public async initialize(options: ConnectorStartOptions): Promise<void> {
+    this.captureSystemPrompt(options.systemPrompt);
+    if (!this.isConnected) await initializeConnection(options.call, this.connCtx, this.initConnectionInflight);
+    if (!this.thread) await startThread(options.call, this.turnCtx);
   }
 
-  public async start(message: NormalizedMessageInput, options?: ConnectorStartOptions): Promise<AgentStartResult> {
-    this.captureSystemPrompt(options?.systemPrompt);
+  public async start(message: NormalizedMessageInput, options: ConnectorStartOptions): Promise<AgentStartResult> {
+    this.captureSystemPrompt(options.systemPrompt);
     const messageHandle = await this.sendMessage(message, options);
 
     return {
@@ -334,9 +333,9 @@ export class CodexAppServerConnector extends AIAgentConnector<CodexAppServerBus>
 
   public async sendMessage(
     message: NormalizedMessageInput,
-    options?: ConnectorSendMessageOptions,
+    options: ConnectorSendMessageOptions,
   ): Promise<MessageHandle> {
-    if (!this.isConnected) await initializeConnection(this.connCtx, this.initConnectionInflight);
+    if (!this.isConnected) await initializeConnection(options.call, this.connCtx, this.initConnectionInflight);
     // Suppress before startThread: that function reads turnCtx.resumeAdapterSessionId directly;
     // options is not forwarded to it, so clearing it here is the only point suppression applies.
     // The clear is deliberately NOT restored when startThread rejects: the executor announced the
@@ -344,8 +343,8 @@ export class CodexAppServerConnector extends AIAgentConnector<CodexAppServerBus>
     // advertising the old thread. Resurrecting the target would let a later dispatch resume a
     // thread whose abandonment was announced, the bug class this guard closed. Recovery after a
     // failed fresh start is the service tier's decision (fresh-with-history), not the connector's.
-    if (!this.thread && options?.useNativeResume === false) this.turnCtx.resumeAdapterSessionId = undefined;
-    if (!this.thread) await startThread(this.turnCtx);
+    if (!this.thread && options.useNativeResume === false) this.turnCtx.resumeAdapterSessionId = undefined;
+    if (!this.thread) await startThread(options.call, this.turnCtx);
 
     const handle = this.createMessageHandle(message, options);
     const wasIdle = this.getProcessingState() === 'idle';
@@ -354,7 +353,7 @@ export class CodexAppServerConnector extends AIAgentConnector<CodexAppServerBus>
 
     this.messageQueue.enqueue(handle);
 
-    const noActiveTurn = !this.currentTurn || this.currentTurn.isCompleted();
+    const noActiveTurn = !this.currentTurn;
     if (noActiveTurn) await processQueue(this.turnCtx);
 
     return handle;

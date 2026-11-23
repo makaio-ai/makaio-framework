@@ -15,6 +15,7 @@ import {
   type PreparedAdapterAuthRuntime,
 } from '@makaio/ai-adapters-core/config';
 import { MakaioBus, type ScopedBus } from '@makaio/bus-core';
+import type { CallContext } from '@makaio/core';
 import { CodexAppServerNamespace } from './namespaces/index.js';
 import type { CodexAppServerBus } from './namespaces/index.js';
 import type { CodexAppServerAgent } from './agent.js';
@@ -31,14 +32,18 @@ import {
 } from './test/session-config-fixture.js';
 
 /** Prepare auth through the production seam while retaining the trusted host PATH for global binary discovery.
+ * @param call - Call context of the request that triggers this connector's (re)initialization
  * @param config - Bound conformance connector configuration
  * @returns Prepared connector configuration and its owned client lease
  */
 async function prepareConformanceAuthRuntime<
   TBus extends ScopedBus<string>,
   TConfig extends BaseAgentConnectorConfig<TBus>,
->(config: BoundAdapterRuntimeConfig<TBus, TConfig>): Promise<PreparedAdapterAuthRuntime<TBus, TConfig>> {
-  const prepared = await prepareAdapterAuthRuntime(config);
+>(
+  call: CallContext,
+  config: BoundAdapterRuntimeConfig<TBus, TConfig>,
+): Promise<PreparedAdapterAuthRuntime<TBus, TConfig>> {
+  const prepared = await prepareAdapterAuthRuntime(call, config);
   const hostPath = process.env.PATH;
   if (!hostPath) throw new Error('Codex conformance requires a non-empty host PATH');
   return { ...prepared, config: { ...prepared.config, env: { ...prepared.config.env, PATH: hostPath } } };
@@ -64,7 +69,7 @@ export const createTestConfig = async (
   options?: CreateConformanceTestConfigOptions,
 ): Promise<ConformanceTestConfig<CodexAppServerBus, CodexAppServerConnector, CodexAppServerAgent>> => {
   const { scopedBus } = CodexAppServerNamespace;
-  const bus = await scopedBus();
+  const bus = await scopedBus(MakaioBus);
   const testPreset = resolveConformanceTestPreset({
     adapterName: CodexAppServerAdapterName,
     testProviderDefinitionId: testPresetId,

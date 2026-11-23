@@ -120,7 +120,7 @@ async function createState(): Promise<FixtureState> {
         const sessionDir = path.join(root, ctx.payload.clientId, 'sessions', ctx.payload.leaseId);
         await fs.mkdir(sessionDir, { recursive: true });
         try {
-          const setup = await MakaioBus.request(CodexClientSubjects.sessionConfig.setup, {
+          const setup = await MakaioBus.request(ctx.call, CodexClientSubjects.sessionConfig.setup, {
             sessionDir,
             baseConfigDir: ctx.payload.baseConfigDir ?? sessionDir,
             projectDir: ctx.payload.projectDir,
@@ -153,7 +153,7 @@ async function createState(): Promise<FixtureState> {
         const sessionDir = path.join(root, ctx.payload.clientId, 'sessions', ctx.payload.leaseId);
         const failures: unknown[] = [];
         try {
-          const result = await MakaioBus.request(CodexClientSubjects.sessionConfig.destroy, {
+          const result = await MakaioBus.request(ctx.call, CodexClientSubjects.sessionConfig.destroy, {
             sessionDir,
             platform: resolvePlatform(),
           });

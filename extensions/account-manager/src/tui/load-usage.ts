@@ -2,6 +2,7 @@ import type { Dispatch, SetStateAction } from 'react';
 import { AccountManagerSubjects } from '../bus/namespace.js';
 import type { Account } from '../bus/schemas.js';
 import type { IMakaioBus } from '@makaio/bus-core';
+import type { CallContext } from '@makaio/core';
 import { usageKey, type UsageMap } from './usage-keys.js';
 import type { UsageAwaitingResolutionMap } from './usage-state.js';
 
@@ -28,12 +29,14 @@ export interface LoadUsageDeps {
  * The `loadSeq` token must come from the matching `loadData()` call so stale
  * usage work cannot commit after a newer reload has already advanced the
  * sequence.
+ * @param call - Call of the message or origin that started the load.
  * @param deps - Bus and state setters required to merge usage.
  * @param loadSeq - Sequence token returned by the matching `loadData()` call.
  * @param accountsMap - Accounts to bootstrap usage for.
  * @param isCurrentRun - Guard that returns false on unmount/re-mount.
  */
 export async function loadUsageForAccounts(
+  call: CallContext,
   { bus, canCommitLoad, setUsageByAccount, setUsageAwaitingResolutionByAccount }: LoadUsageDeps,
   loadSeq: number,
   accountsMap: Record<string, Account[]>,
@@ -55,7 +58,7 @@ export async function loadUsageForAccounts(
     accounts.map(async (account) => {
       const key = usageKey(clientId, account.id);
       try {
-        const { usage } = await bus.request(AccountManagerSubjects.usage.get, {
+        const { usage } = await bus.request(call, AccountManagerSubjects.usage.get, {
           clientId,
           accountId: account.id,
         });

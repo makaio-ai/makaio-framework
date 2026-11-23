@@ -154,11 +154,12 @@ describe('ExtensionCoordinator contribution processor lifecycle', () => {
     const bus = createBusInstance();
     const coordinator = new ExtensionCoordinator(bus, { extensionContextBase: TEST_PKG_CTX_BASE });
 
+    const firstActivated = vi.fn<ContributionProcessor['processActivated']>().mockResolvedValue(undefined);
     const firstStopped = vi.fn<NonNullable<ContributionProcessor['processStopped']>>().mockResolvedValue(undefined);
 
     // First processor succeeds — its processStopped must be called on rollback.
     coordinator.registerContributionProcessor({
-      processActivated: async () => undefined,
+      processActivated: firstActivated,
       processStopped: firstStopped,
     });
 
@@ -179,7 +180,12 @@ describe('ExtensionCoordinator contribution processor lifecycle', () => {
 
     // The first processor's stopped callback must have been called during rollback.
     expect(firstStopped).toHaveBeenCalledTimes(1);
-    expect(firstStopped.mock.calls[0]?.[0]).toBe('feature');
+    expect(firstActivated).toHaveBeenCalledWith(
+      'feature',
+      expect.objectContaining({ name: 'feature' }),
+      expect.objectContaining({ bus: expect.any(Object) }),
+    );
+    expect(firstStopped).toHaveBeenCalledWith('feature');
   });
 
   it('marks no-service extensions skipped when contribution activation raises ServiceSkipError', async () => {

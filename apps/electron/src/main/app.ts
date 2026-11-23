@@ -18,7 +18,7 @@ import {
   LOCAL_STEP_STOP_BUDGET_MS,
   resourceStep,
 } from '@makaio/runtime-node';
-import { HostSubjects } from '@makaio/contracts';
+import { HostSubjects, type CallContext } from '@makaio/contracts';
 import { TrayMenuSubjects, type TrayMenuListEntry } from '@makaio/services-core/tray-menu';
 import { LocalNotificationSubjects } from '@makaio/services-core/local-notification/namespace';
 import {
@@ -152,7 +152,8 @@ export function startApp() {
     lifecycle,
     beforeRuntime: [
       resourceStep('window session', async () => {
-        if (windowManager) await saveWindowSession(MakaioBus, windowManager, WINDOW_SESSION_SCOPE);
+        if (windowManager)
+          await saveWindowSession(MakaioBus.own('stop'), MakaioBus, windowManager, WINDOW_SESSION_SCOPE);
       }),
     ],
     afterRuntime: [
@@ -180,10 +181,11 @@ export function startApp() {
    * This is the canonical window creation path — used by startup, tray,
    * navigation handler, and the `window.create` RPC. All bus event emission
    * around window lifecycle is centralised here.
+   * @param call - Call responsible for opening the window.
    * @param options - Window creation options forwarded to WindowManager.
    * @returns The Electron window ID of the created or reused window.
    */
-  function createWindow(options: CreateWindowOptions): number {
+  function createWindow(call: CallContext, options: CreateWindowOptions): number {
     restoreFromBackgroundMode();
     const { windowId, isNew } = windowManager!.createWindow(options);
 
@@ -191,7 +193,7 @@ export function startApp() {
       refreshTrayMenu?.();
       const entry = windowManager!.getWindow(windowId);
       if (entry) {
-        MakaioBus.emit(HostSubjects.window.opened, {
+        MakaioBus.emit(call, HostSubjects.window.opened, {
           windowId,
           registrationId: entry.registrationId,
           params: entry.params,
@@ -204,7 +206,7 @@ export function startApp() {
 
         entry.win.on('closed', () => {
           refreshTrayMenu?.();
-          MakaioBus.emit(HostSubjects.window.closed, {
+          MakaioBus.emit(MakaioBus.own('observer'), HostSubjects.window.closed, {
             windowId,
             registrationId: entry.registrationId,
             params: entry.params,
@@ -359,10 +361,11 @@ export function startApp() {
    *
    * Startup overrides are consumed by `openInitialWindows`; every later
    * default-window affordance must reopen the fallback shell.
+   * @param call - Call responsible for opening the fallback shell.
    * @returns The Electron window ID of the created window.
    */
-  function openDefaultWindow(): number {
-    return createWindow({ registrationId: FRAMEWORK_FALLBACK_WINDOW });
+  function openDefaultWindow(call: CallContext): number {
+    return createWindow(call, { registrationId: FRAMEWORK_FALLBACK_WINDOW });
   }
 
   // Foreground OS events can arrive before WindowManager exists, or while
@@ -372,7 +375,7 @@ export function startApp() {
     isReady: () => windowManager !== null && initialWindowsComplete,
     hasOpenWindows: () => BrowserWindow.getAllWindows().length > 0,
     focusWindow: () => windowManager!.focusWindow(),
-    openDefaultWindow,
+    openDefaultWindow: () => openDefaultWindow(MakaioBus.own('observer')),
     restoreFromBackgroundMode,
   });
 
@@ -390,7 +393,7 @@ export function startApp() {
     if (isOverride) {
       // Environment-driven override (integration tests, CLI launch).
       const customData = resolveInitialCustomData();
-      createWindow({
+      createWindow(MakaioBus.own('start'), {
         registrationId,
         params: Object.keys(customData).length > 0 ? customData : undefined,
       });
@@ -399,20 +402,20 @@ export function startApp() {
 
     let session: Awaited<ReturnType<typeof loadWindowSession>> = null;
     try {
-      session = await loadWindowSession(MakaioBus, WINDOW_SESSION_SCOPE);
+      session = await loadWindowSession(MakaioBus.own('start'), MakaioBus, WINDOW_SESSION_SCOPE);
     } catch (err: unknown) {
       console.warn('[electron] Failed to load window session:', err);
     }
 
     if (!session) {
       // No session to restore — open the fallback shell window.
-      openDefaultWindow();
+      openDefaultWindow(MakaioBus.own('start'));
       return;
     }
 
     for (const entry of session.windows) {
       try {
-        const windowId = createWindow({
+        const windowId = createWindow(MakaioBus.own('start'), {
           registrationId: entry.registrationId,
           params: entry.params,
         });
@@ -440,7 +443,7 @@ export function startApp() {
     // every createWindow call above fails silently. Fall back to the default
     // window so the user always sees at least one window on startup.
     if (windowManager!.listWindows().length === 0) {
-      openDefaultWindow();
+      openDefaultWindow(MakaioBus.own('start'));
     }
   }
 
@@ -531,10 +534,10 @@ export function startApp() {
           windowManager!.focusWindow(id);
         },
         createWindow: (registrationId) => {
-          createWindow({ registrationId });
+          createWindow(MakaioBus.own('observer'), { registrationId });
         },
         onItemClicked: (entry) => {
-          MakaioBus.emit(TrayMenuSubjects.item.clicked, {
+          MakaioBus.emit(MakaioBus.own('observer'), TrayMenuSubjects.item.clicked, {
             packageName: entry.packageName,
             entryId: entry.entryId,
             groupId: entry.groupId,
@@ -544,7 +547,7 @@ export function startApp() {
           });
         },
         openDashboard: () => {
-          MakaioBus.request(HostSubjects.window.openDashboard, {})
+          MakaioBus.request(MakaioBus.own('observer'), HostSubjects.window.openDashboard, {})
             .then((result) => {
               if (result.windowId === null) {
                 console.warn('[electron] Failed to open dashboard from tray menu: no window could be opened');
@@ -560,9 +563,9 @@ export function startApp() {
       // Rapid changed events during boot are bounded by the number of
       // packages (typically 3-5) and settle before Electron subscribes
       // (startAll awaits all registrations). No coalescing needed.
-      const refreshTrayEntries = async (): Promise<void> => {
+      const refreshTrayEntries = async (call: CallContext): Promise<void> => {
         try {
-          const result = await MakaioBus.request(TrayMenuSubjects.list, {});
+          const result = await MakaioBus.request(call, TrayMenuSubjects.list, {});
           trayEntries = result.entries;
           refreshTrayMenu?.();
         } catch (err: unknown) {
@@ -571,12 +574,12 @@ export function startApp() {
       };
 
       busHandlerCleanups.push(
-        MakaioBus.on(TrayMenuSubjects.changed, () => {
-          void refreshTrayEntries();
+        MakaioBus.on(TrayMenuSubjects.changed, (ctx) => {
+          void refreshTrayEntries(ctx.call);
         }),
       );
 
-      await refreshTrayEntries();
+      await refreshTrayEntries(MakaioBus.own('start'));
 
       destroyTray = destroy;
       registerShutdownAndLifecycle();

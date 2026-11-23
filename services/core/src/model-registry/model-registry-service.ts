@@ -1,6 +1,7 @@
 import type { AIModel, ProviderAIModel } from '@makaio/contracts';
 import { ModelRegistryPublicSubjects, type ModelRegistrySupportedModel } from '@makaio/contracts/model-registry';
 import type { IMakaioBus } from '@makaio/bus-core';
+import type { CallContext } from '@makaio/core';
 import { BaseService } from '@makaio/service-base';
 import { ModelRegistrySubjects } from './namespace.js';
 import { type ModelRegistry, type ProviderModelOverride } from './schemas.js';
@@ -214,8 +215,10 @@ export class ModelRegistryService extends BaseService {
       return;
     }
 
+    // The refresh is shared by every joined requester, so it runs under the bus carrier's own context.
+    const call = this.bus.own('shared-work');
     const refreshPromise =
-      this.fetchPromise !== null ? this.awaitActiveFetchForRefresh(this.fetchPromise) : this.runRefresh();
+      this.fetchPromise !== null ? this.awaitActiveFetchForRefresh(call, this.fetchPromise) : this.runRefresh(call);
     this.refreshPromise = refreshPromise;
 
     try {
@@ -229,22 +232,27 @@ export class ModelRegistryService extends BaseService {
 
   /**
    * Await an active registry fetch on behalf of a refresh request.
+   * @param call - Shared-work context of the refresh.
    * @param fetchPromise - Active registry fetch to share with the refresh.
    * @throws Error if the fetcher chain fails or the shared fetch cannot commit.
    */
-  private async awaitActiveFetchForRefresh(fetchPromise: Promise<RegistryFetchResult>): Promise<void> {
+  private async awaitActiveFetchForRefresh(
+    call: CallContext,
+    fetchPromise: Promise<RegistryFetchResult>,
+  ): Promise<void> {
     const result = await fetchPromise;
     if (!result.committed) {
       throw new Error('Model registry refresh completed without committing a registry');
     }
-    await this.emitRegistryChanged();
+    await this.emitRegistryChanged(call);
   }
 
   /**
    * Run the single active forced refresh when no registry fetch is in flight.
+   * @param call - Shared-work context of the refresh.
    * @throws Error if the fetcher chain fails or the refresh cannot commit.
    */
-  private async runRefresh(): Promise<void> {
+  private async runRefresh(call: CallContext): Promise<void> {
     const generation = this.fetchGeneration + 1;
     this.fetchGeneration = generation;
     this.registry = null;
@@ -255,15 +263,16 @@ export class ModelRegistryService extends BaseService {
     if (!result.committed) {
       throw new Error('Model registry refresh completed without committing a registry');
     }
-    await this.emitRegistryChanged();
+    await this.emitRegistryChanged(call);
   }
 
   /**
    * Notify subscribers that the committed model registry changed.
+   * @param call - Shared-work context of the refresh that committed the registry.
    */
-  private async emitRegistryChanged(): Promise<void> {
+  private async emitRegistryChanged(call: CallContext): Promise<void> {
     try {
-      await this.bus.emit(ModelRegistrySubjects.changed, {});
+      await this.bus.emit(call, ModelRegistrySubjects.changed, {});
     } catch (error) {
       console.warn('[ModelRegistryService] Failed to notify model registry change:', error);
     }

@@ -13,34 +13,50 @@ import { registerDrizzleHandlers } from '@makaio/storage-drizzle';
 import type { IMakaioBus } from '@makaio/bus-core';
 import type { MakaioNodeExtension } from '@makaio/contracts';
 import { SupervisorService } from './supervisor-service.js';
+import type { ConnectionCloseObserver } from './terminal-attachment-registry.js';
 import { registerDrizzleSupervisorRuntimeStorage } from './storage/drizzle-handler.js';
 
+/** Manifest name of the native session supervisor package. */
+export const NATIVE_SESSION_SUPERVISOR_PACKAGE_NAME = 'makaio.native-session-supervisor';
+
+/** Options supplied by the host when it builds the supervisor package. */
+export interface NativeSessionSupervisorPackageOptions {
+  /** Observes transport connection closes so terminal attachments of a closed connection are released. */
+  readonly observeConnectionClosed: ConnectionCloseObserver;
+}
+
 /**
- * MakaioExtension manifest for the native session supervisor package.
+ * Build the MakaioExtension manifest for the native session supervisor package.
  *
  * Critical because the supervisor service manages process runtimes that other
  * packages depend on for native CLI attachment.
+ * @param options - Host-supplied seams the supervisor service needs.
+ * @returns The package manifest.
  */
-export const nativeSessionSupervisorPackage: MakaioNodeExtension<IMakaioBus> = {
-  name: 'makaio.native-session-supervisor',
-  displayName: 'Native Session Supervisor',
-  version: '0.1.0',
-  critical: true,
+export function createNativeSessionSupervisorPackage(
+  options: NativeSessionSupervisorPackageOptions,
+): MakaioNodeExtension<IMakaioBus> {
+  return {
+    name: NATIVE_SESSION_SUPERVISOR_PACKAGE_NAME,
+    displayName: 'Native Session Supervisor',
+    version: '0.1.0',
+    critical: true,
 
-  /**
-   * Creates the supervisor service.
-   * @param ctx - Runtime package context.
-   * @returns The supervisor service instance (not yet initialized).
-   */
-  create: (ctx) => new SupervisorService(ctx.bus),
-
-  storage: {
     /**
-     * Registers Drizzle-backed bus storage handlers for supervisor runtimes.
-     * @param bus - The application bus instance.
-     * @param db - The Drizzle database instance.
-     * @returns Cleanup function that unregisters handlers during shutdown.
+     * Creates the supervisor service.
+     * @param ctx - Runtime package context.
+     * @returns The supervisor service instance (not yet initialized).
      */
-    registerHandlers: registerDrizzleHandlers(registerDrizzleSupervisorRuntimeStorage),
-  },
-};
+    create: (ctx) => new SupervisorService(ctx.bus, options.observeConnectionClosed),
+
+    storage: {
+      /**
+       * Registers Drizzle-backed bus storage handlers for supervisor runtimes.
+       * @param bus - The application bus instance.
+       * @param db - The Drizzle database instance.
+       * @returns Cleanup function that unregisters handlers during shutdown.
+       */
+      registerHandlers: registerDrizzleHandlers(registerDrizzleSupervisorRuntimeStorage),
+    },
+  };
+}

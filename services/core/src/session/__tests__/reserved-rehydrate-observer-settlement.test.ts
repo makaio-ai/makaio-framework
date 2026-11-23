@@ -34,8 +34,8 @@ describe('reserved rehydrate observer-first settlement', () => {
     // which is why the attempt records it before it does anything else with the
     // result. Settling the reserved key instead would reuse the attempt's own
     // generation and the case would pass without ever exercising the rule.
-    ctx.registerAdapter(async (agentId) => {
-      await ctx.bus.request(SessionSubjects.ownership.settleMovement, {
+    ctx.registerAdapter(async (call, agentId) => {
+      await ctx.bus.request(call, SessionSubjects.ownership.settleMovement, {
         sessionId: agent.sessionId,
         agentId,
         adapterId: ADAPTER_ID,
@@ -78,8 +78,8 @@ describe('reserved rehydrate observer-first settlement', () => {
   it('leaves an observer-first generation held when the settle response is lost (case 113b)', async () => {
     const agent = await ctx.seedAgent('session-observer-lost', 'agent-observer-lost');
     let observed: AdapterSessionClaimRecord | undefined;
-    ctx.registerAdapter(async (agentId) => {
-      await ctx.bus.request(SessionSubjects.ownership.settleMovement, {
+    ctx.registerAdapter(async (call, agentId) => {
+      await ctx.bus.request(call, SessionSubjects.ownership.settleMovement, {
         sessionId: agent.sessionId,
         agentId,
         adapterId: ADAPTER_ID,

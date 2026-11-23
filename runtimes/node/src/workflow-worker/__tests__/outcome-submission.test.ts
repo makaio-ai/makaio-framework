@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { createBusInstance } from '@makaio/bus-core';
 import { WorkerNamespace, WorkerSubjects } from '@makaio/contracts';
 import type { OutcomeAckDecision, WorkflowRunResult } from '@makaio/contracts';
+import { createTestCall } from '@makaio/test-utils';
 import { submitOutcomeWithAck, OutcomeDeliveryError, DELIVERED_DECISIONS } from '../outcome-submission.js';
 
 // ─────────────────────────────────────────────────────────────
@@ -61,7 +62,7 @@ function makeResult(executionId: string = 'exec-1'): WorkflowRunResult {
 describe('submitOutcomeWithAck', () => {
   it('returns accepted on first attempt', async () => {
     const { bus } = createOutcomeBus({ decisions: ['accepted'] });
-    const decision = await submitOutcomeWithAck(bus, {
+    const decision = await submitOutcomeWithAck(createTestCall(), bus, {
       executionAttemptId: 'a-1',
       executionId: 'exec-1',
       result: makeResult(),
@@ -71,7 +72,7 @@ describe('submitOutcomeWithAck', () => {
 
   it('returns duplicate as a successful delivery', async () => {
     const { bus } = createOutcomeBus({ decisions: ['duplicate'] });
-    const decision = await submitOutcomeWithAck(bus, {
+    const decision = await submitOutcomeWithAck(createTestCall(), bus, {
       executionAttemptId: 'a-1',
       executionId: 'exec-1',
       result: makeResult(),
@@ -84,7 +85,7 @@ describe('submitOutcomeWithAck', () => {
       decisions: ['conflict'],
     });
     await expect(
-      submitOutcomeWithAck(bus, {
+      submitOutcomeWithAck(createTestCall(), bus, {
         executionAttemptId: 'a-1',
         executionId: 'exec-1',
         result: makeResult(),
@@ -99,7 +100,7 @@ describe('submitOutcomeWithAck', () => {
       decisions: ['fenced'],
     });
     await expect(
-      submitOutcomeWithAck(bus, {
+      submitOutcomeWithAck(createTestCall(), bus, {
         executionAttemptId: 'a-1',
         executionId: 'exec-1',
         result: makeResult(),
@@ -113,6 +114,7 @@ describe('submitOutcomeWithAck', () => {
       decisions: ['throw', 'throw', 'accepted'],
     });
     const decision = await submitOutcomeWithAck(
+      createTestCall(),
       bus,
       {
         executionAttemptId: 'a-1',
@@ -131,6 +133,7 @@ describe('submitOutcomeWithAck', () => {
       decisions: ['throw', 'throw', 'accepted'],
     });
     await submitOutcomeWithAck(
+      createTestCall(),
       bus,
       {
         executionAttemptId: 'a-1',
@@ -153,6 +156,7 @@ describe('submitOutcomeWithAck', () => {
       decisions: ['throw', 'accepted'],
     });
     const decision = await submitOutcomeWithAck(
+      createTestCall(),
       bus,
       {
         executionAttemptId: 'a-1',
@@ -177,6 +181,7 @@ describe('submitOutcomeWithAck', () => {
 
     try {
       const submission = submitOutcomeWithAck(
+        createTestCall(),
         bus,
         {
           executionAttemptId: 'a-1',
@@ -206,6 +211,7 @@ describe('submitOutcomeWithAck', () => {
     });
     await expect(
       submitOutcomeWithAck(
+        createTestCall(),
         bus,
         {
           executionAttemptId: 'a-1',
@@ -234,6 +240,7 @@ describe('submitOutcomeWithAck', () => {
     const startTime = Date.now();
     await expect(
       submitOutcomeWithAck(
+        createTestCall(),
         bus,
         {
           executionAttemptId: 'a-1',
@@ -269,6 +276,7 @@ describe('submitOutcomeWithAck', () => {
     const { bus } = createOutcomeBus({ decisions: ['accepted'] });
     await expect(
       submitOutcomeWithAck(
+        createTestCall(),
         bus,
         {
           executionAttemptId: 'a-1',
@@ -288,6 +296,7 @@ describe('submitOutcomeWithAck', () => {
 
     try {
       const submission = submitOutcomeWithAck(
+        createTestCall(),
         bus,
         {
           executionAttemptId: 'a-1',
@@ -315,6 +324,7 @@ describe('submitOutcomeWithAck', () => {
 
     try {
       const submission = submitOutcomeWithAck(
+        createTestCall(),
         bus,
         {
           executionAttemptId: 'a-1',
@@ -352,6 +362,7 @@ describe('submitOutcomeWithAck', () => {
 
     try {
       const submission = submitOutcomeWithAck(
+        createTestCall(),
         bus,
         {
           executionAttemptId: 'a-1',
@@ -383,6 +394,7 @@ describe('submitOutcomeWithAck', () => {
 
     try {
       const submission = submitOutcomeWithAck(
+        createTestCall(),
         bus,
         {
           executionAttemptId: 'a-1',

@@ -16,6 +16,7 @@
  */
 
 import type { IMakaioBus } from '@makaio/bus-core';
+import { createCarrierBus } from '@makaio/bus-core/kernel-api';
 import type {
   ExtensionContext,
   NodeExtensionContext,
@@ -64,6 +65,30 @@ function createStubDataDir(): string {
  */
 export function stubExtensionIdentity(name: string): ExtensionContext['identity'] {
   return { extensionName: name } as ExtensionContext['identity'];
+}
+
+/**
+ * Bind a bus instance to an extension carrier for tests.
+ *
+ * {@link makeStubExtensionContext} and {@link makeStubNodeExtensionContext} place the
+ * bus they are given on the context as is. Pass the result of this helper when the test
+ * needs `ctx.bus.own(...)` and sends to name the extension as caller. The host must be a
+ * real bus instance (for example from `createTestBusInstance`); a mock bus has no kernel
+ * instance to derive a carrier from. This helper lives here because extension tests must
+ * not import the kernel entry point themselves.
+ * @example
+ * ```ts
+ * const ctx = makeStubExtensionContext(makeStubExtensionBus(host, 'x'), {
+ *   identity: stubExtensionIdentity('x'),
+ * });
+ * ctx.bus.own('start'); // caller is extension `x`
+ * ```
+ * @param host - Real bus instance whose context is shared.
+ * @param name - Extension name the carrier represents.
+ * @returns A bus instance bound to the extension `name`.
+ */
+export function makeStubExtensionBus(host: IMakaioBus, name: string): IMakaioBus {
+  return createCarrierBus(host, { kind: 'makaio.extension', id: name });
 }
 
 /**

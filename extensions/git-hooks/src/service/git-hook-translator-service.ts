@@ -11,6 +11,7 @@
  * @packageDocumentation
  */
 
+import type { CallContext } from '@makaio/core';
 import type { IMakaioBus } from '@makaio/bus-core';
 import { GitHookSubjects, registerGitHookEventsProvider, unregisterGitHookEventsProvider } from '@makaio/contracts';
 import type { GitCommitEvent, GitCheckoutEvent } from '@makaio/services-core/git/schemas';
@@ -47,13 +48,13 @@ export class GitHookTranslatorService extends BaseService {
         return;
       }
       if (normalized.kind === 'commit') {
-        await this.emitCommit(normalized.repoPath);
+        await this.emitCommit(ctx.call, normalized.repoPath);
       } else if (normalized.kind === 'checkout') {
-        await this.emitCheckout(normalized.repoPath);
+        await this.emitCheckout(ctx.call, normalized.repoPath);
       } else if (normalized.kind === 'merge') {
-        await this.emitNativeMerge(normalized.repoPath, normalized.squash);
+        await this.emitNativeMerge(ctx.call, normalized.repoPath, normalized.squash);
       } else {
-        await this.emitRewrite(normalized.repoPath, normalized.command, normalized.rewritten);
+        await this.emitRewrite(ctx.call, normalized.repoPath, normalized.command, normalized.rewritten);
       }
     });
 
@@ -61,18 +62,19 @@ export class GitHookTranslatorService extends BaseService {
       ctx.setResult(await this.provider.getCoverage(ctx.payload));
     });
 
-    await registerGitHookEventsProvider(this.bus, this.provider);
+    await registerGitHookEventsProvider(this.bus.own('start'), this.bus, this.provider);
   }
 
   protected async onDestroy(): Promise<void> {
-    await unregisterGitHookEventsProvider(this.bus, this.provider.id);
+    await unregisterGitHookEventsProvider(this.bus.own('stop'), this.bus, this.provider.id);
   }
 
   /**
    * Resolve the latest commit details from git and emit a `git.commit` event.
+   * @param call - Call context of the handled hook message.
    * @param repoPath - Absolute path to the repository root.
    */
-  private async emitCommit(repoPath: string): Promise<void> {
+  private async emitCommit(call: CallContext, repoPath: string): Promise<void> {
     const commitInfo = await gitOutput(['log', '-1', '--format=%H%x00%s%x00%an%x00%ae%x00%aI'], repoPath);
     const branch = await gitOutput(['rev-parse', '--abbrev-ref', 'HEAD'], repoPath);
     const [hash, message, author, email, timestamp] = commitInfo.split('\x00');
@@ -85,7 +87,7 @@ export class GitHookTranslatorService extends BaseService {
       branch,
       timestamp: timestamp ?? new Date().toISOString(),
     };
-    await this.bus.emit(GitSubjects.commit, payload);
+    await this.bus.emit(call, GitSubjects.commit, payload);
   }
 
   /**
@@ -93,16 +95,17 @@ export class GitHookTranslatorService extends BaseService {
    *
    * Git's `post-checkout` hook provides previous/new HEAD values, not branch
    * names, so `previousBranch` is intentionally omitted.
+   * @param call - Call context of the handled hook message.
    * @param repoPath - Absolute path to the repository root.
    */
-  private async emitCheckout(repoPath: string): Promise<void> {
+  private async emitCheckout(call: CallContext, repoPath: string): Promise<void> {
     const currentBranch = await gitOutput(['rev-parse', '--abbrev-ref', 'HEAD'], repoPath);
     const payload: GitCheckoutEvent = {
       repoPath,
       currentBranch,
       timestamp: new Date().toISOString(),
     };
-    await this.bus.emit(GitSubjects.checkout, payload);
+    await this.bus.emit(call, GitSubjects.checkout, payload);
   }
 
   /**
@@ -110,15 +113,16 @@ export class GitHookTranslatorService extends BaseService {
    *
    * Git's post-merge hook does not provide the source branch required by the
    * canonical `git.merge` event, so the hook event is emitted under `gitHook`.
+   * @param call - Call context of the handled hook message.
    * @param repoPath - Absolute path to the repository root.
    * @param squash - Whether Git reported a squash merge.
    */
-  private async emitNativeMerge(repoPath: string, squash: boolean): Promise<void> {
+  private async emitNativeMerge(call: CallContext, repoPath: string, squash: boolean): Promise<void> {
     const [targetBranch, currentHead] = await Promise.all([
       gitOutput(['rev-parse', '--abbrev-ref', 'HEAD'], repoPath),
       gitOutput(['rev-parse', 'HEAD'], repoPath),
     ]);
-    await this.bus.emit(GitHookSubjects.merge, {
+    await this.bus.emit(call, GitHookSubjects.merge, {
       repoPath,
       squash,
       targetBranch,
@@ -133,17 +137,19 @@ export class GitHookTranslatorService extends BaseService {
    * Git's post-rewrite hook provides the rewrite command and old/new commit
    * pairs, but not the `onto` field required by the canonical `git.rebase`
    * event.
+   * @param call - Call context of the handled hook message.
    * @param repoPath - Absolute path to the repository root.
    * @param command - Rewrite command passed by Git, such as `rebase` or `amend`.
    * @param rewritten - Old/new commit hash pairs from hook stdin.
    */
   private async emitRewrite(
+    call: CallContext,
     repoPath: string,
     command: string,
     rewritten: readonly { readonly oldHash: string; readonly newHash: string }[],
   ): Promise<void> {
     const branch = await gitOutput(['rev-parse', '--abbrev-ref', 'HEAD'], repoPath);
-    await this.bus.emit(GitHookSubjects.rewrite, {
+    await this.bus.emit(call, GitHookSubjects.rewrite, {
       repoPath,
       command,
       rewritten: [...rewritten],

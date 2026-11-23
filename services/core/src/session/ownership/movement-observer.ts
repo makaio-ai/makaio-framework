@@ -1,4 +1,5 @@
 import type { IMakaioBus } from '@makaio/bus-core';
+import type { CallContext } from '@makaio/core';
 import { AgentSubjects, SessionSubjects, type SessionOwnershipServiceMovement } from '@makaio/contracts';
 import { AgentStorageSubjects } from '../storage/agent-namespace.js';
 import { enqueueAgentSettle } from './settle-queue.js';
@@ -66,6 +67,7 @@ export function registerAdapterSessionMovementObserver(bus: IMakaioBus): () => v
     // carried this announcement stays pending until the settlement is durable.
     await enqueueAgentSettle(agentId, async () => {
       await settleObservedMovement(
+        ctx.call,
         bus,
         { agentId, adapterId, adapterName, machineId, ownerInstanceId, sessionId },
         movement,
@@ -139,19 +141,21 @@ interface ObservedMovementPrincipal {
  * authority, a refused settlement, a storage failure — is reported the same
  * way, because the producer needs exactly one bit back and every one of them
  * means the same thing to it: no row carries this movement, so keep it.
+ * @param call - Handled movement announcement being settled.
  * @param bus - Bus used for the agent read and the settle request.
  * @param principal - Who the movement is settled for.
  * @param movement - The observed movement.
  * @throws A {@link MovementNotSettledError} when nothing durable recorded the movement.
  */
 async function settleObservedMovement(
+  call: CallContext,
   bus: IMakaioBus,
   principal: ObservedMovementPrincipal,
   movement: SessionOwnershipServiceMovement,
 ): Promise<void> {
   let outcome: string;
   try {
-    const agentResult = await bus.requestOptional(AgentStorageSubjects.get, { agentId: principal.agentId });
+    const agentResult = await bus.requestOptional(call, AgentStorageSubjects.get, { agentId: principal.agentId });
     const agent = agentResult.handled ? agentResult.data.agent : null;
     if (agent === null) throw new MovementNotSettledError(principal.agentId, 'agent-row-unreadable');
     if (agent.adapterName !== principal.adapterName || agent.adapterId !== principal.adapterId) {
@@ -165,7 +169,7 @@ async function settleObservedMovement(
       throw new MovementNotSettledError(principal.agentId, 'runtime-owner-mismatch');
     }
 
-    const result = await bus.requestOptional(SessionSubjects.ownership.settleMovement, {
+    const result = await bus.requestOptional(call, SessionSubjects.ownership.settleMovement, {
       sessionId: principal.sessionId,
       agentId: principal.agentId,
       adapterId: principal.adapterId,

@@ -7,6 +7,7 @@
  */
 import { describe, it, expect, afterEach } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
+import { createTestCall } from '@makaio/test-utils';
 import { AccountManagerSubjects } from '../bus/namespace.js';
 import type { OutputWriter } from '@makaio/kernel/cli';
 import { handleWatch } from '../cli/handlers/watch.js';
@@ -44,6 +45,7 @@ function makeCtx(signal: AbortSignal) {
 
   return {
     bus: MakaioBus,
+    call: createTestCall(),
     args: {},
     output,
     signal,
@@ -74,7 +76,7 @@ describe('handleWatch', () => {
 
     await Promise.resolve();
 
-    MakaioBus.emit(AccountManagerSubjects.credentials.detected, {
+    MakaioBus.emit(createTestCall(), AccountManagerSubjects.credentials.detected, {
       clientId: 'claude',
       account: { id: 'acc-1', metadata: {}, active: true, detectedAt: 0, lastSeenAt: 0 },
       autoLabeled: false,
@@ -98,7 +100,7 @@ describe('handleWatch', () => {
 
     const from = { id: 'acc-1', metadata: {}, active: false, detectedAt: 0, lastSeenAt: 0 };
     const to = { id: 'acc-2', metadata: {}, active: true, detectedAt: 0, lastSeenAt: 0 };
-    MakaioBus.emit(AccountManagerSubjects.credentials.switched, { clientId: 'claude', from, to });
+    MakaioBus.emit(createTestCall(), AccountManagerSubjects.credentials.switched, { clientId: 'claude', from, to });
 
     await Promise.resolve();
 
@@ -116,7 +118,7 @@ describe('handleWatch', () => {
 
     await Promise.resolve();
 
-    MakaioBus.emit(AccountManagerSubjects.credentials.refreshed, {
+    MakaioBus.emit(createTestCall(), AccountManagerSubjects.credentials.refreshed, {
       clientId: 'codex',
       account: { id: 'acc-3', metadata: {}, active: true, detectedAt: 0, lastSeenAt: 0 },
     });
@@ -137,7 +139,7 @@ describe('handleWatch', () => {
 
     await Promise.resolve();
 
-    MakaioBus.emit(AccountManagerSubjects.credentials.error, {
+    MakaioBus.emit(createTestCall(), AccountManagerSubjects.credentials.error, {
       clientId: 'claude',
       message: 'keychain locked',
     });
@@ -158,7 +160,7 @@ describe('handleWatch', () => {
 
     await Promise.resolve();
 
-    MakaioBus.emit(AccountManagerSubjects.usage.updated, {
+    MakaioBus.emit(createTestCall(), AccountManagerSubjects.usage.updated, {
       clientId: 'claude',
       accountId: 'acc-1',
       usage: {
@@ -185,7 +187,7 @@ describe('handleWatch', () => {
 
     await Promise.resolve();
 
-    MakaioBus.emit(AccountManagerSubjects.accounts.metadataPatched, {
+    MakaioBus.emit(createTestCall(), AccountManagerSubjects.accounts.metadataPatched, {
       clientId: 'codex',
       account: { id: 'acc-1', metadata: { planType: 'plus' }, active: true, detectedAt: 0, lastSeenAt: 0 },
     });
@@ -210,8 +212,8 @@ describe('handleWatch', () => {
 
     await Promise.resolve();
 
-    MakaioBus.emit(AccountManagerSubjects.credentials.error, { clientId: 'a', message: 'first' });
-    MakaioBus.emit(AccountManagerSubjects.credentials.error, { clientId: 'b', message: 'second' });
+    MakaioBus.emit(createTestCall(), AccountManagerSubjects.credentials.error, { clientId: 'a', message: 'first' });
+    MakaioBus.emit(createTestCall(), AccountManagerSubjects.credentials.error, { clientId: 'b', message: 'second' });
 
     await Promise.resolve();
 
@@ -242,7 +244,10 @@ describe('handleWatch', () => {
     controller.abort();
     await watchPromise;
 
-    MakaioBus.emit(AccountManagerSubjects.credentials.error, { clientId: 'claude', message: 'too late' });
+    MakaioBus.emit(createTestCall(), AccountManagerSubjects.credentials.error, {
+      clientId: 'claude',
+      message: 'too late',
+    });
 
     await Promise.resolve();
 

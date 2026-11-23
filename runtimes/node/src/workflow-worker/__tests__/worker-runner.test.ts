@@ -7,6 +7,8 @@ import type {
   WorkflowWorkerConfig,
 } from '@makaio/contracts';
 import { WorkflowRunContextSchema } from '@makaio/contracts';
+import type { CallContext } from '@makaio/core';
+import { createTestCall } from '@makaio/test-utils';
 import {
   ExecutionAttemptAuthority,
   parseWorkflowAttemptInstruction,
@@ -49,7 +51,7 @@ describe('WorkerRunner', () => {
     const dispatch = vi.fn();
     const runner = new WorkerRunner({ authority, dispatch });
     await expect(
-      runner.run(makeWorkerConfig(), new AbortController().signal, undefined, {
+      runner.run(createTestCall(), makeWorkerConfig(), new AbortController().signal, undefined, {
         withAttemptCreation: async () => {
           throw new Error('Owner already cancelled');
         },
@@ -79,7 +81,7 @@ describe('WorkerRunner', () => {
     const entered = Promise.withResolvers<void>();
     const release = Promise.withResolvers<void>();
     const controller = new AbortController();
-    const readRunContext = vi.fn(async (_executionId: string, signal: AbortSignal) => {
+    const readRunContext = vi.fn(async (_call: CallContext, _executionId: string, signal: AbortSignal) => {
       expect(signal).toBe(controller.signal);
       entered.resolve();
       await release.promise;
@@ -87,7 +89,7 @@ describe('WorkerRunner', () => {
     });
     const runner = new WorkerRunner({ authority, dispatch, readRunContext });
     if (preAborted) controller.abort(new Error('owner-read-cancelled'));
-    const result = runner.run(config, controller.signal);
+    const result = runner.run(createTestCall(), config, controller.signal);
     const rejected = expect(result).rejects.toThrow('owner-read-cancelled');
     if (!preAborted) {
       await entered.promise;
@@ -107,6 +109,7 @@ describe('WorkerRunner', () => {
     const runner = new WorkerRunner({ authority, dispatch });
     await expect(
       runner.run(
+        createTestCall(),
         makeWorkerConfig({ source: { kind: 'path', path: '/host/workflow.ts' } }),
         new AbortController().signal,
       ),
@@ -138,7 +141,7 @@ describe('WorkerRunner', () => {
         expect(repository.attempts.size).toBe(0);
         return runContext;
       },
-      dispatch: async (request) => {
+      dispatch: async (_call, request) => {
         runContext.inputs = { question: 'changed after creation' };
         const instruction = await authority.getInstruction({
           executionId: config.executionId,
@@ -170,7 +173,7 @@ describe('WorkerRunner', () => {
         return { executionAttemptId: request.executionAttemptId, allocationRef: TEST_ALLOCATION_REF };
       },
     });
-    await expect(runner.run(config, new AbortController().signal)).resolves.toMatchObject({
+    await expect(runner.run(createTestCall(), config, new AbortController().signal)).resolves.toMatchObject({
       state: 'authority-committed',
       result: {
         executionId: config.executionId,
@@ -185,7 +188,7 @@ describe('WorkerRunner', () => {
   it('creates an attempt before dispatch and returns authority-committed', async () => {
     const authority = createTestAuthority();
     let capturedAttemptId: string | undefined;
-    const dispatch: WorkerDispatch = async (request) => {
+    const dispatch: WorkerDispatch = async (_call, request) => {
       capturedAttemptId = request.executionAttemptId;
       // Simulate outcome commitment by the worker via the Authority
       const result: WorkflowRunResult = {
@@ -209,7 +212,7 @@ describe('WorkerRunner', () => {
     const runner = new WorkerRunner({ dispatch, authority });
     const signal = new AbortController().signal;
 
-    const completion = await runner.run(makeWorkerConfig(), signal);
+    const completion = await runner.run(createTestCall(), makeWorkerConfig(), signal);
 
     expect(capturedAttemptId).toBeTruthy();
     expect(completion.state).toBe('authority-committed');
@@ -219,8 +222,8 @@ describe('WorkerRunner', () => {
 
   it('forwards executionAttemptId and authority terminalization in the dispatch request', async () => {
     const authority = createTestAuthority();
-    let capturedRequest: Parameters<WorkerDispatch>[0] | undefined;
-    const dispatch: WorkerDispatch = async (request) => {
+    let capturedRequest: Parameters<WorkerDispatch>[1] | undefined;
+    const dispatch: WorkerDispatch = async (_call, request) => {
       capturedRequest = request;
       const result: WorkflowRunResult = {
         executionId: 'wfx-1',
@@ -245,7 +248,7 @@ describe('WorkerRunner', () => {
     const signal = new AbortController().signal;
 
     const config = makeWorkerConfig({ terminalAuthority: 'worker' });
-    await runner.run(config, signal);
+    await runner.run(createTestCall(), config, signal);
 
     expect(capturedRequest).toBeDefined();
     expect(capturedRequest!.executionAttemptId).toBeTruthy();
@@ -260,8 +263,8 @@ describe('WorkerRunner', () => {
     const authority = createTestAuthority();
     const manifest: WorkerContributionManifest = { contributionRefs: [] };
     const requirements = { persistentStorage: true, customCapabilities: [] };
-    let capturedRequest: Parameters<WorkerDispatch>[0] | undefined;
-    const dispatch: WorkerDispatch = async (request) => {
+    let capturedRequest: Parameters<WorkerDispatch>[1] | undefined;
+    const dispatch: WorkerDispatch = async (_call, request) => {
       capturedRequest = request;
       const result: WorkflowRunResult = {
         executionId: 'wfx-1',
@@ -284,7 +287,7 @@ describe('WorkerRunner', () => {
     const runner = new WorkerRunner({ dispatch, authority, manifest, requirements });
     const signal = new AbortController().signal;
 
-    await runner.run(makeWorkerConfig(), signal);
+    await runner.run(createTestCall(), makeWorkerConfig(), signal);
 
     expect(capturedRequest!.requirements).toEqual(requirements);
   });
@@ -292,8 +295,8 @@ describe('WorkerRunner', () => {
   it('forwards per-run dispatch metadata to the dispatch function', async () => {
     const authority = createTestAuthority();
     const dispatchMetadata = { resume: true, providerRunId: 'gha-1' };
-    let capturedRequest: Parameters<WorkerDispatch>[0] | undefined;
-    const dispatch: WorkerDispatch = async (request) => {
+    let capturedRequest: Parameters<WorkerDispatch>[1] | undefined;
+    const dispatch: WorkerDispatch = async (_call, request) => {
       capturedRequest = request;
       const result: WorkflowRunResult = {
         executionId: 'wfx-1',
@@ -316,7 +319,7 @@ describe('WorkerRunner', () => {
     const runner = new WorkerRunner({ dispatch, authority });
     const signal = new AbortController().signal;
 
-    await runner.run(makeWorkerConfig(), signal, undefined, { dispatchMetadata });
+    await runner.run(createTestCall(), makeWorkerConfig(), signal, undefined, { dispatchMetadata });
 
     expect(capturedRequest!.metadata).toEqual(dispatchMetadata);
   });
@@ -324,8 +327,8 @@ describe('WorkerRunner', () => {
   it('omits requirements from the dispatch payload when not provided', async () => {
     const authority = createTestAuthority();
     const manifest: WorkerContributionManifest = { contributionRefs: [] };
-    let capturedRequest: Parameters<WorkerDispatch>[0] | undefined;
-    const dispatch: WorkerDispatch = async (request) => {
+    let capturedRequest: Parameters<WorkerDispatch>[1] | undefined;
+    const dispatch: WorkerDispatch = async (_call, request) => {
       capturedRequest = request;
       const result: WorkflowRunResult = {
         executionId: 'wfx-1',
@@ -348,15 +351,15 @@ describe('WorkerRunner', () => {
     const runner = new WorkerRunner({ dispatch, authority, manifest });
     const signal = new AbortController().signal;
 
-    await runner.run(makeWorkerConfig(), signal);
+    await runner.run(createTestCall(), makeWorkerConfig(), signal);
 
     expect('requirements' in capturedRequest!).toBe(false);
   });
 
   it('omits manifest from the dispatch payload when no manifest source is provided', async () => {
     const authority = createTestAuthority();
-    let capturedRequest: Parameters<WorkerDispatch>[0] | undefined;
-    const dispatch: WorkerDispatch = async (request) => {
+    let capturedRequest: Parameters<WorkerDispatch>[1] | undefined;
+    const dispatch: WorkerDispatch = async (_call, request) => {
       capturedRequest = request;
       const result: WorkflowRunResult = {
         executionId: 'wfx-1',
@@ -379,7 +382,7 @@ describe('WorkerRunner', () => {
     const runner = new WorkerRunner({ dispatch, authority });
     const signal = new AbortController().signal;
 
-    await runner.run(makeWorkerConfig(), signal);
+    await runner.run(createTestCall(), makeWorkerConfig(), signal);
 
     expect('manifest' in capturedRequest!).toBe(false);
   });
@@ -389,7 +392,9 @@ describe('WorkerRunner', () => {
     const dispatch = vi.fn().mockRejectedValue(new Error('Dispatch failed'));
     const runner = new WorkerRunner({ dispatch, authority });
 
-    await expect(runner.run(makeWorkerConfig(), new AbortController().signal)).rejects.toThrow('Dispatch failed');
+    await expect(runner.run(createTestCall(), makeWorkerConfig(), new AbortController().signal)).rejects.toThrow(
+      'Dispatch failed',
+    );
   });
 
   it('abandons the durable pending attempt when dispatch rejects', async () => {
@@ -404,7 +409,9 @@ describe('WorkerRunner', () => {
       authority,
     });
 
-    await expect(runner.run(makeWorkerConfig(), new AbortController().signal)).rejects.toThrow('dispatch failed');
+    await expect(runner.run(createTestCall(), makeWorkerConfig(), new AbortController().signal)).rejects.toThrow(
+      'dispatch failed',
+    );
     expect(abandonPendingAttempt).toHaveBeenCalledWith(expect.any(String), 'wfx-1');
   });
 
@@ -412,7 +419,7 @@ describe('WorkerRunner', () => {
     const authority = createTestAuthority();
     const runner = new WorkerRunner({
       authority,
-      dispatch: async (request) => {
+      dispatch: async (_call, request) => {
         const begun = await authority.beginProvisioning(
           makeBeginProvisioningInput(request.executionAttemptId, 'wfx-1'),
         );
@@ -440,16 +447,18 @@ describe('WorkerRunner', () => {
       },
     });
 
-    await expect(runner.run(makeWorkerConfig(), new AbortController().signal)).resolves.toMatchObject({
-      state: 'authority-committed',
-      result: { status: 'completed' },
-    });
+    await expect(runner.run(createTestCall(), makeWorkerConfig(), new AbortController().signal)).resolves.toMatchObject(
+      {
+        state: 'authority-committed',
+        result: { status: 'completed' },
+      },
+    );
   });
 
   it('forwards static requirements to dispatch without merging', async () => {
     const authority = createTestAuthority();
-    let capturedRequest: Parameters<WorkerDispatch>[0] | undefined;
-    const dispatch: WorkerDispatch = async (request) => {
+    let capturedRequest: Parameters<WorkerDispatch>[1] | undefined;
+    const dispatch: WorkerDispatch = async (_call, request) => {
       capturedRequest = request;
       const result: WorkflowRunResult = {
         executionId: 'exec-1',
@@ -476,6 +485,7 @@ describe('WorkerRunner', () => {
     });
 
     await runner.run(
+      createTestCall(),
       makeWorkerConfig({
         source: { kind: 'definition', workflowId: 'factory:intake' },
         executionId: 'exec-1',
@@ -497,7 +507,9 @@ describe('WorkerRunner', () => {
     const dispatch = vi.fn().mockRejectedValue(new Error('provision failed'));
     const runner = new WorkerRunner({ dispatch, authority });
 
-    await expect(runner.run(makeWorkerConfig(), new AbortController().signal)).rejects.toThrow('provision failed');
+    await expect(runner.run(createTestCall(), makeWorkerConfig(), new AbortController().signal)).rejects.toThrow(
+      'provision failed',
+    );
 
     // The Authority's waiter should have been cleaned up
     // (we can't directly inspect waiters, but the error path discards them)
@@ -510,7 +522,7 @@ describe('WorkerRunner', () => {
       resolveOutcome = resolve;
     });
 
-    const dispatch: WorkerDispatch = async (request) => {
+    const dispatch: WorkerDispatch = async (_call, request) => {
       // Simulate: dispatch returns after allocation, outcome arrives later
       setTimeout(async () => {
         const result: WorkflowRunResult = {
@@ -537,7 +549,7 @@ describe('WorkerRunner', () => {
     };
     const runner = new WorkerRunner({ dispatch, authority });
 
-    const completion = await runner.run(makeWorkerConfig(), new AbortController().signal);
+    const completion = await runner.run(createTestCall(), makeWorkerConfig(), new AbortController().signal);
     await outcomeBarrier;
 
     expect(completion.state).toBe('authority-committed');
@@ -558,7 +570,7 @@ describe('WorkerRunner', () => {
     });
     const runner = new WorkerRunner({
       authority,
-      dispatch: async (request, signal) => {
+      dispatch: async (_call, request, signal) => {
         setTimeout(async () => {
           const result: WorkflowRunResult = {
             executionId: 'wfx-1',
@@ -583,7 +595,7 @@ describe('WorkerRunner', () => {
       },
     });
     const controller = new AbortController();
-    const running = runner.run(makeWorkerConfig(), controller.signal);
+    const running = runner.run(createTestCall(), makeWorkerConfig(), controller.signal);
 
     await dispatchStartedPromise;
     controller.abort('cancelled');

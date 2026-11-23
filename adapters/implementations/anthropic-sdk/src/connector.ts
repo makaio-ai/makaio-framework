@@ -1,22 +1,13 @@
 import Anthropic from '@anthropic-ai/sdk';
-import { MakaioBus } from '@makaio/bus-core';
+import type { CallContext } from '@makaio/core';
 import type { WireSessionSubjects } from '@makaio/ai-adapters-core';
 import { BaseStreamConnector } from '@makaio/ai-adapters-stream-session';
-import {
-  AnthropicSdkConnectorNamespace,
-  AnthropicSdkConnectorSubjects,
-  type SdkEventMessage,
-} from './namespaces/index.js';
+import { AnthropicSdkConnectorSubjects, type SdkEventMessage } from './namespaces/index.js';
 import type { AnthropicSdkAgentConfig, AnthropicSdkBus } from './types/index.js';
 import { fetchToolsForAnthropic } from './tool-handling.js';
 import { AnthropicSdkSession } from './session.js';
 import { AnthropicSdkAdapterName, DEFAULT_MODEL } from './constants.js';
 import { resolveAnthropicConstructorAuth } from './constructor-auth.js';
-
-/** Default scoped bus for Anthropic SDK adapter */
-// Intentional module-level await: keeps constructor synchronous while sharing one
-// scoped bus instance across connector instances (same pattern as openai-node).
-const defaultBus = await AnthropicSdkConnectorNamespace.scopedBus();
 
 /**
  * Anthropic SDK Connector — Wraps the Anthropic SDK for agentic message creation.
@@ -46,10 +37,13 @@ export class AnthropicSdkConnector extends BaseStreamConnector<
 
   /**
    * Emit an SDK event wrapped in envelope for type-safe discriminated union handling.
+   * @param call - Call context of the turn the event belongs to
    * @param event - The typed SDK event message to emit
    */
-  private async emitSdkEvent(event: SdkEventMessage): Promise<void> {
-    await this.emit(AnthropicSdkConnectorSubjects.sdk.event, { event });
+  private async emitSdkEvent(call: CallContext, event: SdkEventMessage): Promise<void> {
+    await this.emit<typeof AnthropicSdkConnectorSubjects.sdk.event>(call, AnthropicSdkConnectorSubjects.sdk.event, {
+      event,
+    });
   }
 
   public constructor(config: AnthropicSdkAgentConfig & { adapterId?: string }) {
@@ -57,7 +51,6 @@ export class AnthropicSdkConnector extends BaseStreamConnector<
     super({
       ...baseConfig,
       env: baseConfig.env ?? {},
-      bus: config?.bus ?? defaultBus,
       adapterId: config?.adapterId ?? crypto.randomUUID(),
       adapterName: config?.adapterName ?? AnthropicSdkAdapterName,
     });
@@ -80,23 +73,19 @@ export class AnthropicSdkConnector extends BaseStreamConnector<
    *
    * Also converts fetched tools to Anthropic format and caches them in
    * `this.anthropicTools` for use in `createSession`.
+   * @param call - Call of the message initializing the session
    */
-  protected async fetchTools(): Promise<void> {
+  protected async fetchTools(call: CallContext): Promise<void> {
     const baseUrl = this.config.providerConfig?.baseUrl;
     this.client = new Anthropic({
       ...this.constructorAuth,
       baseURL: baseUrl ?? undefined,
     });
 
-    this.anthropicTools = await fetchToolsForAnthropic(
-      this.config.globalBus ?? MakaioBus,
-      this.adapterId,
-      this.adapterName,
-      {
-        allowedTools: this.config.allowedTools,
-        disallowedTools: this.config.disallowedTools,
-      },
-    );
+    this.anthropicTools = await fetchToolsForAnthropic(call, this.config.globalBus, this.adapterId, this.adapterName, {
+      allowedTools: this.config.allowedTools,
+      disallowedTools: this.config.disallowedTools,
+    });
   }
 
   /**
@@ -104,22 +93,18 @@ export class AnthropicSdkConnector extends BaseStreamConnector<
    *
    * Called at turn boundary when `hasPendingToolRefresh` is true.
    * Re-fetches Anthropic-format tools from the registry, re-prepares MCP
-   * direct tools (and arms the ledger injection flag via `super.refreshTools()`),
+   * direct tools (and arms the ledger injection flag via `super.refreshTools(call)`),
    * then notifies the active session so the next API call uses the updated
    * merged tool list. The ledger `recordInjection` is deferred to
    * `onTurnStarted` so it uses the canonical turn number.
+   * @param call - Call of the turn event triggering the refresh
    */
-  protected override async refreshTools(): Promise<void> {
-    this.anthropicTools = await fetchToolsForAnthropic(
-      this.config.globalBus ?? MakaioBus,
-      this.adapterId,
-      this.adapterName,
-      {
-        allowedTools: this.config.allowedTools,
-        disallowedTools: this.config.disallowedTools,
-      },
-    );
-    await super.refreshTools(); // re-prepares mcpDirectTools, sets hasPendingLedgerInjection
+  protected override async refreshTools(call: CallContext): Promise<void> {
+    this.anthropicTools = await fetchToolsForAnthropic(call, this.config.globalBus, this.adapterId, this.adapterName, {
+      allowedTools: this.config.allowedTools,
+      disallowedTools: this.config.disallowedTools,
+    });
+    await super.refreshTools(call); // re-prepares mcpDirectTools, sets hasPendingLedgerInjection
     const session = this.getSession();
     session?.replaceNativeTools(this.anthropicTools);
     session?.updateTools?.(this.mcpDirectTools);
@@ -128,7 +113,7 @@ export class AnthropicSdkConnector extends BaseStreamConnector<
   /**
    * Construct the Anthropic SDK session with all required config.
    *
-   * Called by `BaseStreamConnector.initializeSession()` after `fetchTools()`
+   * Called by `BaseStreamConnector.initializeSession()` after `fetchTools(call)`
    * has resolved credentials and initialized `this.client`.
    * @returns A new `AnthropicSdkSession` instance
    */
@@ -158,10 +143,14 @@ export class AnthropicSdkConnector extends BaseStreamConnector<
       allowedDirectories: this.config.allowedDirectories,
       supportedReasoningLevels: this.config.supportedReasoningLevels,
       emitSdkEvent: this.emitSdkEvent.bind(this),
-      globalBus: this.config.globalBus ?? MakaioBus,
+      globalBus: this.config.globalBus,
       handleError: this.handleError.bind(this),
-      requestToolApproval: (payload) =>
-        this.requestToolApprovalWithHandling(AnthropicSdkConnectorSubjects.tool_approval, payload),
+      requestToolApproval: (call, payload) =>
+        this.requestToolApprovalWithHandling<typeof AnthropicSdkConnectorSubjects.tool_approval>(
+          call,
+          AnthropicSdkConnectorSubjects.tool_approval,
+          payload,
+        ),
       logLowLevelEvent: this.logLowLevelEvent,
       onTurnStart: (handle) => {
         this.pendingMessageHandle = handle;

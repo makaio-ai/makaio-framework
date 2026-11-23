@@ -8,6 +8,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ContributorCallbackContext, ContributorDefinition, ContributorResponse } from '@makaio/contracts/client';
+import { createTestCall } from '@makaio/test-utils';
 import { type RegisteredContributor } from '../client-hook-response-collector.js';
 import { collectContributions as collectForClient } from '../client-hook-response-collector.js';
 
@@ -36,7 +37,8 @@ function collectContributions(
   eventName: string,
   eventPayload: unknown,
 ) {
-  return collectForClient(snapshot, CLIENT_ID, requestDeadline, requestSignal, eventName, eventPayload);
+  const call = createTestCall();
+  return collectForClient(call, snapshot, CLIENT_ID, requestDeadline, requestSignal, eventName, eventPayload);
 }
 
 /**
@@ -956,6 +958,7 @@ describe('collectContributions', () => {
       };
 
       const result = await collectForClient(
+        createTestCall(),
         [{ definition }],
         CLIENT_ID,
         undefined,

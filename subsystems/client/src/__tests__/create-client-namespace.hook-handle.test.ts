@@ -169,7 +169,8 @@ describe('createClientNamespace — hook.handle subject', () => {
 
   it('hook.handle schema is accessible from the bus after namespace registration', () => {
     const clientId = nextClientId('ns-schema');
-    const { subjects } = createClientNamespace(clientId);
+    const { definition, subjects } = createClientNamespace(clientId);
+    MakaioBus.registerNamespace(definition);
 
     const schema = MakaioBus.getSchema(subjects.hook.handle);
     expect(schema).toBeDefined();

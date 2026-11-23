@@ -49,22 +49,30 @@ describe('channelSubject() compile-time and runtime guards', () => {
   describe('runtime guards', () => {
     it('request() throws ChannelOnlyError for channel subjects', async () => {
       // @ts-expect-error - channel subjects rejected at compile time
-      await expect(MakaioBus.request(TestSubjects.secret, { key: 'test' })).rejects.toThrow(ChannelOnlyError);
+      await expect(MakaioBus.request(MakaioBus.own('root'), TestSubjects.secret, { key: 'test' })).rejects.toThrow(
+        ChannelOnlyError,
+      );
     });
 
     it('request() error message contains "channel-only"', async () => {
       // @ts-expect-error - channel subjects rejected at compile time
-      await expect(MakaioBus.request(TestSubjects.secret, { key: 'test' })).rejects.toThrow('channel-only');
+      await expect(MakaioBus.request(MakaioBus.own('root'), TestSubjects.secret, { key: 'test' })).rejects.toThrow(
+        'channel-only',
+      );
     });
 
     it('emit() throws ChannelOnlyError for channel subjects', async () => {
       // @ts-expect-error - channel subjects rejected at compile time
-      await expect(MakaioBus.emit(TestSubjects.notify, { message: 'test' })).rejects.toThrow(ChannelOnlyError);
+      await expect(MakaioBus.emit(MakaioBus.own('root'), TestSubjects.notify, { message: 'test' })).rejects.toThrow(
+        ChannelOnlyError,
+      );
     });
 
     it('emit() error message contains "channel-only"', async () => {
       // @ts-expect-error - channel subjects rejected at compile time
-      await expect(MakaioBus.emit(TestSubjects.notify, { message: 'test' })).rejects.toThrow('channel-only');
+      await expect(MakaioBus.emit(MakaioBus.own('root'), TestSubjects.notify, { message: 'test' })).rejects.toThrow(
+        'channel-only',
+      );
     });
 
     it('on() throws ChannelOnlyError for channel subjects', () => {
@@ -78,20 +86,26 @@ describe('channelSubject() compile-time and runtime guards', () => {
     });
 
     it('requestOptional() throws ChannelOnlyError for channel subjects', async () => {
-      // @ts-expect-error - channel subjects rejected at compile time
-      await expect(MakaioBus.requestOptional(TestSubjects.secret, { key: 'test' })).rejects.toThrow(ChannelOnlyError);
+      await expect(
+        // @ts-expect-error - channel subjects rejected at compile time
+        MakaioBus.requestOptional(MakaioBus.own('root'), TestSubjects.secret, { key: 'test' }),
+      ).rejects.toThrow(ChannelOnlyError);
     });
   });
 
   describe('compile-time guards', () => {
     it('compile-time: channel request rejected by bus.request()', async () => {
       // @ts-expect-error - channel subjects resolve to never in request()
-      await expect(MakaioBus.request(TestSubjects.secret, { key: 'test' })).rejects.toThrow(ChannelOnlyError);
+      await expect(MakaioBus.request(MakaioBus.own('root'), TestSubjects.secret, { key: 'test' })).rejects.toThrow(
+        ChannelOnlyError,
+      );
     });
 
     it('compile-time: channel event rejected by bus.emit()', async () => {
       // @ts-expect-error - channel subjects resolve to never in emit()
-      await expect(MakaioBus.emit(TestSubjects.notify, { message: 'test' })).rejects.toThrow(ChannelOnlyError);
+      await expect(MakaioBus.emit(MakaioBus.own('root'), TestSubjects.notify, { message: 'test' })).rejects.toThrow(
+        ChannelOnlyError,
+      );
     });
 
     it('compile-time: channel rejected by bus.on()', () => {
@@ -113,7 +127,7 @@ describe('channelSubject() compile-time and runtime guards', () => {
   describe('normal subjects still work', () => {
     it('normal subjects work on bus.emit()', async () => {
       const unsub = MakaioBus.on(TestSubjects.normal, () => {});
-      await MakaioBus.emit(TestSubjects.normal, { data: 'hello' });
+      await MakaioBus.emit(MakaioBus.own('root'), TestSubjects.normal, { data: 'hello' });
       unsub();
     });
 
@@ -121,7 +135,7 @@ describe('channelSubject() compile-time and runtime guards', () => {
       const unsub = MakaioBus.on(TestSubjects.normalRequest, (ctx) => {
         ctx.setResult({ found: true });
       });
-      const result = await MakaioBus.request(TestSubjects.normalRequest, { id: '1' });
+      const result = await MakaioBus.request(MakaioBus.own('root'), TestSubjects.normalRequest, { id: '1' });
       expect(result.found).toBe(true);
       unsub();
     });

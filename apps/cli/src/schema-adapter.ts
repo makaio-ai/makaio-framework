@@ -6,7 +6,7 @@
  * Commander is an implementation detail — extensions never import it.
  */
 import { z } from 'zod';
-import type { IMakaioBus } from '@makaio/bus-core';
+import { MakaioBus, type IMakaioBus } from '@makaio/bus-core';
 import type { CliSubcommandEntry, CliContribution, FieldSchema } from '@makaio/kernel/cli';
 import { INTERACTIVE_SUBCOMMAND, getMeta, isBooleanSchema, isNumberSchema } from '@makaio/kernel/cli';
 import { toCliLongOptionName } from './flag-names.js';
@@ -23,6 +23,19 @@ import {
 import type { ResolvedCliBus } from './command-runtime.js';
 import { parseNumericArg } from './cli-arg-parsers.js';
 import { findOrCreateCommand, claimSubcommandName, type CommandInstance } from './command-tree.js';
+
+/**
+ * Root call context of a local CLI invocation.
+ *
+ * Taken from the effective command bus (connected or embedded), so the context
+ * belongs to the carrier that sends on behalf of the command. Only when no bus
+ * is available (offline) does it come from the process bus.
+ * @param bus - Effective command bus, or `null` when offline.
+ * @returns The root call context for `beforeRun`, interactive and command contexts.
+ */
+export function rootCallFor(bus: IMakaioBus | null): ReturnType<IMakaioBus['own']> {
+  return (bus ?? MakaioBus).own('root');
+}
 
 /**
  * Determine whether the current process has a real interactive terminal.
@@ -94,7 +107,7 @@ export function registerContribution(
         if (shouldStopForCommandSignal(signalContext.signal)) return;
         const gate = await evaluateBeforeRunGate(
           contributionBeforeRun,
-          { subcommandName: INTERACTIVE_SUBCOMMAND, args: {}, bus: resolved.bus },
+          { subcommandName: INTERACTIVE_SUBCOMMAND, args: {}, call: rootCallFor(resolved.bus), bus: resolved.bus },
           connectionError,
         );
         if (shouldStopForCommandSignal(signalContext.signal)) return;
@@ -103,7 +116,7 @@ export function registerContribution(
           process.exitCode = gate.exitCode;
           return;
         }
-        await interactiveHandler({ bus: resolved.bus, signal: signalContext.signal });
+        await interactiveHandler({ call: rootCallFor(resolved.bus), bus: resolved.bus, signal: signalContext.signal });
       } catch (err) {
         if (!shouldStopForCommandSignal(signalContext.signal)) {
           reportCommandFailure(err);
@@ -175,7 +188,12 @@ function registerSubcommand(
       if (shouldStopForCommandSignal(signalContext.signal)) return;
       const gate = await evaluateBeforeRunGate(
         beforeRun,
-        { subcommandName: entry.name, args: parsed.data as Record<string, unknown>, bus: resolved.bus },
+        {
+          subcommandName: entry.name,
+          args: parsed.data as Record<string, unknown>,
+          call: rootCallFor(resolved.bus),
+          bus: resolved.bus,
+        },
         connectionError,
       );
       if (shouldStopForCommandSignal(signalContext.signal)) return;

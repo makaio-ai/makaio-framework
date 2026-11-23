@@ -1,4 +1,4 @@
-import type { ContributionProcessor } from '@makaio/kernel';
+import type { ContributionProcessor, KernelExtensionContext, KernelMakaioExtension } from '@makaio/kernel';
 import type { SurfaceBindingRegistration } from '@makaio/contracts/materialization';
 import { SurfaceBindingRegistryToken } from './packages.js';
 import type { SurfaceBindingRegistry } from './surface-binding-registry.js';
@@ -63,7 +63,7 @@ export function createSurfaceBindingContributionProcessor(): ContributionProcess
   return {
     filter: (pkg) => (pkg.surfaceBindings?.bindings?.length ?? 0) > 0,
 
-    async processActivated(name, pkg, ctx) {
+    async processActivated(name: string, pkg: KernelMakaioExtension, ctx: KernelExtensionContext) {
       // Contribution processors run inside the ExtensionCoordinator lifecycle.
       // They use the registry service directly so activation rollback and
       // processStopped can remove package-owned entries; public consumers cross
@@ -95,7 +95,7 @@ export function createSurfaceBindingContributionProcessor(): ContributionProcess
       activeContributions.set(name, { registry, registrations });
     },
 
-    async processStopped(name) {
+    async processStopped(name: string) {
       try {
         stopContribution(name);
       } catch (error) {

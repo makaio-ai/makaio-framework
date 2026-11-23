@@ -7,6 +7,7 @@
 
 import type { AgentToolApproveResponse } from '@makaio/contracts';
 import type { IMakaioBus } from '@makaio/bus-core';
+import type { CallContext } from '@makaio/core';
 import { isMcpCallTool, extractMcpCallTarget } from '@makaio/ai-adapters-core';
 
 import type { ToolCall } from '../namespaces/schemas/tool-calls.js';
@@ -24,10 +25,14 @@ export type HandleToolCallsCallbacks = {
   emitSdkEvent: ToolLifecycleEmitter;
   /**
    * Request tool approval via the scoped bus routed to the global bus.
+   * @param call - Call context of the turn's message handle that the approval belongs to
    * @param payload - Tool call payload enriched with optional reasoning
    * @returns Global approval response
    */
-  requestToolApproval: (payload: ToolCallPayload & { reasoning?: string }) => Promise<AgentToolApproveResponse>;
+  requestToolApproval: (
+    call: CallContext,
+    payload: ToolCallPayload & { reasoning?: string },
+  ) => Promise<AgentToolApproveResponse>;
   /**
    * Record an mcp_call invocation in the session tool ledger.
    *
@@ -57,6 +62,7 @@ export type ToolResultBuilder<TResult> = (toolCallId: string, content: string, i
  *
  * **Mutation:** When approval modifies tool arguments, entries in `toolCalls`
  * are mutated in place via {@link applyApprovedArgs}.
+ * @param call - Call context of the turn's message handle; forwarded to approval and tool execution
  * @param toolCalls - Tool calls from the model (entries may be mutated when approval modifies args)
  * @param callbacks - Approval and lifecycle event callbacks
  * @param contextOverrides - Execution context (session, agent, turn)
@@ -65,6 +71,7 @@ export type ToolResultBuilder<TResult> = (toolCallId: string, content: string, i
  * @returns Formatted tool results for injection back into the conversation
  */
 export async function handleToolCalls<TResult>(
+  call: CallContext,
   toolCalls: ToolCall[],
   callbacks: HandleToolCallsCallbacks,
   contextOverrides: ToolExecutionContextOverrides,
@@ -75,7 +82,7 @@ export async function handleToolCalls<TResult>(
 
   for (const toolCall of toolCalls) {
     const payload = extractToolCallPayload(toolCall, adapterLabel);
-    const approval = await callbacks.requestToolApproval({
+    const approval = await callbacks.requestToolApproval(call, {
       ...payload,
       reasoning: contextOverrides.reasoning,
     });
@@ -98,7 +105,7 @@ export async function handleToolCalls<TResult>(
     }
 
     applyApprovedArgs(toolCall, approval);
-    const executionResult = await executeTool(callbacks.bus, toolCall, callbacks.emitSdkEvent, contextOverrides);
+    const executionResult = await executeTool(call, callbacks.bus, toolCall, callbacks.emitSdkEvent, contextOverrides);
 
     if (executionResult.success) {
       // Record mcp_call invocations in the session tool ledger after successful

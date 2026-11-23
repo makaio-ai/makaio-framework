@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
 import type { TurnUsage } from '@makaio/contracts';
+import { createTestCall } from '@makaio/test-utils';
 import { Turn } from '../entities/turn.js';
 import { persistTurnCompletion } from '../turn-finalization-persistence.js';
 import { TurnStorageSubjects } from '../turns/index.js';
@@ -57,7 +58,7 @@ describe('turn finalization persistence', () => {
     );
 
     await expect(
-      persistTurnCompletion(MakaioBus, turn, { success: true, errors: [] }, CANONICAL_USAGE),
+      persistTurnCompletion(createTestCall(), MakaioBus, turn, { success: true, errors: [] }, CANONICAL_USAGE),
     ).rejects.toThrow(`Turn completion usage reconciliation did not persist the canonical snapshot for ${turn.turnId}`);
     expect(calls).toBe(2);
   });
@@ -89,7 +90,7 @@ describe('turn finalization persistence', () => {
     );
 
     await expect(
-      persistTurnCompletion(MakaioBus, turn, { success: true, errors: [] }, CANONICAL_USAGE),
+      persistTurnCompletion(createTestCall(), MakaioBus, turn, { success: true, errors: [] }, CANONICAL_USAGE),
     ).resolves.toEqual({ handled: true, transitioned: true });
     expect(calls).toBe(1);
   });

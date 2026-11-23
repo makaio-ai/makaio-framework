@@ -1,3 +1,5 @@
+import type { CallContext } from '@makaio/core';
+import { createTestCall } from '@makaio/test-utils';
 import type { Account } from '../../bus/schemas.js';
 import type { UsageEntry } from '../../bus/usage-entry.js';
 import type {
@@ -67,22 +69,26 @@ export class InMemoryAccountMetadataStore implements IAccountMetadataStore {
   private readonly metadataGenerations = new Map<string, number>();
   private nextTimelineSequence = 1;
 
-  public async list(clientId: string): Promise<Account[]> {
+  public async list(_call: CallContext, clientId: string): Promise<Account[]> {
     return (this.data.get(clientId) ?? []).map(cloneAccount);
   }
 
-  public async listByLinkedClientAccountId(clientId: string, linkedClientAccountId: string): Promise<Account[]> {
+  public async listByLinkedClientAccountId(
+    _call: CallContext,
+    clientId: string,
+    linkedClientAccountId: string,
+  ): Promise<Account[]> {
     return (this.data.get(clientId) ?? [])
       .filter((account) => account.linkedClientAccountId === linkedClientAccountId)
       .map(cloneAccount);
   }
 
-  public async get(clientId: string, accountId: string): Promise<Account | null> {
+  public async get(_call: CallContext, clientId: string, accountId: string): Promise<Account | null> {
     const account = (this.data.get(clientId) ?? []).find((candidate) => candidate.id === accountId);
     return account ? cloneAccount(account) : null;
   }
 
-  public async upsert(clientId: string, account: Account): Promise<void> {
+  public async upsert(_call: CallContext, clientId: string, account: Account): Promise<void> {
     const accounts = this.data.get(clientId) ?? [];
     const index = accounts.findIndex((candidate) => candidate.id === account.id);
     const clone = cloneAccount(account);
@@ -98,7 +104,7 @@ export class InMemoryAccountMetadataStore implements IAccountMetadataStore {
     );
   }
 
-  public async remove(clientId: string, accountId: string): Promise<void> {
+  public async remove(_call: CallContext, clientId: string, accountId: string): Promise<void> {
     const accounts = this.data.get(clientId);
     if (!accounts) return;
     this.data.set(
@@ -108,14 +114,14 @@ export class InMemoryAccountMetadataStore implements IAccountMetadataStore {
     this.metadataGenerations.delete(createMetadataGenerationKey(clientId, accountId));
   }
 
-  public async getActive(clientId: string): Promise<Account | null> {
+  public async getActive(_call: CallContext, clientId: string): Promise<Account | null> {
     const [account] = (this.data.get(clientId) ?? [])
       .filter((candidate) => candidate.active)
       .sort((left, right) => right.lastSeenAt - left.lastSeenAt || right.id.localeCompare(left.id));
     return account ? cloneAccount(account) : null;
   }
 
-  public async getActiveAtTimestamp(clientId: string, timestamp: number): Promise<string | null> {
+  public async getActiveAtTimestamp(_call: CallContext, clientId: string, timestamp: number): Promise<string | null> {
     const rows = (this.timeline.get(clientId) ?? [])
       .filter((row) => row.effectiveAt <= timestamp)
       .sort((a, b) => b.effectiveAt - a.effectiveAt || b.sequence - a.sequence);
@@ -123,6 +129,7 @@ export class InMemoryAccountMetadataStore implements IAccountMetadataStore {
   }
 
   public async getLatestTimelineEntry(
+    _call: CallContext,
     clientId: string,
     reason?: AccountTimelineReason,
   ): Promise<AccountTimelineEntry | null> {
@@ -136,7 +143,7 @@ export class InMemoryAccountMetadataStore implements IAccountMetadataStore {
     return structuredClone(entry);
   }
 
-  public async deactivateAll(clientId: string): Promise<void> {
+  public async deactivateAll(_call: CallContext, clientId: string): Promise<void> {
     const accounts = this.data.get(clientId) ?? [];
     this.data.set(
       clientId,
@@ -147,42 +154,49 @@ export class InMemoryAccountMetadataStore implements IAccountMetadataStore {
     );
   }
 
-  public async setLabel(clientId: string, accountId: string, label: string): Promise<Account | null> {
-    const account = await this.get(clientId, accountId);
+  public async setLabel(
+    call: CallContext,
+    clientId: string,
+    accountId: string,
+    label: string,
+  ): Promise<Account | null> {
+    const account = await this.get(call, clientId, accountId);
     if (!account) return null;
     const updated = { ...cloneAccount(account), label };
-    await this.upsert(clientId, updated);
+    await this.upsert(call, clientId, updated);
     return updated;
   }
 
   public async setLinkedClientAccountId(
+    call: CallContext,
     clientId: string,
     accountId: string,
     linkedClientAccountId: string | null,
   ): Promise<Account | null> {
-    const account = await this.get(clientId, accountId);
+    const account = await this.get(call, clientId, accountId);
     if (!account) return null;
     const updated =
       linkedClientAccountId === null
         ? omitLinkedClientAccountId(cloneAccount(account))
         : { ...cloneAccount(account), linkedClientAccountId };
-    await this.upsert(clientId, updated);
+    await this.upsert(call, clientId, updated);
     return updated;
   }
 
   public async getWithMetadataGeneration(
+    call: CallContext,
     clientId: string,
     accountId: string,
   ): Promise<{ account: Account; metadataGeneration: number } | null> {
-    const account = await this.get(clientId, accountId);
+    const account = await this.get(call, clientId, accountId);
     return account ? { account, metadataGeneration: this.getStoredGeneration(clientId, accountId) } : null;
   }
 
-  public async getMetadataGeneration(clientId: string, accountId: string): Promise<number | null> {
+  public async getMetadataGeneration(_call: CallContext, clientId: string, accountId: string): Promise<number | null> {
     return this.hasAccount(clientId, accountId) ? this.getStoredGeneration(clientId, accountId) : null;
   }
 
-  public async bumpMetadataGeneration(clientId: string, accountId: string): Promise<number | null> {
+  public async bumpMetadataGeneration(_call: CallContext, clientId: string, accountId: string): Promise<number | null> {
     if (!this.hasAccount(clientId, accountId)) return null;
     const nextGeneration = this.getStoredGeneration(clientId, accountId) + 1;
     this.metadataGenerations.set(createMetadataGenerationKey(clientId, accountId), nextGeneration);
@@ -190,12 +204,13 @@ export class InMemoryAccountMetadataStore implements IAccountMetadataStore {
   }
 
   public async patchMetadata(
+    call: CallContext,
     clientId: string,
     accountId: string,
     expectedGeneration: number,
     patches: Record<string, unknown>,
   ): Promise<Account | null> {
-    const account = await this.get(clientId, accountId);
+    const account = await this.get(call, clientId, accountId);
     if (!account) return null;
     if (this.getStoredGeneration(clientId, accountId) !== expectedGeneration) return null;
     const changed = metadataPatchChanges(account.metadata, patches);
@@ -204,7 +219,7 @@ export class InMemoryAccountMetadataStore implements IAccountMetadataStore {
       ...cloneAccount(account),
       metadata: applyJsonMergePatch(account.metadata, patches),
     };
-    await this.upsert(clientId, updated);
+    await this.upsert(call, clientId, updated);
     this.metadataGenerations.set(
       createMetadataGenerationKey(clientId, accountId),
       this.getStoredGeneration(clientId, accountId) + 1,
@@ -212,7 +227,7 @@ export class InMemoryAccountMetadataStore implements IAccountMetadataStore {
     return updated;
   }
 
-  public async appendTimeline(entry: AccountTimelineEntry): Promise<void> {
+  public async appendTimeline(_call: CallContext, entry: AccountTimelineEntry): Promise<void> {
     const rows = this.timeline.get(entry.clientId) ?? [];
     rows.push({
       ...structuredClone(entry),
@@ -221,7 +236,7 @@ export class InMemoryAccountMetadataStore implements IAccountMetadataStore {
     this.timeline.set(entry.clientId, rows);
   }
 
-  public async hasAnyAccounts(): Promise<boolean> {
+  public async hasAnyAccounts(_call: CallContext): Promise<boolean> {
     return [...this.data.values()].some((accounts) => accounts.length > 0);
   }
 
@@ -247,7 +262,7 @@ export class InMemoryAccountMetadataStore implements IAccountMetadataStore {
 export class InMemoryAccountUsageSnapshotStore implements IAccountUsageSnapshotStore {
   private readonly entries = new Map<string, UsageEntry[]>();
 
-  public async append(clientId: string, accountId: string, entry: UsageEntry): Promise<boolean> {
+  public async append(_call: CallContext, clientId: string, accountId: string, entry: UsageEntry): Promise<boolean> {
     const key = `${clientId}:${accountId}`;
     const rows = this.entries.get(key) ?? [];
     if (rows.some((candidate) => candidate.ts === entry.ts && candidate.windowId === entry.windowId)) {
@@ -259,6 +274,7 @@ export class InMemoryAccountUsageSnapshotStore implements IAccountUsageSnapshotS
   }
 
   public async *read(
+    _call: CallContext,
     clientId: string,
     accountId: string,
     opts: { from: number; to: number; windowId?: string },
@@ -272,7 +288,7 @@ export class InMemoryAccountUsageSnapshotStore implements IAccountUsageSnapshotS
     }
   }
 
-  public async hasAnySnapshots(): Promise<boolean> {
+  public async hasAnySnapshots(_call: CallContext): Promise<boolean> {
     return [...this.entries.values()].some((entries) => entries.length > 0);
   }
 
@@ -290,19 +306,19 @@ export class InMemoryAccountStore {
   public readonly usageSnapshotStore = new InMemoryAccountUsageSnapshotStore();
 
   public async list(clientId: string): Promise<StoredAccount[]> {
-    return listStoredAccounts(this.metadataStore, this.credentialStore, clientId);
+    return listStoredAccounts(createTestCall(), this.metadataStore, this.credentialStore, clientId);
   }
 
   public async get(clientId: string, accountId: string): Promise<StoredAccount | null> {
-    return getStoredAccount(this.metadataStore, this.credentialStore, clientId, accountId);
+    return getStoredAccount(createTestCall(), this.metadataStore, this.credentialStore, clientId, accountId);
   }
 
   public async upsert(clientId: string, account: StoredAccount): Promise<void> {
-    await upsertStoredAccount(this.metadataStore, this.credentialStore, clientId, account);
+    await upsertStoredAccount(createTestCall(), this.metadataStore, this.credentialStore, clientId, account);
   }
 
   public async remove(clientId: string, accountId: string): Promise<void> {
-    await removeStoredAccount(this.metadataStore, this.credentialStore, clientId, accountId);
+    await removeStoredAccount(createTestCall(), this.metadataStore, this.credentialStore, clientId, accountId);
   }
 
   public clear(): void {

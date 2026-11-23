@@ -1,7 +1,7 @@
 // NOTE: do NOT change the eslint override on the next line without explicit human approval
 /* eslint max-lines: ["error", { "max": 530 }] */
-import { MakaioBus, type IMakaioBus } from '@makaio/bus-core';
-import { createMakaioContext } from '@makaio/core';
+import type { IMakaioBus } from '@makaio/bus-core';
+import { createMakaioContext, type CallContext } from '@makaio/core';
 import type {
   AnyToolDefinition,
   FileAccessRuleProvider,
@@ -35,6 +35,16 @@ export type {
   ToolsetPolicyProvider,
   ToolsWithToolsetsResult,
 } from './types.js';
+
+/** Options for registering a toolset. */
+export interface ToolsetRegistrationOptions {
+  /**
+   * Bus instance of the extension that contributes the toolset. Tools of the toolset send over this
+   * bus; without it they send over the registry's own bus.
+   */
+  bus?: IMakaioBus;
+}
+
 /** Internal storage for registered tools with toolset association. */
 interface RegisteredTool {
   tool: AnyToolDefinition;
@@ -47,6 +57,7 @@ interface RegisteredTool {
 function generateExecutionId(): string {
   return `exec_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
 }
+
 /**
  * Central registry for tools and toolsets.
  * Manages registration, lookup, and execution with bus integration.
@@ -58,20 +69,22 @@ export class ToolRegistry {
   private readonly bus: IMakaioBus;
   private readonly toolsets = new Map<string, Toolset>();
   private readonly tools = new Map<string, RegisteredTool>();
+  /** Carrier bus of the contributing extension per toolset name; absent entries use `this.bus`. */
+  private readonly toolsetBuses = new Map<string, IMakaioBus>();
   private readonly cleanupHandlers: Array<() => void> = [];
   private readonly handlerPriority: number;
   private readonly policyProvider?: ToolsetPolicyProvider;
   private readonly fileAccessRuleProvider?: FileAccessRuleProvider;
   private revision = 0;
   /**
-   * Creates a new ToolRegistry with optional configuration.
-   * @param options - Registry configuration options
+   * Creates a new ToolRegistry bound to the given bus.
+   * @param options - Registry configuration options; `bus` is the registry's own bus
    */
-  public constructor(options?: ToolRegistryOptions) {
-    this.bus = options?.bus ?? MakaioBus;
-    this.handlerPriority = options?.handlerPriority ?? 0;
-    this.policyProvider = options?.policyProvider;
-    this.fileAccessRuleProvider = options?.fileAccessRuleProvider;
+  public constructor(options: ToolRegistryOptions & { readonly bus: IMakaioBus }) {
+    this.bus = options.bus;
+    this.handlerPriority = options.handlerPriority ?? 0;
+    this.policyProvider = options.policyProvider;
+    this.fileAccessRuleProvider = options.fileAccessRuleProvider;
     this.registerHandlers();
   }
 
@@ -95,7 +108,7 @@ export class ToolRegistry {
       async (context) => {
         const { toolName, input, adapterId, adapterName, contextOverrides } = context.payload;
 
-        const result = await this.execute(toolName, input, {
+        const result = await this.execute(context.call, toolName, input, {
           contextOverrides,
           adapterId,
           adapterName,
@@ -110,8 +123,9 @@ export class ToolRegistry {
   /**
    * Registers a toolset. All tools are indexed by name. Emits `tool.registered` event.
    * @param toolset - Toolset to register
+   * @param options - Registration options (carrier bus of the contributing extension)
    */
-  public async register(toolset: Toolset): Promise<void> {
+  public async register(toolset: Toolset, options?: ToolsetRegistrationOptions): Promise<void> {
     if (this.toolsets.has(toolset.metadata.name)) {
       throw new Error(`Toolset '${toolset.metadata.name}' is already registered`);
     }
@@ -126,26 +140,27 @@ export class ToolRegistry {
           `Tool '${toolName}' is already registered (from toolset '${this.tools.get(toolName)!.toolsetName}')`,
         );
       }
-      registrations.push({
-        tool,
-        toolsetName: toolset.metadata.name,
-      });
+      registrations.push({ tool, toolsetName: toolset.metadata.name });
       toolNames.push(toolName);
     }
 
     this.toolsets.set(toolset.metadata.name, toolset);
+    if (options?.bus) {
+      this.toolsetBuses.set(toolset.metadata.name, options.bus);
+    }
     for (let index = 0; index < registrations.length; index += 1) {
       this.tools.set(toolNames[index], registrations[index]);
     }
 
-    await this.emitRegistryChanged('toolset-registered', toolset.metadata.name).catch((error) =>
+    const call = this.bus.own('shared-work');
+    await this.emitRegistryChanged(call, 'toolset-registered', toolset.metadata.name).catch((error) =>
       console.warn(
         `[ToolRegistry] Failed to emit ${ToolSubjects.registryChanged.subject} for '${toolset.metadata.name}':`,
         error,
       ),
     );
     await this.bus
-      .emit(ToolSubjects.registered, {
+      .emit(call, ToolSubjects.registered, {
         toolsetName: toolset.metadata.name,
         toolsetVersion: toolset.metadata.version,
         toolNames,
@@ -172,7 +187,8 @@ export class ToolRegistry {
       this.tools.delete(tool.metadata.name);
     }
     this.toolsets.delete(toolsetName);
-    await this.emitRegistryChanged('toolset-unregistered', toolsetName).catch((error) =>
+    this.toolsetBuses.delete(toolsetName);
+    await this.emitRegistryChanged(this.bus.own('shared-work'), 'toolset-unregistered', toolsetName).catch((error) =>
       console.warn(
         `[ToolRegistry] Failed to emit ${ToolSubjects.registryChanged.subject} for '${toolsetName}':`,
         error,
@@ -182,15 +198,17 @@ export class ToolRegistry {
 
   /**
    * Emit a monotonic registryChanged event for toolset lifecycle updates.
+   * @param call - Call context the event is sent with
    * @param reason - Change reason enum.
    * @param toolsetName - Affected toolset.
    */
   private async emitRegistryChanged(
+    call: CallContext,
     reason: 'toolset-registered' | 'toolset-unregistered' | 'plugin-loaded' | 'plugin-unloaded',
     toolsetName: string,
   ): Promise<void> {
     this.revision += 1;
-    await this.bus.emit(ToolSubjects.registryChanged, {
+    await this.bus.emit(call, ToolSubjects.registryChanged, {
       revision: this.revision,
       reason,
       toolsetName,
@@ -203,12 +221,18 @@ export class ToolRegistry {
    * Validates input against the tool's schema, enforces policy, executes the tool,
    * and emits lifecycle events (started, completed/error). Constraints are enriched
    * with file access rules before the tool receives its context.
+   * @param call - Call context of the execution request; lifecycle events and the tool's own sends carry it
    * @param toolName - Name of the tool to execute
    * @param input - Input data (validated against tool's inputSchema)
    * @param options - Optional execution options (context overrides, adapter identity)
    * @returns Tool execution result (success with data or failure with error)
    */
-  public async execute(toolName: string, input: unknown, options?: ExecuteOptions): Promise<ToolResult<unknown>> {
+  public async execute(
+    call: CallContext,
+    toolName: string,
+    input: unknown,
+    options?: ExecuteOptions,
+  ): Promise<ToolResult<unknown>> {
     const registered = this.tools.get(toolName);
 
     if (!registered) {
@@ -237,12 +261,7 @@ export class ToolRegistry {
     const startTime = Date.now();
 
     // Emit started event
-    await this.bus.emit(ToolSubjects.started, {
-      toolName,
-      toolsetName,
-      executionId,
-      timestamp: startTime,
-    });
+    await this.bus.emit(call, ToolSubjects.started, { toolName, toolsetName, executionId, timestamp: startTime });
 
     try {
       // Validate input
@@ -252,7 +271,7 @@ export class ToolRegistry {
           issues: parseResult.error.issues,
         });
 
-        await this.bus.emit(ToolSubjects.error, {
+        await this.bus.emit(call, ToolSubjects.error, {
           toolName,
           toolsetName,
           executionId,
@@ -263,11 +282,11 @@ export class ToolRegistry {
         return error;
       }
 
-      const context = await this.buildExecutionContext(options, adapterIdentity.data);
+      const context = await this.buildExecutionContext(call, toolsetName, options, adapterIdentity.data);
       const result = await tool.execute(parseResult.data, context);
 
       if (result.success) {
-        await this.bus.emit(ToolSubjects.completed, {
+        await this.bus.emit(call, ToolSubjects.completed, {
           toolName,
           toolsetName,
           executionId,
@@ -275,7 +294,7 @@ export class ToolRegistry {
           durationMs: Date.now() - startTime,
         });
       } else {
-        await this.bus.emit(ToolSubjects.error, {
+        await this.bus.emit(call, ToolSubjects.error, {
           toolName,
           toolsetName,
           executionId,
@@ -288,7 +307,7 @@ export class ToolRegistry {
     } catch (error) {
       const toolResult = errorToToolResult(error);
 
-      await this.bus.emit(ToolSubjects.error, {
+      await this.bus.emit(call, ToolSubjects.error, {
         toolName,
         toolsetName,
         executionId,
@@ -303,11 +322,15 @@ export class ToolRegistry {
   /**
    * Builds a ToolExecutionContext from execute options, enriching constraints
    * with file access rules when a provider is configured.
+   * @param call - Call context of the execution request
+   * @param toolsetName - Toolset of the tool; selects the carrier bus the tool sends over
    * @param options - Execution options with optional context overrides
    * @param effectiveAdapterIdentity - Canonical adapter identity for this execution
    * @returns Fully populated ToolExecutionContext
    */
   private async buildExecutionContext(
+    call: CallContext,
+    toolsetName: string,
     options: ExecuteOptions | undefined,
     effectiveAdapterIdentity: EffectiveAdapterIdentity,
   ): Promise<ToolExecutionContext> {
@@ -319,12 +342,12 @@ export class ToolRegistry {
       enrichedConstraints = { ...enrichedConstraints, [FILE_ACCESS_RULES_KEY]: rules };
     }
 
-    // Cast bus to BusLike — IMakaioBus implements BusLike methods but with stricter types
     const baseContext = createMakaioContext({ ...options?.contextOverrides, constraints: enrichedConstraints });
     const overrides = options?.contextOverrides as Partial<ToolExecutionContext> | undefined;
     return {
       ...baseContext,
-      bus: this.bus as ToolExecutionContext['bus'],
+      call,
+      bus: this.toolsetBuses.get(toolsetName) ?? this.bus,
       sessionId: overrides?.sessionId,
       agentId: overrides?.agentId,
       adapterId: effectiveAdapterIdentity.adapterId,

@@ -1,5 +1,8 @@
 /* eslint-disable max-lines-per-function, complexity */
 import type { ProceduralConnectorTurn } from '@makaio/ai-adapters-core';
+import type { CallContext } from '@makaio/contracts';
+import type { EmitSubject } from '@makaio/bus-core';
+import type { ScopedSubjectDefinition } from '@makaio/core';
 import type { StreamSessionTurnState } from '@makaio/ai-adapters-stream-session';
 import { CursorSdkSubjects } from './namespaces/index.js';
 import type { CursorSdkBus } from './namespaces/index.js';
@@ -62,35 +65,40 @@ export function createTurnEventState(): TurnEventState {
 
 /**
  * Emit a scoped bus event with auto-injected identity metadata.
+ * @param call - Call of the message that owns this SDK run.
  * @param bus - Scoped bus to emit on.
  * @param metadata - Identity fields to merge into every payload.
- * @param args - Subject and payload arguments for bus.emit().
+ * @param subject - Event subject to emit.
+ * @param payload - Event payload before identity enrichment.
  */
-export function emitWithMetadata(
+export function emitWithMetadata<Subject extends ScopedSubjectDefinition<CursorSdkBus['namespace']>>(
+  call: CallContext,
   bus: CursorSdkBus,
   metadata: BusMetadata,
-  ...args: Parameters<CursorSdkBus['emit']>
+  subject: EmitSubject<Subject>,
+  payload: Subject['$meta']['payload'],
 ): void {
-  const [subject, payload] = args;
-  void bus.emit(subject, { ...payload, ...metadata } as Parameters<CursorSdkBus['emit']>[1]);
+  void bus.emit<Subject>(call, subject, { ...payload, ...metadata });
 }
 
 /**
  * Mark a stream step as started without exposing rejected lifecycle promises.
+ * @param call - Call of the message that owns this SDK run.
  * @param turn - Active turn whose step lifecycle should advance.
  */
-function markStepStarted(turn: StepLifecycleTurn): void {
-  void turn.markStepStarted().catch((err: unknown) => {
+function markStepStarted(call: CallContext, turn: StepLifecycleTurn): void {
+  void turn.markStepStarted(call).catch((err: unknown) => {
     console.error('[CursorSdkEventRouting] turn.markStepStarted failed:', err);
   });
 }
 
 /**
  * Mark a stream step as finished without exposing rejected lifecycle promises.
+ * @param call - Call of the message that owns this SDK run.
  * @param turn - Active turn whose step lifecycle should advance.
  */
-function markStepFinished(turn: StepLifecycleTurn): void {
-  void turn.markStepFinished().catch((err: unknown) => {
+function markStepFinished(call: CallContext, turn: StepLifecycleTurn): void {
+  void turn.markStepFinished(call).catch((err: unknown) => {
     console.error('[CursorSdkEventRouting] turn.markStepFinished failed:', err);
   });
 }
@@ -112,20 +120,26 @@ function stringifyShellOutput(value: unknown): string {
 
 /**
  * Flush accumulated text and thinking buffers as complete events.
+ * @param call - Call of the message that owns this SDK run.
  * @param bus - Scoped bus to emit on.
  * @param metadata - Identity metadata to inject.
  * @param state - Mutable turn event state containing the buffers.
  */
-export function flushAccumulated(bus: CursorSdkBus, metadata: BusMetadata, state: TurnEventState): void {
+export function flushAccumulated(
+  call: CallContext,
+  bus: CursorSdkBus,
+  metadata: BusMetadata,
+  state: TurnEventState,
+): void {
   if (state.accumulatedText) {
-    emitWithMetadata(bus, metadata, CursorSdkSubjects.text_complete, {
+    emitWithMetadata(call, bus, metadata, CursorSdkSubjects.text_complete, {
       eventType: 'text_complete',
       text: state.accumulatedText,
     });
     state.accumulatedText = '';
   }
   if (state.accumulatedThinking) {
-    emitWithMetadata(bus, metadata, CursorSdkSubjects.thinking_complete, {
+    emitWithMetadata(call, bus, metadata, CursorSdkSubjects.thinking_complete, {
       eventType: 'thinking_complete',
       text: state.accumulatedThinking,
     });
@@ -168,6 +182,7 @@ function isFailedToolCompletion(update: CursorUpdate, toolCall: Record<string, u
  *
  * Separated from the outer handler to keep per-event logic isolated and
  * satisfy the per-function line limit.
+ * @param call - Call of the message that owns this SDK run.
  * @param bus - Scoped bus to emit events on.
  * @param metadata - Identity metadata to inject into every emission.
  * @param turn - Active turn for state transitions.
@@ -176,6 +191,7 @@ function isFailedToolCompletion(update: CursorUpdate, toolCall: Record<string, u
  * @param messageId - Makaio message that owns the SDK update.
  */
 function routeUpdate(
+  call: CallContext,
   bus: CursorSdkBus,
   metadata: BusMetadata,
   turn: StepLifecycleTurn,
@@ -187,12 +203,12 @@ function routeUpdate(
     case 'text-delta': {
       if (!state.stepStarted) {
         state.stepStarted = true;
-        markStepStarted(turn);
+        markStepStarted(call, turn);
       }
       const textDelta = (update.text as string) ?? '';
       state.accumulatedText += textDelta;
       state.turnText += textDelta;
-      emitWithMetadata(bus, metadata, CursorSdkSubjects.text_delta, {
+      emitWithMetadata(call, bus, metadata, CursorSdkSubjects.text_delta, {
         eventType: 'text_delta',
         delta: textDelta,
       });
@@ -202,11 +218,11 @@ function routeUpdate(
     case 'thinking-delta': {
       if (!state.stepStarted) {
         state.stepStarted = true;
-        markStepStarted(turn);
+        markStepStarted(call, turn);
       }
       const thinkDelta = (update.text as string) ?? '';
       state.accumulatedThinking += thinkDelta;
-      emitWithMetadata(bus, metadata, CursorSdkSubjects.thinking_delta, {
+      emitWithMetadata(call, bus, metadata, CursorSdkSubjects.thinking_delta, {
         eventType: 'thinking_delta',
         delta: thinkDelta,
       });
@@ -214,7 +230,7 @@ function routeUpdate(
     }
 
     case 'thinking-completed':
-      emitWithMetadata(bus, metadata, CursorSdkSubjects.thinking_complete, {
+      emitWithMetadata(call, bus, metadata, CursorSdkSubjects.thinking_complete, {
         eventType: 'thinking_complete',
         text: state.accumulatedThinking,
         durationMs: (update.thinkingDurationMs as number | undefined) ?? undefined,
@@ -224,7 +240,7 @@ function routeUpdate(
 
     case 'tool-call-started': {
       const toolCall = update.toolCall as { type: string; args?: unknown } | undefined;
-      emitWithMetadata(bus, metadata, CursorSdkSubjects.tool_started, {
+      emitWithMetadata(call, bus, metadata, CursorSdkSubjects.tool_started, {
         eventType: 'tool_started',
         messageId,
         toolName: toolCall?.type ?? 'unknown',
@@ -236,7 +252,7 @@ function routeUpdate(
 
     case 'tool-call-completed': {
       const completedCall = isRecord(update.toolCall) ? update.toolCall : undefined;
-      emitWithMetadata(bus, metadata, CursorSdkSubjects.tool_completed, {
+      emitWithMetadata(call, bus, metadata, CursorSdkSubjects.tool_completed, {
         eventType: 'tool_completed',
         messageId,
         toolName: typeof completedCall?.['type'] === 'string' ? completedCall['type'] : 'unknown',
@@ -249,7 +265,7 @@ function routeUpdate(
 
     case 'shell-output-delta': {
       const raw = update.event;
-      emitWithMetadata(bus, metadata, CursorSdkSubjects.shell_output_delta, {
+      emitWithMetadata(call, bus, metadata, CursorSdkSubjects.shell_output_delta, {
         eventType: 'shell_output_delta',
         delta: stringifyShellOutput(raw),
       });
@@ -257,20 +273,20 @@ function routeUpdate(
     }
 
     case 'summary-started':
-      emitWithMetadata(bus, metadata, CursorSdkSubjects.summary_started, { eventType: 'summary_started' });
+      emitWithMetadata(call, bus, metadata, CursorSdkSubjects.summary_started, { eventType: 'summary_started' });
       break;
 
     case 'summary-completed':
-      emitWithMetadata(bus, metadata, CursorSdkSubjects.summary_complete, {
+      emitWithMetadata(call, bus, metadata, CursorSdkSubjects.summary_complete, {
         eventType: 'summary_complete',
         text: (update.summary as string) ?? '',
       });
       break;
 
     case 'turn-ended': {
-      flushAccumulated(bus, metadata, state);
+      flushAccumulated(call, bus, metadata, state);
       if (update.usage && typeof update.usage === 'object') {
-        emitWithMetadata(bus, metadata, CursorSdkSubjects.usage, {
+        emitWithMetadata(call, bus, metadata, CursorSdkSubjects.usage, {
           eventType: 'usage',
           usage: update.usage,
           agentId: metadata.agentId,
@@ -282,7 +298,7 @@ function routeUpdate(
     }
 
     case 'status-changed':
-      emitWithMetadata(bus, metadata, CursorSdkSubjects.status_changed, {
+      emitWithMetadata(call, bus, metadata, CursorSdkSubjects.status_changed, {
         eventType: 'status_changed',
         status: (update.status as string) ?? '',
         message: (update.message as string | undefined) ?? undefined,
@@ -297,12 +313,14 @@ function routeUpdate(
  * Routes InteractionUpdate events to scoped bus subjects. Always emits the
  * raw `sdk.event` first for observability, then delegates to
  * {@link routeUpdate} for normalized semantic subject emission.
+ * @param call - Call of the message that owns this SDK run.
  * @param config - Event routing configuration.
  * @param turn - The active turn for state transitions.
  * @param state - Mutable turn event state.
  * @returns Callback function for SendOptions.onDelta.
  */
 export function createDeltaHandler(
+  call: CallContext,
   config: EventRoutingConfig,
   turn: StepLifecycleTurn,
   state: TurnEventState,
@@ -311,8 +329,8 @@ export function createDeltaHandler(
 
   return ({ update }) => {
     // Always emit raw event first for observability
-    emitWithMetadata(bus, metadata, CursorSdkSubjects.sdk.event, update);
-    routeUpdate(bus, metadata, turn, state, update, messageId);
+    emitWithMetadata(call, bus, metadata, CursorSdkSubjects.sdk.event, update);
+    routeUpdate(call, bus, metadata, turn, state, update, messageId);
   };
 }
 
@@ -323,12 +341,14 @@ export function createDeltaHandler(
  * text as a `text_complete` event, then transitions the turn to step_finished
  * and resets the stepStarted flag so the next content block correctly
  * transitions to step_started again.
+ * @param call - Call of the message that owns this SDK run.
  * @param config - Event routing configuration (bus and agentId).
  * @param turn - The active turn for state transitions.
  * @param state - Mutable turn event state.
  * @returns Callback function for SendOptions.onStep.
  */
 export function createStepHandler(
+  call: CallContext,
   config: EventRoutingConfig,
   turn: StepLifecycleTurn,
   state: TurnEventState,
@@ -336,8 +356,8 @@ export function createStepHandler(
   const { bus, metadata } = config;
   return () => {
     if (state.stepStarted) {
-      flushAccumulated(bus, metadata, state);
-      markStepFinished(turn);
+      flushAccumulated(call, bus, metadata, state);
+      markStepFinished(call, turn);
       state.stepStarted = false;
     }
   };

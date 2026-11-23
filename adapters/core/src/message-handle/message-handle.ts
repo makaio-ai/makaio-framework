@@ -1,3 +1,4 @@
+import type { CallContext } from '@makaio/core';
 import { DeferredPromise } from '@makaio/utils';
 import type {
   CacheStrategy,
@@ -7,7 +8,7 @@ import type {
   ResponseSchemaDescriptor,
   RequestCorrelationContext,
 } from '@makaio/contracts';
-import type { MessageResult, MessageState } from './types.js';
+import type { MessageHandleOptions, MessageResult, MessageState } from './types.js';
 import type { NormalizedMessageInput } from '../utils/normalizeMessageInput.js';
 
 type CompletionTransform = (result: MessageResult) => MessageResult | Promise<MessageResult>;
@@ -44,6 +45,11 @@ export class MessageHandle {
   private _turnContext?: Record<string, JsonValue>;
 
   public constructor(
+    /**
+     * Call context of the operation this handle serves. Read-only holder for
+     * exactly one operation; events the operation triggers send with it.
+     */
+    public readonly call: CallContext,
     public readonly messageId: string,
     public readonly message: NormalizedMessageInput,
     public readonly deliveryMode: MessageDeliveryMode,
@@ -360,4 +366,45 @@ export function markCompletedWithFinalResult(
       console.warn(`[MessageHandle] completion notification failed for messageId: ${handle.messageId}`, error);
     }
   });
+}
+
+/**
+ * Create a MessageHandle with standard initialization (messageId, adapterSessionId, onMessageSent).
+ *
+ * The connector supplies its session identity and notification callback so handle
+ * construction stays independent of connector state.
+ * @param message - Normalized user message
+ * @param options - Message options (call, id, delivery mode, history, and turn context)
+ * @param adapterSessionId - Provider session ID of the connector at creation time
+ * @param onMessageSent - Connector callback announcing a user message; skipped for internal retries
+ * @returns Initialized MessageHandle instance
+ */
+export function buildMessageHandle(
+  message: NormalizedMessageInput,
+  options: MessageHandleOptions,
+  adapterSessionId: string | undefined,
+  onMessageSent: ((messageHandle: MessageHandle) => void) | undefined,
+): MessageHandle {
+  const messageId = options.messageId ?? crypto.randomUUID();
+  const handle = new MessageHandle(
+    options.call,
+    messageId,
+    message,
+    options.deliveryMode ?? 'enqueue',
+    options.messageHistory,
+    options.turnContext,
+    options.responseSchema,
+    options.internalRetry ?? false,
+    options.cacheStrategy,
+    options.requestCorrelation === undefined ? undefined : { ...options.requestCorrelation, messageId },
+    options.turnId,
+    options.useNativeResume,
+  );
+  handle.adapterSessionId = adapterSessionId;
+  // Suppress user_message.sent for internal retry turns — the retry is an
+  // implementation detail and should not be surfaced as a new user message.
+  if (!options.internalRetry) {
+    onMessageSent?.(handle);
+  }
+  return handle;
 }

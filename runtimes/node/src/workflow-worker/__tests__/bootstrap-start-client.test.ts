@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import { createBusInstance, NoHandlerError } from '@makaio/bus-core';
-import { ExecutionAttemptNamespace, ExecutionAttemptSubjects } from '@makaio/contracts';
+import {
+  ExecutionAttemptNamespace,
+  ExecutionAttemptSubjects,
+  type ExecutionAttemptBootstrapAwaitStartResponse,
+} from '@makaio/contracts';
+import { countSubjectHandlers } from '@makaio/test-utils';
 import { bootstrapWorkerRuntime, BootstrapStartRefusedError } from '../bootstrap-start-client.js';
 
 describe('bootstrap start response parsing', () => {
@@ -12,7 +17,9 @@ describe('bootstrap start response parsing', () => {
   ])('rejects malformed $status even when bus validation is disabled', async (response) => {
     const bus = createBusInstance();
     bus.registerNamespace({ ...ExecutionAttemptNamespace, options: { busValidationMode: 'skip' } });
-    bus.on(ExecutionAttemptSubjects.bootstrap.awaitStart, (ctx) => ctx.setResult(response as never));
+    bus.on(ExecutionAttemptSubjects.bootstrap.awaitStart, (ctx) =>
+      ctx.setResult(response as ExecutionAttemptBootstrapAwaitStartResponse),
+    );
     let closed = 0;
     let connections = 0;
     await expect(
@@ -36,7 +43,7 @@ describe('bootstrap start response parsing', () => {
     ).rejects.toThrow();
     expect(connections).toBe(1);
     expect(closed).toBe(1);
-    expect(bus.getContext().requestHandlers.get('execution-attempt.operation.deliver') ?? []).toHaveLength(0);
+    expect(countSubjectHandlers(bus, ExecutionAttemptSubjects.operation.deliver)).toBe(0);
   });
 
   it('preserves an explicit refusal without retrying or registering', async () => {

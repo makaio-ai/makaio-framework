@@ -286,6 +286,7 @@ export async function connectBusClient(url?: string, options?: ConnectBusClientO
   };
   const transport = new WebSocketClientTransport({
     url: resolvedUrl,
+    attestingRole: 'core-uplink',
     name: 'ws-client',
     autoReconnect: resolvedReconnectConfig,
     auth: options?.auth,

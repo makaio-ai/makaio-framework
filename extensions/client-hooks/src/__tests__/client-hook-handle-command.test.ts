@@ -18,6 +18,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { readFile } from 'node:fs/promises';
 import { createBusInstance, type IMakaioBus } from '@makaio/bus-core';
+import { createTestCall } from '@makaio/test-utils';
 import {
   RawClientHookPayloadSchema,
   ClientHookHandleResponseSchema,
@@ -29,7 +30,6 @@ import {
   handleClientHookHandle,
   runClientHookHandleCommand,
   type ClientHookHandleArgs,
-  type ClientHookHandleCommandContext,
 } from '../cli/client-hook-command.js';
 import { clientHooksCli } from '../cli/index.js';
 
@@ -124,6 +124,7 @@ describe('handleClientHookHandle — CLI output capture', () => {
 
     try {
       await handleClientHookHandle({
+        call: createTestCall(),
         args: { client: 'cli-output', eventName: 'PreToolUse', timeout: 5000, failClose: false },
         bus,
         output,
@@ -289,7 +290,7 @@ describe('runClientHookHandleCommand — observation invariant', () => {
           resolveEmit = res;
         });
       });
-      const requestOptional = vi.fn(async () => {
+      const requestOptional = vi.spyOn(createBusInstance(), 'requestOptional').mockImplementation(async () => {
         order.push('handle');
         return { handled: false as const };
       });
@@ -312,8 +313,7 @@ describe('runClientHookHandleCommand — observation invariant', () => {
       // The sub-budget fires at 250 ms; fake timers advance to 600 ms but
       // Date.now() at the point requestOptional is called reflects only the
       // 250 ms sub-budget expiry.  Remaining = 1000 − 250 = 750 ms > 500 ms.
-      const passedTimeout = (requestOptional.mock.calls[0] as unknown as [unknown, unknown, { timeout: number }])[2]
-        .timeout;
+      const passedTimeout = requestOptional.mock.calls[0]?.[2]?.timeout;
       expect(passedTimeout).toBeGreaterThan(500);
 
       resolveEmit();
@@ -326,7 +326,7 @@ describe('runClientHookHandleCommand — observation invariant', () => {
   it('observation sub-budget does not consume the handle budget', async () => {
     // emit resolves instantly; the handle timeout should be nearly the full budget.
     const emit = vi.fn(async () => {});
-    const requestOptional = vi.fn(async () => ({ handled: false as const }));
+    const requestOptional = vi.spyOn(createBusInstance(), 'requestOptional').mockResolvedValue({ handled: false });
 
     await runClientHookHandleCommand(
       {
@@ -337,8 +337,7 @@ describe('runClientHookHandleCommand — observation invariant', () => {
     );
 
     expect(requestOptional).toHaveBeenCalledOnce();
-    const passedTimeout = (requestOptional.mock.calls[0] as unknown as [unknown, unknown, { timeout: number }])[2]
-      .timeout;
+    const passedTimeout = requestOptional.mock.calls[0]?.[2]?.timeout;
     // Observation completed instantly, so nearly the full 1000 ms should remain.
     expect(passedTimeout).toBeGreaterThanOrEqual(900);
   });
@@ -669,15 +668,7 @@ describe('runClientHookHandleCommand — fail-close', () => {
 describe('runClientHookHandleCommand — timeout forwarding', () => {
   it('passes the timeout option to requestOptional', async () => {
     const emit = vi.fn(async () => {});
-    let requestOptions: { readonly timeout?: number } | undefined;
-    const requestOptional: NonNullable<ClientHookHandleCommandContext['bus']>['requestOptional'] = async (
-      _subject,
-      _payload,
-      options,
-    ) => {
-      requestOptions = options;
-      return { handled: false };
-    };
+    const requestOptional = vi.spyOn(createBusInstance(), 'requestOptional').mockResolvedValue({ handled: false });
 
     await runClientHookHandleCommand(
       {
@@ -687,6 +678,7 @@ describe('runClientHookHandleCommand — timeout forwarding', () => {
       makeDeps({}),
     );
 
+    const requestOptions = requestOptional.mock.calls[0]?.[2];
     expect(requestOptions?.timeout).toBeGreaterThan(0);
     expect(requestOptions?.timeout).toBeLessThanOrEqual(1234);
   });

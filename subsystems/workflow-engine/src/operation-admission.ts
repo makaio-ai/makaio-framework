@@ -99,7 +99,7 @@ export function registerOperationAdmissionHandler<TOutcome>(
       // the durable admission: generation and instant are the ones the
       // repository recorded, so a replay names the original admission, not
       // the retry that announced it again.
-      await deps.bus.emit(ExecutionAttemptSubjects.operation.admitted, {
+      await deps.bus.emit(ctx.call, ExecutionAttemptSubjects.operation.admitted, {
         executionAttemptId,
         operationId: decision.operationId,
         operationKind,

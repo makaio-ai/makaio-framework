@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
 import { registerStorageEngine } from '@makaio/storage-drizzle';
 import { storageEngine as postgresStorageEngine } from '@makaio/storage-pg';
@@ -313,6 +314,48 @@ describe('stagePackageForNpmPublish', () => {
     expect(manifest.types).toBe('dist/index.d.ts');
     expect(manifest.exports?.['.'].types).toBe('./dist/index.d.ts');
     expect(manifest.exports?.['./server'].types).toBe('./dist/server.d.ts');
+  });
+
+  it('refuses to stage built output that imports @makaio/framework without a framework peer', () => {
+    const packageDir = makeTempDir();
+    writeFixture(
+      packageDir,
+      'package.json',
+      JSON.stringify({
+        name: '@makaio/undeclared-framework-importer',
+        version: '1.0.0',
+        type: 'module',
+        files: ['dist'],
+        publishConfig: { access: 'public', exports: { '.': './dist/index.mjs' } },
+      }),
+    );
+    writeFixture(packageDir, 'dist/index.mjs', 'export {};');
+    writeFixture(packageDir, 'dist/index.d.ts', "import type { PartyKind } from '@makaio/framework/core';\n");
+
+    expect(() => stagePackageForNpmPublish(packageDir, '1.0.0')).toThrow(
+      /built output imports @makaio\/framework \(dist\/index\.d\.ts\)/u,
+    );
+  });
+
+  it('stages the real contracts manifest with the framework peer its built declarations need', () => {
+    const contractsManifest = readFileSync(
+      join(dirname(fileURLToPath(import.meta.url)), '../../core/contracts/package.json'),
+      'utf8',
+    );
+    const packageDir = makeTempDir();
+    writeFixture(packageDir, 'package.json', contractsManifest);
+    writeFixture(packageDir, 'LICENSE', 'MIT');
+    writeFixture(packageDir, 'README.md', '# test');
+    writeFixture(packageDir, 'dist/index.mjs', 'export {};');
+    writeFixture(packageDir, 'dist/index.d.ts', "export type { PartyKind } from '@makaio/framework/core';\n");
+
+    const staged = JSON.parse(
+      readFileSync(join(stagePackageForNpmPublish(packageDir, '1.0.0'), 'package.json'), 'utf8'),
+    ) as {
+      readonly peerDependencies?: Record<string, string>;
+    };
+
+    expect(staged.peerDependencies?.['@makaio/framework']).toBe('^1.0.0');
   });
 
   it('omits emitted test declarations without excluding runtime dist files', () => {

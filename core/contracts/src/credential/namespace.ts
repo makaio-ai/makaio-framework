@@ -17,17 +17,18 @@
  * @example
  * ```typescript
  * // Obtain a channel token, then open a channel for sensitive operations
- * const { token } = await bus.request(CredentialSubjects.getChannelToken, {});
- * const channel = await openChannel(bus.getContext(), 'credentials', { token, transports: [] });
+ * const call = bus.own('root');
+ * const { token } = await bus.request(call, CredentialSubjects.getChannelToken, {});
+ * const channel = await openChannel(bus, 'credentials', { token, transports: [] });
  *
  * // Store credentials over the local encrypted channel
- * await channel.request(CredentialSubjects.store, {
+ * await channel.request(call, CredentialSubjects.store, {
  *   configId: 'uuid-here',
  *   credentials: { apiKey: 'sk-...' },
  * });
  *
  * // Resolve a credential reference over the encrypted channel
- * const { value } = await channel.request(CredentialSubjects.resolve, { ref });
+ * const { value } = await channel.request(call, CredentialSubjects.resolve, { ref });
  * ```
  * @packageDocumentation
  */

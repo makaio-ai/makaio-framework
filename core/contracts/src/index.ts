@@ -1750,6 +1750,33 @@ export type {
 export { EvaluationIdSchema, RuleIdSchema } from './rules/index.js';
 export type { EvaluationId, LookupKind, ReactionKind, RuleId, StrategyKind, TriggerKind } from './rules/index.js';
 export {
+  CallClaimSchema,
+  CallContextRecordSchema,
+  CrossHostMetadataSchema,
+  isCallClaim,
+  isInProcessCaller,
+  MAKAIO_CLI_LOCAL_PARTY_KIND,
+  MAKAIO_E2E_PEER_PARTY_KIND,
+  MAKAIO_EXTENSION_PARTY_KIND,
+  MAKAIO_HOST_PARTY_KIND,
+  MAKAIO_LOOPBACK_PARTY_KIND,
+  MAKAIO_WORKER_THREAD_PARTY_KIND,
+  MAKAIO_JOB_RUN_PARTY_KIND,
+  PartyRefSchema,
+  PartySchema,
+} from './call-context/index.js';
+export type {
+  CallClaim,
+  CallContext,
+  CallContextRecord,
+  CrossHostMetadata,
+  OwnWorkPurpose,
+  Party,
+  PartyKind,
+  PartyRef,
+  TransportConnectionInfo,
+} from './call-context/index.js';
+export {
   BrowserEntrypointSchema,
   CliManifestSchema,
   ContributionNameSchema,

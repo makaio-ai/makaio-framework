@@ -13,6 +13,7 @@
  * - Persistence and lifecycle event emission
  */
 import type { IMakaioBus, ScopedBus } from '@makaio/bus-core';
+import type { CallContext } from '@makaio/core';
 import type { AIAgent } from '../agent/ai-agent.js';
 import type { AIAgentConnector } from '../agent/index.js';
 import type { AgentCreationOptions, AgentUsageTotals, StartAgentRequestPayload } from './types.js';
@@ -43,6 +44,7 @@ import {
   type StartAgentRefusal,
   type StartAgentResponsePayload,
 } from './adapter-start-reservation.js';
+import { buildStartSuccess } from './ai-adapter-start-response.js';
 import { callerOwnsAgentRow, persistAndEmitAgent, rollbackRegisteredAgent } from './ai-adapter-start-persistence.js';
 import {
   commitAdapterProviderContextActivation,
@@ -158,19 +160,21 @@ interface StartAgentExecutionResult {
 
 /**
  * Start an agent or initialize an idle connector.
+ * @param call - Call of the start request that creates the agent.
  * @param agent - Newly created, not-yet-registered agent.
  * @param payload - Start-agent request payload.
  * @param sessionContext - Parsed session context, when provided.
  * @returns Adapter session metadata produced by the connector.
  */
 async function startOrInitializeAgent<TBus extends ScopedBus<string>, TConnector extends AIAgentConnector<TBus>>(
+  call: CallContext,
   agent: AIAgent<TBus, TConnector>,
   payload: StartAgentRequestPayload,
   sessionContext: SessionContext | undefined,
 ): Promise<StartAgentExecutionResult> {
   if (payload.initialMessage !== undefined) {
     const normalizedMessage = normalizeMessageInput(payload.initialMessage);
-    const startResult = await agent.start(normalizedMessage, {
+    const startResult = await agent.start(call, normalizedMessage, {
       systemPrompt: payload.systemPrompt,
       sessionContext,
       responseSchema: payload.responseSchema,
@@ -182,7 +186,7 @@ async function startOrInitializeAgent<TBus extends ScopedBus<string>, TConnector
     };
   }
 
-  const adapterSessionId = await agent.initialize({
+  const adapterSessionId = await agent.initialize(call, {
     systemPrompt: payload.systemPrompt,
     sessionContext,
     responseSchema: payload.responseSchema,
@@ -203,6 +207,7 @@ function createUsageBaseline(): AgentUsageTotals {
 
 /**
  * Evict an ephemeral agent after its initial turn reaches a terminal state.
+ * @param call - Call of the start request that created the ephemeral agent
  * @param registry - Agent registry that owns the temporary entry
  * @param agentId - Ephemeral agent identifier
  * @param adapterName - Adapter name for diagnostics
@@ -213,6 +218,7 @@ async function cleanupEphemeralAgentAfterTurn<
   TConnector extends AIAgentConnector<TBus>,
   TAgent extends AIAgent<TBus, TConnector>,
 >(
+  call: CallContext,
   registry: ActiveAgentRegistry<TBus, TConnector, TAgent>,
   agentId: string,
   adapterName: string,
@@ -221,7 +227,7 @@ async function cleanupEphemeralAgentAfterTurn<
   try {
     await messageHandle?.waitForCompletion(EPHEMERAL_CLEANUP_COMPLETION_TIMEOUT_MS);
   } finally {
-    await registry.evictSilently(agentId);
+    await registry.evictSilently(call, agentId);
   }
 }
 
@@ -271,16 +277,21 @@ function buildCreationOptions(
  * Ephemeral agents use a caller-supplied or local UUID. Create-mode agents
  * ask the session service to create/confirm. Resume and fork modes require
  * an explicit `sessionId` on the payload.
+ * @param call - Call context of the start request, sent with the session-service RPC
  * @param payload - Start-agent request payload
  * @param globalBus - Global bus for session-service RPC
  * @returns Resolved session ID
  */
-async function resolveSessionId(payload: StartAgentRequestPayload, globalBus: IMakaioBus): Promise<string> {
+async function resolveSessionId(
+  call: CallContext,
+  payload: StartAgentRequestPayload,
+  globalBus: IMakaioBus,
+): Promise<string> {
   if (payload.ephemeral) {
     return payload.sessionId ?? crypto.randomUUID();
   }
   if ((payload.mode ?? 'create') === 'create') {
-    const createResult = await globalBus.requestOptional(SessionSubjects.create, {
+    const createResult = await globalBus.requestOptional(call, SessionSubjects.create, {
       ...(payload.sessionId ? { sessionId: payload.sessionId } : {}),
     });
     return createResult.handled ? createResult.data.sessionId : (payload.sessionId ?? crypto.randomUUID());
@@ -296,6 +307,7 @@ async function resolveSessionId(payload: StartAgentRequestPayload, globalBus: IM
  *
  * Wraps `createAgent` and `startOrInitializeAgent` with claim-aware error
  * handling so the claim is always released when the agent cannot be started.
+ * @param call - Call context of the start request
  * @param params - Agent creation and start parameters
  * @returns Created agent and start execution result
  */
@@ -303,22 +315,25 @@ async function createAndStartAgentWithClaim<
   TBus extends ScopedBus<string>,
   TConnector extends AIAgentConnector<TBus>,
   TAgent extends AIAgent<TBus, TConnector>,
->(params: {
-  agentId: string;
-  sessionId: string;
-  payload: StartAgentRequestPayload;
-  providerContext: ProviderContext;
-  sessionContext: SessionContext | undefined;
-  adapterName: string;
-  resumeAdapterSessionId: string | undefined;
-  registry: ActiveAgentRegistry<TBus, TConnector, TAgent>;
-  globalBus: IMakaioBus;
-  createAgent: (agentId: string, sessionId: string, options: AgentCreationOptions) => Promise<TAgent>;
-  /** Record that this attempt may have reached the provider, at the moment it may. */
-  markDispatched: () => void;
-  /** The attempt's publication gate, carried into the agent it creates. */
-  publication: ProviderKeyPublication;
-}): Promise<{ agent: TAgent; startResult: StartAgentExecutionResult }> {
+>(
+  call: CallContext,
+  params: {
+    agentId: string;
+    sessionId: string;
+    payload: StartAgentRequestPayload;
+    providerContext: ProviderContext;
+    sessionContext: SessionContext | undefined;
+    adapterName: string;
+    resumeAdapterSessionId: string | undefined;
+    registry: ActiveAgentRegistry<TBus, TConnector, TAgent>;
+    globalBus: IMakaioBus;
+    createAgent: (agentId: string, sessionId: string, options: AgentCreationOptions) => Promise<TAgent>;
+    /** Record that this attempt may have reached the provider, at the moment it may. */
+    markDispatched: () => void;
+    /** The attempt's publication gate, carried into the agent it creates. */
+    publication: ProviderKeyPublication;
+  },
+): Promise<{ agent: TAgent; startResult: StartAgentExecutionResult }> {
   const { agentId, sessionId, payload, providerContext, sessionContext, adapterName, globalBus } = params;
   let activation: ProviderContextActivationLifecycle | undefined;
   let agent: TAgent | undefined;
@@ -331,7 +346,7 @@ async function createAndStartAgentWithClaim<
     // `dead`, and the next attempt found the provider session `occupied` on the
     // strength of an account manager being unavailable. I15's boundary is the
     // *entry of the provider-touching call*, and this is not it.
-    activation = await prepareAdapterProviderContextActivation(globalBus, providerContext);
+    activation = await prepareAdapterProviderContextActivation(call, globalBus, providerContext);
     // From here on the attempt may have reached the provider: the connector is
     // constructed and then initialised, and `initialize` has spoken to the
     // provider by the time it can fail. The marker goes up before the
@@ -343,8 +358,8 @@ async function createAndStartAgentWithClaim<
       sessionId,
       buildCreationOptions(payload, providerContext, sessionContext, params.publication),
     );
-    const startResult = await startOrInitializeAgent(agent, payload, sessionContext);
-    await commitAdapterProviderContextActivation(activation);
+    const startResult = await startOrInitializeAgent(call, agent, payload, sessionContext);
+    await commitAdapterProviderContextActivation(call, activation);
     return { agent, startResult };
   } catch (error) {
     // **No claim release here.** This used to give the process-local
@@ -360,11 +375,11 @@ async function createAndStartAgentWithClaim<
     // rollback helper returns `never` — so there is no exit it fails to cover.
     if (activation === undefined) throw error;
     const failedAgent = agent;
-    return await rollbackAdapterProviderContextActivationAfterFailure({
+    return await rollbackAdapterProviderContextActivationAfterFailure(call, {
       activation,
       primaryError: error,
       ...(failedAgent !== undefined && {
-        cleanup: () => rethrowTeardownFailure(failedAgent.close({ emitSessionClosed: !payload.ephemeral })),
+        cleanup: (call) => rethrowTeardownFailure(failedAgent.close({ emitSessionClosed: !payload.ephemeral, call })),
       }),
       operation: `[AIAdapter:${adapterName}] startAgent`,
       cleanupFailureMessage: `[AIAdapter:${adapterName}] startAgent and connector cleanup both failed.`,
@@ -378,6 +393,7 @@ async function createAndStartAgentWithClaim<
  * Every refusal it returns has already given back what it took; everything it
  * throws is given back by the caller's single `catch`, which is what keeps the
  * acquisitions leak-proof without a `finally` per resource.
+ * @param call - Call context of the start request
  * @param deps - Adapter-provided dependencies
  * @param payload - Validated startAgent request payload
  * @param agentId - Resolved agent identity for this start
@@ -389,6 +405,7 @@ async function runStartAttempt<
   TConnector extends AIAgentConnector<TBus>,
   TAgent extends AIAgent<TBus, TConnector>,
 >(
+  call: CallContext,
   deps: StartAgentHandlerDeps<TBus, TConnector, TAgent>,
   payload: StartAgentRequestPayload,
   agentId: string,
@@ -403,15 +420,20 @@ async function runStartAttempt<
       : ProviderContextSchema.parse(payload.providerContext);
 
   assertValidEphemeralStartPayload(payload);
-  const sessionId = await resolveSessionId(payload, globalBus);
+  const sessionId = await resolveSessionId(call, payload, globalBus);
   const resolvedPayload = { ...payload, providerContext };
 
-  const refusal = await acquireStartOwnership(deps, { payload: resolvedPayload, agentId, sessionId, acquisitions });
+  const refusal = await acquireStartOwnership(call, deps, {
+    payload: resolvedPayload,
+    agentId,
+    sessionId,
+    acquisitions,
+  });
   if (refusal !== undefined) return { result: refusal, messageHandle: undefined };
   const resumeAdapterSessionId = getResumeAdapterSessionId(payload);
 
   const sessionContext = payload.sessionContext ? SessionContextSchema.parse(payload.sessionContext) : undefined;
-  const { agent, startResult } = await createAndStartAgentWithClaim({
+  const { agent, startResult } = await createAndStartAgentWithClaim(call, {
     markDispatched: () => {
       acquisitions.dispatched = true;
     },
@@ -451,25 +473,17 @@ async function runStartAttempt<
 
   if (!payload.ephemeral) {
     const failure = await persistStartedAgent(
+      call,
       deps,
       { agentId, sessionId, adapterSessionId },
       resolvedPayload,
       acquisitions,
     );
     if (failure !== undefined) return { result: failure, messageHandle: undefined };
-    await announceStartedAdapterSession(agent, adapterSessionId, acquisitions.publication);
+    await announceStartedAdapterSession(call, agent, adapterSessionId, acquisitions.publication);
   }
   return {
-    result: {
-      success: true,
-      agentId,
-      adapterId: deps.adapterId,
-      ownerInstanceId: deps.ownerInstanceId,
-      sessionId,
-      adapterSessionId,
-      ...(messageId !== undefined && { messageId }),
-      ...(settlementAckToken !== undefined && { settlementAckToken }),
-    },
+    result: buildStartSuccess(deps, { agentId, sessionId, adapterSessionId, messageId, settlementAckToken }),
     messageHandle,
   };
 }
@@ -503,19 +517,25 @@ async function runStartAttempt<
  * only from there: "may this key be published" and "who settles it" are one
  * question, and re-deriving the second from the payload is how a route ends up
  * answering it from a fact the gate does not share.
+ * @param call - Call of the start message; the announcement is sent with it.
  * @param agent - The started agent, whose tracker owns the announcement.
  * @param adapterSessionId - Provider session the connector confirmed, when it confirmed one.
  * @param publication - The attempt's provider-key publication gate.
  */
 async function announceStartedAdapterSession(
+  call: CallContext,
   agent: {
-    recordConfirmedAdapterSession: (adapterSessionId: string, settledByCaller?: boolean) => Promise<void>;
+    recordConfirmedAdapterSession: (
+      call: CallContext,
+      adapterSessionId: string,
+      settledByCaller?: boolean,
+    ) => Promise<void>;
   },
   adapterSessionId: string | undefined,
   publication: ProviderKeyPublication,
 ): Promise<void> {
   if (adapterSessionId === undefined) return;
-  await agent.recordConfirmedAdapterSession(adapterSessionId, !providerKeyIsPublishable(publication));
+  await agent.recordConfirmedAdapterSession(call, adapterSessionId, !providerKeyIsPublishable(publication));
 }
 
 /**
@@ -527,6 +547,7 @@ async function announceStartedAdapterSession(
  * a second recovery for a live agent. The typed refusal it answers with is the
  * one post-dispatch outcome the adapter can describe, which is why it returns
  * rather than throws.
+ * @param call - Call context of the start request
  * @param deps - Adapter-provided dependencies
  * @param identity - Agent, session and the provider session the connector landed on
  * @param payload - Start payload with its provider context resolved
@@ -538,6 +559,7 @@ async function persistStartedAgent<
   TConnector extends AIAgentConnector<TBus>,
   TAgent extends AIAgent<TBus, TConnector>,
 >(
+  call: CallContext,
   deps: StartAgentHandlerDeps<TBus, TConnector, TAgent>,
   identity: { agentId: string; sessionId: string; adapterSessionId: string | undefined },
   payload: StartAgentRequestPayload & { providerContext: ProviderContext },
@@ -546,7 +568,7 @@ async function persistStartedAgent<
   const { agentId, sessionId, adapterSessionId } = identity;
   let failure: string | undefined;
   try {
-    failure = await persistAndEmitAgent(agentId, sessionId, adapterSessionId, payload, deps, {
+    failure = await persistAndEmitAgent(call, agentId, sessionId, adapterSessionId, payload, deps, {
       guarded: acquisitions.reservation !== undefined,
       // Restated, never recomputed: this write replaces the whole pre-dispatch
       // record, and a fresh `createdAt` here would date the agent from the
@@ -555,11 +577,11 @@ async function persistStartedAgent<
       publication: acquisitions.publication,
     });
   } catch (error) {
-    await rollbackRegisteredAgent(deps.registry, agentId, deps.name, error);
+    await rollbackRegisteredAgent(call, deps.registry, agentId, deps.name, error);
     throw error;
   }
   if (failure === undefined) return undefined;
-  return failStartAfterRegistration(deps, agentId, acquisitions, failure);
+  return failStartAfterRegistration(call, deps, agentId, acquisitions, failure);
 }
 
 /**
@@ -637,19 +659,19 @@ export function createStartAgentHandler<
 
       let attempt: { result: StartAgentResponsePayload; messageHandle: MessageHandle | undefined };
       try {
-        attempt = await runStartAttempt(deps, payload, agentId, acquisitions);
+        attempt = await runStartAttempt(ctx.call, deps, payload, agentId, acquisitions);
       } catch (error) {
         // The scope of this catch is exactly "failures with no modeled response":
         // every outcome the attempt can describe answers for itself and has
         // already given its acquisitions back.
-        await releaseStartAcquisitions({ globalBus, registry, agentId, ...acquisitions });
+        await releaseStartAcquisitions(ctx.call, { globalBus, registry, agentId, ...acquisitions });
         throw error;
       }
 
       ctx.setResult(attempt.result);
 
       if (payload.ephemeral && attempt.result.success) {
-        void cleanupEphemeralAgentAfterTurn(registry, agentId, name, attempt.messageHandle).catch((err) => {
+        void cleanupEphemeralAgentAfterTurn(ctx.call, registry, agentId, name, attempt.messageHandle).catch((err) => {
           console.warn(`[AIAdapter:${name}] Ephemeral agent cleanup failed:`, err);
         });
       }

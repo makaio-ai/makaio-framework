@@ -1,4 +1,5 @@
 import type { IMakaioBus } from '@makaio/bus-core';
+import type { CallContext } from '@makaio/core';
 import { SessionOwnershipStorageSubjects, type IMakaioSession, type MakaioSessionAgent } from '@makaio/contracts';
 import { peekInFlightStart, runExclusiveStart, type StartAttemptOutcome } from '../ownership/index.js';
 import { AgentStorageSubjects } from '../storage/agent-namespace.js';
@@ -143,11 +144,12 @@ export function classifyJoinedRow(agent: MakaioSessionAgent | null): StartResolu
  * since spoken for the row — the out-raced start completing, a removal, a peer's
  * own claim — and every one of those outranks this correction, which is why the
  * refusal is accepted silently (I21′: the status write is advisory).
+ * @param call - Call context of the send that probed the agent.
  * @param bus - Bus the compare-and-swap is issued on.
  * @param agentId - Agent whose row contradicts its connector.
  */
-export async function restoreProbedLiveAgent(bus: IMakaioBus, agentId: string): Promise<void> {
-  await bus.requestOptional(AgentStorageSubjects.updateStatus, {
+export async function restoreProbedLiveAgent(call: CallContext, bus: IMakaioBus, agentId: string): Promise<void> {
+  await bus.requestOptional(call, AgentStorageSubjects.updateStatus, {
     agentId,
     status: 'idle',
     expectedStatus: ['dead'],
@@ -156,17 +158,19 @@ export async function restoreProbedLiveAgent(bus: IMakaioBus, agentId: string): 
 
 /**
  * Read an agent row, treating a host without agent storage as "unchanged".
+ * @param call - Call context of the send the read belongs to.
  * @param bus - Bus the read is issued on.
  * @param agentId - Agent to read.
  * @param fallback - Row to answer with when no agent storage is registered.
  * @returns The stored row, or `null` when it is gone.
  */
 async function readAgentRow(
+  call: CallContext,
   bus: IMakaioBus,
   agentId: string,
   fallback: MakaioSessionAgent,
 ): Promise<MakaioSessionAgent | null> {
-  const result = await bus.requestOptional(AgentStorageSubjects.get, { agentId });
+  const result = await bus.requestOptional(call, AgentStorageSubjects.get, { agentId });
   return result.handled ? result.data.agent : fallback;
 }
 
@@ -176,15 +180,20 @@ async function readAgentRow(
  * Absence, an unhandled subject and read errors are deliberately inconclusive:
  * an exact fence identifies the write it may make, but does not grant another
  * runtime authority to make that write.
+ * @param call - Call context of the send the read belongs to.
  * @param bus - Bus the runtime-instance read is issued on.
  * @param agent - Guarded recovery row whose owner may have retired.
  * @returns `true` only when durable retirement evidence exists for that owner.
  */
-async function guardedRecoveryOwnerIsRetired(bus: IMakaioBus, agent: MakaioSessionAgent): Promise<boolean> {
+async function guardedRecoveryOwnerIsRetired(
+  call: CallContext,
+  bus: IMakaioBus,
+  agent: MakaioSessionAgent,
+): Promise<boolean> {
   const owner = agent.runtimeOwner;
   if (owner === undefined) return false;
   try {
-    const result = await bus.requestOptional(SessionOwnershipStorageSubjects.getRuntimeInstance, {
+    const result = await bus.requestOptional(call, SessionOwnershipStorageSubjects.getRuntimeInstance, {
       instanceId: owner.instanceId,
       machineId: owner.machineId,
     });
@@ -219,13 +228,18 @@ interface StartingAgentResolution {
  * leaving the caller on the stale one would probe and dispatch at an instance
  * the attempt moved off — the same read answering one question and not the
  * other.
+ * @param call - Call context of the send that observed the starting row; every read and write here is its own.
  * @param bus - Bus the reads and the compare-and-swap are issued on.
  * @param agent - The agent as the session row carries it.
  * @returns What this send does with the agent, the row that decided it, and
  *   whether it joined a local attempt or decided through the cross-process
  *   compare-and-swap.
  */
-async function resolveStartingAgent(bus: IMakaioBus, agent: MakaioSessionAgent): Promise<StartingAgentResolution> {
+async function resolveStartingAgent(
+  call: CallContext,
+  bus: IMakaioBus,
+  agent: MakaioSessionAgent,
+): Promise<StartingAgentResolution> {
   let current: MakaioSessionAgent | null = agent;
   let joined = false;
   for (let observation = 0; observation < MAX_STARTING_OBSERVATIONS; observation += 1) {
@@ -255,13 +269,13 @@ async function resolveStartingAgent(bus: IMakaioBus, agent: MakaioSessionAgent):
       // status alone. Refresh before arbitrating so an observer that read the
       // row before the reservation still addresses the persisted attempt; a
       // stale observer can then terminalize only that exact attempt and binding.
-      current = await readAgentRow(bus, agent.agentId, current ?? agent);
+      current = await readAgentRow(call, bus, agent.agentId, current ?? agent);
       if (current?.status === 'starting' && current.recoveryAttemptId !== undefined) {
         const owner = current.runtimeOwner;
-        if (owner === undefined || !(await guardedRecoveryOwnerIsRetired(bus, current))) {
+        if (owner === undefined || !(await guardedRecoveryOwnerIsRetired(call, bus, current))) {
           return { resolution: 'defer', row: current, arbitrated: false, joined };
         }
-        await bus.request(SessionOwnershipStorageSubjects.finalizeRecovery, {
+        await bus.request(call, SessionOwnershipStorageSubjects.finalizeRecovery, {
           agentId: current.agentId,
           attemptId: current.recoveryAttemptId,
           binding: {
@@ -272,7 +286,7 @@ async function resolveStartingAgent(bus: IMakaioBus, agent: MakaioSessionAgent):
           action: { kind: 'failed' },
         });
       } else {
-        const claimed = await bus.requestOptional(AgentStorageSubjects.updateStatus, {
+        const claimed = await bus.requestOptional(call, AgentStorageSubjects.updateStatus, {
           agentId: agent.agentId,
           status: 'dead',
           expectedStatus: ['starting'],
@@ -295,14 +309,14 @@ async function resolveStartingAgent(bus: IMakaioBus, agent: MakaioSessionAgent):
           // view where there is not.
           return {
             resolution: 'recover',
-            row: await readAgentRow(bus, agent.agentId, current ?? agent),
+            row: await readAgentRow(call, bus, agent.agentId, current ?? agent),
             arbitrated: true,
             joined,
           };
         }
       }
     }
-    current = await readAgentRow(bus, agent.agentId, current ?? agent);
+    current = await readAgentRow(call, bus, agent.agentId, current ?? agent);
     const resolution = classifyJoinedRow(current);
     if (resolution !== undefined) return { resolution, row: current, arbitrated: false, joined };
   }
@@ -394,11 +408,13 @@ function recordRefreshedSessionRow(
  * begins again from storage. Each repeat follows a real local start that has
  * settled; {@link resolveStartingAgent} bounds that start's own observations.
  * The same contention limit bounds passes invalidated by fresh local starts.
+ * @param call - Call context of the send whose session snapshot is refreshed.
  * @param bus - Bus the refresh reads and starting resolutions use.
  * @param session - Session whose materialized rows are refreshed.
  * @param bookkeeping - Collections accumulated for the send.
  */
 async function refreshJoinedSessionRows(
+  call: CallContext,
   bus: IMakaioBus,
   session: IMakaioSession,
   bookkeeping: StartingResolutionBookkeeping,
@@ -407,9 +423,9 @@ async function refreshJoinedSessionRows(
   for (;;) {
     let joinedDuringPass = false;
     for (const agent of session.agents) {
-      const row = await readAgentRow(bus, agent.agentId, agent);
+      const row = await readAgentRow(call, bus, agent.agentId, agent);
       if (row?.status === 'starting') {
-        const result = await resolveStartingAgent(bus, row);
+        const result = await resolveStartingAgent(call, bus, row);
         joinedDuringPass ||= result.joined;
         recordStartingResolution(agent.agentId, result, bookkeeping);
       } else {
@@ -448,11 +464,13 @@ async function refreshJoinedSessionRows(
  * attempt can bind an agent to a different adapter instance, and a send that
  * kept the pre-join snapshot would probe liveness and route at the instance the
  * lifecycle moved off.
+ * @param call - Call context of the send whose agents are resolved.
  * @param bus - Bus the joins, reads and compare-and-swaps are issued on.
  * @param session - Session whose agents are resolved; its `agents` are filtered and refreshed in place.
  * @returns Which agents left the set, and which the send must recover.
  */
 export async function resolveInFlightStarts(
+  call: CallContext,
   bus: IMakaioBus,
   session: IMakaioSession,
 ): Promise<InFlightStartResolution> {
@@ -471,7 +489,7 @@ export async function resolveInFlightStarts(
   let joinedStart = false;
   for (const agent of session.agents) {
     if (agent.status !== 'starting') continue;
-    const result = await resolveStartingAgent(bus, agent);
+    const result = await resolveStartingAgent(call, bus, agent);
     joinedStart ||= result.joined;
     recordStartingResolution(agent.agentId, result, bookkeeping);
   }
@@ -482,7 +500,7 @@ export async function resolveInFlightStarts(
   // passes through the same resolver before it can reach either later step. A
   // row removed or disposed while waiting is no longer a target at all.
   if (joinedStart) {
-    await refreshJoinedSessionRows(bus, session, bookkeeping);
+    await refreshJoinedSessionRows(call, bus, session, bookkeeping);
   }
 
   // The designation is deliberately left alone. A session left with no agents
@@ -570,6 +588,7 @@ function isReservedRehydrateRequest(
  * consumer enters the seam once itself and gets an authoritative outcome —
  * including the `deferred` it must be told about. `starting` is unresolved by
  * definition, and a gone or `disposed` row is unavailable.
+ * @param call - Call context of the send that asked for the recovery; the attempt this call wins runs under it.
  * @param bus - Bus every step is issued on.
  * @param agent - Agent identity the exclusive-start seam coordinates.
  * @param createAttempt - Builds a fresh recovery request only after this call wins the seam.
@@ -577,6 +596,7 @@ function isReservedRehydrateRequest(
  * @throws A {@link SessionStartError} when a joined attempt failed or nothing resolved.
  */
 export async function runOrJoinReservedRehydrate(
+  call: CallContext,
   bus: IMakaioBus,
   agent: MakaioSessionAgent,
   createAttempt: ReservedRehydrateAttemptFactory,
@@ -585,7 +605,7 @@ export async function runOrJoinReservedRehydrate(
     let outcome: ReservedRehydrateOutcome | undefined;
     const start = runExclusiveStart(agent.agentId, async () => {
       const attempt = await createAttempt();
-      outcome = isReservedRehydrateRequest(attempt) ? await runReservedRehydrate(bus, attempt) : attempt;
+      outcome = isReservedRehydrateRequest(attempt) ? await runReservedRehydrate(call, bus, attempt) : attempt;
       return outcome.kind === 'rehydrated' ? 'connected' : 'no-connector';
     });
     if (!start.joined) {
@@ -595,7 +615,7 @@ export async function runOrJoinReservedRehydrate(
       return outcome;
     }
 
-    const joined = await consumeJoinedAttempt(bus, agent, start.settled);
+    const joined = await consumeJoinedAttempt(call, bus, agent, start.settled);
     if (joined !== 'retry') return joined;
   }
 
@@ -611,6 +631,7 @@ export async function runOrJoinReservedRehydrate(
  * The rejection is read before the row, because it is this process's own and
  * outranks an advisory status write; the row then classifies what a *successful*
  * attempt produced.
+ * @param call - Call context of the send that joined the attempt.
  * @param bus - Bus the re-read is issued on.
  * @param agent - Agent whose start was joined; re-stamped with the instance the row names.
  * @param settled - The joined attempt, as the seam handed it back.
@@ -618,6 +639,7 @@ export async function runOrJoinReservedRehydrate(
  * @throws A {@link SessionStartError} when the joined attempt rejected.
  */
 async function consumeJoinedAttempt(
+  call: CallContext,
   bus: IMakaioBus,
   agent: MakaioSessionAgent,
   settled: Promise<StartAttemptOutcome>,
@@ -652,7 +674,7 @@ async function consumeJoinedAttempt(
   // that never existed, and the consumers act on all of it: the cwd and model
   // decide whether a connector swap is issued, and the next recovery's rollback
   // target is read off the status.
-  const row = await readAgentRow(bus, agent.agentId, agent);
+  const row = await readAgentRow(call, bus, agent.agentId, agent);
   if (row !== null) Object.assign(agent, row);
 
   // The attempt's own verdict, after the refresh but ahead of the
@@ -726,6 +748,7 @@ export interface LazyRecoveryResult {
  * computes: a key that collides with nothing protects nothing, and the peer it
  * was supposed to exclude claims the same provider session beside it. So an
  * unresolvable instance is a deferral, not a fallback.
+ * @param call - Call context of the send that found the agent dead.
  * @param bus - Bus the dispatch and the join are issued on.
  * @param agent - Dead agent whose connector is being rebuilt.
  * @param request - Resume target for this recovery, and the machine identity to act under.
@@ -733,18 +756,19 @@ export interface LazyRecoveryResult {
  * @throws A {@link SessionStartError} when the recovery failed rather than deferred.
  */
 export async function recoverDeadAgentExclusively(
+  call: CallContext,
   bus: IMakaioBus,
   agent: MakaioSessionAgent,
   request: { readonly resumeProviderSessionId: string | null; readonly machineId?: string },
 ): Promise<LazyRecoveryResult> {
   const { agentId } = agent;
   if (request.resumeProviderSessionId === null) {
-    const outcome = await runOrJoinReservedRehydrate(bus, agent, async () => {
-      const snapshot = await readRecoveryPlanningSnapshot(bus, agentId);
+    const outcome = await runOrJoinReservedRehydrate(call, bus, agent, async () => {
+      const snapshot = await readRecoveryPlanningSnapshot(call, bus, agentId);
       if (snapshot === null || !recoverySnapshotIsClaimable(snapshot)) return { kind: 'lost' };
       Object.assign(agent, snapshot.agent);
       const instance = toMachineScopedAdapterInstance(
-        await resolveOwnedAdapterInstance(bus, {
+        await resolveOwnedAdapterInstance(call, bus, {
           adapterName: agent.adapterName,
           storedAdapterId: agent.adapterId,
           ...(request.machineId !== undefined && { machineId: request.machineId }),
@@ -763,21 +787,21 @@ export async function recoverDeadAgentExclusively(
   }
 
   for (let replan = 0; replan <= MAX_RECOVERY_REPLANS; replan += 1) {
-    const outcome = await runOrJoinReservedRehydrate(bus, agent, async () => {
-      const snapshot = await readRecoveryPlanningSnapshot(bus, agentId);
+    const outcome = await runOrJoinReservedRehydrate(call, bus, agent, async () => {
+      const snapshot = await readRecoveryPlanningSnapshot(call, bus, agentId);
       if (snapshot === null || !recoverySnapshotIsClaimable(snapshot)) return { kind: 'lost' };
       const resumeProviderSessionId = recoveryProviderSessionId(snapshot);
       if (resumeProviderSessionId === null) return { kind: 'stale-plan' };
       Object.assign(agent, snapshot.agent);
       const instance = toMachineScopedAdapterInstance(
-        await resolveOwnedAdapterInstance(bus, {
+        await resolveOwnedAdapterInstance(call, bus, {
           adapterName: agent.adapterName,
           storedAdapterId: agent.adapterId,
           ...(request.machineId !== undefined && { machineId: request.machineId }),
         }),
       );
       if (instance === undefined) return { kind: 'deferred', reason: 'machine-identity-unavailable' };
-      const recoveryGuard = await buildRecoveryReservationGuard(bus, snapshot, instance, resumeProviderSessionId);
+      const recoveryGuard = await buildRecoveryReservationGuard(call, bus, snapshot, instance, resumeProviderSessionId);
       return { agent, sessionId: agent.sessionId, instance, resumeProviderSessionId, recoveryGuard };
     });
     if (outcome?.kind === 'stale-plan' && replan < MAX_RECOVERY_REPLANS) continue;

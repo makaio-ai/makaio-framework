@@ -14,6 +14,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
 import { AgentSubjects, type AdapterSessionMoved } from '@makaio/contracts';
 import type { SDKMessage } from '@makaio/client-claude-code';
+import { createTestCall } from '@makaio/test-utils';
 
 const transportStub = vi.hoisted(() => {
   // Settled from `close()`, exactly as the real transport settles it from the
@@ -62,7 +63,7 @@ interface ObservedMovement {
  * @returns Agent wired to the real CLI connector
  */
 async function makeResumeArmedAgent(): Promise<ClaudeCodeCliAgent> {
-  const adapterBus = await ClaudeCodeCliConnectorNamespace.scopedBus();
+  const adapterBus = await ClaudeCodeCliConnectorNamespace.scopedBus(MakaioBus);
   return new ClaudeCodeCliAgent({
     adapterBus,
     teardownArbiter: new AgentTeardownArbiter(),
@@ -142,11 +143,11 @@ describe('ClaudeCodeCliAgent provider-session currency on an immediate-mode rest
 
   it('announces the abandoned provider thread before respawning', async () => {
     agent = await makeResumeArmedAgent();
-    await expect(agent.initialize()).resolves.toBe(RESUME_TARGET);
+    await expect(agent.initialize(createTestCall())).resolves.toBe(RESUME_TARGET);
 
     // Turn 1 resumes the stored thread and the provider confirms it, so the
     // session row's currency is the thread the restart is about to abandon.
-    await MakaioBus.request(AgentSubjects.sendMessage, {
+    await MakaioBus.request(createTestCall(), AgentSubjects.sendMessage, {
       agentId: AGENT_ID,
       adapterId: ADAPTER_ID,
       message: 'first turn with native resume',
@@ -160,7 +161,7 @@ describe('ClaudeCodeCliAgent provider-session currency on an immediate-mode rest
 
     // An immediate message queues while the turn is in flight; the connector
     // processes the queue at the next step boundary.
-    await MakaioBus.request(AgentSubjects.sendMessage, {
+    await MakaioBus.request(createTestCall(), AgentSubjects.sendMessage, {
       agentId: AGENT_ID,
       adapterId: ADAPTER_ID,
       message: 'supersede the live turn',

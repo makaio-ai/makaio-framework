@@ -9,6 +9,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { CredentialRef } from '@makaio/contracts/config';
 import type { LaunchStatus } from '@makaio/subprocess';
 import { recordingLaunch } from '@makaio/subprocess/testing';
+import { createTestCall } from '@makaio/test-utils';
 import { NodeCredentialProvider } from '../credential-provider.js';
 
 const SECRET = 'hunter2-secret-value';
@@ -42,19 +43,19 @@ describe('NodeCredentialProvider keychain lookup', () => {
       output: { stdout: `  ${SECRET}\n`, stderr: '' },
     });
 
-    await expect(new NodeCredentialProvider({ launch }).resolve(REF)).resolves.toBe(SECRET);
+    await expect(new NodeCredentialProvider({ launch }).resolve(createTestCall(), REF)).resolves.toBe(SECRET);
   });
 
   it('returns null when the command completed with empty output', async () => {
     const { launch } = recordingLaunch({ status: 'completed', output: { stdout: '\n', stderr: '' } });
 
-    await expect(new NodeCredentialProvider({ launch }).resolve(REF)).resolves.toBeNull();
+    await expect(new NodeCredentialProvider({ launch }).resolve(createTestCall(), REF)).resolves.toBeNull();
   });
 
   it('hands the port the exact command, arguments and bounds', async () => {
     const { launch, calls } = recordingLaunch({ status: 'completed', output: { stdout: SECRET, stderr: '' } });
 
-    await new NodeCredentialProvider({ launch }).resolve(REF);
+    await new NodeCredentialProvider({ launch }).resolve(createTestCall(), REF);
 
     expect(calls).toHaveLength(1);
     expect(calls[0]).toEqual({
@@ -79,15 +80,15 @@ describe('NodeCredentialProvider keychain lookup', () => {
   it.each(nonCompleted)('returns null for status %s even when the port carries output', async (status) => {
     const { launch } = recordingLaunch({ status, output: { stdout: SECRET, stderr: SECRET } });
 
-    await expect(new NodeCredentialProvider({ launch }).resolve(REF)).resolves.toBeNull();
+    await expect(new NodeCredentialProvider({ launch }).resolve(createTestCall(), REF)).resolves.toBeNull();
   });
 
   it('never logs the secret, whether the lookup succeeds or not', async () => {
     const found = recordingLaunch({ status: 'completed', output: { stdout: SECRET, stderr: SECRET } });
     const failed = recordingLaunch({ status: 'failed', output: { stdout: SECRET, stderr: SECRET } });
 
-    await new NodeCredentialProvider({ launch: found.launch }).resolve(REF);
-    await new NodeCredentialProvider({ launch: failed.launch }).resolve(REF);
+    await new NodeCredentialProvider({ launch: found.launch }).resolve(createTestCall(), REF);
+    await new NodeCredentialProvider({ launch: failed.launch }).resolve(createTestCall(), REF);
 
     expect(loggedText()).not.toContain(SECRET);
     for (const spy of consoleSpies) expect(spy).not.toHaveBeenCalled();

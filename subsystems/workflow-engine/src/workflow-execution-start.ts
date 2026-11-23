@@ -1,5 +1,6 @@
 /* eslint max-lines: ["error", { "max": 500, "skipBlankLines": true, "skipComments": true }], max-lines-per-function: ["error", { "max": 90, "skipBlankLines": true, "skipComments": true }] */
 import type { IMakaioBus } from '@makaio/bus-core';
+import type { CallContext } from '@makaio/core';
 import {
   SessionSubjects,
   type ExecutionLink,
@@ -80,14 +81,16 @@ export interface StartExecutionDeps {
   buildFinalizerDeps(): FinalizerDeps;
   /**
    * Resolve the workspace root for a parent session, falling back to config cwd.
+   * @param call - Call context of the message that triggered the start.
    * @param parentSessionId - Optional parent session identifier.
    */
-  resolveExecutionWorkspaceRoot(parentSessionId?: string): Promise<string>;
+  resolveExecutionWorkspaceRoot(call: CallContext, parentSessionId?: string): Promise<string>;
   /**
    * Run an in-process execution via the mutable DAG scheduler.
+   * @param call - Call context of the message that triggered the execution.
    * @param executionId - Target execution identifier.
    */
-  runExecution(executionId: string): Promise<void>;
+  runExecution(call: CallContext, executionId: string): Promise<void>;
   /**
    * Execution attempt Authority for Worker dispatch runners.
    *
@@ -105,19 +108,21 @@ export interface StartExecutionDeps {
  *
  * Worker-loaded executions require `setExecutionStart` so execution, run
  * context, and initial state are recorded atomically before runtime work starts.
+ * @param call - Call context of the workflow run being started.
  * @param bus - Message bus used for storage requests.
  * @param execution - Running execution row.
  * @param runContext - Worker-loaded run-context snapshot.
  * @param definition - Loaded workflow definition.
  */
 export async function persistLoadedExecutionStart(
+  call: CallContext,
   bus: IMakaioBus,
   execution: WorkflowExecution,
   runContext: WorkflowRunContext,
   definition: WorkflowDefinition,
 ): Promise<void> {
   const initialState = getValidatedInitialWorkflowState(definition);
-  await bus.request(WorkflowStorageSubjects.setExecutionStart, {
+  await bus.request(call, WorkflowStorageSubjects.setExecutionStart, {
     execution,
     runContext,
     initialState,
@@ -127,12 +132,13 @@ export async function persistLoadedExecutionStart(
 /**
  * Emit the execution-started lifecycle event without letting observer failures
  * prevent an already-persisted execution from running.
+ * @param call - Call context of the message that triggered the start.
  * @param bus - Message bus
  * @param execution - Already-persisted execution whose launch is being announced.
  */
-async function emitExecutionStarted(bus: IMakaioBus, execution: WorkflowExecution): Promise<void> {
+async function emitExecutionStarted(call: CallContext, bus: IMakaioBus, execution: WorkflowExecution): Promise<void> {
   try {
-    await bus.emit(WorkflowSubjects.execution.started, {
+    await bus.emit(call, WorkflowSubjects.execution.started, {
       executionId: execution.id,
       workflowId: execution.workflowId,
       coordinatorSessionId: execution.coordinatorSessionId,
@@ -146,13 +152,33 @@ async function emitExecutionStarted(bus: IMakaioBus, execution: WorkflowExecutio
 
 /**
  * Close a coordinator session created for an execution that failed before launch.
+ * @param call - Call context of the message that triggered the start.
  * @param bus - Message bus
  * @param sessionId - Coordinator session ID
  */
-async function closeCoordinatorSession(bus: IMakaioBus, sessionId: string): Promise<void> {
-  await bus.request(SessionSubjects.close, { sessionId }).catch((error: unknown) => {
+async function closeCoordinatorSession(call: CallContext, bus: IMakaioBus, sessionId: string): Promise<void> {
+  await bus.request(call, SessionSubjects.close, { sessionId }).catch((error: unknown) => {
     console.error(`[WorkflowExecutor] Failed to close coordinator session "${sessionId}" after launch failure:`, error);
   });
+}
+
+/**
+ * Roll back registry state and close the coordinator session of an execution
+ * that failed before it was launched.
+ * @param call - Call context of the message that triggered the start.
+ * @param deps - Shared executor state and callbacks.
+ * @param executionId - Execution identifier whose registry entries are removed.
+ * @param coordinatorSessionId - Coordinator session created for the execution.
+ */
+async function abandonLaunch(
+  call: CallContext,
+  deps: StartExecutionDeps,
+  executionId: string,
+  coordinatorSessionId: string,
+): Promise<void> {
+  deps.activeExecutions.delete(executionId);
+  deps.executionTasks.delete(executionId);
+  await closeCoordinatorSession(call, deps.bus, coordinatorSessionId);
 }
 
 /**
@@ -208,6 +234,7 @@ function seedDefinitionExecution(
  *
  * The storage layer owns the transaction because execution rows and run-context
  * snapshots are stored in separate tables but are created as one launch unit.
+ * @param call - Call context of the message that triggered the start.
  * @param bus - Message bus used for storage requests.
  * @param execution - The new `WorkflowExecution` record.
  * @param runContext - The pre-built {@link WorkflowRunContext} snapshot.
@@ -215,13 +242,14 @@ function seedDefinitionExecution(
  * @param executionLinks - Optional links persisted in the same start transaction.
  */
 async function persistExecutionStart(
+  call: CallContext,
   bus: IMakaioBus,
   execution: WorkflowExecution,
   runContext: WorkflowRunContext,
   initialState: JsonValue | undefined,
   executionLinks: readonly ExecutionLink[] | undefined,
 ): Promise<void> {
-  await bus.request(WorkflowStorageSubjects.setExecutionStart, {
+  await bus.request(call, WorkflowStorageSubjects.setExecutionStart, {
     execution,
     runContext,
     ...(initialState !== undefined ? { initialState } : {}),
@@ -285,12 +313,14 @@ function assertRunnerBackedSourceDispatchAvailable(
  *
  * A caller-supplied spec is reserved for replaying an existing durable run
  * context. Fresh starts resolve through the host seam before storage mutates.
+ * @param call - Call context of the message that triggered the start.
  * @param deps - Shared executor dependencies.
  * @param input - Start identity and process-local source information.
  * @param providedSpec - Existing durable spec supplied by a replay path.
  * @returns The resolved durable spec, or undefined for non-path sources.
  */
 async function resolveMaterializationSpec(
+  call: CallContext,
   deps: StartExecutionDeps,
   input: {
     executionId: string;
@@ -303,7 +333,7 @@ async function resolveMaterializationSpec(
   if (input.source.kind !== 'path') return undefined;
   if (providedSpec !== undefined) return providedSpec;
   for (const resolver of deps.materializationSpecResolvers) {
-    const resolved = await resolver.resolve({
+    const resolved = await resolver.resolve(call, {
       executionId: input.executionId,
       workflowId: input.workflowId,
       sourcePath: input.source.path,
@@ -324,12 +354,14 @@ interface ResolvedDurablePathSource {
 
 /**
  * Resolve the durable source form for a fresh or replayed execution start.
+ * @param call - Call context of the message that triggered the start.
  * @param deps - Shared executor dependencies.
  * @param input - Start identity and source information.
  * @param providedSpec - Existing durable spec supplied by a replay path.
  * @returns Portable source and immutable workspace reference.
  */
 async function resolveDurablePathSource(
+  call: CallContext,
   deps: StartExecutionDeps,
   input: {
     executionId: string;
@@ -339,7 +371,7 @@ async function resolveDurablePathSource(
   },
   providedSpec: WorkflowRunContext['materializationSpec'] | undefined,
 ): Promise<ResolvedDurablePathSource> {
-  const materializationSpec = await resolveMaterializationSpec(deps, input, providedSpec);
+  const materializationSpec = await resolveMaterializationSpec(call, deps, input, providedSpec);
   return {
     source:
       input.source.kind === 'path' && materializationSpec !== undefined
@@ -373,12 +405,17 @@ async function dispatchAndAwait(
 
 /**
  * Load a workflow definition from storage and validate its steps.
+ * @param call - Call context of the message that triggered the start.
  * @param bus - Message bus used for storage lookup.
  * @param workflowId - The workflow definition ID.
  * @returns The validated workflow definition.
  */
-async function loadAndValidateWorkflow(bus: IMakaioBus, workflowId: string): Promise<WorkflowDefinition> {
-  const { workflow } = await bus.request(WorkflowStorageSubjects.get, { id: workflowId });
+async function loadAndValidateWorkflow(
+  call: CallContext,
+  bus: IMakaioBus,
+  workflowId: string,
+): Promise<WorkflowDefinition> {
+  const { workflow } = await bus.request(call, WorkflowStorageSubjects.get, { id: workflowId });
   if (!workflow) {
     throw new Error(`Workflow not found: ${workflowId}`);
   }
@@ -434,6 +471,7 @@ export interface ResolvedDefinitionStartOptions extends DefinitionStartOptions {
 
 /**
  * Create the coordinator session that owns a definition-backed execution.
+ * @param call - Call context of the message that triggered the start.
  * @param bus - Bus used for session creation.
  * @param parentSessionId - Optional parent coordinator session.
  * @param workflowName - Human-readable workflow name for the session title.
@@ -441,12 +479,13 @@ export interface ResolvedDefinitionStartOptions extends DefinitionStartOptions {
  * @returns Created coordinator session ID.
  */
 async function createDefinitionCoordinatorSession(
+  call: CallContext,
   bus: IMakaioBus,
   parentSessionId: string | undefined,
   workflowName: string | undefined,
   workspaceRoot: string,
 ): Promise<string> {
-  const { sessionId } = await bus.request(SessionSubjects.create, {
+  const { sessionId } = await bus.request(call, SessionSubjects.create, {
     parentSessionId,
     branchKind: 'coordinator',
     title: `Workflow: ${workflowName}`,
@@ -461,18 +500,20 @@ async function createDefinitionCoordinatorSession(
  * Looks up the workflow from storage, seeds the execution record and
  * run-context snapshot, then dispatches to the configured runner or the
  * in-process step scheduler.
+ * @param call - Call context of the message that triggered the start.
  * @param deps - Shared executor state and callbacks.
  * @param workflowId - The workflow definition ID.
  * @param options - Execution options.
  * @returns The new execution ID.
  */
 export async function startExecution(
+  call: CallContext,
   deps: StartExecutionDeps,
   workflowId: string,
   options: DefinitionStartOptions = {},
 ): Promise<string> {
-  const workflow = await loadAndValidateWorkflow(deps.bus, workflowId);
-  return startResolvedDefinitionExecution(deps, workflowId, { ...options, workflow });
+  const workflow = await loadAndValidateWorkflow(call, deps.bus, workflowId);
+  return startResolvedDefinitionExecution(call, deps, workflowId, { ...options, workflow });
 }
 
 /**
@@ -481,12 +522,14 @@ export async function startExecution(
  * This is the core launch path shared by {@link startExecution} (which loads the
  * definition from storage first) and the rerun path (which supplies a snapshot
  * or freshly-loaded definition directly).
+ * @param call - Call context of the message that triggered the start.
  * @param deps - Shared executor state and callbacks.
  * @param workflowId - The workflow definition ID.
  * @param options - Execution options including the pre-loaded workflow.
  * @returns The new execution ID.
  */
 export async function startResolvedDefinitionExecution(
+  call: CallContext,
   deps: StartExecutionDeps,
   workflowId: string,
   options: ResolvedDefinitionStartOptions,
@@ -499,7 +542,7 @@ export async function startResolvedDefinitionExecution(
   const boundInputs = bindWorkflowInputs(workflow, options.input === undefined ? {} : options.input);
   const boundConfig = bindWorkflowConfig(workflow, options.config ?? {});
   const resolvedScope: WorkflowExecutionScope = scopeOverride ?? workflow.scope;
-  const workspaceRoot = await deps.resolveExecutionWorkspaceRoot(parentSessionId);
+  const workspaceRoot = await deps.resolveExecutionWorkspaceRoot(call, parentSessionId);
   const executionSource = options.executionSource ?? resolveDefinitionExecutionSource(workflow, workflowId);
   // `workflow` was loaded or resolved by the Authority before dispatch. Persist
   // that exact immutable definition for every definition launch, including
@@ -508,12 +551,14 @@ export async function startResolvedDefinitionExecution(
   const dispatch = selectDefinitionExecutionDispatch(deps, { workflow });
   assertRunnerBackedSourceDispatchAvailable(dispatch.runner, executionSource, workflowId);
   const { source: durableSource, materializationSpec } = await resolveDurablePathSource(
+    call,
     deps,
     { executionId, workflowId, source: executionSource, workspaceRoot },
     options.materializationSpec,
   );
 
   const coordinatorSessionId = await createDefinitionCoordinatorSession(
+    call,
     bus,
     parentSessionId,
     workflow.name,
@@ -549,10 +594,11 @@ export async function startResolvedDefinitionExecution(
       runContext,
     );
     const initialState = executionSource.kind === 'definition' ? getValidatedInitialWorkflowState(workflow) : undefined;
-    await persistExecutionStart(bus, execution, runContext, initialState, options.executionLinks?.(executionId));
+    await persistExecutionStart(call, bus, execution, runContext, initialState, options.executionLinks?.(executionId));
 
-    const startedEventTask = emitExecutionStarted(bus, execution);
+    const startedEventTask = emitExecutionStarted(call, bus, execution);
     const executionTask = launchDefinitionExecutionTask(
+      call,
       deps,
       {
         executionId,
@@ -575,11 +621,7 @@ export async function startResolvedDefinitionExecution(
     launched = true;
     return dispatchAndAwait(executionTasks, executionId, executionTask, startedEventTask);
   } catch (error) {
-    if (!launched) {
-      activeExecutions.delete(executionId);
-      executionTasks.delete(executionId);
-      await closeCoordinatorSession(bus, coordinatorSessionId);
-    }
+    if (!launched) await abandonLaunch(call, deps, executionId, coordinatorSessionId);
     throw error;
   }
 }
@@ -618,6 +660,7 @@ function seedFileExecution(
 
 /**
  * Create the coordinator session that owns a file-backed execution.
+ * @param call - Call context of the message that triggered the start.
  * @param bus - Bus used for session creation.
  * @param parentSessionId - Optional parent coordinator session.
  * @param filePath - Workflow file path used for the session title.
@@ -625,12 +668,13 @@ function seedFileExecution(
  * @returns Created coordinator session ID.
  */
 async function createFileCoordinatorSession(
+  call: CallContext,
   bus: IMakaioBus,
   parentSessionId: string | undefined,
   filePath: string,
   workspaceRoot: string,
 ): Promise<string> {
-  const { sessionId } = await bus.request(SessionSubjects.create, {
+  const { sessionId } = await bus.request(call, SessionSubjects.create, {
     ...(parentSessionId !== undefined ? { parentSessionId } : {}),
     branchKind: 'coordinator',
     title: `Workflow: ${filePath}`,
@@ -673,12 +717,14 @@ function requireFileMaterializationSpec(
  *
  * Only valid when a workflow runner is configured; the caller is responsible
  * for ensuring that precondition before calling this method.
+ * @param call - Call context of the message that triggered the start.
  * @param deps - Shared executor state and callbacks.
  * @param filePath - Worker-local path to the workflow TypeScript or JavaScript file.
  * @param options - Execution options.
  * @returns The new execution ID.
  */
 export async function startFileExecution(
+  call: CallContext,
   deps: StartExecutionDeps,
   filePath: string,
   options: Pick<
@@ -704,7 +750,7 @@ export async function startFileExecution(
   const boundInputs = options.input === undefined ? {} : options.input;
   const boundConfig = options.config ?? {};
   const resolvedScope: WorkflowExecutionScope = scopeOverride ?? { type: 'global' };
-  const workspaceRoot = await deps.resolveExecutionWorkspaceRoot(parentSessionId);
+  const workspaceRoot = await deps.resolveExecutionWorkspaceRoot(call, parentSessionId);
 
   const workflowRunner = requireFileWorkflowRunner(deps.workflowRunner);
 
@@ -713,12 +759,13 @@ export async function startFileExecution(
   const workflowId = executionId;
   const materializationSpec = requireFileMaterializationSpec(
     await resolveMaterializationSpec(
+      call,
       deps,
       { executionId, workflowId, source: { kind: 'path', path: filePath }, workspaceRoot },
       options.materializationSpec,
     ),
   );
-  const coordinatorSessionId = await createFileCoordinatorSession(bus, parentSessionId, filePath, workspaceRoot);
+  const coordinatorSessionId = await createFileCoordinatorSession(call, bus, parentSessionId, filePath, workspaceRoot);
   const execution: WorkflowExecution = {
     id: executionId,
     workflowId,
@@ -748,12 +795,12 @@ export async function startFileExecution(
       ...(artifactRef !== undefined ? { artifactRef } : {}),
       materializationSpec,
     });
-    await persistExecutionStart(bus, execution, runContext, undefined, options.executionLinks?.(executionId));
+    await persistExecutionStart(call, bus, execution, runContext, undefined, options.executionLinks?.(executionId));
 
     seedFileExecution(activeExecutions, execution, filePath, resolvedScope, runContext);
 
-    const startedEventTask = emitExecutionStarted(bus, execution);
-    const executionTask = buildFileExecutionTask(deps.buildRunnerTaskDeps(workflowRunner), {
+    const startedEventTask = emitExecutionStarted(call, bus, execution);
+    const executionTask = buildFileExecutionTask(call, deps.buildRunnerTaskDeps(workflowRunner), {
       executionId,
       workflowId,
       filePath,
@@ -770,11 +817,7 @@ export async function startFileExecution(
     launched = true;
     return dispatchAndAwait(executionTasks, executionId, executionTask, startedEventTask);
   } catch (error) {
-    if (!launched) {
-      activeExecutions.delete(executionId);
-      executionTasks.delete(executionId);
-      await closeCoordinatorSession(bus, coordinatorSessionId);
-    }
+    if (!launched) await abandonLaunch(call, deps, executionId, coordinatorSessionId);
     throw error;
   }
 }

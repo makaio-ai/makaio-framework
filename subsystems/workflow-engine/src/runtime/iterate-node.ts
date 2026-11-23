@@ -1,3 +1,4 @@
+import type { CallContext } from '@makaio/core';
 import type { JsonValue, WorkflowFrameState, WorkflowIterateNode, WorkflowSequenceNode } from '@makaio/contracts';
 import type { ExecuteSequenceFn, NodeOutcome } from './node-execution.js';
 import { cancelFrame, completeFrame, failFrame, startFrame } from './node-execution.js';
@@ -95,6 +96,7 @@ function shouldKeepItemFrameRunningOnCancel(frame: WorkflowFrameState, options: 
  * failures). Item-level failures are captured in the per-item settled
  * state within `IterateOutput.items`. The caller can inspect per-item
  * results to determine aggregate success.
+ * @param call - Call context of the message that drives this execution run.
  * @param node - The iterate node to execute.
  * @param ctx - Execution-wide runtime context.
  * @param expressionCtx - Current expression evaluation context.
@@ -104,6 +106,7 @@ function shouldKeepItemFrameRunningOnCancel(frame: WorkflowFrameState, options: 
  * @returns Terminal execution outcome for the iterate node as a whole.
  */
 export async function executeIterateNode(
+  call: CallContext,
   node: WorkflowIterateNode,
   ctx: RuntimeContext,
   expressionCtx: PrimitiveExpressionContext,
@@ -130,6 +133,7 @@ export async function executeIterateNode(
   // ── 3. Run items concurrently (with optional batching) ──────────────────
   const batchSize = node.concurrency !== undefined && node.concurrency > 0 ? node.concurrency : 0;
   const settled = await runItemsWithConcurrency(
+    call,
     collection,
     node,
     ctx,
@@ -165,6 +169,7 @@ export async function executeIterateNode(
  * `Promise.all`. When `batchSize > 0`, items are partitioned into batches of
  * `batchSize`; each batch runs fully in parallel but the next batch starts
  * only after the current batch settles.
+ * @param call - Call context of the message that drives this execution run.
  * @param collection - Resolved collection items.
  * @param node - The iterate node (for ID reference).
  * @param ctx - Runtime context.
@@ -176,6 +181,7 @@ export async function executeIterateNode(
  * @returns Ordered array of per-item settled outcomes.
  */
 async function runItemsWithConcurrency(
+  call: CallContext,
   collection: unknown[],
   node: WorkflowIterateNode,
   ctx: RuntimeContext,
@@ -198,6 +204,7 @@ async function runItemsWithConcurrency(
     // Unlimited concurrency: launch all items at once.
     const promises = collection.map((item, index) =>
       runItem(
+        call,
         item,
         index,
         node,
@@ -218,10 +225,7 @@ async function runItemsWithConcurrency(
   const settled: ItemSettled[] = new Array<ItemSettled>(collection.length);
   for (let batchStart = 0; batchStart < collection.length; batchStart += batchSize) {
     if (itemCtx.signal.aborted) {
-      // Fill remaining slots with cancelled.
-      for (let i = batchStart; i < collection.length; i++) {
-        settled[i] = { status: 'cancelled' };
-      }
+      markCancelledFrom(settled, batchStart);
       break;
     }
     const batchEnd = Math.min(batchStart + batchSize, collection.length);
@@ -229,6 +233,7 @@ async function runItemsWithConcurrency(
     for (let i = batchStart; i < batchEnd; i++) {
       batchPromises.push(
         runItem(
+          call,
           collection[i],
           i,
           node,
@@ -251,13 +256,22 @@ async function runItemsWithConcurrency(
     }
     const paused = batchResults.some((result) => result.status === 'paused');
     if (paused) {
-      for (let i = batchEnd; i < collection.length; i++) {
-        settled[i] = { status: 'cancelled' };
-      }
+      markCancelledFrom(settled, batchEnd);
       break;
     }
   }
   return settled;
+}
+
+/**
+ * Mark every slot from `start` to the end of the settled array as cancelled.
+ * @param settled - Per-item settled outcomes being filled in collection order.
+ * @param start - First slot index to mark as cancelled.
+ */
+function markCancelledFrom(settled: ItemSettled[], start: number): void {
+  for (let i = start; i < settled.length; i++) {
+    settled[i] = { status: 'cancelled' };
+  }
 }
 
 /**
@@ -288,6 +302,7 @@ function abortSiblingsWhenPaused(
  * Creates a child frame with `iteration = index` so the GUI can track
  * per-item state independently. Injects `item` and `index` into the
  * expression context so body nodes can reference the current collection element.
+ * @param call - Call context of the message that drives this execution run.
  * @param item - The collection item for this iteration.
  * @param index - Zero-based index of this item in the collection.
  * @param node - The iterate node (for ID and body reference).
@@ -300,6 +315,7 @@ function abortSiblingsWhenPaused(
  * @returns Settled outcome for this item.
  */
 async function runItem(
+  call: CallContext,
   item: unknown,
   index: number,
   node: WorkflowIterateNode,
@@ -334,7 +350,7 @@ async function runItem(
   // item frame left behind by a parked descendant gate.
   const frame =
     resumeFrame ??
-    ctx.createFrame({
+    ctx.createFrame(call, {
       nodeId: node.id,
       nodeType: 'iterate',
       path: parentPath,
@@ -344,21 +360,21 @@ async function runItem(
 
   if (ctx.signal.aborted) {
     if (!shouldKeepItemFrameRunningOnCancel(frame, cancellationOptions)) {
-      await cancelFrame(frame, ctx);
+      await cancelFrame(call, frame, ctx);
     }
     return { status: 'cancelled' };
   }
 
   if (resumeFrame === undefined) {
-    await startFrame(frame, ctx);
+    await startFrame(call, frame, ctx);
   }
 
   let outcome: NodeOutcome;
   try {
-    outcome = await executeSequenceFn(node.body as WorkflowSequenceNode, ctx, itemCtx, frame.frameId, frame.path);
+    outcome = await executeSequenceFn(call, node.body as WorkflowSequenceNode, ctx, itemCtx, frame.frameId, frame.path);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    await failFrame(frame, ctx, message);
+    await failFrame(call, frame, ctx, message);
     return { status: 'rejected', reason: message };
   }
 
@@ -368,17 +384,17 @@ async function runItem(
       // because sequences are structural containers that do not carry a single
       // output value. Extract the last body node's output from the frame registry.
       const bodyOutput = extractLastBodyOutput(node, frame.frameId, ctx);
-      await completeFrame(frame, ctx, bodyOutput);
+      await completeFrame(call, frame, ctx, bodyOutput);
       return fulfilledItem(bodyOutput);
     }
     case 'skipped': {
       // A fully-skipped body sequence is treated as fulfilled with no output.
-      await completeFrame(frame, ctx);
+      await completeFrame(call, frame, ctx);
       return fulfilledItem();
     }
     case 'cancelled': {
       if (!shouldKeepItemFrameRunningOnCancel(frame, cancellationOptions)) {
-        await cancelFrame(frame, ctx);
+        await cancelFrame(call, frame, ctx);
       }
       return { status: 'cancelled' };
     }
@@ -388,7 +404,7 @@ async function runItem(
       return outcome;
     }
     case 'failed': {
-      await failFrame(frame, ctx, outcome.error);
+      await failFrame(call, frame, ctx, outcome.error);
       return { status: 'rejected', reason: outcome.error };
     }
   }

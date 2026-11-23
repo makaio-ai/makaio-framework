@@ -1,4 +1,5 @@
 import type { IMakaioBus } from '@makaio/bus-core';
+import type { CallContext } from '@makaio/core';
 import {
   ExecutionAttemptSchemas,
   ExecutionAttemptSubjects,
@@ -154,7 +155,7 @@ export function registerRuntimeRegistrationHandler<TOutcome>(
       // occupy an attempt that is free to run real work; the durable readiness
       // is announced again instead, so a first pass whose announcement failed
       // is repaired by this one.
-      await announceReadiness(deps, executionAttemptId, registration.runtimeGeneration);
+      await announceReadiness(ctx.call, deps, executionAttemptId, registration.runtimeGeneration);
       ctx.setResult({ decision: 'duplicate', runtimeGeneration: registration.runtimeGeneration });
       return;
     }
@@ -171,7 +172,7 @@ export function registerRuntimeRegistrationHandler<TOutcome>(
     const runtimeGeneration = registration.runtimeGeneration;
 
     // Steps 3 to 6: prove the endpoint and make its readiness durable.
-    const readiness = await proveRuntimeEndpoint(deps, probeTimeout, {
+    const readiness = await proveRuntimeEndpoint(ctx.call, deps, probeTimeout, {
       executionAttemptId,
       executionId: peer.executionId,
       runtimeIncarnationId,
@@ -185,7 +186,7 @@ export function registerRuntimeRegistrationHandler<TOutcome>(
     // Step 7: announce the proven endpoint from the durable record, not from
     // what this pass observed. Announced on `ready` and on `duplicate` alike —
     // see the handler doc for the at-least-once rule.
-    await announceReadiness(deps, executionAttemptId, runtimeGeneration);
+    await announceReadiness(ctx.call, deps, executionAttemptId, runtimeGeneration);
 
     // Step 8.
     ctx.setResult({ decision: 'ready', runtimeGeneration });
@@ -215,11 +216,13 @@ export function registerRuntimeRegistrationHandler<TOutcome>(
  * same linearization as the transition belongs to the durable publication
  * seam that follows this cut: an outbox row per transition, events carrying
  * an event id and the authority version.
+ * @param call - Call context of the registration request being handled.
  * @param deps - Runtime registration dependencies.
  * @param executionAttemptId - Attempt whose runtime is ready.
  * @param runtimeGeneration - Generation the readiness belongs to.
  */
 async function announceReadiness<TOutcome>(
+  call: CallContext,
   deps: RuntimeRegistrationDeps<TOutcome>,
   executionAttemptId: string,
   runtimeGeneration: number,
@@ -228,7 +231,7 @@ async function announceReadiness<TOutcome>(
   if (control === null || control.runtimeGeneration !== runtimeGeneration || control.runtimeReadyAt === null) {
     return;
   }
-  await deps.bus.emit(ExecutionAttemptSubjects.runtime.ready, {
+  await deps.bus.emit(call, ExecutionAttemptSubjects.runtime.ready, {
     executionAttemptId,
     runtimeGeneration,
     acceptedAt: control.runtimeReadyAt,
@@ -252,12 +255,14 @@ type ProvenReadiness = { readonly kind: 'ready' | 'duplicate'; readonly accepted
  *
  * Nothing is announced from here: the probe is never projected to the pool, and
  * readiness is announced by the caller only once this returned a `ready`.
+ * @param call - Call context of the registration request being handled.
  * @param deps - Runtime registration dependencies.
  * @param probeTimeout - Delivery budget in milliseconds.
  * @param attempt - Attempt identity, its owner, the incarnation, and its fence.
  * @returns The durable readiness, or `null` when the endpoint was not proven.
  */
 async function proveRuntimeEndpoint<TOutcome>(
+  call: CallContext,
   deps: RuntimeRegistrationDeps<TOutcome>,
   probeTimeout: number,
   attempt: {
@@ -290,6 +295,7 @@ async function proveRuntimeEndpoint<TOutcome>(
   let receipt: 'completed' | 'duplicate' | 'refused';
   try {
     const delivered = await deps.bus.request(
+      call,
       ExecutionAttemptSubjects.operation.deliver,
       { executionAttemptId, runtimeIncarnationId, operationId, operationKind: 'runtime-probe', runtimeGeneration },
       { timeout: probeTimeout },

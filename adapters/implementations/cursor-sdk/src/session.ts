@@ -12,7 +12,9 @@ import {
   type QueueableTurn,
   type UserMessageQueue,
 } from '@makaio/ai-adapters-core';
-import type { ConnectorTeardownResult } from '@makaio/contracts';
+import type { CallContext, ConnectorTeardownResult } from '@makaio/contracts';
+import { MakaioBus, type EmitSubject } from '@makaio/bus-core';
+import type { ScopedSubjectDefinition } from '@makaio/core';
 import { registerMcpSession, buildMcpServerConfig, unregisterMcpSession } from './mcp-bridge.js';
 import {
   createDeltaHandler,
@@ -257,10 +259,16 @@ export class CursorSdkSession {
 
   /**
    * Emit an event on the scoped bus with auto-injected connector metadata.
-   * @param args - Subject and payload forwarded to `bus.emit()`.
+   * @param call - Call of the message that owns this SDK run.
+   * @param subject - Event subject to emit.
+   * @param payload - Event payload before identity enrichment.
    */
-  private emitEvent(...args: Parameters<CursorSdkBus['emit']>): void {
-    emitWithMetadata(this.config.bus, this.busMetadata, ...args);
+  private emitEvent<Subject extends ScopedSubjectDefinition<CursorSdkBus['namespace']>>(
+    call: CallContext,
+    subject: EmitSubject<Subject>,
+    payload: Subject['$meta']['payload'],
+  ): void {
+    emitWithMetadata(call, this.config.bus, this.busMetadata, subject, payload);
   }
 
   /**
@@ -306,8 +314,9 @@ export class CursorSdkSession {
    * The adapter session ID is generated upfront so the MCP URL embedded in the
    * Cursor Agent configuration always matches the registered session. No
    * re-registration is needed after `Agent.create()` resolves.
+   * @param call - Call of the message initializing the session.
    */
-  public async initialize(): Promise<void> {
+  public async initialize(call: CallContext): Promise<void> {
     // Dynamically import @cursor/sdk (peer dependency — not bundled).
     const cursorSdkModuleName = '@cursor/sdk';
     const { Agent } = (await import(cursorSdkModuleName)) as CursorSdkModule;
@@ -318,7 +327,7 @@ export class CursorSdkSession {
     const stableId = `cursor-${crypto.randomUUID()}`;
     this.cursorAgentId = stableId;
 
-    const mcpResult = await registerMcpSession(this.config, stableId);
+    const mcpResult = await registerMcpSession(call, this.config, stableId);
     this.mcpServerPort = mcpResult.port;
 
     const mcpServers = buildMcpServerConfig(this.mcpServerPort, stableId);
@@ -336,7 +345,7 @@ export class CursorSdkSession {
 
       this.cursorAgent = agent;
     } catch (error) {
-      await unregisterMcpSession(stableId);
+      await unregisterMcpSession(call, stableId);
       this.cursorAgentId = undefined;
       this.mcpServerPort = undefined;
       throw error;
@@ -375,13 +384,13 @@ export class CursorSdkSession {
       this.config.adapterName,
       this.config.agentId,
       handle,
-      (pausedTurn) => this.cancelRunForTurn(pausedTurn),
+      (_call, pausedTurn) => this.cancelRunForTurn(pausedTurn),
     );
     this.activeTurn = turn;
 
     handle.adapterSessionId = this.cursorAgentId;
     handle.markAcknowledged();
-    await turn.start();
+    await turn.start(handle.call);
 
     const text = this.buildPromptText(handle, mergedContent);
 
@@ -416,8 +425,8 @@ export class CursorSdkSession {
       metadata: this.busMetadata,
       messageId: handle.messageId,
     };
-    const deltaHandler = createDeltaHandler(eventConfig, turn, state);
-    const stepHandler = createStepHandler(eventConfig, turn, state);
+    const deltaHandler = createDeltaHandler(handle.call, eventConfig, turn, state);
+    const stepHandler = createStepHandler(handle.call, eventConfig, turn, state);
     let run: ActiveRun | undefined;
 
     try {
@@ -454,10 +463,10 @@ export class CursorSdkSession {
       }
 
       // Emit run.created for observability (fire-and-forget).
-      this.emitEvent(CursorSdkSubjects.sdk.event, {
+      this.emitEvent(handle.call, CursorSdkSubjects.sdk.event, {
         type: 'run.created',
       });
-      this.emitEvent(CursorSdkSubjects.run.created, {
+      this.emitEvent(handle.call, CursorSdkSubjects.run.created, {
         eventType: 'run.created',
         runId: run.id,
         agentId: this.config.agentId,
@@ -466,7 +475,7 @@ export class CursorSdkSession {
       });
 
       // Emit agent_started to drive the turn lifecycle in the agent layer.
-      this.emitEvent(CursorSdkSubjects.agent_started, {
+      this.emitEvent(handle.call, CursorSdkSubjects.agent_started, {
         eventType: 'agent_started',
         runId: run.id,
         model: this.currentModel,
@@ -475,7 +484,7 @@ export class CursorSdkSession {
       // PATH B: await the run and complete the turn on resolution.
       const runResult = await run.wait();
       const result = await this.buildCompletionResult(run, runResult);
-      this.emitCompletion(result, state);
+      this.emitCompletion(handle.call, result, state);
       await this.completeTurn(turn, handle, result);
     } catch (error) {
       if (turn.isPaused()) {
@@ -483,8 +492,8 @@ export class CursorSdkSession {
         return;
       }
 
-      this.flushAccumulatedContent(state);
-      this.emitRunError(error);
+      this.flushAccumulatedContent(handle.call, state);
+      this.emitRunError(handle.call, error);
 
       await this.completeTurn(turn, handle, {
         outcome: 'error',
@@ -559,7 +568,7 @@ export class CursorSdkSession {
     }
 
     await turn
-      .markTurnFinished()
+      .markTurnFinished(handle.call)
       .catch((err: unknown) => {
         console.error('[CursorSdkSession] turn.markTurnFinished failed:', err);
       })
@@ -572,19 +581,21 @@ export class CursorSdkSession {
 
   /**
    * Flush any buffered text/thinking content that was not delivered by a step boundary or SDK event.
+   * @param call - Call of the message that owns this SDK run.
    * @param state - Mutable turn event state containing the accumulated buffers.
    */
-  private flushAccumulatedContent(state: TurnEventState): void {
-    flushAccumulated(this.config.bus, this.busMetadata, state);
+  private flushAccumulatedContent(call: CallContext, state: TurnEventState): void {
+    flushAccumulated(call, this.config.bus, this.busMetadata, state);
   }
 
   /**
    * Emit an error event pair (raw sdk.event + typed error subject).
+   * @param call - Call of the message that owns this SDK run.
    * @param error - The error value from the failed run.
    */
-  private emitRunError(error: unknown): void {
-    this.emitEvent(CursorSdkSubjects.sdk.event, { type: 'error' });
-    this.emitEvent(CursorSdkSubjects.error, {
+  private emitRunError(call: CallContext, error: unknown): void {
+    this.emitEvent(call, CursorSdkSubjects.sdk.event, { type: 'error' });
+    this.emitEvent(call, CursorSdkSubjects.error, {
       eventType: 'error',
       error,
       message: error instanceof Error ? error.message : String(error),
@@ -649,12 +660,13 @@ export class CursorSdkSession {
    *
    * Cursor may replay prior conversation text through streaming deltas; the
    * terminal run result is the SDK-owned source of truth for the current turn.
+   * @param call - Call of the message that owns this SDK run.
    * @param result - Normalized message result for the current turn.
    * @param state - Turn event state used for duration metadata.
    */
-  private emitCompletion(result: MessageResult, state: TurnEventState): void {
+  private emitCompletion(call: CallContext, result: MessageResult, state: TurnEventState): void {
     if (result.outcome !== 'completed') return;
-    this.emitEvent(CursorSdkSubjects.agent_complete, {
+    this.emitEvent(call, CursorSdkSubjects.agent_complete, {
       eventType: 'agent_complete',
       result: result.result?.message,
       durationMs: Date.now() - state.startTime,
@@ -732,9 +744,10 @@ export class CursorSdkSession {
    * that could not tell whether its own agent was disposed cannot claim to have
    * released it, so the failure now decides the class instead of only reaching a
    * log line.
+   * @param _call - Call of the triggering message or teardown lifecycle.
    * @returns What this session observed about the end of its Cursor Agent.
    */
-  public async close(): Promise<ConnectorTeardownResult> {
+  public async close(_call: CallContext): Promise<ConnectorTeardownResult> {
     this.closed = true;
     const unaccounted: string[] = [];
 
@@ -755,7 +768,8 @@ export class CursorSdkSession {
     // initialization has at least started — covers both fully initialized and
     // in-flight-at-close() scenarios.
     if (this.cursorAgentId) {
-      await unregisterMcpSession(this.cursorAgentId);
+      // ORIGIN: Session teardown unregisters on the global MCP carrier.
+      await unregisterMcpSession(MakaioBus.own('stop'), this.cursorAgentId);
     }
 
     this.cursorAgent = undefined;

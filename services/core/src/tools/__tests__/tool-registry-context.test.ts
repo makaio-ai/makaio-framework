@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { z } from 'zod';
 import { MakaioBus } from '@makaio/bus-core';
+import { createTestCall } from '@makaio/test-utils';
 import {
   defineTool,
   defineToolset,
@@ -51,6 +52,7 @@ describe('ToolRegistry context injection', () => {
   describe('sessionId injection', () => {
     it('should inject sessionId from contextOverrides into tool context', async () => {
       const result = await registry.execute(
+        createTestCall(),
         'captureContext',
         { value: 'test' },
         {
@@ -64,7 +66,7 @@ describe('ToolRegistry context injection', () => {
     });
 
     it('should not have sessionId when not provided in contextOverrides', async () => {
-      const result = await registry.execute('captureContext', { value: 'test' });
+      const result = await registry.execute(createTestCall(), 'captureContext', { value: 'test' });
 
       expect(result.success).toBe(true);
       expect(capturedContext).not.toBeNull();
@@ -73,6 +75,7 @@ describe('ToolRegistry context injection', () => {
 
     it('should pass sessionId along with other context properties', async () => {
       const result = await registry.execute(
+        createTestCall(),
         'captureContext',
         { value: 'test' },
         {
@@ -91,7 +94,7 @@ describe('ToolRegistry context injection', () => {
 
   describe('bus injection', () => {
     it('should inject bus into tool context', async () => {
-      const result = await registry.execute('captureContext', { value: 'test' });
+      const result = await registry.execute(createTestCall(), 'captureContext', { value: 'test' });
 
       expect(result.success).toBe(true);
       expect(capturedContext).not.toBeNull();
@@ -109,7 +112,7 @@ describe('ToolRegistry context injection', () => {
         eventReceived = true;
       });
 
-      await registry.execute('captureContext', { value: 'test' });
+      await registry.execute(createTestCall(), 'captureContext', { value: 'test' });
 
       expect(eventReceived).toBe(true);
       unsubscribe();
@@ -118,7 +121,7 @@ describe('ToolRegistry context injection', () => {
 
   describe('bus handler integration', () => {
     it('should inject top-level adapter identity into tool context', async () => {
-      const result = await MakaioBus.request(ToolSubjects.execute, {
+      const result = await MakaioBus.request(createTestCall(), ToolSubjects.execute, {
         toolName: 'captureContext',
         input: { value: 'adapter-identity' },
         adapterId: 'adapter-runtime-1',
@@ -132,6 +135,7 @@ describe('ToolRegistry context injection', () => {
 
     it('should allow partial top-level adapter identity for direct execution', async () => {
       const result = await registry.execute(
+        createTestCall(),
         'captureContext',
         { value: 'partial-top-level' },
         {
@@ -146,6 +150,7 @@ describe('ToolRegistry context injection', () => {
 
     it('should reject conflicting adapter identity between top-level fields and contextOverrides', async () => {
       const result = await registry.execute(
+        createTestCall(),
         'captureContext',
         { value: 'conflict' },
         {
@@ -191,7 +196,12 @@ describe('ToolRegistry context injection', () => {
       ] as const;
 
       for (const scenario of scenarios) {
-        const result = await registry.execute('captureContext', { value: 'partial-conflict' }, scenario.options);
+        const result = await registry.execute(
+          createTestCall(),
+          'captureContext',
+          { value: 'partial-conflict' },
+          scenario.options,
+        );
 
         expect(result.success).toBe(false);
         if (!result.success) {
@@ -204,6 +214,7 @@ describe('ToolRegistry context injection', () => {
 
     it('should reject override-only adapter identity for direct execution', async () => {
       const result = await registry.execute(
+        createTestCall(),
         'captureContext',
         { value: 'override-only-full' },
         {
@@ -237,7 +248,12 @@ describe('ToolRegistry context injection', () => {
       ] as const;
 
       for (const options of scenarios) {
-        const result = await registry.execute('captureContext', { value: 'override-only-partial' }, options);
+        const result = await registry.execute(
+          createTestCall(),
+          'captureContext',
+          { value: 'override-only-partial' },
+          options,
+        );
 
         expect(result.success).toBe(false);
         if (!result.success) {
@@ -250,7 +266,7 @@ describe('ToolRegistry context injection', () => {
 
     it('should extract sessionId from contextOverrides in bus handler', async () => {
       // Execute via bus request (simulating external caller)
-      const result = await MakaioBus.request(ToolSubjects.execute, {
+      const result = await MakaioBus.request(createTestCall(), ToolSubjects.execute, {
         toolName: 'captureContext',
         input: { value: 'via-bus' },
         contextOverrides: {
@@ -263,7 +279,7 @@ describe('ToolRegistry context injection', () => {
     });
 
     it('should handle bus request without sessionId', async () => {
-      const result = await MakaioBus.request(ToolSubjects.execute, {
+      const result = await MakaioBus.request(createTestCall(), ToolSubjects.execute, {
         toolName: 'captureContext',
         input: { value: 'no-session' },
       });
@@ -273,7 +289,7 @@ describe('ToolRegistry context injection', () => {
     });
 
     it('should combine cwd, env, and sessionId from bus request', async () => {
-      const result = await MakaioBus.request(ToolSubjects.execute, {
+      const result = await MakaioBus.request(createTestCall(), ToolSubjects.execute, {
         toolName: 'captureContext',
         input: { value: 'combined' },
         contextOverrides: {
@@ -306,6 +322,7 @@ describe('ToolRegistry context injection', () => {
       await registry.register(testToolset);
 
       const result = await registry.execute(
+        createTestCall(),
         'captureContext',
         { value: 'test' },
         {
@@ -333,6 +350,7 @@ describe('ToolRegistry context injection', () => {
       await registry.register(testToolset);
 
       const result = await registry.execute(
+        createTestCall(),
         'captureContext',
         { value: 'test' },
         {

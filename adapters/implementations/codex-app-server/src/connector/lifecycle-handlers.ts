@@ -12,16 +12,13 @@ import type {
   ThreadTokenUsageUpdatedNotification,
   TurnStartedNotification,
 } from '../protocol/generated/v2/index.js';
+import type { CallContext } from '@makaio/contracts';
 import type { ProcessingState } from '@makaio/ai-adapters-core';
-import { CodexAppServerSubjects, type CodexAppServerBus } from '../namespaces/index.js';
+import { CodexAppServerSubjects } from '../namespaces/index.js';
 import type { CodexAppServerThread } from '../thread.js';
 import type { CodexAppServerTurn, ItemType } from '../turn.js';
 import type { DynamicToolCallCacheEntry } from '../dynamic-tool-handling.js';
-
-/**
- * Emit function type for bus events.
- */
-type EmitFn = CodexAppServerBus['emit'];
+import type { CodexCallEmit } from './turn-flow-handlers.js';
 
 /**
  * Extract thread ID from thread/started notification.
@@ -35,11 +32,13 @@ export function extractThreadId(notification: ThreadStartedNotification): string
 /**
  * Handle turn/started notification.
  * Acknowledges the message when the turn starts (server echoed it).
+ * @param call - Call of the message the notification belongs to, or its observer origin
  * @param notification - Turn started notification
  * @param turn - Current turn instance
  * @param updateProcessingState - State update callback
  */
 export async function handleTurnStarted(
+  call: CallContext,
   notification: TurnStartedNotification,
   turn: CodexAppServerTurn | undefined,
   updateProcessingState: (state: ProcessingState) => Promise<void>,
@@ -50,16 +49,17 @@ export async function handleTurnStarted(
   }
 
   turn.markAcknowledged();
-  await turn.handleTurnStarted(notification.turn.id);
+  await turn.handleTurnStarted(call, notification.turn.id);
   await updateProcessingState('processing_started');
   await updateProcessingState('turn_started');
 }
 
 /**
  * Handle item/started notification.
+ * @param call - Call of the message the notification belongs to, or its observer origin
  * @param notification - Item started notification
  * @param turn - Current turn instance
- * @param emit - Bus emit function
+ * @param emit - Emitter forwarding the notification call
  * @param commandCache - Cache for command execution metadata
  * @param dynamicToolCallCache - Cache for dynamic tool call metadata and results
  * @param updateProcessingState - State update callback
@@ -68,9 +68,10 @@ export async function handleTurnStarted(
  *   this `item/started` notification.
  */
 export async function handleItemStarted(
+  call: CallContext,
   notification: ItemStartedNotification,
   turn: CodexAppServerTurn | undefined,
-  emit: EmitFn,
+  emit: CodexCallEmit,
   commandCache: Map<string, { command: string; cwd: string }>,
   dynamicToolCallCache: Map<string, DynamicToolCallCacheEntry>,
   updateProcessingState: (state: ProcessingState) => Promise<void>,
@@ -84,7 +85,7 @@ export async function handleItemStarted(
   // (e.g. `dynamicToolCall`). The cast is intentional and safe: the codex server sends the
   // actual type string; we own the `ItemType` definition and keep it in sync.
   const itemType = item.type as ItemType;
-  await turn.handleItemStarted(itemId, itemType);
+  await turn.handleItemStarted(call, itemId, itemType);
   await updateProcessingState('step_started');
 
   // Emit exec_command_begin for command execution items
@@ -92,7 +93,7 @@ export async function handleItemStarted(
     const info = { command: item.command, cwd: item.cwd };
     commandCache.set(item.id, info);
     onCommandInfoReady?.(item.id, info);
-    await emit(CodexAppServerSubjects.exec_command_begin, {
+    await emit(call, CodexAppServerSubjects.exec_command_begin, {
       threadId: notification.threadId,
       turnId: notification.turnId,
       callId: item.id,
@@ -110,7 +111,7 @@ export async function handleItemStarted(
   if (itemType === 'dynamicToolCall') {
     const cached = dynamicToolCallCache.get(itemId);
     if (cached) {
-      await emit(CodexAppServerSubjects.dynamic_tool_call_begin, {
+      await emit(call, CodexAppServerSubjects.dynamic_tool_call_begin, {
         threadId: notification.threadId,
         turnId: notification.turnId,
         itemId,
@@ -126,18 +127,20 @@ export async function handleItemStarted(
 
 /**
  * Handle item/completed notification.
+ * @param call - Call of the message the notification belongs to, or its observer origin
  * @param notification - Item completed notification
  * @param turn - Current turn instance
- * @param emit - Bus emit function
+ * @param emit - Emitter forwarding the notification call
  * @param commandCache - Cache for command execution metadata
  * @param dynamicToolCallCache - Cache for dynamic tool call metadata and results
  * @param updateProcessingState - State update callback
  * @param setAgentMessageContent - Replaces the accumulator with the completed agent message text
  */
 export async function handleItemCompleted(
+  call: CallContext,
   notification: ItemCompletedNotification,
   turn: CodexAppServerTurn | undefined,
-  emit: EmitFn,
+  emit: CodexCallEmit,
   commandCache: Map<string, { command: string; cwd: string }>,
   dynamicToolCallCache: Map<string, DynamicToolCallCacheEntry>,
   updateProcessingState: (state: ProcessingState) => Promise<void>,
@@ -149,7 +152,7 @@ export async function handleItemCompleted(
   const itemId = 'id' in item ? item.id : '';
   // Cast to ItemType to accept experimental types not yet in the generated `ThreadItem` union.
   const itemType = item.type as ItemType;
-  await turn.handleItemCompleted(itemId);
+  await turn.handleItemCompleted(call, itemId);
   await updateProcessingState('step_finished');
 
   if (item.type === 'agentMessage') {
@@ -158,7 +161,7 @@ export async function handleItemCompleted(
 
   // Emit exec_command_end for command execution items
   if (item.type === 'commandExecution') {
-    await emit(CodexAppServerSubjects.exec_command_end, {
+    await emit(call, CodexAppServerSubjects.exec_command_end, {
       threadId: notification.threadId,
       turnId: notification.turnId,
       callId: item.id,
@@ -174,7 +177,7 @@ export async function handleItemCompleted(
   if (itemType === 'dynamicToolCall') {
     const cached = dynamicToolCallCache.get(itemId);
     if (cached) {
-      await emit(CodexAppServerSubjects.dynamic_tool_call_end, {
+      await emit(call, CodexAppServerSubjects.dynamic_tool_call_end, {
         threadId: notification.threadId,
         turnId: notification.turnId,
         itemId,
@@ -192,7 +195,7 @@ export async function handleItemCompleted(
 
   // For all other item types, emit item_completed so downstream handlers (e.g. agent.ts)
   // can react to completion without type-switching on individual item types.
-  await emit(CodexAppServerSubjects.item_completed, {
+  await emit(call, CodexAppServerSubjects.item_completed, {
     threadId: notification.threadId,
     turnId: notification.turnId,
     itemId,
@@ -203,16 +206,19 @@ export async function handleItemCompleted(
 
 /**
  * Handle token usage updated notification.
+ * @param call - Call of the message the notification belongs to, or its observer origin
  * @param notification - Token usage notification
  * @param thread - Current thread instance
  */
 export async function handleTokenUsageUpdated(
+  call: CallContext,
   notification: ThreadTokenUsageUpdatedNotification,
   thread: CodexAppServerThread | undefined,
 ): Promise<void> {
   if (!thread) return;
 
   await thread.handleTokenUsageUpdated(
+    call,
     notification.tokenUsage.last.inputTokens,
     notification.tokenUsage.last.cachedInputTokens,
     notification.tokenUsage.last.outputTokens,

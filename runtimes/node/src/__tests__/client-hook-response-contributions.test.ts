@@ -25,6 +25,7 @@ import {
 } from '@makaio/client-claude-code/runtime';
 import { codexClientRuntimePackage, CODEX_CONTRACT_ID } from '@makaio/client-codex/runtime';
 import { ClientsCoreToken, createClientsCorePackage } from '@makaio/subsystem-client';
+import { createTestCall } from '@makaio/test-utils';
 
 import { registerExtensionBootContributions } from '../boot.js';
 
@@ -418,6 +419,8 @@ describe('client hook response contributions', () => {
   });
 
   it('contributor factory captures bus from extensionContext and uses it at callback time', async () => {
+    const call = createTestCall();
+    const probe = createBusNamespace('ctx-consumer-probe', { fired: z.object({ source: z.string() }) });
     let capturedBus: IMakaioBus | undefined;
     const observed: string[] = [];
     const extension: KernelMakaioExtension = {
@@ -434,12 +437,7 @@ describe('client hook response contributions', () => {
           // bus at callback time and the subscription observes the delivery,
           // proving the bus is usable during hook handling — not just shaped
           // like a bus.
-          const { subjects } = bus.registerNamespace(
-            createBusNamespace('ctx-consumer-probe', { fired: z.object({ source: z.string() }) }),
-          );
-          bus.on(subjects.fired, (event) => {
-            observed.push(event.payload.source);
-          });
+          const { subjects } = bus.registerNamespace(probe);
           return [
             {
               lane: 'canonical' as const,
@@ -447,8 +445,8 @@ describe('client hook response contributions', () => {
               priority: 100,
               timeoutMs: 500,
               selectors: [{ kind: 'event-name' as const, name: 'PreToolUse' }],
-              respond: async () => {
-                await bus.emit(subjects.fired, { source: 'bus-enricher' });
+              respond: async (ctx) => {
+                await bus.emit(ctx.call, subjects.fired, { source: 'bus-enricher' });
                 return {
                   canonicalEffects: [createAppendEffect('bus-alive')],
                 };
@@ -461,11 +459,14 @@ describe('client hook response contributions', () => {
 
     const runtime = await startRuntime([extension]);
     try {
-      const result = await runtime.bus.request(ClaudeCodeClientSubjects.hook.handle, hookRequest());
+      runtime.bus.on(probe.subjects.fired, (event) => {
+        expect(event.call.principal).toEqual(call.principal);
+        observed.push(event.payload.source);
+      });
+      const result = await runtime.bus.request(call, ClaudeCodeClientSubjects.hook.handle, hookRequest());
       expect(responseOutput(result.stdout).additionalContext).toBe('bus-alive');
-      // Identity: the activation context carries the runtime's live bus, so
-      // the probe round-trip above ran on the same broker the host uses.
-      expect(capturedBus).toBe(runtime.bus);
+      // The extension carrier bus delivers to subscribers on the runtime bus.
+      expect(capturedBus?.own('observer').caller).toEqual({ kind: 'makaio.extension', id: 'ctx-consumer' });
       expect(observed).toEqual(['bus-enricher']);
     } finally {
       await runtime.coordinator.shutdown();

@@ -25,6 +25,7 @@ import {
   type BusTransport,
   type BusTransportRegistry,
 } from '../index.js';
+import { busContextOf } from '../kernel-api.js';
 
 // ---------------------------------------------------------------------------
 // Namespace registrations — done once at module level so the augmented
@@ -167,7 +168,7 @@ function createReadinessTransport(options: ReadinessTransportOptions): {
  */
 function addTransport(ns: string, transport: BusTransport, registrations: Array<{ unregister: () => void }>): void {
   registrations.push(
-    MakaioBus.getContext().transportRegistry.registerTransport(ns as keyof BusTransportRegistry, transport),
+    busContextOf(MakaioBus).transportRegistry.registerTransport(ns as keyof BusTransportRegistry, transport),
   );
 }
 
@@ -218,7 +219,12 @@ describe('Dispatch readiness gate', () => {
     });
 
     try {
-      const result = await MakaioBus.request(GateNamespace.ping, { id: 'local-handler' }, { timeout: 2000 });
+      const result = await MakaioBus.request(
+        MakaioBus.own('root'),
+        GateNamespace.ping,
+        { id: 'local-handler' },
+        { timeout: 2000 },
+      );
       expect(result).toEqual({ pong: true });
     } finally {
       cleanup();
@@ -239,13 +245,18 @@ describe('Dispatch readiness gate', () => {
 
     // Seed remoteRequestHandlers before dispatch runs — simulates a transport
     // that completed subscribe-sync before the first request is made.
-    MakaioBus.getContext().remoteRequestHandlers.set('readinessGate.ping', [{ transport: 'gate-s2', priority: 0 }]);
+    busContextOf(MakaioBus).remoteRequestHandlers.set('readinessGate.ping', [{ transport: 'gate-s2', priority: 0 }]);
 
     // With no local handler the pre-seeded remote entry is the whole chain. Resolve
     // ready so the gate's retry finds it instead of reporting NoHandlerError.
     deferred.resolve();
 
-    const result = await MakaioBus.request(GateNamespace.ping, { id: 'remote-pre-seeded' }, { timeout: 2000 });
+    const result = await MakaioBus.request(
+      MakaioBus.own('root'),
+      GateNamespace.ping,
+      { id: 'remote-pre-seeded' },
+      { timeout: 2000 },
+    );
 
     expect(result).toEqual({ pong: true });
     expect(getRequestCalls(sendSpy)).toHaveLength(1);
@@ -258,7 +269,7 @@ describe('Dispatch readiness gate', () => {
   it('throws NoHandlerError immediately when no handlers and no pending transports exist', async () => {
     // No transport registered, no handlers — gate has nothing to await.
     await expect(
-      MakaioBus.request(GateNamespace.ping, { id: 'no-handler-no-pending' }, { timeout: 2000 }),
+      MakaioBus.request(MakaioBus.own('root'), GateNamespace.ping, { id: 'no-handler-no-pending' }, { timeout: 2000 }),
     ).rejects.toThrow(NoHandlerError);
   });
 
@@ -286,12 +297,19 @@ describe('Dispatch readiness gate', () => {
     // run before request() reaches the await and would miss the gate entirely.
     timers.push(
       setTimeout(() => {
-        MakaioBus.getContext().remoteRequestHandlers.set('readinessGate.ping', [{ transport: 'gate-s4', priority: 0 }]);
+        busContextOf(MakaioBus).remoteRequestHandlers.set('readinessGate.ping', [
+          { transport: 'gate-s4', priority: 0 },
+        ]);
         deferred.resolve();
       }, 5),
     );
 
-    const result = await MakaioBus.request(GateNamespace.ping, { id: 'pending-then-handler' }, { timeout: 2000 });
+    const result = await MakaioBus.request(
+      MakaioBus.own('root'),
+      GateNamespace.ping,
+      { id: 'pending-then-handler' },
+      { timeout: 2000 },
+    );
 
     expect(result).toEqual({ pong: true });
     expect(getRequestCalls(sendSpy)).toHaveLength(1);
@@ -319,7 +337,7 @@ describe('Dispatch readiness gate', () => {
     );
 
     await expect(
-      MakaioBus.request(GateNamespace.ping, { id: 'pending-no-handler' }, { timeout: 2000 }),
+      MakaioBus.request(MakaioBus.own('root'), GateNamespace.ping, { id: 'pending-no-handler' }, { timeout: 2000 }),
     ).rejects.toThrow(NoHandlerError);
   });
 
@@ -338,7 +356,12 @@ describe('Dispatch readiness gate', () => {
     // transports: [] sets localOnly = true in request.ts, bypassing the gate.
     // This must not hang even though deferred.promise never resolves here.
     await expect(
-      MakaioBus.request(GateNamespace.ping, { id: 'local-only-transports' }, { timeout: 2000, transports: [] }),
+      MakaioBus.request(
+        MakaioBus.own('root'),
+        GateNamespace.ping,
+        { id: 'local-only-transports' },
+        { timeout: 2000, transports: [] },
+      ),
     ).rejects.toThrow(NoHandlerError);
 
     // Clean up the dangling deferred to avoid unhandled-promise-rejection noise.
@@ -360,7 +383,12 @@ describe('Dispatch readiness gate', () => {
     // $meta.local subjects are never dispatched remotely; the gate must not
     // be entered at all.
     await expect(
-      MakaioBus.request(GateNamespace.localOnlyPing, { id: 'local-subject-gate' }, { timeout: 2000 }),
+      MakaioBus.request(
+        MakaioBus.own('root'),
+        GateNamespace.localOnlyPing,
+        { id: 'local-subject-gate' },
+        { timeout: 2000 },
+      ),
     ).rejects.toThrow(NoHandlerError);
 
     deferred.resolve();
@@ -401,14 +429,19 @@ describe('Dispatch readiness gate', () => {
       setTimeout(() => {
         // Second transport becomes ready AND handler is seeded — only now
         // should dispatch retry and find the remote handler.
-        MakaioBus.getContext().remoteRequestHandlers.set('readinessGate.ping', [
+        busContextOf(MakaioBus).remoteRequestHandlers.set('readinessGate.ping', [
           { transport: 'gate-s7b', priority: 0 },
         ]);
         deferredB.resolve();
       }, 10),
     );
 
-    const result = await MakaioBus.request(GateNamespace.ping, { id: 'multi-pending' }, { timeout: 2000 });
+    const result = await MakaioBus.request(
+      MakaioBus.own('root'),
+      GateNamespace.ping,
+      { id: 'multi-pending' },
+      { timeout: 2000 },
+    );
 
     expect(result).toEqual({ pong: true });
     expect(getRequestCalls(sendSpyB)).toHaveLength(1);
@@ -444,11 +477,11 @@ describe('Dispatch readiness gate', () => {
     );
 
     await expect(
-      MakaioBus.request(GateNamespace.ping, { id: 'unregister-during-wait' }, { timeout: 2000 }),
+      MakaioBus.request(MakaioBus.own('root'), GateNamespace.ping, { id: 'unregister-during-wait' }, { timeout: 2000 }),
     ).rejects.toThrow(NoHandlerError);
 
     // Registry must be empty after unregister.
-    expect(MakaioBus.getContext().transportRegistry.names()).not.toContain('gate-s8');
+    expect(busContextOf(MakaioBus).transportRegistry.names()).not.toContain('gate-s8');
   });
 
   // -------------------------------------------------------------------------
@@ -471,7 +504,12 @@ describe('Dispatch readiness gate', () => {
     // merged list, finds nothing, and reports honestly. A readiness hint must
     // never fail a request, and must never consume the caller's request budget.
     await expect(
-      MakaioBus.request(GateNamespace.ping, { id: 'never-settling' }, { timeout: 5000, readinessTimeout: 50 }),
+      MakaioBus.request(
+        MakaioBus.own('root'),
+        GateNamespace.ping,
+        { id: 'never-settling' },
+        { timeout: 5000, readinessTimeout: 50 },
+      ),
     ).rejects.toThrow(NoHandlerError);
     const elapsed = Date.now() - started;
 
@@ -497,7 +535,12 @@ describe('Dispatch readiness gate', () => {
     // timeout: 0 disables the request deadline entirely. Before the readiness
     // budget existed this hung forever; now the gate expires and dispatch reports.
     await expect(
-      MakaioBus.request(GateNamespace.ping, { id: 'no-request-timeout' }, { timeout: 0, readinessTimeout: 50 }),
+      MakaioBus.request(
+        MakaioBus.own('root'),
+        GateNamespace.ping,
+        { id: 'no-request-timeout' },
+        { timeout: 0, readinessTimeout: 50 },
+      ),
     ).rejects.toThrow(NoHandlerError);
   });
 
@@ -507,15 +550,26 @@ describe('Dispatch readiness gate', () => {
 
   it('rejects a non-finite or negative readinessTimeout with a RangeError', async () => {
     await expect(
-      MakaioBus.request(GateNamespace.ping, { id: 'negative-budget' }, { timeout: 2000, readinessTimeout: -1 }),
-    ).rejects.toThrow(RangeError);
-
-    await expect(
-      MakaioBus.request(GateNamespace.ping, { id: 'nan-budget' }, { timeout: 2000, readinessTimeout: Number.NaN }),
+      MakaioBus.request(
+        MakaioBus.own('root'),
+        GateNamespace.ping,
+        { id: 'negative-budget' },
+        { timeout: 2000, readinessTimeout: -1 },
+      ),
     ).rejects.toThrow(RangeError);
 
     await expect(
       MakaioBus.request(
+        MakaioBus.own('root'),
+        GateNamespace.ping,
+        { id: 'nan-budget' },
+        { timeout: 2000, readinessTimeout: Number.NaN },
+      ),
+    ).rejects.toThrow(RangeError);
+
+    await expect(
+      MakaioBus.request(
+        MakaioBus.own('root'),
         GateNamespace.ping,
         { id: 'infinite-budget' },
         { timeout: 2000, readinessTimeout: Number.POSITIVE_INFINITY },
@@ -553,6 +607,7 @@ describe('Dispatch readiness gate', () => {
       );
 
       const request = MakaioBus.request(
+        MakaioBus.own('root'),
         GateNamespace.ping,
         { id: 'deadline-bound' },
         {
@@ -590,7 +645,7 @@ describe('Dispatch readiness gate', () => {
     const { transport } = createReadinessTransport({ name: 'gate-s9q', requestError: transportFailure });
     addTransport('gate-s9q', transport, registrations);
 
-    MakaioBus.getContext().remoteRequestHandlers.set('readinessGate.ping', [{ transport: 'gate-s9q', priority: 0 }]);
+    busContextOf(MakaioBus).remoteRequestHandlers.set('readinessGate.ping', [{ transport: 'gate-s9q', priority: 0 }]);
 
     let compensated = false;
     const cleanup = MakaioBus.on(
@@ -610,7 +665,7 @@ describe('Dispatch readiness gate', () => {
     try {
       // The rollback ran, and the failure still reaches the caller.
       await expect(
-        MakaioBus.request(GateNamespace.ping, { id: 'wrapper-compensates' }, { timeout: 2000 }),
+        MakaioBus.request(MakaioBus.own('root'), GateNamespace.ping, { id: 'wrapper-compensates' }, { timeout: 2000 }),
       ).rejects.toThrow('gate-s9q exploded');
       expect(compensated).toBe(true);
     } finally {
@@ -641,7 +696,7 @@ describe('Dispatch readiness gate', () => {
 
     try {
       await expect(
-        MakaioBus.request(GateNamespace.ping, { id: 'deadline-mid-chain' }, { timeout: 40 }),
+        MakaioBus.request(MakaioBus.own('root'), GateNamespace.ping, { id: 'deadline-mid-chain' }, { timeout: 40 }),
       ).rejects.toThrow(TimeoutError);
 
       // Give the overrunning handler time to finish and attempt its next().
@@ -678,7 +733,7 @@ describe('Dispatch readiness gate', () => {
       // be suspended in the gate before the deferred resolves.
       timers.push(
         setTimeout(() => {
-          MakaioBus.getContext().remoteRequestHandlers.set('readinessGate.ping', [
+          busContextOf(MakaioBus).remoteRequestHandlers.set('readinessGate.ping', [
             { transport: 'gate-s9d', priority: 10 },
           ]);
           deferred.resolve();
@@ -686,6 +741,7 @@ describe('Dispatch readiness gate', () => {
       );
 
       const result = await MakaioBus.request(
+        MakaioBus.own('root'),
         GateNamespace.ping,
         { id: 'allowlist-pinned' },
         { timeout: 2000, transports: ['gate-s9d' as keyof BusTransportRegistry] },
@@ -730,14 +786,19 @@ describe('Dispatch readiness gate', () => {
     );
     timers.push(
       setTimeout(() => {
-        MakaioBus.getContext().remoteRequestHandlers.set('readinessGate.ping', [
+        busContextOf(MakaioBus).remoteRequestHandlers.set('readinessGate.ping', [
           { transport: 'gate-s10-good', priority: 0 },
         ]);
         deferredGood.resolve();
       }, 10),
     );
 
-    const result = await MakaioBus.request(GateNamespace.ping, { id: 'one-rejects' }, { timeout: 2000 });
+    const result = await MakaioBus.request(
+      MakaioBus.own('root'),
+      GateNamespace.ping,
+      { id: 'one-rejects' },
+      { timeout: 2000 },
+    );
 
     expect(result).toEqual({ pong: true });
     expect(getRequestCalls(sendSpyGood)).toHaveLength(1);

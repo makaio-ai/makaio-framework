@@ -1,4 +1,5 @@
 import type { SessionMessage } from '@makaio/contracts';
+import type { CallContext } from '@makaio/core';
 import type { SessionEditorAction } from '../../../session-editor/types.js';
 
 /**
@@ -14,7 +15,13 @@ export const messagesToContextAction: SessionEditorAction = {
   description: 'Convert messages to context JSON (final step)',
   category: 'extraction',
 
-  async execute(messages: SessionMessage[]) {
+  /**
+   * Convert the messages to a context JSON blob.
+   * @param _call - Call context of the pipeline's operation (unused: this action sends nothing)
+   * @param messages - Messages to export as context
+   * @returns Context result
+   */
+  async execute(_call: CallContext, messages: SessionMessage[]) {
     // Extract text content for the context summary
     const contextMessages = messages.map((msg) => ({
       role: msg.role,

@@ -1,3 +1,4 @@
+import type { CallContext } from '@makaio/core';
 import type { JsonValue, WorkflowFrameState, WorkflowParallelNode, WorkflowSequenceNode } from '@makaio/contracts';
 import type { ExecuteSequenceFn, NodeOutcome } from './node-execution.js';
 import type { PrimitiveExpressionContext, RuntimeContext } from './runtime-context.js';
@@ -92,6 +93,7 @@ export type BranchSettled =
  *
  * In both modes, cancellation of the outer {@link RuntimeContext.signal}
  * propagates immediately: all in-flight branch frames are cancelled.
+ * @param call - Call context of the message that drives this execution run.
  * @param node - The parallel node to execute.
  * @param ctx - Execution-wide runtime context.
  * @param expressionCtx - Current expression evaluation context forwarded to each branch.
@@ -102,6 +104,7 @@ export type BranchSettled =
  * @returns Terminal execution outcome for the parallel node as a whole.
  */
 export async function executeParallelNode(
+  call: CallContext,
   node: WorkflowParallelNode,
   ctx: RuntimeContext,
   expressionCtx: PrimitiveExpressionContext,
@@ -138,10 +141,21 @@ export async function executeParallelNode(
   const branchCtx: RuntimeContext = combinedSignal === ctx.signal ? ctx : ctx.withSignal(combinedSignal);
 
   const branchPromises = branchEntries.map(([branchKey, branchSequence]) =>
-    runBranch(branchKey, branchSequence, node, branchCtx, expressionCtx, executeSequenceFn, parentFrameId, parentPath, {
-      outerSignal: ctx.signal,
-      pauseSignal: mode === 'fail-fast' || abortSiblingsOnPause ? pauseController.signal : undefined,
-    }),
+    runBranch(
+      call,
+      branchKey,
+      branchSequence,
+      node,
+      branchCtx,
+      expressionCtx,
+      executeSequenceFn,
+      parentFrameId,
+      parentPath,
+      {
+        outerSignal: ctx.signal,
+        pauseSignal: mode === 'fail-fast' || abortSiblingsOnPause ? pauseController.signal : undefined,
+      },
+    ),
   );
 
   if (mode === 'all-settled') {
@@ -192,6 +206,7 @@ export async function executeParallelNode(
  * Creates a child frame for the branch, emits frame lifecycle events, and
  * delegates to the sequence executor. The frame uses `branchKey` so the
  * GUI/WorkLog can correlate per-branch state.
+ * @param call - Call context of the message that drives this execution run.
  * @param branchKey - Branch name from `node.branches`.
  * @param branchSequence - Sequence node to execute for this branch.
  * @param parallelNode - Parent parallel node (for nodeId reference).
@@ -204,6 +219,7 @@ export async function executeParallelNode(
  * @returns Settled outcome for this branch.
  */
 async function runBranch(
+  call: CallContext,
   branchKey: string,
   branchSequence: WorkflowSequenceNode,
   parallelNode: WorkflowParallelNode,
@@ -231,7 +247,7 @@ async function runBranch(
   // the running branch frame left behind by a parked descendant gate.
   const frame =
     resumeFrame ??
-    ctx.createFrame({
+    ctx.createFrame(call, {
       nodeId: parallelNode.id,
       nodeType: 'parallel',
       path: parentPath,
@@ -241,21 +257,21 @@ async function runBranch(
 
   if (ctx.signal.aborted) {
     if (!shouldKeepBranchFrameRunningOnCancel(frame, cancellationOptions)) {
-      await cancelFrame(frame, ctx);
+      await cancelFrame(call, frame, ctx);
     }
     return { status: 'cancelled' };
   }
 
   if (resumeFrame === undefined) {
-    await startFrame(frame, ctx);
+    await startFrame(call, frame, ctx);
   }
 
   let outcome: NodeOutcome;
   try {
-    outcome = await executeSequenceFn(branchSequence, ctx, expressionCtx, frame.frameId, frame.path);
+    outcome = await executeSequenceFn(call, branchSequence, ctx, expressionCtx, frame.frameId, frame.path);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    await failFrame(frame, ctx, message);
+    await failFrame(call, frame, ctx, message);
     return { status: 'failed', error: message };
   }
 
@@ -265,18 +281,18 @@ async function runBranch(
       // Extract the last branch node's output from the frame registry so the
       // parallel aggregate can surface per-branch results.
       const branchOutput = extractLastSequenceOutput(branchSequence, frame.frameId, ctx);
-      await completeFrame(frame, ctx, branchOutput);
+      await completeFrame(call, frame, ctx, branchOutput);
       return { status: 'completed', output: branchOutput };
     }
     case 'skipped': {
       // Sequences only return 'skipped' if all nodes were skipped.
       // Treat as completed for the branch aggregate with no output.
-      await completeFrame(frame, ctx);
+      await completeFrame(call, frame, ctx);
       return { status: 'completed' };
     }
     case 'cancelled': {
       if (!shouldKeepBranchFrameRunningOnCancel(frame, cancellationOptions)) {
-        await cancelFrame(frame, ctx);
+        await cancelFrame(call, frame, ctx);
       }
       return { status: 'cancelled' };
     }
@@ -286,7 +302,7 @@ async function runBranch(
       return outcome;
     }
     case 'failed': {
-      await failFrame(frame, ctx, outcome.error);
+      await failFrame(call, frame, ctx, outcome.error);
       return { status: 'failed', error: outcome.error };
     }
   }

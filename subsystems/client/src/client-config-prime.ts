@@ -17,7 +17,7 @@
 
 import type { IMakaioBus } from '@makaio/bus-core';
 import type { ClientConfigPrimeRequest, ClientConfigPrimeResponse } from '@makaio/contracts/client';
-import type { RequestMessagePayload, SubjectDefinition, SubjectRecord } from '@makaio/core';
+import type { CallContext, RequestMessagePayload, SubjectDefinition, SubjectRecord } from '@makaio/core';
 
 // ---------------------------------------------------------------------------
 // Non-owning per-client subject definition
@@ -72,15 +72,17 @@ function createClientConfigPrimeSubjectDef(clientId: string): ClientConfigPrimeS
  * any lifecycle step that depends on the primed config directory.  When no
  * client-specific handler is registered the promise resolves immediately as a
  * no-op.
+ * @param call - Call context of the handled message that triggers the priming, forwarded to the request.
  * @param bus - Bus instance to dispatch on.
  * @param payload - Config prime request payload.
  * @returns Prime response from the client-specific handler, or `{ primed: false }`
  *   when no handler is registered.
  */
 export async function primeClientConfig(
+  call: CallContext,
   bus: IMakaioBus,
   payload: ClientConfigPrimeRequest,
 ): Promise<ClientConfigPrimeResponse> {
-  const result = await bus.requestOptional(createClientConfigPrimeSubjectDef(payload.clientId), payload);
+  const result = await bus.requestOptional(call, createClientConfigPrimeSubjectDef(payload.clientId), payload);
   return result.handled ? result.data : { primed: false };
 }

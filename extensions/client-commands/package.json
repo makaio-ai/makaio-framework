@@ -16,6 +16,9 @@
     "build": "bun build.ts",
     "test": "vitest run"
   },
+  "peerDependencies": {
+    "@makaio/framework": "workspace:*"
+  },
   "dependencies": {
     "@makaio/bus-core": "workspace:*",
     "@makaio/contracts": "workspace:*",

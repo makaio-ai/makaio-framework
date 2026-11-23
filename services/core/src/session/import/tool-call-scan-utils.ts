@@ -5,6 +5,7 @@
  */
 
 import type { IMakaioBus } from '@makaio/bus-core';
+import type { CallContext } from '@makaio/core';
 import type { SessionMessage } from '@makaio/contracts';
 import { MessageStorageSubjects, type MessagePageCursor } from '../messages/namespace.js';
 
@@ -69,17 +70,22 @@ export function outputReferencesSessionId(output: string, pattern: RegExp): bool
  *
  * Follows `nextCursor` until exhausted. Callers should only invoke this
  * for sessions where message volume is bounded (e.g., imported sessions).
+ * @param call - Call context of the handled message the fetch serves
  * @param bus - The bus instance to issue requests on
  * @param sessionId - Session whose messages to fetch
  * @returns Full ordered list of messages (oldest first)
  */
-export async function fetchAllMessages(bus: IMakaioBus, sessionId: string): Promise<SessionMessage[]> {
+export async function fetchAllMessages(
+  call: CallContext,
+  bus: IMakaioBus,
+  sessionId: string,
+): Promise<SessionMessage[]> {
   const collected: SessionMessage[] = [];
   let cursor: MessagePageCursor | undefined;
   let pageCount = 0;
 
   do {
-    const response = await bus.request(MessageStorageSubjects.getBySession, {
+    const response = await bus.request(call, MessageStorageSubjects.getBySession, {
       sessionId,
       order: 'asc',
       ...(cursor !== undefined ? { after: cursor } : {}),

@@ -4,7 +4,7 @@ import type { AIAdapterRuntimeInitOptions } from './ai-adapter-init-options.js';
 import type { AIAdapter } from '../adapter/ai-adapter.js';
 import type { AIAgent } from '../agent/ai-agent.js';
 import type { ToolApprovalContext } from '../utils/tool-approval.js';
-import type { AIReasoningLevel, ProviderContext, ProviderDefinitionInput } from '@makaio/contracts';
+import type { AIReasoningLevel, CallContext, ProviderContext, ProviderDefinitionInput } from '@makaio/contracts';
 
 /**
  * Identifies a specific model offering for test execution.
@@ -58,11 +58,11 @@ export interface CreateConformanceTestConfigOptions {
 
 /**
  * Options for creating test agent instances.
- * Omits 'bus' (provided by test config) and makes 'adapterName'/'agentId' optional (factories provide defaults).
+ * Omits 'bus' (provided by test config) and 'globalBus' (handed in by the conformance caller), and makes 'adapterName'/'agentId' optional (factories provide defaults).
  */
 export type CreateTestAgentOptions = Omit<
   BaseAgentConnectorConfig,
-  'bus' | 'agentId' | 'adapterName' | 'model' | 'cwd' | 'providerContext'
+  'bus' | 'globalBus' | 'agentId' | 'adapterName' | 'model' | 'cwd' | 'providerContext'
 > & {
   agentId?: string;
   adapterName?: string;
@@ -103,12 +103,13 @@ export interface ConformanceTestConfig<
    * The handler will only receive approval requests from the given connector
    * (filtered by agentId). Returns an unsubscribe function for cleanup.
    * @param connector - The connector to scope approval handling to
-   * @param context - Optional approval context (e.g., allowed tools, policies)
+   * @param context - Approval context, or a lazy resolver that receives the call of the approval request being handled
+   * @param globalBus - Bus the scoped approval requests are forwarded to
    * @returns Unsubscribe function to remove the handler
    */
   registerToolApprovalHandler(
     connector: TConnector,
-    context: ToolApprovalContext | (() => Promise<ToolApprovalContext>),
+    context: ToolApprovalContext | ((call: CallContext) => Promise<ToolApprovalContext>),
     globalBus: IMakaioBus,
   ): () => void;
 

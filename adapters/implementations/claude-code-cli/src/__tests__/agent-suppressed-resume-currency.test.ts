@@ -13,6 +13,7 @@ import { AgentTeardownArbiter } from '@makaio/ai-adapters-core';
 import os from 'node:os';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
+import { createTestCall } from '@makaio/test-utils';
 import { AgentSubjects, type AdapterSessionMoved } from '@makaio/contracts';
 import type { SDKMessage } from '@makaio/client-claude-code';
 
@@ -57,7 +58,7 @@ const RESUME_TARGET = 'stored-provider-session';
  * @returns Agent wired to the real CLI connector
  */
 async function makeResumeArmedAgent(): Promise<ClaudeCodeCliAgent> {
-  const adapterBus = await ClaudeCodeCliConnectorNamespace.scopedBus();
+  const adapterBus = await ClaudeCodeCliConnectorNamespace.scopedBus(MakaioBus);
   return new ClaudeCodeCliAgent({
     adapterBus,
     teardownArbiter: new AgentTeardownArbiter(),
@@ -135,9 +136,9 @@ describe('ClaudeCodeCliAgent provider-session currency on a suppressed native re
     agent = await makeResumeArmedAgent();
     // Idle start: the session seeds its identity from the stored target and
     // reports it as authoritative before any subprocess exists.
-    await expect(agent.initialize()).resolves.toBe(RESUME_TARGET);
+    await expect(agent.initialize(createTestCall())).resolves.toBe(RESUME_TARGET);
 
-    await MakaioBus.request(AgentSubjects.sendMessage, {
+    await MakaioBus.request(createTestCall(), AgentSubjects.sendMessage, {
       agentId: AGENT_ID,
       adapterId: ADAPTER_ID,
       message: 'first turn after a degrade',
@@ -170,9 +171,9 @@ describe('ClaudeCodeCliAgent provider-session currency on a suppressed native re
     // Counter-check: a dispatch that keeps native resume never rotates, so the
     // stored target stays the agent's currency.
     agent = await makeResumeArmedAgent();
-    await agent.initialize();
+    await agent.initialize(createTestCall());
 
-    await MakaioBus.request(AgentSubjects.sendMessage, {
+    await MakaioBus.request(createTestCall(), AgentSubjects.sendMessage, {
       agentId: AGENT_ID,
       adapterId: ADAPTER_ID,
       message: 'first turn with native resume',

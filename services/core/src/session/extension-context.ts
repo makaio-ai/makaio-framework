@@ -1,4 +1,5 @@
 import type { IMakaioBus } from '@makaio/bus-core';
+import type { CallContext } from '@makaio/core';
 import {
   SessionSubjects,
   type Message,
@@ -44,8 +45,8 @@ export class SessionExtensionContextImpl implements SessionExtensionContext {
 
   // --- Message Actions ---
 
-  public async sendToAgent(agentId: string, message: Message): Promise<void> {
-    await this.bus.request(SessionSubjects.sendMessage, {
+  public async sendToAgent(call: CallContext, agentId: string, message: Message): Promise<void> {
+    await this.bus.request(call, SessionSubjects.sendMessage, {
       sessionId: this._sessionId,
       agentIds: [agentId],
       message,
@@ -71,8 +72,8 @@ export class SessionExtensionContextImpl implements SessionExtensionContext {
 
   // --- Session Lifecycle ---
 
-  public async fork(options: ForkOptions): Promise<string> {
-    const result = await this.bus.request(SessionSubjects.fork, {
+  public async fork(call: CallContext, options: ForkOptions): Promise<string> {
+    const result = await this.bus.request(call, SessionSubjects.fork, {
       sourceSessionId: this._sessionId,
       name: options.reason,
       // Note: targetAgentId/initialMessage/inheritContext require fork handler extension
@@ -80,8 +81,8 @@ export class SessionExtensionContextImpl implements SessionExtensionContext {
     return result.sessionId;
   }
 
-  public async merge(childSessionId: string, summary?: string): Promise<void> {
-    await this.bus.request(SessionSubjects.merge, {
+  public async merge(call: CallContext, childSessionId: string, summary?: string): Promise<void> {
+    await this.bus.request(call, SessionSubjects.merge, {
       parentSessionId: this._sessionId,
       childSessionId,
       summary,
@@ -90,8 +91,8 @@ export class SessionExtensionContextImpl implements SessionExtensionContext {
     });
   }
 
-  public async abandon(childSessionId: string): Promise<void> {
-    await this.bus.request(SessionSubjects.abandon, {
+  public async abandon(call: CallContext, childSessionId: string): Promise<void> {
+    await this.bus.request(call, SessionSubjects.abandon, {
       parentSessionId: this._sessionId,
       childSessionId,
       source: 'extension',
@@ -101,8 +102,8 @@ export class SessionExtensionContextImpl implements SessionExtensionContext {
 
   // --- Compression ---
 
-  public async requestCompression(reason: string): Promise<void> {
-    await this.bus.emit(SessionSubjects.compressionRequested, {
+  public async requestCompression(call: CallContext, reason: string): Promise<void> {
+    await this.bus.emit(call, SessionSubjects.compressionRequested, {
       sessionId: this._sessionId,
       reason,
       source: 'extension',
@@ -112,7 +113,7 @@ export class SessionExtensionContextImpl implements SessionExtensionContext {
 
   // --- Query ---
 
-  public async getContextWindowState(): Promise<ContextWindowState> {
+  public async getContextWindowState(call: CallContext): Promise<ContextWindowState> {
     // Try tracker first for real-time data
     if (this.contextTracker) {
       const state = this.contextTracker.getSessionState(this._sessionId);
@@ -127,7 +128,7 @@ export class SessionExtensionContextImpl implements SessionExtensionContext {
     }
 
     // Fallback: check session for agents
-    const { session } = await this.bus.request(SessionSubjects.get, {
+    const { session } = await this.bus.request(call, SessionSubjects.get, {
       sessionId: this._sessionId,
     });
 
@@ -139,8 +140,8 @@ export class SessionExtensionContextImpl implements SessionExtensionContext {
     return { currentTokens: 0, maxTokens: 200000, percentage: 0, level: 'ok' };
   }
 
-  public async getChildSessions(): Promise<string[]> {
-    const result = await this.bus.request(SessionSubjects.getChildren, {
+  public async getChildSessions(call: CallContext): Promise<string[]> {
+    const result = await this.bus.request(call, SessionSubjects.getChildren, {
       sessionId: this._sessionId,
     });
     return result.children.map((child) => child.sessionId);

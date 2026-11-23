@@ -72,6 +72,17 @@ function toDefinitionDbValues(workflow: WorkflowDefinition, now: number): Insert
 }
 
 /**
+ * Selects the lifecycle subject announcing a persisted definition write.
+ * @param kind - Whether the write inserted a new row or updated an existing one
+ * @returns The `definition.created` or `definition.updated` subject
+ */
+function definitionEventSubject(
+  kind: 'created' | 'updated',
+): typeof WorkflowSubjects.definition.created | typeof WorkflowSubjects.definition.updated {
+  return kind === 'created' ? WorkflowSubjects.definition.created : WorkflowSubjects.definition.updated;
+}
+
+/**
  * Builds the `SET` clause for updating an existing `workflow_definitions` row.
  *
  * Per-column rule: `name`, `root`, `updatedAt`, `state`, `extensions`, `executableSource`, `requirements`,
@@ -151,10 +162,7 @@ export function registerDefinitionHandlers(bus: IMakaioBus, db: MakaioDatabase):
     });
 
     if (event) {
-      await bus.emit(
-        event.kind === 'created' ? WorkflowSubjects.definition.created : WorkflowSubjects.definition.updated,
-        mapDefinition(event.row),
-      );
+      await bus.emit(ctx.call, definitionEventSubject(event.kind), mapDefinition(event.row));
     }
     ctx.setResult({ id: workflow.id });
   });
@@ -165,7 +173,7 @@ export function registerDefinitionHandlers(bus: IMakaioBus, db: MakaioDatabase):
     );
     const deleted = deletedRows.length > 0;
     if (deleted) {
-      await bus.emit(WorkflowSubjects.definition.deleted, { id: ctx.payload.id });
+      await bus.emit(ctx.call, WorkflowSubjects.definition.deleted, { id: ctx.payload.id });
     }
     ctx.setResult({ deleted });
   });

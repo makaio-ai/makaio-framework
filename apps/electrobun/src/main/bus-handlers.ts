@@ -1,5 +1,5 @@
 import { MakaioBus } from '@makaio/bus-core';
-import { HostSubjects } from '@makaio/contracts';
+import { HostSubjects, type CallContext } from '@makaio/contracts';
 import { VariantSubjects } from '@makaio/contracts/variant';
 import type { MakaioRuntime } from '@makaio/runtime-bun';
 import type { ILocalNotificationProvider } from '@makaio/services-core/local-notification';
@@ -16,12 +16,19 @@ import { registerElectrobunWindowsBusHandlers } from './windows-bus-handlers.js'
 export interface RegisterBusHandlersOptions {
   /** Cleanup sink for all bus handler unsubscribe callbacks. */
   busHandlerCleanups: Array<() => void>;
-  /** Host window creation helper. */
-  createWindow: (options: CreateWindowOptions) => number;
+  /**
+   * Host window creation helper.
+   * @param call - Call of the message requesting the window.
+   * @param options - Window creation options forwarded to WindowManager.
+   */
+  createWindow: (call: CallContext, options: CreateWindowOptions) => number;
   /** Desktop notification provider, if this runtime supplies one. */
   localNotificationProvider: ILocalNotificationProvider | undefined;
-  /** Fallback shell window opener. */
-  openDefaultWindow: () => number;
+  /**
+   * Fallback shell window opener.
+   * @param call - Call of the message requesting the fallback window.
+   */
+  openDefaultWindow: (call: CallContext) => number;
   /** Refresh the tray menu after window state changes. */
   refreshTrayMenu: () => void;
   /** Show the tray popover idempotently. */
@@ -58,7 +65,7 @@ export function registerBusHandlers(options: RegisterBusHandlersOptions): void {
 
   busHandlerCleanups.push(
     MakaioBus.on(HostSubjects.window.create, (ctx) => {
-      const windowId = createWindow(ctx.payload);
+      const windowId = createWindow(ctx.call, ctx.payload);
       ctx.setResult({ windowId });
     }),
   );
@@ -123,7 +130,7 @@ export function registerBusHandlers(options: RegisterBusHandlersOptions): void {
   registerVariantUpgradeHandler(busHandlerCleanups, variantConfig);
   busHandlerCleanups.push(
     registerElectrobunWindowsBusHandlers(MakaioBus, {
-      createWindow: (registrationId) => createWindow({ registrationId }),
+      createWindow: (call: CallContext, registrationId: string) => createWindow(call, { registrationId }),
       dashboardRegistrationId: FRAMEWORK_FALLBACK_WINDOW,
       findWindow: (registrationId) => windowManager.findByRegistrationId(registrationId),
       focusWindow: (windowId) => windowManager.focusWindow(windowId),
