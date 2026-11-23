@@ -50,6 +50,8 @@ export interface PiSession {
 export interface PiConnectorSessionConfig {
   /** Scoped bus for emitting turn lifecycle events to the agent layer. */
   bus: PiSdkBus;
+  /** Mints the context for signals no turn caused, using the carrier bus's `own('observer')`. */
+  observerCall: () => CallContext;
   /** Unique adapter instance identifier. */
   adapterId: string;
   /** Adapter type name (always 'pi-sdk'). */
@@ -172,7 +174,7 @@ export class PiConnectorSession extends BaseConnectorSession<PiConnectorSessionC
   private readonly approvedToolInputs = new Map<string, Record<string, unknown>>();
 
   /** Originating Makaio message for each in-flight Pi tool call. */
-  private readonly toolMessageIds = new Map<string, string>();
+  private readonly toolMessageHandles = new Map<string, MessageHandle>();
 
   /** Metadata injected into every bus emission so the filtered bus matches by agentId. */
   private readonly busMetadata: { agentId: string; adapterId: string; adapterName: string };
@@ -196,15 +198,17 @@ export class PiConnectorSession extends BaseConnectorSession<PiConnectorSessionC
    * The agent layer subscribes via a filtered bus keyed on agentId. Raw bus
    * emissions would be invisible to those subscriptions; this wrapper ensures
    * every emission carries the required identity fields.
+   * @param call - Call of the originating message or the session observer
    * @param subject - Scoped subject definition to emit on
    * @param payload - Event payload (metadata is merged automatically)
    * @returns Promise resolving when the event is delivered
    */
   private emitEvent<S extends Parameters<PiSdkBus['emit']>[0]>(
+    call: CallContext,
     subject: S,
     payload: Parameters<PiSdkBus['emit']>[1],
   ): Promise<void> {
-    return this.config.bus.emit(subject, { ...payload, ...this.busMetadata } as Parameters<PiSdkBus['emit']>[1]);
+    return this.config.bus.emit(call, subject, { ...payload, ...this.busMetadata });
   }
 
   /**
@@ -257,8 +261,7 @@ export class PiConnectorSession extends BaseConnectorSession<PiConnectorSessionC
       // Capture active turn synchronously so deferred handlePiEvent
       // doesn't pick up a replacement turn set by startNewTurn.
       const turnSnapshot = this.activeTurn;
-      const handleSnapshot = this.activeTurn?.messageHandle;
-      void this.handlePiEvent(event, turnSnapshot, handleSnapshot).catch((error: unknown) => {
+      void this.handlePiEvent(event, turnSnapshot).catch((error: unknown) => {
         console.error('[PiConnectorSession] Failed to handle Pi session event:', error);
       });
     });
@@ -270,16 +273,15 @@ export class PiConnectorSession extends BaseConnectorSession<PiConnectorSessionC
    * Always emits the raw event to `sdk.event` for observability. Delegates
    * to sub-handlers by event category to stay within the per-function line limit.
    * @param event - Raw event from Pi SDK's session.subscribe()
+   * @param turnSnapshot - Active turn captured when Pi emitted the event
    */
-
-  private async handlePiEvent(
-    event: AgentSessionEvent,
-    turnSnapshot?: PiConnectorTurn,
-    handleSnapshot?: MessageHandle,
-  ): Promise<void> {
+  private async handlePiEvent(event: AgentSessionEvent, turnSnapshot?: PiConnectorTurn): Promise<void> {
+    const handle =
+      event.type === 'tool_execution_end' ? this.toolMessageHandles.get(event.toolCallId) : turnSnapshot?.messageHandle;
+    const call = handle?.call ?? this.config.observerCall();
     // Always emit raw event for observability / debugging (fire-and-forget:
     // high-frequency text_delta tokens must not block the semantic handler chain)
-    void this.emitEvent(PiSdkSubjects.sdk.event, event as { type: string }).catch((error: unknown) => {
+    void this.emitEvent(call, PiSdkSubjects.sdk.event, event).catch((error: unknown) => {
       console.error('[PiConnectorSession] Failed to emit raw sdk.event:', error);
     });
 
@@ -291,47 +293,47 @@ export class PiConnectorSession extends BaseConnectorSession<PiConnectorSessionC
         await this.handleMessageEnd(event, turnSnapshot);
         break;
       case 'tool_execution_start':
-        if (!handleSnapshot) return;
-        this.toolMessageIds.set(event.toolCallId, handleSnapshot.messageId);
-        await this.emitEvent(PiSdkSubjects.tool_started, {
+        if (!handle) return;
+        this.toolMessageHandles.set(event.toolCallId, handle);
+        await this.emitEvent(call, PiSdkSubjects.tool_started, {
           eventType: 'tool_started',
-          messageId: handleSnapshot.messageId,
+          messageId: handle.messageId,
           toolName: event.toolName,
           toolCallId: event.toolCallId,
           args: this.normalizeToolArgs(event.args),
         });
         break;
       case 'tool_execution_end':
-        await this.emitToolCompletedEvent(event);
+        if (handle) await this.emitToolCompletedEvent(event, handle);
         break;
       case 'agent_start':
-        await this.emitEvent(PiSdkSubjects.agent_started, { eventType: 'agent_started' });
+        await this.emitEvent(call, PiSdkSubjects.agent_started, { eventType: 'agent_started' });
         break;
       case 'agent_end':
-        await this.handleAgentEnd(event, turnSnapshot, handleSnapshot);
+        await this.handleAgentEnd(event, turnSnapshot);
         break;
       case 'compaction_start':
-        await this.emitEvent(PiSdkSubjects.compaction_started, {
+        await this.emitEvent(call, PiSdkSubjects.compaction_started, {
           eventType: 'compaction_started',
         });
         break;
       case 'compaction_end':
-        await this.emitEvent(PiSdkSubjects.compaction_ended, {
+        await this.emitEvent(call, PiSdkSubjects.compaction_ended, {
           eventType: 'compaction_ended',
         });
         break;
       case 'auto_retry_start':
-        await this.emitEvent(PiSdkSubjects.auto_retry_started, {
+        await this.emitEvent(call, PiSdkSubjects.auto_retry_started, {
           eventType: 'auto_retry_started',
         });
         break;
       case 'auto_retry_end':
-        await this.emitEvent(PiSdkSubjects.auto_retry_ended, {
+        await this.emitEvent(call, PiSdkSubjects.auto_retry_ended, {
           eventType: 'auto_retry_ended',
         });
         break;
       case 'queue_update':
-        await this.emitEvent(PiSdkSubjects.queue_update, { eventType: 'queue_update' });
+        await this.emitEvent(call, PiSdkSubjects.queue_update, { eventType: 'queue_update' });
         break;
     }
   }
@@ -349,26 +351,27 @@ export class PiConnectorSession extends BaseConnectorSession<PiConnectorSessionC
     turnSnapshot?: PiConnectorTurn,
   ): Promise<void> {
     if (!this.shouldAcceptTurnEvent(turnSnapshot)) return;
+    const { call } = turnSnapshot.messageHandle;
     if (ame.type === 'text_delta') {
-      await this.emitEvent(PiSdkSubjects.text_delta, {
+      await this.emitEvent(call, PiSdkSubjects.text_delta, {
         eventType: 'text_delta',
         delta: ame.delta,
       });
-      await this.advanceToStepStarted(turnSnapshot.messageHandle.call, turnSnapshot);
+      await this.advanceToStepStarted(call, turnSnapshot);
     } else if (ame.type === 'text_end') {
       this.appendTurnAssistantText(turnSnapshot, ame.content);
-      await this.emitEvent(PiSdkSubjects.text_complete, {
+      await this.emitEvent(call, PiSdkSubjects.text_complete, {
         eventType: 'text_complete',
         text: ame.content,
       });
     } else if (ame.type === 'thinking_delta') {
-      await this.emitEvent(PiSdkSubjects.thinking_delta, {
+      await this.emitEvent(call, PiSdkSubjects.thinking_delta, {
         eventType: 'thinking_delta',
         delta: ame.delta,
       });
-      await this.advanceToStepStarted(turnSnapshot.messageHandle.call, turnSnapshot);
+      await this.advanceToStepStarted(call, turnSnapshot);
     } else if (ame.type === 'thinking_end') {
-      await this.emitEvent(PiSdkSubjects.thinking_complete, {
+      await this.emitEvent(call, PiSdkSubjects.thinking_complete, {
         eventType: 'thinking_complete',
         text: ame.content,
       });
@@ -387,8 +390,9 @@ export class PiConnectorSession extends BaseConnectorSession<PiConnectorSessionC
     turnSnapshot?: PiConnectorTurn,
   ): Promise<void> {
     if (!this.shouldAcceptTurnEvent(turnSnapshot)) return;
+    const { call } = turnSnapshot.messageHandle;
 
-    await this.emitEvent(PiSdkSubjects.message_complete, {
+    await this.emitEvent(call, PiSdkSubjects.message_complete, {
       eventType: 'message_complete',
       message: event.message,
     });
@@ -397,7 +401,7 @@ export class PiConnectorSession extends BaseConnectorSession<PiConnectorSessionC
     if ('role' in event.message && event.message.role === 'assistant') {
       const assistantMsg = event.message;
       if ('usage' in assistantMsg && assistantMsg.usage) {
-        await this.emitEvent(PiSdkSubjects.usage, {
+        await this.emitEvent(call, PiSdkSubjects.usage, {
           eventType: 'usage',
           usage: assistantMsg.usage,
         });
@@ -406,39 +410,37 @@ export class PiConnectorSession extends BaseConnectorSession<PiConnectorSessionC
         const errorMessage =
           'errorMessage' in assistantMsg ? String(assistantMsg.errorMessage) : 'Unknown Pi SDK error';
         this.turnErrors.set(turnSnapshot, new Error(errorMessage));
-        await this.emitEvent(PiSdkSubjects.error, {
+        await this.emitEvent(call, PiSdkSubjects.error, {
           eventType: 'error',
           error: { message: errorMessage, stopReason: 'error' },
         });
       }
     }
 
-    await this.advanceToStepFinished(turnSnapshot.messageHandle.call, turnSnapshot);
+    await this.advanceToStepFinished(call, turnSnapshot);
   }
 
   /**
    * Handle agent_end events from Pi SDK.
    *
-   * Uses the turn/handle snapshots captured synchronously by the subscriber
-   * so that deferred execution doesn't pick up a replacement turn that was
-   * set by startNewTurn between event emission and handler execution.
+   * Uses the turn captured synchronously by the subscriber so deferred
+   * execution keeps the handle of the turn that emitted the event.
    * @param event - The agent_end event from Pi's event stream
    * @param turnSnapshot - The active turn at event emission time
-   * @param handleSnapshot - The active handle at event emission time
    */
   private async handleAgentEnd(
     event: Extract<AgentSessionEvent, { type: 'agent_end' }>,
     turnSnapshot?: PiConnectorTurn,
-    handleSnapshot?: MessageHandle,
   ): Promise<void> {
-    if (!this.shouldAcceptTurnEvent(turnSnapshot) || !handleSnapshot) return;
+    if (!this.shouldAcceptTurnEvent(turnSnapshot)) return;
+    const handle = turnSnapshot.messageHandle;
     const text = this.getTurnAssistantText(turnSnapshot);
-    await this.emitEvent(PiSdkSubjects.agent_complete, {
+    await this.emitEvent(handle.call, PiSdkSubjects.agent_complete, {
       eventType: 'agent_complete',
       messages: event.messages as unknown[],
       text,
     });
-    await this.completeTurn(turnSnapshot, handleSnapshot, this.buildCompletionResult(turnSnapshot, text));
+    await this.completeTurn(turnSnapshot, handle, this.buildCompletionResult(turnSnapshot, text));
   }
 
   /**
@@ -467,23 +469,23 @@ export class PiConnectorSession extends BaseConnectorSession<PiConnectorSessionC
    * Pi can deliver a completion after immediate delivery has replaced the active
    * turn. The call ID is the provider's stable ownership key across that gap.
    * @param event - Pi SDK tool execution completion event
+   * @param handle - Message that started the tool execution
    */
   private async emitToolCompletedEvent(
     event: Extract<AgentSessionEvent, { type: 'tool_execution_end' }>,
+    handle: MessageHandle,
   ): Promise<void> {
-    const messageId = this.toolMessageIds.get(event.toolCallId);
-    if (!messageId) return;
     try {
-      await this.emitEvent(PiSdkSubjects.tool_completed, {
+      await this.emitEvent(handle.call, PiSdkSubjects.tool_completed, {
         eventType: 'tool_completed',
-        messageId,
+        messageId: handle.messageId,
         toolName: event.toolName,
         toolCallId: event.toolCallId,
         result: event.result,
         isError: event.isError,
       });
     } finally {
-      this.toolMessageIds.delete(event.toolCallId);
+      this.toolMessageHandles.delete(event.toolCallId);
     }
   }
 
@@ -758,7 +760,7 @@ export class PiConnectorSession extends BaseConnectorSession<PiConnectorSessionC
       unaccounted.push(stageFailure('Pi session abort', error));
     }
     this.piSession?.dispose();
-    this.toolMessageIds.clear();
+    this.toolMessageHandles.clear();
     const unaccountedReport = reportBestEffortStages('Pi session close', unaccounted);
     if (unaccountedReport !== undefined) return unaccountedReport;
     return { evidence: 'released' };

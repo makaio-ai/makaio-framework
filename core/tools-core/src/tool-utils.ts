@@ -23,7 +23,7 @@ export function validateSessionId(
 }
 
 /**
- * Emits an event on the bus if available.
+ * Emits an event on the bus with the tool execution's call context if a bus is available.
  *
  * The subject must be a properly typed subject definition from a registered namespace.
  * Type inference ensures the payload matches the subject's schema at compile time.
@@ -52,7 +52,7 @@ export async function emitEvent<S extends { $meta: { payload: unknown } }>(
     // 1. S must have $meta.payload (enforced by generic constraint)
     // 2. payload is typed to match that $meta.payload
     // 3. At runtime, any subject with $meta will work with the bus
-    await context.bus.emit(subject as never, payload as never);
+    await context.bus.emit(context.call, subject as never, payload as never);
   }
 }
 

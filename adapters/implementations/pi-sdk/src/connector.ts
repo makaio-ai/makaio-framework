@@ -226,9 +226,10 @@ export class PiConnector extends ProceduralAgentConnector<PiSdkBus, PiConnectorC
       }),
     ]);
     const piConnectorConfig = this.config.providerConfig;
-
     this.session = new PiConnectorSession({
       bus: this.config.bus,
+      // ORIGIN: Pi can report provider signals outside a message turn.
+      observerCall: () => this.globalBus.own('observer'),
       adapterId: this.adapterId,
       adapterName: this.adapterName,
       agentId: this.agentId,
