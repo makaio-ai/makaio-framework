@@ -33,7 +33,7 @@ import {
   trackMessageCorrelation,
 } from '@makaio/bus-core';
 import {
-  ATTESTING_CONNECTION_ROLES,
+  attestationForRole,
   type OutboundAttestingConnectionRole,
   type Party,
   type PayloadFilter,
@@ -136,7 +136,7 @@ export function createMessagePortTransport(options: MessagePortCallerTransportOp
   const transportName = options.name ?? 'message-port';
   const receiveContext: TransportReceiveContext = Object.freeze({
     transportName,
-    ...(attestingRole === undefined ? {} : { attests: ATTESTING_CONNECTION_ROLES[attestingRole] }),
+    ...(attestingRole === undefined ? {} : { attests: attestationForRole(attestingRole) }),
   });
   const useEnvelope = options.envelope ?? false;
 

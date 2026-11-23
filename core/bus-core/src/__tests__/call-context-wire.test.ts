@@ -59,6 +59,8 @@ const JOB_RUN: Party = { kind: 'makaio.job-run', id: 'job-run-1' };
 const PERSON: Party = { kind: 'acme.person', id: 'person-1', claims: { role: 'admin' } };
 const PERSON_REF = { kind: PERSON.kind, id: PERSON.id };
 const LOCAL_CALLER: Party = { kind: 'acme.local', id: 'local-1' };
+// Model the unchecked direction a JavaScript transport can supply.
+const INHERITED_ATTESTATION: TransportReceiveContext['attests'] = JSON.parse('"toString"');
 
 type WarnSpy = MockInstance<typeof console.warn>;
 
@@ -244,6 +246,21 @@ describe('call context over the wire', () => {
       expect(delivered.attestedBy).toBeUndefined();
     }
     expect(wireReports(warnSpy)).toEqual([expect.stringContaining(reason)]);
+  });
+
+  it.each([
+    { kind: 'makaio.extension', id: 'extension-1' },
+    PERSON_REF,
+  ])('rejects $kind when the attestation is an inherited table key', async (principal) => {
+    const { sender, receiver } = connectedPair(JOB_RUN, INHERITED_ATTESTATION);
+    const seen = recordPings(receiver);
+
+    await sender.emit(callFor(principal), WireSubjects.ping, { note: 'claim' });
+    await waitForCalls(seen, 1);
+
+    expect(seen.calls[0].principal).toEqual(JOB_RUN);
+    expect(seen.calls[0].attestedBy).toBeUndefined();
+    expect(wireReports(warnSpy)).toEqual([expect.stringContaining('unattested-principal')]);
   });
 
   it('accepts an in-process principal from an outbound attesting connection', async () => {

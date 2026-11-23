@@ -18,7 +18,8 @@ import { readFileSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { WebSocketLike, WebSocketCloseEvent } from '@makaio/bus-transport-websocket';
-import type { SubjectDefinition } from '@makaio/core';
+import type { CallContext, PartyRef, SubjectDefinition } from '@makaio/core';
+import type { BusClientOptions } from '../src/index.js';
 import { ApprovalSubjects, BusClient, AgentSubjects, ToolSubjects } from '../src/index.js';
 
 // ---------------------------------------------------------------------------
@@ -33,6 +34,7 @@ interface ConformanceWireEntry {
   direction: 'client->server' | 'server->client';
   messageRef: string;
   phase?: string;
+  receiverAttestation?: 'outbound' | 'none';
 }
 
 /** Shape of a single assertion in a conformance case. */
@@ -46,6 +48,7 @@ interface ConformanceAssertion {
   priorities?: number[];
   messages?: string[];
   messageRef?: string;
+  principal?: PartyRef;
 }
 
 /** Shape of a single conformance test case. */
@@ -53,6 +56,7 @@ interface ConformanceCase {
   id: string;
   title: string;
   description: string;
+  requires?: ['principal-model'];
   wire: ConformanceWireEntry[];
   assertions: ConformanceAssertion[];
 }
@@ -84,6 +88,7 @@ const MESSAGES = loadMessages();
 const CONFORMANCE_CASE_DECISIONS = {
   'auth-challenge-response': 'covered',
   'request-with-principal-metadata': 'covered',
+  'request-with-unattested-principal-metadata': 'covered',
   'request-unknown-envelope-field-ignored': 'covered',
   'request-without-metadata-is-connector-call': 'covered',
   'event-delivery-agent-complete': 'covered',
@@ -311,9 +316,14 @@ interface Harness {
  * `harness.fakes[i]`.
  * @param count - Number of fake sockets to allocate for this test harness.
  * @param dispatch - Request dispatch mode to use for the connected client.
+ * @param attestingRole - Role for a connection trusted to attest principals.
  * @returns Harness with the connected transport and fake socket
  */
-async function createHarness(count = 1, dispatch: 'local-first' | 'remote' = 'remote'): Promise<Harness> {
+async function createHarness(
+  count = 1,
+  dispatch: 'local-first' | 'remote' = 'remote',
+  attestingRole?: BusClientOptions['attestingRole'],
+): Promise<Harness> {
   const fakes = Array.from({ length: count }, () => new FakeWebSocket());
   const client = new BusClient('ws://test-host/bus');
 
@@ -321,6 +331,7 @@ async function createHarness(count = 1, dispatch: 'local-first' | 'remote' = 're
   const connect = client.connect({
     auth: false,
     dispatch,
+    attestingRole,
     createWebSocket: () => {
       const fake = fakes[index];
       index += 1;
@@ -379,6 +390,24 @@ describe('conformance fixture integrity', () => {
     }
   });
 
+  it('case requirements use supported SDK capabilities', () => {
+    for (const c of CASES) {
+      if (c.requires !== undefined) {
+        expect(c.requires, c.id).toEqual(['principal-model']);
+      }
+    }
+  });
+
+  it('receiver attestation is declared only for SDK receive frames', () => {
+    for (const c of CASES) {
+      for (const wire of c.wire) {
+        if (wire.receiverAttestation === undefined) continue;
+        expect(wire.direction, c.id).toBe('server->client');
+        expect(['outbound', 'none'], c.id).toContain(wire.receiverAttestation);
+      }
+    }
+  });
+
   it('all assertion messageRef values resolve in messages.json', () => {
     for (const c of CASES) {
       for (const assertion of c.assertions) {
@@ -422,7 +451,6 @@ describe('BusClient public facade', () => {
 
     const connectPromise = client.connect({
       auth: false,
-      attestingRole: 'core-uplink',
       createWebSocket: () => fake,
     });
     await waitFor(() => fake.hasListener('message'), 2000, 'client did not attach a message listener');
@@ -481,39 +509,6 @@ describe('BusClient public facade', () => {
         action: 'allow',
       },
     });
-  });
-
-  it.each([
-    ['request-with-principal-metadata', 'request.approval.request.with-principal'],
-    ['request-unknown-envelope-field-ignored', 'request.approval.request.unknown-envelope-field'],
-    ['request-without-metadata-is-connector-call', 'request.approval.request'],
-  ] as const)('handles conformance case %s', async (id, ref) => {
-    const fixture = msg(ref);
-    let handled = false;
-    client.onRequest(ApprovalSubjects.request, (ctx) => {
-      expect(ctx.payload).toEqual(fixture.payload);
-      expect(ctx).not.toHaveProperty('futureEnvelopeField');
-      expect(ctx.call).not.toHaveProperty('futureEnvelopeField');
-      if (id === 'request-with-principal-metadata') {
-        // The SDK opened an outbound core connection, which can attest in-process principals.
-        expect(ctx.call.principal).toEqual({ kind: 'makaio.extension', id: 'fixture-extension' });
-        expect(ctx.call.attestedBy).toEqual(ctx.call.caller);
-      } else {
-        expect(ctx.call.principal).toEqual(ctx.call.caller);
-        expect(ctx.call.attestedBy).toBeUndefined();
-      }
-      handled = true;
-      return { action: 'allow' };
-    });
-    await fake.waitSent(1);
-    fake.receiveMessage(fixture);
-    const response = await fake.waitSent(2);
-    expect(response).toEqual({
-      type: 'response',
-      correlationId: fixture.correlationId,
-      result: { action: 'allow' },
-    });
-    expect(handled).toBe(true);
   });
 
   it('uses default local-first dispatch for matching local request handlers without sending a wire request', async () => {
@@ -590,6 +585,52 @@ describe('BusClient public facade', () => {
     await expect(responsePromise).resolves.toEqual(responseFixture.result);
     expect(localCalls).toBe(0);
   });
+});
+
+it.each([
+  'request-with-principal-metadata',
+  'request-with-unattested-principal-metadata',
+  'request-unknown-envelope-field-ignored',
+  'request-without-metadata-is-connector-call',
+])('handles conformance case %s', async (id) => {
+  const {
+    wire: [wire],
+    assertions: [assertion],
+  } = conformanceCase(id);
+  const fixture = msg(wire.messageRef);
+  const attestingRole = wire.receiverAttestation === 'outbound' ? 'core-uplink' : undefined;
+  const {
+    client,
+    fakes: [fake],
+    teardown,
+  } = await createHarness(1, 'local-first', attestingRole);
+  try {
+    let call: CallContext | undefined;
+    client.onRequest(ApprovalSubjects.request, (ctx) => {
+      expect(ctx.payload).toEqual(fixture.payload);
+      expect(ctx).not.toHaveProperty('futureEnvelopeField');
+      expect(ctx.call).not.toHaveProperty('futureEnvelopeField');
+      call = ctx.call;
+      return { action: 'allow' };
+    });
+    await fake.waitSent(1);
+    fake.receiveMessage(fixture);
+    expect(await fake.waitSent(2)).toEqual({
+      type: 'response',
+      correlationId: fixture.correlationId,
+      result: { action: 'allow' },
+    });
+    expect(call?.caller).toBeDefined();
+    if (assertion.kind === 'principal-declared') {
+      expect(call?.principal).toEqual(assertion.principal);
+      expect(call?.attestedBy).toEqual(call?.caller);
+    } else {
+      expect(call?.principal).toEqual(call?.caller);
+      expect(call?.attestedBy).toBeUndefined();
+    }
+  } finally {
+    await teardown();
+  }
 });
 
 // ---------------------------------------------------------------------------

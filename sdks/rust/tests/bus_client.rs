@@ -170,10 +170,20 @@ fn conformance_message_refs_resolve_and_deserialize() {
         .expect("conformance cases should be an array")
     {
         let case_id = case["id"].as_str().expect("case should have an id");
+        if let Some(requires) = case.get("requires") {
+            assert_eq!(requires, &json!(["principal-model"]), "{case_id}");
+        }
         for wire_entry in case["wire"]
             .as_array()
             .expect("conformance case should have wire entries")
         {
+            if let Some(attestation) = wire_entry.get("receiverAttestation") {
+                assert_eq!(wire_entry["direction"], "server->client", "{case_id}");
+                assert!(
+                    matches!(attestation.as_str(), Some("outbound" | "none")),
+                    "{case_id} receiverAttestation must be outbound or none"
+                );
+            }
             let message_ref = wire_entry["messageRef"]
                 .as_str()
                 .expect("wire entry should reference a message");
@@ -212,9 +222,7 @@ fn conformance_assertions_use_supported_kinds_and_shapes() {
     }
 }
 
-/// Maps each conformance case that asserts a caller or principal decision to the test in this
-/// file that runs it. Scope: only what this SDK itself does. The receiver's decision (caller,
-/// principal, attestation) is checked by the core against its real implementation.
+/// Maps the caller and principal cases covered by the SDK's send and receive behavior.
 const PRINCIPAL_CASE_TESTS: &[(&str, &str)] = &[
     (
         "request-without-metadata-is-connector-call",
@@ -223,10 +231,6 @@ const PRINCIPAL_CASE_TESTS: &[(&str, &str)] = &[
     (
         "request-unknown-envelope-field-ignored",
         "receive_path_handles_request_as_if_unknown_envelope_field_were_absent",
-    ),
-    (
-        "request-with-principal-metadata",
-        "envelope_with_principal_metadata_decodes_and_reserializes_without_metadata",
     ),
 ];
 
@@ -237,11 +241,12 @@ const PRINCIPAL_ASSERTION_KINDS: &[&str] = &[
 ];
 
 #[test]
-fn principal_cases_are_all_mapped_to_existing_tests() {
+fn principal_cases_are_mapped_to_existing_tests_or_require_principal_model() {
     let cases = conformance_cases();
-    let mut declared: Vec<String> = cases["cases"]
+    let cases = cases["cases"]
         .as_array()
-        .expect("conformance cases should be an array")
+        .expect("conformance cases should be an array");
+    let mut declared: Vec<&str> = cases
         .iter()
         .filter(|case| {
             case["assertions"]
@@ -254,22 +259,23 @@ fn principal_cases_are_all_mapped_to_existing_tests() {
                         .is_some_and(|kind| PRINCIPAL_ASSERTION_KINDS.contains(&kind))
                 })
         })
-        .map(|case| {
-            case["id"]
-                .as_str()
-                .expect("case should have an id")
-                .to_string()
-        })
+        .map(|case| case["id"].as_str().expect("case should have an id"))
         .collect();
-    let mut mapped: Vec<String> = PRINCIPAL_CASE_TESTS
+    let principal_model = json!(["principal-model"]);
+    let required = cases
         .iter()
-        .map(|(case_id, _)| (*case_id).to_string())
+        .filter(|case| case.get("requires") == Some(&principal_model))
+        .map(|case| case["id"].as_str().expect("case should have an id"));
+    let mut accounted_for: Vec<&str> = PRINCIPAL_CASE_TESTS
+        .iter()
+        .map(|(case_id, _)| *case_id)
+        .chain(required)
         .collect();
     declared.sort();
-    mapped.sort();
+    accounted_for.sort();
     assert_eq!(
-        declared, mapped,
-        "every caller/principal conformance case needs exactly one entry in PRINCIPAL_CASE_TESTS"
+        declared, accounted_for,
+        "every caller/principal conformance case must have exactly one test mapping or require a principal model"
     );
 
     let this_file = include_str!("bus_client.rs");
@@ -467,17 +473,11 @@ async fn receive_path_handles_request_as_if_unknown_envelope_field_were_absent()
     assert_eq!(with.response, without.response);
 }
 
-/// `metadata.principal` is tolerated by the envelope: it decodes as a request and the SDK, which
-/// has no field for `metadata`, serializes it back without it. Which principal the receiver
-/// derives from it is decided by the core, not by this SDK.
-#[test]
-fn envelope_with_principal_metadata_decodes_and_reserializes_without_metadata() {
-    let (case, fixture) = case_fixture("request-with-principal-metadata");
-    assert_eq!(case["assertions"][0]["kind"], "principal-declared");
-    assert!(
-        fixture.get("metadata").is_some(),
-        "fixture should carry metadata"
-    );
+/// Checks that a request carrying the principal claim decodes and reserializes without metadata.
+///
+/// `fixture` is the request envelope to replay. The core tests the receiver's principal decision.
+fn assert_principal_claim_is_tolerated(fixture: Value) {
+    assert!(fixture["metadata"]["principal"].is_object());
 
     let decoded = serde_json::from_value::<BusMessage>(fixture.clone())
         .expect("envelope with metadata.principal should decode");
@@ -493,6 +493,20 @@ fn envelope_with_principal_metadata_decodes_and_reserializes_without_metadata() 
         reserialized.get("metadata").is_none(),
         "the SDK has no metadata field, got {reserialized}"
     );
+}
+
+#[test]
+fn envelope_with_principal_metadata_decodes_and_reserializes_without_metadata() {
+    let (case, fixture) = case_fixture("request-with-principal-metadata");
+    assert_eq!(case["assertions"][0]["kind"], "principal-declared");
+    assert_principal_claim_is_tolerated(fixture);
+}
+
+#[test]
+fn envelope_with_unattested_principal_metadata_decodes_and_reserializes_without_metadata() {
+    let (case, fixture) = case_fixture("request-with-unattested-principal-metadata");
+    assert_eq!(case["assertions"][0]["kind"], "principal-is-caller");
+    assert_principal_claim_is_tolerated(fixture);
 }
 
 #[tokio::test]

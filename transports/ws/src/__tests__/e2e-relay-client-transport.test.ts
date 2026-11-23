@@ -9,13 +9,14 @@ import {
   type BusEventMessage,
   type BusMessage,
   type BusRequestMessage,
+  type BusReceiveHandler,
   type BusResponseMessage,
   type BusSubscribeMessage,
   type BusTransportRegistry,
   type BusUnsubscribeMessage,
 } from '@makaio/bus-core';
 import { busContextOf } from '@makaio/bus-core/kernel-api';
-import { createBusNamespace } from '@makaio/core';
+import { createBusNamespace, MAKAIO_ANONYMOUS_PARTY_KIND, type CallContext } from '@makaio/core';
 import { createTestCall } from '@makaio/test-utils';
 import { createE2ERelayClientTransport, createE2ERelayCodec } from '../e2e-relay-client-transport.js';
 import { WebSocketClientTransport } from '../ws-client-transport.js';
@@ -42,6 +43,19 @@ import { waitForCondition } from './test-utils.js';
 
 const testRegistry = buildRelayControlTestRegistry();
 const { createRelayControlEnvelope } = createRelayControlTestHelpers(testRegistry);
+
+const relayControlWithPrincipal: RelayControlEnvelopeMessage = {
+  type: 'relay-control',
+  v: 1,
+  payload: {
+    type: 'event',
+    subject: 'error',
+    namespace: 'relay',
+    payload: { code: 'connection_error', message: 'oops', timestamp: 0 },
+    messageId: 'relay-control-error',
+    metadata: { principal: { kind: 'makaio.host', id: 'relay' } },
+  },
+};
 
 const EXPIRED_RELAY_CONTROL_RESPONSE_TTL_MS = 5 * 60 * 1000 + 1;
 
@@ -184,47 +198,27 @@ describe('createE2ERelayClientTransport', () => {
     });
   });
 
-  it('discards principal metadata on relay control before the handshake and after reconnect', async () => {
-    const signingKeys = await generateSigningKeyPair();
-    const e2eAuth = new E2ERelayAuth({
-      signingKeyPair: signingKeys,
-      identityId: 'machine-control',
-      getPeerSigningKey: async () => null,
-      mode: 'responder',
-      blocking: false,
-    });
+  it('discards principal metadata on relay control before the first handshake', async () => {
+    const { transport, ws } = await createPreSessionRelayTransport(testRegistry);
+    const received = vi.fn<BusReceiveHandler>();
+    transport.onReceive(received);
 
-    // Reconnection replaces the caller-owned WebSocket and transport.
-    for (const messageId of ['initial-control', 'reconnected-control']) {
-      const ws = new MockWebSocket();
-      const transport = createE2ERelayClientTransport({ websocket: ws, e2eAuth, registry: testRegistry });
-      const received = vi.fn();
-      transport.onReceive(async (message, context) => {
-        received(message, context);
+    try {
+      ws.receiveMessage(JSON.stringify(relayControlWithPrincipal));
+      await waitForCondition(() => received.mock.calls.length === 1, 1000, 'relay control was not delivered');
+
+      const [message, context] = received.mock.calls[0];
+      expect(message).toMatchObject({
+        type: 'event',
+        subject: 'error',
+        namespace: 'relay',
+        messageId: relayControlWithPrincipal.payload.messageId,
       });
-      await transport.connect();
-
-      try {
-        const envelope = createRelayControlEnvelope({
-          type: 'event',
-          subject: 'error',
-          namespace: 'relay',
-          payload: { code: 'connection_error', message: 'oops', timestamp: Date.now() },
-          messageId,
-          metadata: { principal: { kind: 'makaio.host', id: 'relay' } },
-        });
-
-        ws.receiveMessage(JSON.stringify(envelope));
-        await waitForCondition(() => received.mock.calls.length === 1, 1000, 'relay control was not delivered');
-
-        const [message, context] = received.mock.calls[0];
-        expect(message).toMatchObject({ type: 'event', subject: 'error', namespace: 'relay', messageId });
-        expect(message).not.toHaveProperty('metadata');
-        expect(context).toBeDefined();
-        expect(context).not.toHaveProperty('attests');
-      } finally {
-        await transport.disconnect();
-      }
+      expect(message).not.toHaveProperty('metadata');
+      expect(context).toBeDefined();
+      expect(context).not.toHaveProperty('attests');
+    } finally {
+      await transport.disconnect();
     }
   });
 
@@ -310,7 +304,7 @@ describe('createE2ERelayClientTransport', () => {
     expect(received).not.toHaveBeenCalled();
   });
 
-  it('sends tunnel control requests as relay-control and accepts plaintext responses', async () => {
+  it('sends tunnel control requests without metadata and accepts plaintext responses', async () => {
     const signingKeys = await generateSigningKeyPair();
     const e2eAuth = new E2ERelayAuth({
       signingKeyPair: signingKeys,
@@ -331,6 +325,7 @@ describe('createE2ERelayClientTransport', () => {
       payload: { targetPort: 3000, targetHost: '127.0.0.1' },
       correlationId: 'corr-tunnel-1',
       messageId: 'msg-tunnel-1',
+      metadata: { principal: { kind: 'makaio.host', id: 'example-host' } },
     } as const;
 
     const responsePromise = transport.send(request);
@@ -339,6 +334,7 @@ describe('createE2ERelayClientTransport', () => {
     expect(ws.sentMessages).toHaveLength(1);
     const sent = JSON.parse(ws.sentMessages[0]) as { type?: string; payload?: unknown };
     expect(sent.type).toBe('relay-control');
+    expect(sent.payload).not.toHaveProperty('metadata');
     expect(sent.payload).toMatchObject({
       type: 'request',
       subject: 'register',
@@ -750,6 +746,75 @@ const relayReadinessNamespace = createBusNamespace('e2eRelayReadiness', {
 // relay-control envelope regardless of E2E session state.
 const relayControlTestNamespace = createBusNamespace('relay', {
   error: z.object({ code: z.string(), message: z.string(), timestamp: z.number() }),
+});
+
+it('delivers relay control without principal metadata when the same transport reconnects', async () => {
+  const deviceId = 'device-before-reconnect';
+  const { initiator, responder, sendToInitiator } = await createRelayAuthPairRaw({ deviceId });
+  const initialSocket = new MockWebSocket();
+  const reconnectedSocket = new MockWebSocket();
+  const createWebSocket = vi.fn().mockReturnValueOnce(initialSocket).mockReturnValueOnce(reconnectedSocket);
+  const { codec, reset } = createE2ERelayCodec(responder, testRegistry);
+  const transport = new WebSocketClientTransport({
+    url: 'ws://unused',
+    createWebSocket,
+    auth: responder,
+    codec,
+    autoReconnect: false,
+    readiness: 'session-established',
+    heartbeat: false,
+  });
+
+  vi.spyOn(initialSocket, 'send').mockImplementation((data) => {
+    if (typeof data === 'string') sendToInitiator(JSON.parse(data));
+  });
+
+  const bus = createBusInstance();
+  const { subjects } = bus.registerNamespace(relayControlTestNamespace);
+  const receivedCall = vi.fn<(call: CallContext) => void>();
+  bus.on(subjects.error, (ctx) => receivedCall(ctx.call));
+
+  try {
+    await transport.connect();
+    await initiator.authenticateClient((frame) => initialSocket.receiveMessage(JSON.stringify(frame)));
+    expect(responder.getPeerId()).toBe(deviceId);
+    expect(responder.getSessionKey()).not.toBeNull();
+
+    await transport.disconnect();
+    reset();
+    await transport.connect();
+    expect(createWebSocket).toHaveBeenCalledTimes(2);
+    expect(responder.getSessionKey()).toBeNull();
+
+    const received = vi.fn<BusReceiveHandler>();
+    transport.onReceive(received);
+    const { unregister } = busContextOf(bus).transportRegistry.registerTransport(
+      'relay' as keyof BusTransportRegistry,
+      transport,
+    );
+    try {
+      reconnectedSocket.receiveMessage(JSON.stringify(relayControlWithPrincipal));
+      await vi.waitFor(() => {
+        expect(received).toHaveBeenCalledTimes(1);
+        expect(receivedCall).toHaveBeenCalledTimes(1);
+      });
+
+      const [message, context] = received.mock.calls[0];
+      expect(message).toMatchObject({ type: 'event', namespace: 'relay', subject: 'error' });
+      expect(message).not.toHaveProperty('metadata');
+      expect(context).toBeDefined();
+      expect(context).not.toHaveProperty('attests');
+      const [call] = receivedCall.mock.calls[0];
+      expect(call.caller).toEqual({ kind: MAKAIO_ANONYMOUS_PARTY_KIND, id: transport.name });
+      expect(call.principal).toEqual(call.caller);
+      expect(call).not.toHaveProperty('attestedBy');
+    } finally {
+      unregister();
+    }
+  } finally {
+    initiator.cleanup();
+    await transport.disconnect();
+  }
 });
 
 describe('E2E relay transport — emit integration (issue #1372)', () => {

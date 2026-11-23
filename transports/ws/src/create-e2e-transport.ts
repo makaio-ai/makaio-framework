@@ -31,14 +31,15 @@ import { encryptMessage, decryptMessage, type MaybeEncryptedMessage } from './e2
  * and the session key provider (for message encryption/decryption).
  *
  * Provide a pre-created `websocket` to wrap a caller-owned socket. All other
- * options are forwarded to `WebSocketClientTransport` (excluding `auth`,
- * `messageTransform`, `url`, `createWebSocket`, and `autoReconnect`, which
- * are managed internally by this factory).
+ * options are forwarded to `WebSocketClientTransport` except `auth`,
+ * `messageTransform`, `url`, `createWebSocket`, `autoReconnect`, and
+ * `attestingRole`, which are managed by this factory. An E2E connection never
+ * attests principal claims.
  */
 export interface E2ETransportOptions
   extends Omit<
     WebSocketClientTransportOptions,
-    'auth' | 'messageTransform' | 'url' | 'createWebSocket' | 'autoReconnect'
+    'auth' | 'messageTransform' | 'url' | 'createWebSocket' | 'autoReconnect' | 'attestingRole'
   > {
   /**
    * Pre-created WebSocket instance to wrap.
@@ -86,6 +87,7 @@ export function createE2ETransport(options: E2ETransportOptions): BusTransport {
   // factory is responsible for a single caller-owned socket.
   const innerTransport = new WebSocketClientTransport({
     ...rest,
+    attestingRole: undefined,
     url: '<pre-connected>',
     createWebSocket: () => ws,
     auth: e2eAuth,
