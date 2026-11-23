@@ -14,10 +14,10 @@ it with `"@makaio/bus-core": "workspace:*"`; it is not installed from npm.
 ### Define a namespace
 
 ```typescript
-import { MakaioBus } from '@makaio/bus-core';
+import { createBusNamespace } from '@makaio/core';
 import { z } from 'zod';
 
-const MyNamespace = MakaioBus.registerNamespace('my-service', {
+const MyDefinition = createBusNamespace('my-service', {
   // Event: fire-and-forget
   taskStarted: z.object({ taskId: z.string() }),
 
@@ -27,39 +27,55 @@ const MyNamespace = MakaioBus.registerNamespace('my-service', {
     response: z.object({ status: z.string(), progress: z.number() }),
   },
 });
-const { subjects: MySubjects } = MyNamespace;
+const { subjects: MySubjects } = MyDefinition;
+```
+
+Definitions are pure. An extension declares static definitions in its manifest
+with `namespaces: [MyDefinition]` or claims a runtime definition with
+`ctx.namespaces.lease(definition)`. A claim by a different holder fails with
+`namespace-already-owned`.
+
+For the examples below, register the definition from a host composition root:
+
+```typescript
+import { createBusInstance, type IHostMakaioBus } from '@makaio/bus-core';
+
+const bus: IHostMakaioBus = createBusInstance();
+const MyNamespace = bus.registerNamespace(MyDefinition);
 ```
 
 ### Emit and subscribe to events
 
 ```typescript
 // Subscribe
-MakaioBus.on(MySubjects.taskStarted, ({ payload }) => {
+bus.on(MySubjects.taskStarted, ({ payload }) => {
   console.log('Task started:', payload.taskId);
 });
 
-// Emit
-await MakaioBus.emit(MySubjects.taskStarted, { taskId: 'abc-123' });
+// ORIGIN: The example starts a task on this bus.
+await bus.emit(bus.own('root'), MySubjects.taskStarted, { taskId: 'abc-123' });
 ```
 
 ### Register and call request handlers
 
 ```typescript
 // Register a handler
-MakaioBus.on(MySubjects.getStatus, (ctx) => {
+bus.on(MySubjects.getStatus, (ctx) => {
   ctx.setResult({ status: 'running', progress: 0.5 });
 });
 
-// Make a typed request
-const result = await MakaioBus.request(MySubjects.getStatus, { taskId: 'abc-123' });
+// ORIGIN: The example queries task status on this bus.
+const result = await bus.request(bus.own('root'), MySubjects.getStatus, { taskId: 'abc-123' });
 console.log(result.status); // 'running'
 ```
 
-### Scoped bus (filtered by session / agent ID)
+### Filter subscriptions on a scoped bus
 
 ```typescript
-const scopedBus = await MyNamespace.scopedBus({ sessionId: 'sess-1' });
-scopedBus.on(MySubjects.taskStarted, (ctx) => { /* only sees sess-1 events */ });
+const scopedBus = await MyNamespace.scopedBus(bus);
+scopedBus.withFilter({ taskId: 'abc-123' }).on(MySubjects.taskStarted, ({ payload }) => {
+  console.log('Task started:', payload.taskId);
+});
 ```
 
 ## API overview
@@ -77,7 +93,8 @@ scopedBus.on(MySubjects.taskStarted, (ctx) => { /* only sees sess-1 events */ })
 | `matchesSubscription()` / `matchesAnySubscription()` | Subscription matching helpers |
 | `parseBusUrl()` | Parse a `makaio-bus://` connection URL |
 | `DEFAULT_REQUEST_TIMEOUT_MS` | Default request timeout constant |
-| `type IMakaioBus` | Full bus interface |
+| `type IMakaioBus` | Bus operations for sending, subscribing, and scoping |
+| `type IHostMakaioBus` | Bus operations and namespace registration for host composition |
 | `type BusTransport` | Transport interface for custom implementations |
 | `type ScopedBus` | Filtered, scoped bus interface |
 | `type BusNamespace` | Typed namespace returned by `registerNamespace` |
@@ -137,7 +154,7 @@ once at request entry and propagated unchanged through the dispatch chain. `unde
 when the request was made with `timeout: 0`.
 
 ```typescript
-MakaioBus.on(MySubjects.resolveCapability, async (ctx) => {
+bus.on(MySubjects.resolveCapability, async (ctx) => {
   if (ctx.deadline !== undefined) {
     const remaining = ctx.deadline - Date.now();
     console.log(`Time budget: ${remaining}ms`);

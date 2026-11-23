@@ -41,6 +41,7 @@ async function makeConnector(
     providerConfig?: TestProviderConfig;
   } = {},
 ): Promise<ClaudeSdkConnector> {
+  MakaioBus.registerNamespaces([ClaudeCodeConnectorNamespace.definition]);
   const bus = await ClaudeCodeConnectorNamespace.scopedBus(MakaioBus);
   return new ClaudeSdkConnector({
     bus,

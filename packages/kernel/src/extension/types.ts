@@ -61,8 +61,8 @@ export type CredentialResolverBinder = (requester: PartyRef, bus: IMakaioBus) =>
  *
  * Omits the fields the coordinator owns and assembles per extension at
  * context-build time (`bus`, `identity`, `getService`, `dataDir`, `config`,
- * `signal`, `hasExtension`, `openContributions`) and `credentials`, which the
- * coordinator derives per extension from {@link ExtensionContextBase.credentialsFor}.
+ * `signal`, `hasExtension`, `openContributions`, `namespaces`) and `credentials`,
+ * which the coordinator derives per extension from {@link ExtensionContextBase.credentialsFor}.
  */
 export type ExtensionContextBase = Omit<
   KernelExtensionContext,
@@ -74,6 +74,7 @@ export type ExtensionContextBase = Omit<
   | 'signal'
   | 'hasExtension'
   | 'openContributions'
+  | 'namespaces'
   | 'credentials'
 > & {
   /**

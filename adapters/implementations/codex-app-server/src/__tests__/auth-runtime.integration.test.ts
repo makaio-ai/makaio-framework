@@ -135,6 +135,7 @@ function providerContext(mode: 'native' | 'access-token' | 'api-key'): ProviderC
  * @returns Bound Codex runtime config
  */
 async function runtimeConfig(mode: 'native' | 'access-token' | 'api-key'): Promise<CodexBoundRuntimeConfig> {
+  MakaioBus.registerNamespaces([CodexAppServerNamespace.definition]);
   const bus = await CodexAppServerNamespace.scopedBus(MakaioBus);
   return CodexAppServerConfig.getConfig({
     bus,

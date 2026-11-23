@@ -1,9 +1,12 @@
+import { hasNamespace, ownerOf } from '@makaio/bus-core/kernel-api';
+import { createBusNamespace } from '@makaio/core';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
-import { MakaioBus } from '@makaio/bus-core';
+import { createBusInstance, MakaioBus } from '@makaio/bus-core';
 import { makeStubExtensionBus, makeStubNodeExtensionContext, stubExtensionIdentity } from '@makaio/test-utils';
 import {
   AdapterSubjects,
+  dep,
   ProviderDefinitionSchema,
   defineAdapterProviderAuth,
   type AdapterContribution,
@@ -24,13 +27,14 @@ import { buildDeterministicAdapterId } from '@makaio/services-core/adapter-runti
 import { AdapterSubsystemSubjects } from '@makaio/services-core/adapter-subsystem';
 import { ModelRegistryProviderNotFoundError, ModelRegistrySubjects } from '@makaio/services-core/model-registry';
 import { ProviderStorageSubjects } from '@makaio/services-core/settings/storage';
-import { ExtensionSubjects } from '@makaio/kernel';
+import { ExtensionCoordinator, ExtensionSubjects } from '@makaio/kernel';
+import { AdapterDefinitionInvalidError, createAdapterSubsystemContributionProcessor } from '../index.js';
 import { AdapterRuntimeRegistry } from '../adapter-runtime-registry.js';
 import {
   AdapterSubsystemService as RuntimeAdapterSubsystemService,
   type AdapterSubsystemServiceOptions,
 } from '../adapter-subsystem-service.js';
-import { ADAPTER_INSTANCE_CLOSE_TIMEOUT_MS } from '../adapter-runtime-lifecycle.js';
+import { ADAPTER_INSTANCE_CLOSE_TIMEOUT_MS, initializeEnabledAdapters } from '../adapter-runtime-lifecycle.js';
 import { cloneAdapterClientRefs, resolveDefaultClientId } from '../adapter-client-refs.js';
 import type { AdapterInitOptions, AdapterInstance, LoadedAdapter } from '../adapter-runtime-types.js';
 import { createStubCoordinator, TEST_MACHINE_ID, TEST_PLATFORM_DEFAULTS } from './test-utils.js';
@@ -114,7 +118,15 @@ function readAdapterFactoryOptions(options: unknown): AdapterFactoryOptions {
 
 type RestartCloseHook = 'shutdown' | 'closeAsync' | 'close';
 
+/**
+ * Build a factory that attaches a close hook to its first instance.
+ * @param name - Adapter name used for the instance's bus domain.
+ * @param closeHook - Hook that exposes the outcome of closing the first instance.
+ * @param hookName - Lifecycle hook name exposed by the instance.
+ * @returns Factory recording initialization attempts.
+ */
 function createRestartTrackingFactory(
+  name: string,
   closeHook: () => void | ConnectorTeardownResult | Promise<void | ConnectorTeardownResult>,
   hookName: RestartCloseHook = 'shutdown',
 ) {
@@ -122,6 +134,7 @@ function createRestartTrackingFactory(
     const adapterOptions = options as AdapterInitOptions;
     const callCount = factory.mock.calls.length;
     return {
+      namespaceName: `adapter:${name}`,
       adapterId: readAdapterFactoryOptions(options).adapterId,
       providers: adapterOptions.definitionProviders,
       ...(callCount === 1 ? { [hookName]: closeHook } : {}),
@@ -224,18 +237,23 @@ describe('cloneAdapterClientRefs', () => {
 });
 
 /**
- * Create a loaded adapter fixture on its package's carrier.
- * @param name - Adapter driver name.
- * @param packageName - Contributing extension name.
- * @returns Adapter fixture ready for registration.
+ * Build a loaded definition and factory using the same bus domain.
+ * @param name - Adapter name.
+ * @param packageName - Package contributing the adapter.
+ * @returns Loaded adapter fixture.
  */
 function createLoadedAdapter(name: string, packageName: string): LoadedAdapter {
+  const busNamespace = createBusNamespace(`adapter:${name}`, {});
   return {
     name,
     displayName: name,
     packageName,
     carrierBus: makeStubExtensionBus(MakaioBus, packageName),
-    factory: async (options?: unknown) => ({ adapterId: readAdapterFactoryOptions(options).adapterId }),
+    busNamespace,
+    factory: async (options?: unknown) => ({
+      namespaceName: busNamespace.name,
+      adapterId: readAdapterFactoryOptions(options).adapterId,
+    }),
     options: {
       adapterId: buildDeterministicAdapterId(TEST_MACHINE_ID, name),
     },
@@ -265,6 +283,7 @@ function createContribution(
       displayName: name,
       ...(options.definitionProtocol !== undefined ? { protocol: options.definitionProtocol } : {}),
       providers,
+      busNamespace: createBusNamespace(`adapter:${name}`, {}),
       defaultTimeouts: {
         initialization: 30_000,
         acknowledgement: 30_000,
@@ -300,6 +319,41 @@ describe('AdapterRuntimeRegistry', () => {
     MakaioBus.__resetHandlers?.();
   });
 
+  it('preserves the original causes for a batch of enabled adapters', async () => {
+    const errors = [
+      new AdapterDefinitionInvalidError('batch-0'),
+      new AdapterDefinitionInvalidError('batch-1', 'adapter:declared', 'adapter:actual'),
+    ];
+    const adapters = errors.map((error, index) => ({
+      ...createLoadedAdapter(`batch-${index}`, '@owner/batch'),
+      factory: async () => {
+        throw error;
+      },
+    }));
+    MakaioBus.on(AdapterSubsystemSubjects.getAdapterConfig, (ctx) => {
+      ctx.setResult({ config: { name: ctx.payload.name, enabled: true, bindings: [] } });
+    });
+
+    // ORIGIN: the host starts the batch of enabled adapters.
+    const initialization = initializeEnabledAdapters(
+      MakaioBus.own('start'),
+      MakaioBus,
+      TEST_MACHINE_ID,
+      adapters,
+      new Map(),
+      TEST_PLATFORM_DEFAULTS,
+      () => 'test-owner-instance',
+      () => undefined,
+      async () => undefined,
+      () => true,
+    );
+    const failure: unknown = await initialization.catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(AggregateError);
+    if (!(failure instanceof AggregateError)) throw failure;
+    expect(failure.errors).toHaveLength(errors.length);
+    for (const [index, error] of errors.entries()) expect(failure.errors[index]).toBe(error);
+  });
+
   it('rejects duplicate adapter names and names both owning packages', () => {
     const registry = new AdapterRuntimeRegistry({
       bus: MakaioBus,
@@ -324,7 +378,7 @@ describe('AdapterRuntimeRegistry', () => {
     const shutdown = vi.fn().mockResolvedValue({ evidence: 'released' });
     const adapter: LoadedAdapter = {
       ...createLoadedAdapter('live-adapter', '@owner/live'),
-      factory: async () => ({ adapterId: explicitAdapterId, shutdown }),
+      factory: async () => ({ namespaceName: 'adapter:live-adapter', adapterId: explicitAdapterId, shutdown }),
       options: { adapterId: explicitAdapterId },
     };
     registry.registerAdapter(adapter, '@owner/live');
@@ -356,7 +410,7 @@ describe('AdapterRuntimeRegistry', () => {
       .fn<() => Promise<{ evidence: 'detached' } | { evidence: 'released' }>>()
       .mockResolvedValueOnce({ evidence: 'detached' })
       .mockResolvedValueOnce({ evidence: 'released' });
-    const factory = vi.fn(async () => ({ adapterId, closeAsync }));
+    const factory = vi.fn(async () => ({ namespaceName: adapter.busNamespace.name, adapterId, closeAsync }));
     const retiringAdapter = { ...adapter, factory };
     registry.registerAdapter(retiringAdapter, '@owner/retry-retiring');
     MakaioBus.on(AdapterSubsystemSubjects.getAdapterConfig, (ctx) => {
@@ -390,7 +444,7 @@ describe('AdapterRuntimeRegistry', () => {
     const adapter = createLoadedAdapter('released-restart-adapter', '@owner/released-restart');
     const adapterId = registry.resolveLoadedAdapterId(adapter);
     const closeAsync = vi.fn().mockResolvedValue({ evidence: 'released' });
-    const factory = vi.fn(async () => ({ adapterId, ...(factory.mock.calls.length === 1 ? { closeAsync } : {}) }));
+    const factory = createRestartTrackingFactory(adapter.name, closeAsync, 'closeAsync');
     const restartableAdapter = { ...adapter, factory };
     registry.registerAdapter(restartableAdapter, '@owner/released-restart');
     MakaioBus.on(AdapterSubsystemSubjects.getAdapterConfig, (ctx) => {
@@ -398,10 +452,13 @@ describe('AdapterRuntimeRegistry', () => {
     });
 
     await registry.initializeAdapter(restartableAdapter, TEST_PLATFORM_DEFAULTS);
-    await registry.restartAdapterInstance(restartableAdapter, TEST_PLATFORM_DEFAULTS);
+    const updated = registry.updateAdapterProviders(restartableAdapter.name, []);
+    if (!updated) throw new Error('Expected a loaded adapter after updating providers');
+    await registry.restartAdapterInstance(updated, TEST_PLATFORM_DEFAULTS);
 
     expect(closeAsync).toHaveBeenCalledOnce();
     expect(factory).toHaveBeenCalledTimes(2);
+    expect(getFactoryInitOptions(factory, 1).globalBus).toBe(updated.carrierBus);
     expect(registry.resolveLiveAdapterId(restartableAdapter.name)).toBe(adapterId);
   });
 
@@ -419,7 +476,7 @@ describe('AdapterRuntimeRegistry', () => {
       .mockResolvedValueOnce({ evidence: 'released' });
     const shutdownRetryAdapter = {
       ...adapter,
-      factory: async () => ({ adapterId, closeAsync }),
+      factory: async () => ({ namespaceName: adapter.busNamespace.name, adapterId, closeAsync }),
     };
     registry.registerAdapter(shutdownRetryAdapter, '@owner/shutdown-retry');
     MakaioBus.on(AdapterSubsystemSubjects.getAdapterConfig, (ctx) => {
@@ -452,6 +509,7 @@ describe('AdapterRuntimeRegistry', () => {
     const selfPublishingAdapter: LoadedAdapter = {
       ...adapter,
       factory: async () => ({
+        namespaceName: adapter.busNamespace.name,
         adapterId,
         closeAsync: async () => {
           await MakaioBus.emit(AdapterSubjects.deinitialized, {
@@ -493,6 +551,7 @@ describe('AdapterRuntimeRegistry', () => {
     const selfPublishingAdapter: LoadedAdapter = {
       ...adapter,
       factory: async () => ({
+        namespaceName: adapter.busNamespace.name,
         adapterId,
         closeAsync: async () => {
           await MakaioBus.emit(AdapterSubjects.deinitialized, {
@@ -538,6 +597,7 @@ describe('AdapterRuntimeRegistry', () => {
     const genericAdapter: LoadedAdapter = {
       ...adapter,
       factory: async () => ({
+        namespaceName: adapter.busNamespace.name,
         adapterId,
         closeAsync: async () => {
           order.push('close');
@@ -572,7 +632,11 @@ describe('AdapterRuntimeRegistry', () => {
     });
     const adapter = createLoadedAdapter(`rejecting-generic-${operation}`, '@owner/rejecting-generic');
     const adapterId = registry.resolveLoadedAdapterId(adapter);
-    const factory = vi.fn(async () => ({ adapterId, closeAsync: vi.fn().mockResolvedValue(undefined) }));
+    const factory = vi.fn(async () => ({
+      namespaceName: adapter.busNamespace.name,
+      adapterId,
+      closeAsync: vi.fn().mockResolvedValue(undefined),
+    }));
     const genericAdapter = { ...adapter, factory };
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
     registry.registerAdapter(genericAdapter, '@owner/rejecting-generic');
@@ -615,6 +679,7 @@ describe('AdapterRuntimeRegistry', () => {
     const managedAdapter: LoadedAdapter = {
       ...adapter,
       factory: async () => ({
+        namespaceName: adapter.busNamespace.name,
         adapterId,
         closeAsync: async () => {
           try {
@@ -694,6 +759,7 @@ describe('AdapterRuntimeRegistry', () => {
     const selfPublishingFirst: LoadedAdapter = {
       ...first,
       factory: async () => ({
+        namespaceName: first.busNamespace.name,
         adapterId: firstAdapterId,
         closeAsync: async () => {
           await MakaioBus.emit(AdapterSubjects.deinitialized, {
@@ -708,6 +774,7 @@ describe('AdapterRuntimeRegistry', () => {
     const gatedSecond: LoadedAdapter = {
       ...second,
       factory: async () => ({
+        namespaceName: second.busNamespace.name,
         adapterId: secondAdapterId,
         closeAsync: async () => {
           secondCloseStarted.resolve();
@@ -754,6 +821,7 @@ describe('AdapterRuntimeRegistry', () => {
     const unknownAdapter: LoadedAdapter = {
       ...adapter,
       factory: async () => ({
+        namespaceName: adapter.busNamespace.name,
         adapterId,
         closeAsync: async () => {
           throw new Error('close outcome unknown');
@@ -832,10 +900,12 @@ describe('AdapterContributionProcessor rollback', () => {
           '@owner/failing-package',
           createExtension('@owner/failing-package', [
             createContribution('first-adapter', async (options?: unknown) => ({
+              namespaceName: 'adapter:first-adapter',
               adapterId: readAdapterFactoryOptions(options).adapterId,
               shutdown: firstShutdown,
             })),
             createContribution('second-adapter', async () => {
+              expect(hasNamespace(MakaioBus, 'adapter:second-adapter')).toBe(true);
               throw new Error('Injected adapter init failure');
             }),
           ]),
@@ -843,12 +913,191 @@ describe('AdapterContributionProcessor rollback', () => {
         ),
       ).rejects.toThrow(/Injected adapter init failure/);
 
+      expect(hasNamespace(MakaioBus, 'adapter:first-adapter')).toBe(false);
+      expect(hasNamespace(MakaioBus, 'adapter:second-adapter')).toBe(false);
       expect(service.getLoadedAdapters()).toEqual([]);
       expect(service.getAdapterInstances().size).toBe(0);
       expect(firstShutdown).toHaveBeenCalledOnce();
       expect(registeredEvents).toEqual([]);
     } finally {
       offRegistered();
+    }
+  });
+
+  it.each([
+    { outcome: 'releases the lease', failedCloses: 0 },
+    { outcome: 'keeps failed teardown available for retry', failedCloses: 2 },
+  ])('rejects an adapter using a different namespace and $outcome', async ({ failedCloses }) => {
+    const name = 'namespace-mismatch';
+    const declaredNamespace = `adapter:${name}`;
+    const actualNamespace = 'adapter:actual';
+    const shutdown = vi.fn<() => Promise<ConnectorTeardownResult>>().mockResolvedValue({ evidence: 'released' });
+    for (let attempt = 0; attempt < failedCloses; attempt++) {
+      shutdown.mockRejectedValueOnce(new Error('close failed'));
+    }
+    const contribution = createContribution(name, async (options) => {
+      expect(hasNamespace(MakaioBus, declaredNamespace)).toBe(true);
+      return { adapterId: readAdapterFactoryOptions(options).adapterId, namespaceName: actualNamespace, shutdown };
+    });
+    const repository = new MemoryRepository(
+      new Map(),
+      new Map<string, AdapterFile>([[name, { $schema: 'makaio/adapter-config/v1', enabled: true }]]),
+    );
+    service = new AdapterSubsystemService({
+      bus: MakaioBus,
+      configRepository: repository,
+      coordinator: createStubCoordinator(),
+      machineId: TEST_MACHINE_ID,
+      platformDefaults: TEST_PLATFORM_DEFAULTS,
+    });
+    await service.init();
+    const registered = vi.fn();
+    const initialized = vi.fn();
+    MakaioBus.on(AdapterSubsystemSubjects.adapter.registered, registered);
+    MakaioBus.on(AdapterSubjects.initialized, initialized);
+
+    const activation = service.processAdapterContributions(
+      '@owner/namespace-package',
+      createExtension('@owner/namespace-package', [contribution]),
+      TEST_EXTENSION_CONTEXT,
+    );
+    await expect(activation).rejects.toBeInstanceOf(Error);
+    expect(shutdown).toHaveBeenCalledTimes(failedCloses || 1);
+    expect(hasNamespace(MakaioBus, declaredNamespace)).toBe(failedCloses > 0);
+    await expect(activation).rejects.toMatchObject({
+      code: 'bus-namespace-mismatch',
+      adapterName: name,
+      declaredNamespace,
+      actualNamespace,
+    });
+    await expect(activation).rejects.toBeInstanceOf(AdapterDefinitionInvalidError);
+    expect(service.getLoadedAdapters().map((adapter) => adapter.name)).toEqual(failedCloses ? [name] : []);
+    expect(service.getAdapterInstances().size).toBe(0);
+    expect(registered).not.toHaveBeenCalled();
+    expect(initialized).not.toHaveBeenCalled();
+
+    await service.stopAdapterContributions('@owner/namespace-package');
+    expect(shutdown).toHaveBeenCalledTimes(failedCloses + 1);
+    expect(service.getLoadedAdapters()).toEqual([]);
+    expect(ownerOf(MakaioBus, declaredNamespace)).toBeUndefined();
+  });
+
+  it('rejects a definition missing its bus namespace before requesting a lease', async () => {
+    const name = 'missing-namespace';
+    const factory = vi.fn(async () => ({ namespaceName: `adapter:${name}` }));
+    const contribution = createContribution(name, factory);
+    Reflect.deleteProperty(contribution.definition, 'busNamespace');
+    const lease = vi.fn(TEST_EXTENSION_CONTEXT.namespaces.lease);
+    service = new AdapterSubsystemService({
+      bus: MakaioBus,
+      configRepository: new MemoryRepository(),
+      coordinator: createStubCoordinator(),
+      machineId: TEST_MACHINE_ID,
+      platformDefaults: TEST_PLATFORM_DEFAULTS,
+    });
+    await service.init();
+
+    const activation = service.processAdapterContributions(
+      '@owner/missing-namespace',
+      createExtension('@owner/missing-namespace', [contribution]),
+      { ...TEST_EXTENSION_CONTEXT, namespaces: { lease } },
+    );
+    await expect(activation).rejects.toMatchObject({
+      code: 'bus-namespace-missing',
+      adapterName: name,
+      declaredNamespace: undefined,
+      actualNamespace: undefined,
+    });
+    await expect(activation).rejects.toBeInstanceOf(AdapterDefinitionInvalidError);
+    expect(lease).not.toHaveBeenCalled();
+    expect(factory).not.toHaveBeenCalled();
+    expect(hasNamespace(MakaioBus, `adapter:${name}`)).toBe(false);
+    expect(service.getLoadedAdapters()).toEqual([]);
+    expect(service.getAdapterInstances().size).toBe(0);
+  });
+
+  it.each([
+    'retry',
+    'shutdown',
+    'late shutdown',
+  ] as const)('holds an adapter namespace after extension startup fails until confirmed removal by %s', async (removal) => {
+    const packageName = '@owner/coordinator-rollback';
+    const name = 'coordinator-retained';
+    const domain = `adapter:${name}`;
+    const bus = createBusInstance();
+    const coordinator = new ExtensionCoordinator(bus, { extensionContextBase: TEST_EXTENSION_CONTEXT });
+    const closeStarted = Promise.withResolvers<void>();
+    const finishClose = Promise.withResolvers<ConnectorTeardownResult>();
+    const released = { evidence: 'released' } as const;
+    const shutdown = vi.fn(async (): Promise<ConnectorTeardownResult> => released);
+    shutdown.mockResolvedValueOnce({ evidence: 'unknown' });
+    if (removal === 'late shutdown') {
+      shutdown.mockImplementationOnce(() => {
+        closeStarted.resolve();
+        return finishClose.promise;
+      });
+    }
+    const retained = createContribution(name, async (options) => ({
+      adapterId: readAdapterFactoryOptions(options).adapterId,
+      namespaceName: domain,
+      shutdown,
+    }));
+    const failing = createContribution('coordinator-failing', async () => {
+      throw new Error('Adapter start failed');
+    });
+    const repository = new MemoryRepository();
+    for (const { name: adapterName } of [retained.definition, failing.definition]) {
+      await repository.writeAdapterFile(adapterName, { $schema: 'makaio/adapter-config/v1', enabled: true });
+    }
+    const registryService = new AdapterSubsystemService({
+      bus,
+      configRepository: repository,
+      coordinator,
+      machineId: TEST_MACHINE_ID,
+      platformDefaults: TEST_PLATFORM_DEFAULTS,
+    });
+    const serviceName = 'test-adapter-subsystem';
+    const unrelated = createBusNamespace('coordinator-manifest-only', {});
+    coordinator.registerContributionProcessor(
+      createAdapterSubsystemContributionProcessor({ getAdapterSubsystemService: () => registryService }),
+    );
+    try {
+      coordinator.load([
+        { ...createExtension(serviceName, []), create: () => registryService },
+        {
+          ...createExtension(packageName, [retained, failing]),
+          dependencies: [dep(serviceName)],
+          namespaces: [retained.definition.busNamespace, unrelated],
+        },
+      ]);
+      await coordinator.startAll();
+
+      expect(coordinator.getInfo(packageName)).toMatchObject({ state: 'failed', error: 'Adapter start failed' });
+      expect(registryService.getLoadedAdapters().map((adapter) => adapter.name)).toEqual([name]);
+      expect(shutdown).toHaveBeenCalledOnce();
+      expect(ownerOf(bus, unrelated.name)).toBeUndefined();
+      const holder = { kind: 'extension', extension: packageName };
+      expect(ownerOf(bus, domain)).toEqual(holder);
+
+      if (removal === 'retry') await registryService.stopAdapterContributions(packageName);
+      else if (removal === 'shutdown') await coordinator.shutdown();
+      else {
+        vi.useFakeTimers();
+        const stopping = coordinator.shutdown();
+        await closeStarted.promise;
+        await vi.advanceTimersByTimeAsync(ADAPTER_INSTANCE_CLOSE_TIMEOUT_MS);
+        await stopping;
+        expect(ownerOf(bus, domain)).toEqual(holder);
+        finishClose.resolve(released);
+        await vi.runAllTimersAsync();
+      }
+      expect(shutdown).toHaveBeenCalledTimes(2);
+      expect(registryService.getLoadedAdapters()).toEqual([]);
+      expect(ownerOf(bus, domain)).toBeUndefined();
+    } finally {
+      finishClose.resolve(released);
+      vi.useRealTimers();
+      await coordinator.shutdown();
     }
   });
 
@@ -883,6 +1132,7 @@ describe('AdapterContributionProcessor rollback', () => {
           '@owner/rollback-package',
           createExtension('@owner/rollback-package', [
             createContribution('rollback-retained-adapter', async (options?: unknown) => ({
+              namespaceName: 'adapter:rollback-retained-adapter',
               adapterId: readAdapterFactoryOptions(options).adapterId,
               closeAsync,
             })),
@@ -929,6 +1179,7 @@ describe('AdapterContributionProcessor rollback', () => {
     });
     const adapterProviderAuth = createTestProviderAuth('test-provider');
     const factory = vi.fn(async (options?: unknown) => ({
+      namespaceName: 'adapter:test-adapter',
       adapterId: readAdapterFactoryOptions(options).adapterId,
     }));
     const offCatalog = MakaioBus.on(ExtensionSubjects.contributions.catalog, (ctx) => {
@@ -1002,6 +1253,7 @@ describe('AdapterContributionProcessor rollback', () => {
             createContribution(
               'malformed-auth-adapter',
               async (options?: unknown) => ({
+                namespaceName: 'adapter:malformed-auth-adapter',
                 adapterId: readAdapterFactoryOptions(options).adapterId,
               }),
               [{ definitionId: 'test-provider', auth: malformedAuth }],
@@ -1064,7 +1316,10 @@ describe('AdapterContributionProcessor rollback', () => {
         createExtension('@owner/provider-package', [
           createContribution(
             'test-adapter',
-            async (options?: unknown) => ({ adapterId: readAdapterFactoryOptions(options).adapterId }),
+            async (options?: unknown) => ({
+              namespaceName: 'adapter:test-adapter',
+              adapterId: readAdapterFactoryOptions(options).adapterId,
+            }),
             [{ definitionId: 'external-provider' }],
           ),
         ]),
@@ -1129,7 +1384,10 @@ describe('AdapterContributionProcessor rollback', () => {
         createExtension('@owner/provider-package', [
           createContribution(
             'test-adapter',
-            async (options?: unknown) => ({ adapterId: readAdapterFactoryOptions(options).adapterId }),
+            async (options?: unknown) => ({
+              namespaceName: 'adapter:test-adapter',
+              adapterId: readAdapterFactoryOptions(options).adapterId,
+            }),
             [{ definitionId: 'transient-provider' }],
           ),
         ]),
@@ -1189,7 +1447,10 @@ describe('AdapterContributionProcessor rollback', () => {
         createExtension('@owner/runtime-adapter-extension', [
           createContribution(
             'runtime-adapter',
-            async (options?: unknown) => ({ adapterId: readAdapterFactoryOptions(options).adapterId }),
+            async (options?: unknown) => ({
+              namespaceName: 'adapter:runtime-adapter',
+              adapterId: readAdapterFactoryOptions(options).adapterId,
+            }),
             [{ definitionId: 'runtime-provider' }],
           ),
         ]),
@@ -1262,7 +1523,10 @@ describe('AdapterContributionProcessor rollback', () => {
         createExtension('@owner/runtime-adapter-extension', [
           createContribution(
             'runtime-adapter',
-            async (options?: unknown) => ({ adapterId: readAdapterFactoryOptions(options).adapterId }),
+            async (options?: unknown) => ({
+              namespaceName: 'adapter:runtime-adapter',
+              adapterId: readAdapterFactoryOptions(options).adapterId,
+            }),
             [{ definitionId: 'runtime-provider' }],
           ),
         ]),
@@ -1323,7 +1587,10 @@ describe('AdapterContributionProcessor rollback', () => {
           [
             createContribution(
               'runtime-adapter',
-              async (options?: unknown) => ({ adapterId: readAdapterFactoryOptions(options).adapterId }),
+              async (options?: unknown) => ({
+                namespaceName: 'adapter:runtime-adapter',
+                adapterId: readAdapterFactoryOptions(options).adapterId,
+              }),
               [{ definitionId: 'runtime-provider' }],
             ),
           ],
@@ -1374,7 +1641,10 @@ describe('AdapterContributionProcessor rollback', () => {
         createExtension('@owner/adapter-package', [
           createContribution(
             'missing-provider-adapter',
-            async (options?: unknown) => ({ adapterId: readAdapterFactoryOptions(options).adapterId }),
+            async (options?: unknown) => ({
+              namespaceName: 'adapter:missing-provider-adapter',
+              adapterId: readAdapterFactoryOptions(options).adapterId,
+            }),
             [{ definitionId: 'missing-provider' }],
           ),
         ]),
@@ -1413,7 +1683,11 @@ describe('AdapterContributionProcessor rollback', () => {
     const adapterProviderAuth = createTestProviderAuth('late-provider');
     const factory = vi.fn(async (options?: unknown) => {
       const adapterOptions = options as AdapterInitOptions;
-      return { adapterId: readAdapterFactoryOptions(options).adapterId, providers: adapterOptions.definitionProviders };
+      return {
+        namespaceName: 'adapter:late-provider-adapter',
+        adapterId: readAdapterFactoryOptions(options).adapterId,
+        providers: adapterOptions.definitionProviders,
+      };
     });
     const offCatalog = MakaioBus.on(ExtensionSubjects.contributions.catalog, (ctx) => {
       ctx.setResult({
@@ -1497,7 +1771,7 @@ describe('AdapterContributionProcessor rollback', () => {
     const providers: ProviderDefinitionInput[] = [];
     const adapterProviderAuth = createTestProviderAuth('late-provider');
     const firstCloseAsync = vi.fn().mockResolvedValue({ evidence: 'released' });
-    const factory = createRestartTrackingFactory(firstCloseAsync, 'closeAsync');
+    const factory = createRestartTrackingFactory('late-live-adapter', firstCloseAsync, 'closeAsync');
     const offCatalog = MakaioBus.on(ExtensionSubjects.contributions.catalog, (ctx) => {
       ctx.setResult({
         providers: providers.map((definition) => ({
@@ -1567,7 +1841,7 @@ describe('AdapterContributionProcessor rollback', () => {
     const closeAsync = vi.fn(async (): Promise<ConnectorTeardownResult> => {
       throw new Error('close failed');
     });
-    const factory = createRestartTrackingFactory(closeAsync, 'closeAsync');
+    const factory = createRestartTrackingFactory('late-live-failing-adapter', closeAsync, 'closeAsync');
     const registeredEvents: Array<{ adapterName: string; initialized: boolean }> = [];
     const offRegistered = MakaioBus.on(AdapterSubsystemSubjects.adapter.registered, (ctx) => {
       registeredEvents.push({ adapterName: ctx.payload.adapterName, initialized: ctx.payload.initialized });
@@ -1635,7 +1909,7 @@ describe('AdapterContributionProcessor rollback', () => {
     await service.init();
 
     const close = vi.fn().mockResolvedValue({ evidence: 'released' });
-    const factory = createRestartTrackingFactory(close, 'close');
+    const factory = createRestartTrackingFactory('removed-provider-adapter', close, 'close');
     const offCatalog = MakaioBus.on(ExtensionSubjects.contributions.catalog, (ctx) => {
       ctx.setResult({
         providers: [
@@ -1678,6 +1952,7 @@ describe('AdapterContributionProcessor rollback', () => {
 
   it('keeps the latest provider-stop epoch deferred across a timed-out close', async () => {
     vi.useFakeTimers();
+    const carrierBus = makeStubExtensionBus(MakaioBus, '@owner/adapter-package');
     const repository = new MemoryRepository(
       new Map(),
       new Map<string, AdapterFile>([
@@ -1704,12 +1979,13 @@ describe('AdapterContributionProcessor rollback', () => {
     });
     const factory = vi.fn(async (options?: unknown) => {
       const adapterId = readAdapterFactoryOptions(options).adapterId;
-      if (factory.mock.calls.length === 1) return { adapterId, closeAsync };
+      if (factory.mock.calls.length === 1)
+        return { namespaceName: 'adapter:deferred-provider-stop-adapter', adapterId, closeAsync };
       if (factory.mock.calls.length === 2) {
         replacementFactoryStarted.resolve();
         await releaseReplacementFactory.promise;
       }
-      return { adapterId };
+      return { namespaceName: 'adapter:deferred-provider-stop-adapter', adapterId };
     });
     const offCatalog = MakaioBus.on(ExtensionSubjects.contributions.catalog, (ctx) => {
       ctx.setResult({
@@ -1746,7 +2022,7 @@ describe('AdapterContributionProcessor rollback', () => {
             { definitionId: 'provider-two' },
           ]),
         ]),
-        TEST_EXTENSION_CONTEXT,
+        { ...TEST_EXTENSION_CONTEXT, bus: carrierBus },
       );
 
       const firstProviderStop = service.stopAdapterContributions('@owner/provider-one');
@@ -1764,6 +2040,7 @@ describe('AdapterContributionProcessor rollback', () => {
 
       expect(factory).toHaveBeenCalledTimes(3);
       expect(getFactoryInitOptions(factory, 2).definitionProviders).toEqual([]);
+      expect(getFactoryInitOptions(factory, 2).globalBus).toBe(carrierBus);
       expect(service.getAdapterInstances().size).toBe(1);
     } finally {
       offCatalog();
@@ -1771,7 +2048,10 @@ describe('AdapterContributionProcessor rollback', () => {
     }
   });
 
-  it('retains adapter package state when adapter close rejects during stop until retry succeeds', async () => {
+  it.each([
+    { outcome: 'a retry succeeds after rejection', late: false },
+    { outcome: 'a timed-out close completes', late: true },
+  ])('retains adapter package state and namespace ownership until $outcome', async ({ late }) => {
     const repository = new MemoryRepository(
       new Map(),
       new Map<string, AdapterFile>([
@@ -1788,13 +2068,19 @@ describe('AdapterContributionProcessor rollback', () => {
     await service.init();
 
     let shouldFailClose = true;
+    const closeStarted = Promise.withResolvers<void>();
+    const completeClose = Promise.withResolvers<void>();
     const closeAsync = vi.fn(async (): Promise<ConnectorTeardownResult> => {
+      if (late) {
+        closeStarted.resolve();
+        await completeClose.promise;
+      }
       if (shouldFailClose) {
         throw new Error('close failed');
       }
       return { evidence: 'released' };
     });
-    const factory = createRestartTrackingFactory(closeAsync, 'closeAsync');
+    const factory = createRestartTrackingFactory('rejecting-close-adapter', closeAsync, 'closeAsync');
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
 
     try {
@@ -1807,19 +2093,40 @@ describe('AdapterContributionProcessor rollback', () => {
       expect(service.getLoadedAdapters()).toHaveLength(1);
       expect(service.getAdapterInstances().size).toBe(1);
 
-      await service.stopAdapterContributions('@owner/adapter-package');
+      if (late) {
+        vi.useFakeTimers();
+        const stop = service.stopAdapterContributions('@owner/adapter-package');
+        await closeStarted.promise;
+        await vi.advanceTimersByTimeAsync(ADAPTER_INSTANCE_CLOSE_TIMEOUT_MS);
+        await stop;
+      } else {
+        await service.stopAdapterContributions('@owner/adapter-package');
+      }
 
       expect(closeAsync).toHaveBeenCalledOnce();
       expect(service.getLoadedAdapters()).toHaveLength(1);
       expect(service.getAdapterInstances().size).toBe(0);
+      expect(ownerOf(MakaioBus, 'adapter:rejecting-close-adapter')).toEqual({
+        kind: 'extension',
+        extension: TEST_EXTENSION_CONTEXT.identity.extensionName,
+      });
 
       shouldFailClose = false;
-      await service.stopAdapterContributions('@owner/adapter-package');
-
-      expect(closeAsync).toHaveBeenCalledTimes(2);
+      if (late) {
+        completeClose.resolve();
+        await vi.runAllTimersAsync();
+        expect(closeAsync).toHaveBeenCalledOnce();
+      } else {
+        await service.stopAdapterContributions('@owner/adapter-package');
+        expect(closeAsync).toHaveBeenCalledTimes(2);
+      }
       expect(service.getLoadedAdapters()).toEqual([]);
       expect(service.getAdapterInstances().size).toBe(0);
+      expect(ownerOf(MakaioBus, 'adapter:rejecting-close-adapter')).toBeUndefined();
     } finally {
+      shouldFailClose = false;
+      completeClose.resolve();
+      vi.useRealTimers();
       errorSpy.mockRestore();
     }
   });
@@ -1849,7 +2156,7 @@ describe('AdapterContributionProcessor rollback', () => {
       const hangingCloseAsync = vi.fn(async () => {
         await releaseClose.promise;
       });
-      const factory = createRestartTrackingFactory(hangingCloseAsync, 'closeAsync');
+      const factory = createRestartTrackingFactory('hanging-close-adapter', hangingCloseAsync, 'closeAsync');
       const hangingCloseRegisteredEvents: Array<{ adapterName: string; initialized: boolean }> = [];
       errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
       offRegistered = MakaioBus.on(AdapterSubsystemSubjects.adapter.registered, (ctx) => {
@@ -1924,7 +2231,11 @@ describe('AdapterContributionProcessor rollback', () => {
 
     const factory = vi.fn(async (options?: unknown) => {
       const adapterOptions = options as AdapterInitOptions;
-      return { adapterId: readAdapterFactoryOptions(options).adapterId, providers: adapterOptions.definitionProviders };
+      return {
+        namespaceName: 'adapter:optional-provider-adapter',
+        adapterId: readAdapterFactoryOptions(options).adapterId,
+        providers: adapterOptions.definitionProviders,
+      };
     });
     const offCatalog = MakaioBus.on(ExtensionSubjects.contributions.catalog, (ctx) => {
       ctx.setResult({ providers: [], clients: [] });
@@ -1982,7 +2293,11 @@ describe('AdapterContributionProcessor rollback', () => {
 
     const factory = vi.fn(async (options?: unknown) => {
       const adapterOptions = options as AdapterInitOptions;
-      return { adapterId: readAdapterFactoryOptions(options).adapterId, providers: adapterOptions.definitionProviders };
+      return {
+        namespaceName: 'adapter:activating-provider-adapter',
+        adapterId: readAdapterFactoryOptions(options).adapterId,
+        providers: adapterOptions.definitionProviders,
+      };
     });
     const offCatalog = MakaioBus.on(ExtensionSubjects.contributions.catalog, (ctx) => {
       ctx.setResult({ providers: [], clients: [] });
@@ -2102,6 +2417,7 @@ describe('AdapterContributionProcessor rollback', () => {
     await service.init();
 
     const factory = vi.fn(async (options?: unknown) => ({
+      namespaceName: 'adapter:multi-provider-adapter',
       adapterId: readAdapterFactoryOptions(options).adapterId,
     }));
     const offCatalog = MakaioBus.on(ExtensionSubjects.contributions.catalog, (ctx) => {
@@ -2164,7 +2480,10 @@ describe('AdapterContributionProcessor rollback', () => {
         createExtension('@owner/protocol-package', [
           createContribution(
             'protocol-mismatch-adapter',
-            async (options?: unknown) => ({ adapterId: readAdapterFactoryOptions(options).adapterId }),
+            async (options?: unknown) => ({
+              namespaceName: 'adapter:protocol-mismatch-adapter',
+              adapterId: readAdapterFactoryOptions(options).adapterId,
+            }),
             [],
             { definitionProtocol: 'openai', manifestProtocols: ['anthropic'] },
           ),
@@ -2198,7 +2517,10 @@ describe('AdapterContributionProcessor rollback', () => {
       createExtension('@owner/protocol-package', [
         createContribution(
           'single-protocol-adapter',
-          async (options?: unknown) => ({ adapterId: readAdapterFactoryOptions(options).adapterId }),
+          async (options?: unknown) => ({
+            namespaceName: 'adapter:single-protocol-adapter',
+            adapterId: readAdapterFactoryOptions(options).adapterId,
+          }),
           [],
           { manifestProtocols: [{ openai: { endpoint: 'https://example.test/v1' } }] },
         ),
@@ -2230,7 +2552,10 @@ describe('AdapterContributionProcessor rollback', () => {
       createExtension('@owner/protocol-package', [
         createContribution(
           'multi-protocol-adapter',
-          async (options?: unknown) => ({ adapterId: readAdapterFactoryOptions(options).adapterId }),
+          async (options?: unknown) => ({
+            namespaceName: 'adapter:multi-protocol-adapter',
+            adapterId: readAdapterFactoryOptions(options).adapterId,
+          }),
           [],
           { manifestProtocols: ['anthropic', 'openai'] },
         ),
@@ -2285,7 +2610,10 @@ describe('AdapterContributionProcessor rollback', () => {
     try {
       const contribution = createContribution(
         'schema-adapter',
-        async (options?: unknown) => ({ adapterId: readAdapterFactoryOptions(options).adapterId }),
+        async (options?: unknown) => ({
+          namespaceName: 'adapter:schema-adapter',
+          adapterId: readAdapterFactoryOptions(options).adapterId,
+        }),
         [
           { definitionId: 'default-schema-provider' },
           { definitionId: 'override-schema-provider', configSchema: providerOverrideConfigSchema },
@@ -2334,7 +2662,10 @@ describe('AdapterContributionProcessor rollback', () => {
           const opts = options as Record<string, unknown>;
           capturedGlobalBus = opts.globalBus;
           capturedOwnerInstanceId = opts.ownerInstanceId;
-          return { adapterId: readAdapterFactoryOptions(options).adapterId };
+          return {
+            namespaceName: 'adapter:bus-check-adapter',
+            adapterId: readAdapterFactoryOptions(options).adapterId,
+          };
         },
         options: { adapterId },
       };
@@ -2359,20 +2690,23 @@ describe('AdapterContributionProcessor rollback', () => {
     const offGetConfig = MakaioBus.on(AdapterSubsystemSubjects.getAdapterConfig, (ctx) => {
       ctx.setResult({ config: { name: 'event-failing-adapter', enabled: true, bindings: [] } });
     });
+    const failure = new Error('Injected initialized emit failure');
     const offInitialized = MakaioBus.on(AdapterSubjects.initialized, () => {
-      throw new Error('Injected initialized emit failure');
+      throw failure;
     });
 
     try {
       const adapter: LoadedAdapter = {
         ...createLoadedAdapter('event-failing-adapter', '@owner/event-failing-package'),
-        factory: async (options?: unknown) => ({ adapterId: readAdapterFactoryOptions(options).adapterId, shutdown }),
+        factory: async (options?: unknown) => ({
+          namespaceName: 'adapter:event-failing-adapter',
+          adapterId: readAdapterFactoryOptions(options).adapterId,
+          shutdown,
+        }),
         options: { adapterId },
       };
       registry.registerAdapter(adapter, '@owner/event-failing-package');
-      await expect(registry.initializeAdapter(adapter, TEST_PLATFORM_DEFAULTS)).rejects.toThrow(
-        /event-failing-adapter: Injected initialized emit failure/,
-      );
+      await expect(registry.initializeAdapter(adapter, TEST_PLATFORM_DEFAULTS)).rejects.toBe(failure);
 
       expect(registry.getAdapterInstances()).toEqual(new Map());
       expect(shutdown).toHaveBeenCalledOnce();
@@ -2395,7 +2729,7 @@ describe('AdapterContributionProcessor rollback', () => {
       .mockResolvedValueOnce({ evidence: 'unknown', detail: 'first close is unproven' })
       .mockResolvedValueOnce({ evidence: 'unknown', detail: 'retry is still unproven' })
       .mockResolvedValueOnce({ evidence: 'released' });
-    const factory = vi.fn(async () => ({ adapterId, closeAsync }));
+    const factory = vi.fn(async () => ({ namespaceName: adapter.busNamespace.name, adapterId, closeAsync }));
     const rollbackAdapter = { ...adapter, factory };
     let rejectInitialized = true;
     const offConfig = MakaioBus.on(AdapterSubsystemSubjects.getAdapterConfig, (ctx) => {
@@ -2453,7 +2787,7 @@ describe('AdapterContributionProcessor rollback', () => {
       });
       return { evidence: 'released' as const };
     });
-    const factory = vi.fn(async () => ({ adapterId, closeAsync }));
+    const factory = vi.fn(async () => ({ namespaceName: adapter.busNamespace.name, adapterId, closeAsync }));
     const lateSelfPublishingAdapter: LoadedAdapter = {
       ...adapter,
       factory,
@@ -2510,7 +2844,11 @@ describe('AdapterContributionProcessor rollback', () => {
       await releaseClose.promise;
       return { evidence: 'released' as const };
     });
-    const factory = vi.fn(async () => ({ adapterId, ...(factory.mock.calls.length === 1 ? { closeAsync } : {}) }));
+    const factory = vi.fn(async () => ({
+      namespaceName: adapter.busNamespace.name,
+      adapterId,
+      ...(factory.mock.calls.length === 1 ? { closeAsync } : {}),
+    }));
     const deregisteredAdapter = { ...adapter, factory };
     const offConfig = MakaioBus.on(AdapterSubsystemSubjects.getAdapterConfig, (ctx) => {
       ctx.setResult({ config: { name: adapter.name, enabled: true, bindings: [] } });
@@ -2554,8 +2892,12 @@ describe('AdapterContributionProcessor rollback', () => {
       await releaseClose.promise;
       return { evidence: 'released' as const };
     });
-    const oldFactory = vi.fn(async () => ({ adapterId, closeAsync: oldClose }));
-    const replacementFactory = vi.fn(async () => ({ adapterId }));
+    const oldFactory = vi.fn(async () => ({
+      namespaceName: adapter.busNamespace.name,
+      adapterId,
+      closeAsync: oldClose,
+    }));
+    const replacementFactory = vi.fn(async () => ({ namespaceName: adapter.busNamespace.name, adapterId }));
     const oldAdapter = { ...adapter, factory: oldFactory };
     const replacementAdapter = { ...adapter, factory: replacementFactory };
     const offConfig = MakaioBus.on(AdapterSubsystemSubjects.getAdapterConfig, (ctx) => {
@@ -2607,8 +2949,13 @@ describe('AdapterContributionProcessor rollback', () => {
       await releaseOldClose.promise;
       return { evidence: 'released' as const };
     });
-    const oldFactory = vi.fn(async () => ({ adapterId, closeAsync: oldClose }));
+    const oldFactory = vi.fn(async () => ({
+      namespaceName: adapter.busNamespace.name,
+      adapterId,
+      closeAsync: oldClose,
+    }));
     const replacementFactory = vi.fn(async () => ({
+      namespaceName: adapter.busNamespace.name,
       adapterId,
       closeAsync: async () => ({ evidence: 'released' as const }),
     }));
@@ -2669,11 +3016,14 @@ describe('AdapterContributionProcessor rollback', () => {
       return { evidence: 'released' as const };
     });
     const replacementClose = vi.fn(async () => ({ evidence: 'released' as const }));
-    const oldAdapter = { ...adapter, factory: async () => ({ adapterId, closeAsync: oldClose }) };
+    const oldAdapter = {
+      ...adapter,
+      factory: async () => ({ namespaceName: adapter.busNamespace.name, adapterId, closeAsync: oldClose }),
+    };
     const replacementFactory = vi.fn(async () => {
       replacementFactoryStarted.resolve();
       await releaseReplacementFactory.promise;
-      return { adapterId, closeAsync: replacementClose };
+      return { namespaceName: adapter.busNamespace.name, adapterId, closeAsync: replacementClose };
     });
     const replacementAdapter = { ...adapter, factory: replacementFactory };
     const initialized = vi.fn();
@@ -2754,6 +3104,7 @@ describe('AdapterContributionProcessor rollback', () => {
       ...adapter,
       providers: [provider],
       factory: async () => ({
+        namespaceName: adapter.busNamespace.name,
         adapterId,
         closeAsync: async () => {
           await releaseOldClose.promise;
@@ -2766,6 +3117,7 @@ describe('AdapterContributionProcessor rollback', () => {
         replacementFactoryStarted.resolve();
         await releaseReplacementFactory.promise;
         return {
+          namespaceName: adapter.busNamespace.name,
           adapterId: readAdapterFactoryOptions(options).adapterId,
           closeAsync: async () => {
             rollbackCloseStarted.resolve();
@@ -2776,7 +3128,7 @@ describe('AdapterContributionProcessor rollback', () => {
       }
       finalFactoryStarted.resolve();
       await releaseFinalFactory.promise;
-      return { adapterId: readAdapterFactoryOptions(options).adapterId };
+      return { namespaceName: adapter.busNamespace.name, adapterId: readAdapterFactoryOptions(options).adapterId };
     });
     const replacementAdapter = { ...adapter, providers: [provider], factory: replacementFactory };
     const offConfig = MakaioBus.on(AdapterSubsystemSubjects.getAdapterConfig, (ctx) => {
@@ -2862,6 +3214,7 @@ describe('AdapterContributionProcessor rollback', () => {
       ...adapter,
       providers: [provider],
       factory: async () => ({
+        namespaceName: adapter.busNamespace.name,
         adapterId,
         closeAsync: async () => {
           await releaseOldClose.promise;
@@ -2875,7 +3228,7 @@ describe('AdapterContributionProcessor rollback', () => {
       factory: async () => {
         replacementFactoryStarted.resolve();
         await releaseReplacementFactory.promise;
-        return { adapterId, closeAsync: replacementClose };
+        return { namespaceName: adapter.busNamespace.name, adapterId, closeAsync: replacementClose };
       },
     };
     const offConfig = MakaioBus.on(AdapterSubsystemSubjects.getAdapterConfig, (ctx) => {
@@ -2936,8 +3289,11 @@ describe('AdapterContributionProcessor rollback', () => {
       await releaseClose.promise;
       return { evidence: 'released' as const };
     });
-    const oldAdapter = { ...adapter, factory: async () => ({ adapterId, closeAsync: oldClose }) };
-    const replacementFactory = vi.fn(async () => ({ adapterId }));
+    const oldAdapter = {
+      ...adapter,
+      factory: async () => ({ namespaceName: adapter.busNamespace.name, adapterId, closeAsync: oldClose }),
+    };
+    const replacementFactory = vi.fn(async () => ({ namespaceName: adapter.busNamespace.name, adapterId }));
     const replacementAdapter = { ...adapter, factory: replacementFactory };
     const offConfig = MakaioBus.on(AdapterSubsystemSubjects.getAdapterConfig, (ctx) => {
       ctx.setResult({ config: { name: adapter.name, enabled: true, bindings: [] } });
@@ -2983,7 +3339,7 @@ describe('AdapterContributionProcessor rollback', () => {
     const adapter = createLoadedAdapter('never-settling-deferred-close', '@owner/never-settling-deferred-close');
     const adapterId = registry.resolveLoadedAdapterId(adapter);
     const closeAsync = vi.fn(() => new Promise<void>(() => {}));
-    const factory = vi.fn(async () => ({ adapterId, closeAsync }));
+    const factory = vi.fn(async () => ({ namespaceName: adapter.busNamespace.name, adapterId, closeAsync }));
     const deferredAdapter = { ...adapter, factory };
     const offConfig = MakaioBus.on(AdapterSubsystemSubjects.getAdapterConfig, (ctx) => {
       ctx.setResult({ config: { name: adapter.name, enabled: true, bindings: [] } });
@@ -3028,9 +3384,12 @@ describe('AdapterContributionProcessor rollback', () => {
       .mockResolvedValueOnce({ evidence: 'released' });
     const replacementFactory = vi.fn(async () => {
       await releaseReplacementFactory.promise;
-      return { adapterId, closeAsync: replacementClose };
+      return { namespaceName: adapter.busNamespace.name, adapterId, closeAsync: replacementClose };
     });
-    const oldAdapter = { ...adapter, factory: async () => ({ adapterId, closeAsync: oldClose }) };
+    const oldAdapter = {
+      ...adapter,
+      factory: async () => ({ namespaceName: adapter.busNamespace.name, adapterId, closeAsync: oldClose }),
+    };
     const replacementAdapter = { ...adapter, factory: replacementFactory };
     const offConfig = MakaioBus.on(AdapterSubsystemSubjects.getAdapterConfig, (ctx) => {
       ctx.setResult({ config: { name: adapter.name, enabled: true, bindings: [] } });
@@ -3086,9 +3445,12 @@ describe('AdapterContributionProcessor rollback', () => {
     });
     const replacementFactory = vi.fn(async () => {
       await releaseReplacementFactory.promise;
-      return { adapterId, closeAsync: rollbackClose };
+      return { namespaceName: adapter.busNamespace.name, adapterId, closeAsync: rollbackClose };
     });
-    const oldAdapter = { ...adapter, factory: async () => ({ adapterId, closeAsync: oldClose }) };
+    const oldAdapter = {
+      ...adapter,
+      factory: async () => ({ namespaceName: adapter.busNamespace.name, adapterId, closeAsync: oldClose }),
+    };
     const replacementAdapter = { ...adapter, factory: replacementFactory };
     const offConfig = MakaioBus.on(AdapterSubsystemSubjects.getAdapterConfig, (ctx) => {
       ctx.setResult({ config: { name: adapter.name, enabled: true, bindings: [] } });
@@ -3149,9 +3511,12 @@ describe('AdapterContributionProcessor rollback', () => {
       .mockResolvedValueOnce({ evidence: 'released' });
     const replacementFactory = vi.fn(async () => {
       await releaseReplacementFactory.promise;
-      return { adapterId, closeAsync: replacementClose };
+      return { namespaceName: adapter.busNamespace.name, adapterId, closeAsync: replacementClose };
     });
-    const oldAdapter = { ...adapter, factory: async () => ({ adapterId, closeAsync: oldClose }) };
+    const oldAdapter = {
+      ...adapter,
+      factory: async () => ({ namespaceName: adapter.busNamespace.name, adapterId, closeAsync: oldClose }),
+    };
     const replacementAdapter = { ...adapter, factory: replacementFactory };
     const offConfig = MakaioBus.on(AdapterSubsystemSubjects.getAdapterConfig, (ctx) => {
       ctx.setResult({ config: { name: adapter.name, enabled: true, bindings: [] } });
@@ -3201,7 +3566,11 @@ describe('AdapterContributionProcessor rollback', () => {
     const deinitialized = vi.fn();
     const rejectingAdapter = {
       ...adapter,
-      factory: async () => ({ adapterId, closeAsync: async () => ({ evidence: 'released' as const }) }),
+      factory: async () => ({
+        namespaceName: adapter.busNamespace.name,
+        adapterId,
+        closeAsync: async () => ({ evidence: 'released' as const }),
+      }),
     };
     const offConfig = MakaioBus.on(AdapterSubsystemSubjects.getAdapterConfig, (ctx) => {
       ctx.setResult({ config: { name: adapter.name, enabled: true, bindings: [] } });
@@ -3249,7 +3618,10 @@ describe('AdapterContributionProcessor rollback', () => {
       return { evidence: 'released' as const };
     });
     const withdrawn = vi.fn();
-    const shutdownAdapter = { ...adapter, factory: async () => ({ adapterId, closeAsync }) };
+    const shutdownAdapter = {
+      ...adapter,
+      factory: async () => ({ namespaceName: adapter.busNamespace.name, adapterId, closeAsync }),
+    };
     const offConfig = MakaioBus.on(AdapterSubsystemSubjects.getAdapterConfig, (ctx) => {
       ctx.setResult({ config: { name: adapter.name, enabled: true, bindings: [] } });
     });
@@ -3292,12 +3664,14 @@ describe('AdapterContributionProcessor rollback', () => {
     try {
       const adapter: LoadedAdapter = {
         ...createLoadedAdapter('mismatch-adapter', '@owner/mismatch-package'),
-        factory: async () => ({ adapterId: 'wrong-adapter-id', shutdown }),
+        factory: async () => ({ namespaceName: 'adapter:mismatch-adapter', adapterId: 'wrong-adapter-id', shutdown }),
         options: { adapterId },
       };
       registry.registerAdapter(adapter, '@owner/mismatch-package');
       await expect(registry.initializeAdapter(adapter, TEST_PLATFORM_DEFAULTS)).rejects.toThrow(
-        /mismatch-adapter: Adapter 'mismatch-adapter' initialized with mismatched adapterId/,
+        new Error(
+          `Adapter 'mismatch-adapter' initialized with mismatched adapterId (expected '${adapterId}', got 'wrong-adapter-id')`,
+        ),
       );
 
       expect(registry.getAdapterInstances()).toEqual(new Map());
@@ -3370,6 +3744,7 @@ describe('AdapterContributionProcessor rollback', () => {
               name: 'client-backed-adapter',
               displayName: 'Client Backed Adapter',
               providers: [],
+              busNamespace: createBusNamespace('adapter:client-backed-adapter', {}),
               defaultTimeouts: {
                 initialization: 30_000,
                 acknowledgement: 30_000,
@@ -3379,7 +3754,7 @@ describe('AdapterContributionProcessor rollback', () => {
               },
               createAdapter: async (options?: unknown) => {
                 capturedOptions = readAdapterFactoryOptions(options);
-                return { adapterId: capturedOptions.adapterId };
+                return { namespaceName: 'adapter:client-backed-adapter', adapterId: capturedOptions.adapterId };
               },
             },
           },
@@ -3425,6 +3800,7 @@ describe('AdapterContributionProcessor rollback', () => {
           adapters: [
             {
               ...createContribution('client-backed-adapter', async (options?: unknown) => ({
+                namespaceName: 'adapter:client-backed-adapter',
                 adapterId: readAdapterFactoryOptions(options).adapterId,
               })),
               manifest: {
@@ -3483,6 +3859,7 @@ describe('AdapterContributionProcessor rollback', () => {
             adapters: [
               {
                 ...createContribution('client-backed-adapter', async (options?: unknown) => ({
+                  namespaceName: 'adapter:client-backed-adapter',
                   adapterId: readAdapterFactoryOptions(options).adapterId,
                 })),
                 manifest: {
@@ -3547,6 +3924,7 @@ describe('AdapterContributionProcessor rollback', () => {
             adapters: [
               {
                 ...createContribution('client-backed-adapter', async (options?: unknown) => ({
+                  namespaceName: 'adapter:client-backed-adapter',
                   adapterId: readAdapterFactoryOptions(options).adapterId,
                 })),
                 manifest: {
@@ -3615,6 +3993,7 @@ describe('AdapterContributionProcessor rollback', () => {
           adapters: [
             {
               ...createContribution('client-backed-adapter', async (options?: unknown) => ({
+                namespaceName: 'adapter:client-backed-adapter',
                 adapterId: readAdapterFactoryOptions(options).adapterId,
               })),
               manifest: {
@@ -3683,6 +4062,7 @@ describe('AdapterContributionProcessor rollback', () => {
           adapters: [
             {
               ...createContribution('client-backed-adapter', async (options?: unknown) => ({
+                namespaceName: 'adapter:client-backed-adapter',
                 adapterId: readAdapterFactoryOptions(options).adapterId,
               })),
               manifest: {

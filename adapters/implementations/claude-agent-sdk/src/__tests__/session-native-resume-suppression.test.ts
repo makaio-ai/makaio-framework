@@ -150,6 +150,7 @@ function makeHandle(
 async function makeInitializedSession(
   call = createTestCall(),
 ): Promise<{ session: ClaudeConnectorSession; config: ClaudeSessionConfig }> {
+  MakaioBus.registerNamespaces([ClaudeCodeConnectorNamespace.definition]);
   const config: ClaudeSessionConfig = {
     bus: await ClaudeCodeConnectorNamespace.scopedBus(MakaioBus),
     adapterId: 'adapter-test',

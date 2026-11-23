@@ -6,6 +6,7 @@ import { AnthropicSdkConnectorNamespace } from '../namespaces/index.js';
 
 describeChangeReasoningInPlaceContract('AnthropicSdkConnector', async () => {
   const globalBus = createTestBusInstance();
+  globalBus.registerNamespaces([AnthropicSdkConnectorNamespace.definition]);
   const bus = await AnthropicSdkConnectorNamespace.scopedBus(globalBus);
   return new AnthropicSdkConnector({
     bus,

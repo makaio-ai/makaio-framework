@@ -315,6 +315,14 @@ export abstract class AIAdapter<
   };
 
   /**
+   * Read the adapter's bus namespace.
+   * @returns Domain used for adapter-specific bus traffic.
+   */
+  public get namespaceName(): string {
+    return this.namespace.name;
+  }
+
+  /**
    * Initialize or join the current adapter generation's initialization.
    * @returns Promise settled when the adapter is publicly initialized
    */
@@ -322,8 +330,8 @@ export abstract class AIAdapter<
     return this.lifecycle.init();
   }
 
+  /** Set up handlers and initialize a generation on the supplied bus. */
   private async initializeGeneration(): Promise<void> {
-    this.globalBus.registerNamespaces([this.namespace.definition]);
     this.adapterBus ??= (await this.namespace.scopedBus(this.globalBus)) as TBus;
     this.setupHandlers();
     await this.onInit();

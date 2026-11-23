@@ -1,4 +1,4 @@
-import { MakaioBus } from '@makaio/bus-core';
+import { MakaioBus, type IMakaioBus } from '@makaio/bus-core';
 import {
   AgentSubjects,
   AdapterSubjects,
@@ -7,9 +7,12 @@ import {
   SessionSubjects,
   SubagentConfigSchema,
   SubagentSubjects,
+  type ExtensionContext,
   type IWorkflowRunner,
 } from '@makaio/contracts';
 import type { ExtractSubjectPayload } from '@makaio/core';
+import { makeStubExtensionContext, stubExtensionIdentity } from '@makaio/test-utils';
+import { WorkflowEngineToken } from '../package.js';
 import { AdapterRuntimeSubjects } from '@makaio/services-core/adapter-runtime';
 import { ExecutionTargetSubjects } from '@makaio/services-core';
 import {
@@ -28,6 +31,15 @@ import { WorkflowExecutor } from '../workflow-executor.js';
 import type { ExecutionAttemptAuthority } from '../execution-attempt-authority.js';
 import type { WorkflowAttemptOutcome } from '../workflow-attempt-outcome.js';
 import { createTestDb, type TestDbContext } from './shared.js';
+
+/**
+ * Bind real namespace leases on the test bus to the workflow engine.
+ * @param bus - Bus used by the executor or service under test.
+ * @returns Namespace capability for a directly constructed test executor.
+ */
+export function createWorkflowTestNamespaceCapability(bus: IMakaioBus = MakaioBus): ExtensionContext['namespaces'] {
+  return makeStubExtensionContext(bus, { identity: stubExtensionIdentity(WorkflowEngineToken.name) }).namespaces;
+}
 
 export interface WorkflowExecutorTestSetup {
   dbContext: TestDbContext;
@@ -266,6 +278,7 @@ export async function setupWorkflowExecutorTest(
 
   const workflowExecutor = new WorkflowExecutor(
     MakaioBus,
+    createWorkflowTestNamespaceCapability(),
     {
       stepCooldownMs: 0,
       stepTimeoutMs: 10_000,
@@ -369,7 +382,7 @@ export async function setupWorkflowExecutorWithSubagentServiceTest(
   });
   await subagentService.init();
 
-  const workflowExecutor = new WorkflowExecutor(MakaioBus, {
+  const workflowExecutor = new WorkflowExecutor(MakaioBus, createWorkflowTestNamespaceCapability(), {
     stepCooldownMs: 0,
     stepTimeoutMs: 10_000,
   });

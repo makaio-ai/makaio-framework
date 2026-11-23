@@ -8,7 +8,7 @@
 import { mkdtempSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
-import { MakaioBus, type IMakaioBus } from '@makaio/bus-core';
+import { MakaioBus, type IHostMakaioBus } from '@makaio/bus-core';
 import type { ISessionToolLedger } from '@makaio/ai-adapters-core';
 import type { ResolvedAdapterAuth } from '@makaio/ai-adapters-core/config';
 import type { ClientExecutionContext } from '@makaio/contracts/client';
@@ -159,7 +159,7 @@ interface ThreadStartedNotificationReceiver {
  * Options for creating a connector test context
  */
 export interface CreateConnectorTestContextOptions {
-  globalBus?: IMakaioBus;
+  globalBus?: IHostMakaioBus;
   reasoningEffort?: AIReasoningLevel;
   approvalPolicy?: 'untrusted' | 'on-failure' | 'on-request' | 'never';
   sandboxMode?: 'read-only' | 'workspace-write' | 'danger-full-access';
@@ -199,6 +199,7 @@ export async function createConnectorTestContext(
 ): Promise<ConnectorTestContext> {
   const tempCwd = mkdtempSync(join(tmpdir(), 'codex-test-'));
   const globalBus = options.globalBus ?? MakaioBus;
+  globalBus.registerNamespaces([CodexAppServerNamespace.definition]);
   const mockBus = await CodexAppServerNamespace.scopedBus(globalBus);
   const mockJsonRpcClient = options.jsonRpcClient ?? new MockJsonRpcClient();
 

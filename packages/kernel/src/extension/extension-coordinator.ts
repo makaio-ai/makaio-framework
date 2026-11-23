@@ -1,5 +1,6 @@
 /* eslint max-lines: ["error", { "max": 490, "skipBlankLines": true, "skipComments": true }] */
 import type { IMakaioBus } from '@makaio/bus-core';
+import { listOwners, ownerOf, type NamespaceHolder } from '@makaio/bus-core/kernel-api';
 import type { CallContext } from '@makaio/core';
 import type { ExtensionOperatorConfigSource, ExtensionService, ExtensionToken, TrayManifest } from '@makaio/contracts';
 import type { ExtensionWarningAction } from '@makaio/contracts/extension';
@@ -61,7 +62,15 @@ import {
   totalExtensionStopBudgetMs,
   type ExtensionShutdownHost,
 } from './extension-shutdown-runner.js';
-import { startExtensionEntry } from './extension-start-runner.js';
+import { claimManifestNamespaces, releaseEntryNamespaces, startExtensionEntry } from './extension-start-runner.js';
+
+/** Live namespace holder queries for the coordinator's bus. */
+interface NamespaceOwners {
+  /** @param namespace - Domain to look up. */
+  ownerOf(namespace: string): NamespaceHolder | undefined;
+  /** Return registered domains in namespace order. */
+  listOwners(): ReturnType<typeof listOwners>;
+}
 
 /** Options of {@link ExtensionCoordinator.startAll}. */
 export interface ExtensionStartOptions {
@@ -227,6 +236,14 @@ export class ExtensionCoordinator {
     return extensionsWithHttp(this.entries);
   }
 
+  /**
+   * Read the current namespace holders on this coordinator's bus.
+   * @returns Live queries for one domain or all registered domains in namespace order.
+   */
+  public namespaceOwners(): NamespaceOwners {
+    return { ownerOf: ownerOf.bind(undefined, this.bus), listOwners: listOwners.bind(undefined, this.bus) };
+  }
+
   // ---------------------------------------------------------------------------
   // Public API
   // ---------------------------------------------------------------------------
@@ -247,27 +264,20 @@ export class ExtensionCoordinator {
    * into {@link cliContributions}, and package bus namespaces are registered
    * -- all before any services are started, and all gated by the same
    * dependency closure (see the class-level doc comment above).
+   * An ownership conflict prevents that entry's surface collection and boot
+   * contributions. The entry remains visible through {@link getInfo}, and
+   * {@link startAll} reports its activation failure.
    *
    * Single-use: calling this method twice on the same instance throws.
-   *
-   * The retained names are returned because filtering happens here and nowhere
-   * else: a composition root that wants to diagnose what it handed in — an
-   * operator config file for an extension this surface excludes, for example —
-   * would otherwise have to restate the surface and environment rules and drift
-   * from them. They are a result of this call rather than an accessor, so there
-   * is no state in which they can be read as "nothing was retained" when in fact
-   * nothing has been loaded yet.
    * @param packages - Extension manifests to register.
    * @param configDefaults - Optional map of extension name to default config values
    *   sourced from descriptor.json.
-   * @returns The packages actually registered, in load order: the input minus
-   *   the ones excluded by surface or environment filtering and their pruned
-   *   dependents, with one entry per name — for an accepted core override
-   *   (see {@link ExtensionCoordinatorOptions.frameworkPackageNames}), the
-   *   overriding registration rather than the framework package it replaced.
-   *   The manifests themselves rather than their names, because a caller
-   *   matching names back against its own input would re-admit exactly the
-   *   overridden registration this dropped.
+   * @returns Retained manifests in load order, excluding manifest ownership
+   *   conflicts, packages filtered by surface or environment, and dependents
+   *   pruned by that filtering. An accepted core override supplies the manifest
+   *   for its name (see {@link ExtensionCoordinatorOptions.frameworkPackageNames}).
+   *   Hosts that manage enablement apply their effective enablement filter
+   *   before registering boot contributions.
    * @throws Error if called more than once, if two registrations collide on a
    *   name that is not an overridable framework package name, if a dependency
    *   cycle is detected, or if dependency sorting fails.
@@ -316,7 +326,6 @@ export class ExtensionCoordinator {
     const orderedEntries: Array<{ readonly name: string; readonly entry: ExtensionEntry }> = [];
     for (const name of this.loadOrder) {
       const pkg = eligible.find((p) => p.name === name)!;
-      retained.push(pkg);
       const warningMessages = softValidationWarnings.get(name);
       const entry: ExtensionEntry = {
         pkg,
@@ -365,19 +374,19 @@ export class ExtensionCoordinator {
       );
     }
     for (const { name, entry } of orderedEntries) {
-      if (!surfaceEligibleNames.has(name)) continue;
-      if (entry.pkg.namespaces) {
-        this.bus.registerNamespaces(entry.pkg.namespaces);
+      if (surfaceEligibleNames.has(name)) {
+        if (claimManifestNamespaces(this.bus, entry)) continue;
+        collectExtensionSurfaces(
+          {
+            windowRegistry: this.windowRegistry,
+            trayEntries: this._trayEntries,
+            cliContributions: this._cliContributions,
+          },
+          entry.pkg,
+        );
+        entry.surfacesCollected = true;
       }
-      collectExtensionSurfaces(
-        {
-          windowRegistry: this.windowRegistry,
-          trayEntries: this._trayEntries,
-          cliContributions: this._cliContributions,
-        },
-        entry.pkg,
-      );
-      entry.surfacesCollected = true;
+      retained.push(entry.pkg);
     }
 
     this.registerRpcHandlers();
@@ -449,6 +458,7 @@ export class ExtensionCoordinator {
    * @param bootSignal - Cancels the start, between two packages and inside a service's `init()`; the coordinator's shutdown cancels it too.
    */
   private async startAllInLifecycleLane(bootSignal: AbortSignal | undefined): Promise<void> {
+    // ORIGIN: Boot orchestration and its notifications are host work.
     const call = this.bus.own('start');
     // A start ends with whichever comes first: the boot's own cancellation or
     // the coordinator's shutdown.
@@ -517,10 +527,12 @@ export class ExtensionCoordinator {
    * together so the caller can treat termination as unclean.
    *
    * Safe to call even if {@link startAll} was never called.
+   * @param scheduleNamespaceRelease - On the first call, optionally defer namespace release
+   * until the host transport is disconnected. The default releases during teardown.
    * @returns A promise that settles after every admitted transition and teardown complete.
    * @throws An AggregateError when any package failed to shut down cleanly.
    */
-  public shutdown(): Promise<void> {
+  public shutdown(scheduleNamespaceRelease: (release: () => void) => void = (release) => release()): Promise<void> {
     if (this.shutdownPromise) return this.shutdownPromise;
 
     // Teardown must never overtake admitted lifecycle work: contribution
@@ -530,7 +542,7 @@ export class ExtensionCoordinator {
     // Mark terminal and reserve the sole teardown promise before aborting.
     // Abort listeners run synchronously and can re-enter shutdown().
     this.shutdownRequested = true;
-    const shutdownPromise = this.enqueueLifecycle(() => this.shutdownInLifecycleLane());
+    const shutdownPromise = this.enqueueLifecycle(() => this.shutdownInLifecycleLane(scheduleNamespaceRelease));
     this.shutdownPromise = shutdownPromise;
     // Signal all active packages to cancel long-running operations before
     // their services are destroyed. The queued callback cannot begin until the
@@ -569,8 +581,11 @@ export class ExtensionCoordinator {
     };
   }
 
-  /** Run shutdown after every lifecycle transition admitted before shutdown. */
-  private async shutdownInLifecycleLane(): Promise<void> {
+  /**
+   * Run shutdown after every lifecycle transition admitted before shutdown.
+   * @param scheduleNamespaceRelease - Schedules release after extension teardown.
+   */
+  private async shutdownInLifecycleLane(scheduleNamespaceRelease: (release: () => void) => void): Promise<void> {
     const failures: unknown[] = [];
     let extensionShutdownSummary: string | undefined;
     for (const cleanup of this.rpcCleanups) {
@@ -592,6 +607,10 @@ export class ExtensionCoordinator {
       } else {
         failures.push(error);
       }
+    } finally {
+      // Keep routing metadata until the host transport is gone, including when
+      // extension teardown reports a failure.
+      scheduleNamespaceRelease(() => this.entries.forEach(releaseEntryNamespaces));
     }
 
     if (failures.length > 0) {

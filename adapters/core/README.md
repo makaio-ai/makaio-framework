@@ -54,6 +54,15 @@ class MyLLMAdapter extends AIAdapter<MyLLMBus, MyLLMConnector, MyLLMAgent> {
 }
 ```
 
+Declare `busNamespace: MyNamespace.definition` in the adapter definition. The
+contribution processor leases it for the contributing extension before the factory
+runs. Untyped `registerNamespace` and `registerNamespaces` calls on the adapter’s
+`globalBus` acquire leases for the contributing extension. The coordinator
+releases those leases when that extension stops.
+In a standalone harness, register it on the host bus instead with
+`bus.registerNamespace(MyNamespace.definition)` before initializing the adapter.
+Do not claim it both ways: a second holder is rejected with `namespace-already-owned`.
+
 ### Use discriminated handlers for streaming responses
 
 ```typescript
@@ -76,7 +85,7 @@ await processDiscriminatedItems(sdkStreamChunks, handlers, emit);
 | Export | Description |
 |--------|-------------|
 | `AIAdapter` | Abstract base class; handles `adapter.*` bus subjects, owns agent registry |
-| `createAdapterNamespace()` | Register a typed bus namespace for an adapter |
+| `createAdapterNamespace()` | Define a typed namespace and scoped bus factory without registering it |
 | `AIAgent` | Abstract base class for per-session agent instances |
 | `AIAgentConnector` | Abstract bridge between `AIAgent` and the AI SDK |
 | `BaseConnectorSession` | Optional base for connector-owned provider session state |

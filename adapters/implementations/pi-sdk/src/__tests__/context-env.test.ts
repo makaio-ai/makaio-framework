@@ -20,6 +20,7 @@ class TestPiConnector extends PiConnector {
  * @returns Configured connector and its scoped bus
  */
 async function createConnector(hostBus = createTestBusInstance()) {
+  hostBus.registerNamespaces([PiSdkNamespace.definition]);
   const bus = await PiSdkNamespace.scopedBus(hostBus);
   const connector = new TestPiConnector({
     bus,

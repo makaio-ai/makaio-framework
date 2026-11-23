@@ -13,6 +13,7 @@
  * @see {@link AdapterContribution} for the combined contribution type.
  */
 
+import type { RegistrableBusNamespaceDefinition } from '@makaio/core';
 import type { z } from 'zod';
 import type { AdapterProviderAuth } from '../auth/adapter-binding.js';
 import type { ProtocolId, ProviderDefinitionInput } from '../provider/definition.js';
@@ -125,6 +126,8 @@ export interface AdapterDefinitionContract<TAdapter = unknown, TOptions = never>
    * Used as the primary key in adapter registries.
    */
   readonly name: string;
+  /** Connector namespace leased by the contributing extension before the factory runs. */
+  readonly busNamespace: RegistrableBusNamespaceDefinition;
   /**
    * Human-readable display name shown in the UI (e.g., `'Claude Code'`).
    *

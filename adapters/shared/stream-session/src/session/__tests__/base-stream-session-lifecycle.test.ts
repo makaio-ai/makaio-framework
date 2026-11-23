@@ -86,6 +86,7 @@ class TestStreamSession extends BaseStreamSession<StreamSessionConfig<TestBus>, 
 describe('BaseStreamSession terminal setup gate', () => {
   it('continues scheduling turns after a reusable abort', async () => {
     const hostBus = createTestBusInstance();
+    hostBus.registerNamespaces([TestNamespace.definition]);
     const bus = await TestNamespace.scopedBus(hostBus);
     const session = new TestStreamSession({
       bus,
@@ -118,6 +119,7 @@ describe('BaseStreamSession terminal setup gate', () => {
 
   it('does not schedule a provider turn when close wins during agent_started emission', async () => {
     const hostBus = createTestBusInstance();
+    hostBus.registerNamespaces([TestNamespace.definition]);
     const bus = await TestNamespace.scopedBus(hostBus);
     let signalAgentStarted: (() => void) | undefined;
     const agentStarted = new Promise<void>((resolve) => {

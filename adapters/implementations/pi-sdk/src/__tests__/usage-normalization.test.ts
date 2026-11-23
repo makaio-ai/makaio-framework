@@ -56,6 +56,7 @@ class TestPiConnector extends PiConnector {
  * @returns Agent under test and its connector
  */
 async function makeAgent(call: CallContext): Promise<{ agent: PiAgent; connector: TestPiConnector }> {
+  MakaioBus.registerNamespaces([PiSdkNamespace.definition]);
   const adapterBus = await PiSdkNamespace.scopedBus(MakaioBus);
   let connector: TestPiConnector | undefined;
   const agent = new PiAgent({

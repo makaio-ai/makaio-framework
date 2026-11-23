@@ -6,7 +6,7 @@ import type { AIAdapterDefinition } from '@makaio/ai-adapters-core';
 import { createClaudeCliAdapter } from './adapter.js';
 import { ClaudeCodeCliAdapterName, DEFAULT_TIMEOUTS } from './constants.js';
 import { ClaudeCodeCliProviderConfigSchema } from './schemas.js';
-import type { ClaudeCodeCliConnectorBus } from './namespace/index.js';
+import { ClaudeCodeCliConnectorNamespace, type ClaudeCodeCliConnectorBus } from './namespace/index.js';
 import type { ClaudeCliConnector } from './connector.js';
 import type { ClaudeCodeCliAgent } from './agent.js';
 import { defaultPresetId, providerAuthById, providerIds } from './provider.js';
@@ -20,6 +20,7 @@ import { defaultPresetId, providerAuthById, providerIds } from './provider.js';
 export const adapterDefinition: AIAdapterDefinition<ClaudeCodeCliConnectorBus, ClaudeCliConnector, ClaudeCodeCliAgent> =
   {
     name: ClaudeCodeCliAdapterName,
+    busNamespace: ClaudeCodeCliConnectorNamespace.definition,
     displayName: 'Claude Code (CLI)',
     defaultPresetId,
     description: 'Claude Code integration via the `claude` CLI binary using stdio JSON streaming',

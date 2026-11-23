@@ -7,18 +7,19 @@
  * - **Unified API**: Single `on()` method for both events and requests
  * - **Type Safety**: Full TypeScript inference from subject definitions
  * - **Zero-Cost Abstraction**: Subjects are just strings at runtime
- * - **Distributed Ownership**: Each package defines and owns its subjects
+ * - **Namespace Ownership**: Each registered namespace has a host or extension owner
  * - **Middleware Support**: Request handlers can form a chain
  * - **Validation**: Optional Zod validation in development mode
  *
  * ## Basic Usage
  *
- * ### Define Subjects
+ * ### Define and Register Host Subjects
  * ```typescript
- * import { SubjectRegistry } from '@makaio/bus-core';
+ * import { MakaioBus } from '@makaio/bus-core';
+ * import { createBusNamespace } from '@makaio/core';
  * import { z } from 'zod';
  *
- * const { namespace: AdapterSubjects } = MakaioBus.registerNamespace('adapter', {
+ * const definition = createBusNamespace('adapter', {
  *   // Event: fire-and-forget
  *   initialized: z.object({ adapterName: z.string() }),
  *
@@ -28,19 +29,22 @@
  *     response: z.object({ capabilities: z.array(z.string()) }),
  *   },
  * });
+ * const { subjects: AdapterSubjects } = MakaioBus.registerNamespace(definition);
  * ```
+ *
+ * Extensions declare definitions in their manifest's `namespaces` or claim
+ * them at runtime with `ctx.namespaces.lease(definition)`.
  *
  * ### Use Events
  * ```typescript
- * import { MakaioBus, BusSubjects } from '@makaio/bus-core';
- *
  * // Listen for events
- * MakaioBus.on(BusSubjects.adapter.initialized, (payload) => {
+ * MakaioBus.on(AdapterSubjects.initialized, ({ payload }) => {
  *   console.debug('Adapter initialized:', payload.adapterName);
  * });
  *
- * // Emit events
- * await MakaioBus.emit(BusSubjects.adapter.initialized, {
+ * // ORIGIN: The host publishes adapter initialization.
+ * const initialization = MakaioBus.own('adapter-initialized');
+ * await MakaioBus.emit(initialization, AdapterSubjects.initialized, {
  *   adapterName: 'claude'
  * });
  * ```
@@ -48,14 +52,16 @@
  * ### Use Requests
  * ```typescript
  * // Handle requests
- * MakaioBus.on(BusSubjects.adapter.getCapabilities, (context) => {
+ * MakaioBus.on(AdapterSubjects.getCapabilities, (context) => {
  *   const capabilities = loadCapabilities(context.payload.adapterName);
  *   context.setResult({ capabilities });
  * });
  *
- * // Make requests
+ * // ORIGIN: The host queries the adapter's capabilities.
+ * const lookup = MakaioBus.own('lookup-capabilities');
  * const result = await MakaioBus.request(
- *   BusSubjects.adapter.getCapabilities,
+ *   lookup,
+ *   AdapterSubjects.getCapabilities,
  *   { adapterName: 'claude' }
  * );
  * console.debug(result.capabilities);
@@ -128,7 +134,13 @@ export type {
 export { MakaioBus, createBusInstance } from './bus.js';
 export { waitForSubscriptionPropagation } from './methods/on.js';
 export type { ScopedBus } from './bus.js';
-export type { ConnectOptions, IMakaioBus, MakaioBusContext, TransportRegistration } from './types/bus.js';
+export type {
+  ConnectOptions,
+  IHostMakaioBus,
+  IMakaioBus,
+  MakaioBusContext,
+  TransportRegistration,
+} from './types/bus.js';
 export type { EmitSubject } from './types/bus-send.js';
 
 /**

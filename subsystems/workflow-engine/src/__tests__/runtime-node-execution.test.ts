@@ -79,6 +79,13 @@ function makeBus(): ReturnType<typeof createBusInstance> {
   return bus;
 }
 
+/** Create a host bus with the in-memory frame handlers installed. */
+function makeBusWithFrames(): ReturnType<typeof makeBus> {
+  const bus = makeBus();
+  registerInMemoryFrameStore(bus);
+  return bus;
+}
+
 /**
  * Create a fresh RuntimeContext with in-memory frame storage by default.
  * @param handlers - Code step handlers keyed by node ID.
@@ -90,8 +97,7 @@ function makeCtx(
   signal: AbortSignal = new AbortController().signal,
   bus?: ReturnType<typeof makeBus>,
 ): RuntimeContext {
-  const runtimeBus = bus ?? makeBus();
-  if (bus === undefined) registerInMemoryFrameStore(runtimeBus);
+  const runtimeBus = bus ?? makeBusWithFrames();
   return new RuntimeContext(
     'exec-test',
     'workflow-test',
@@ -1355,7 +1361,8 @@ describe('executeAgentStepNode', () => {
       completion: 'turn',
       resultFinalizerId: 'artifact.read-wrap',
     };
-    const ctx = makeCtx({});
+    const hostBus = makeBusWithFrames();
+    const ctx = makeCtx({}, undefined, hostBus);
     const createdSessions: unknown[] = [];
     const attachedAgents: unknown[] = [];
     const sentMessages: unknown[] = [];
@@ -1365,7 +1372,7 @@ describe('executeAgentStepNode', () => {
     const spawned: unknown[] = [];
     let parentSessionReads = 0;
     const resultFinalizer = createWorkflowDelegateResultFinalizerNamespace('artifact.read-wrap');
-    ctx.bus.registerNamespace(resultFinalizer.namespace);
+    hostBus.registerNamespace(resultFinalizer.namespace);
     const unsubscribeFinalizer = ctx.bus.on(resultFinalizer.subjects.finalize, (requestCtx) => {
       finalizedResults.push(requestCtx.payload);
       requestCtx.setResult({ output: requestCtx.payload.rawResult as JsonValue });
@@ -1686,9 +1693,10 @@ describe('executeAgentStepNode', () => {
       completion: 'tool',
       resultFinalizerId: 'artifact.read-wrap',
     };
-    const ctx = makeCtx({});
+    const hostBus = makeBusWithFrames();
+    const ctx = makeCtx({}, undefined, hostBus);
     const finalizer = createWorkflowDelegateResultFinalizerNamespace('artifact.read-wrap');
-    ctx.bus.registerNamespace(finalizer.namespace);
+    hostBus.registerNamespace(finalizer.namespace);
     const unsubscribeRole = ctx.bus.on(WorkflowSubjects.resolveRole, (requestCtx) => {
       requestCtx.setResult({
         adapterName: 'claude-code',
@@ -1760,9 +1768,10 @@ describe('executeAgentStepNode', () => {
       prompt: 'Read the artifact',
       resultFinalizerId: 'artifact.read-wrap',
     };
-    const ctx = makeCtx({});
+    const hostBus = makeBusWithFrames();
+    const ctx = makeCtx({}, undefined, hostBus);
     const finalizer = createWorkflowDelegateResultFinalizerNamespace('artifact.read-wrap');
-    ctx.bus.registerNamespace(finalizer.namespace);
+    hostBus.registerNamespace(finalizer.namespace);
     const unsubscribeRole = ctx.bus.on(WorkflowSubjects.resolveRole, (requestCtx) => {
       requestCtx.setResult({ adapterName: 'claude-code' });
     });
@@ -1797,9 +1806,10 @@ describe('executeAgentStepNode', () => {
       prompt: 'Read the artifact',
       resultFinalizerId: 'artifact.read-wrap',
     };
-    const ctx = makeCtx({}, controller.signal);
+    const hostBus = makeBusWithFrames();
+    const ctx = makeCtx({}, controller.signal, hostBus);
     const finalizer = createWorkflowDelegateResultFinalizerNamespace('artifact.read-wrap');
-    ctx.bus.registerNamespace(finalizer.namespace);
+    hostBus.registerNamespace(finalizer.namespace);
     let markFinalizerStarted: () => void = () => undefined;
     const finalizerStarted = new Promise<void>((resolve) => {
       markFinalizerStarted = resolve;
@@ -1841,9 +1851,10 @@ describe('executeAgentStepNode', () => {
       completion: 'turn',
       resultFinalizerId: 'artifact.read-wrap',
     };
-    const ctx = makeCtx({}, controller.signal);
+    const hostBus = makeBusWithFrames();
+    const ctx = makeCtx({}, controller.signal, hostBus);
     const finalizer = createWorkflowDelegateResultFinalizerNamespace('artifact.read-wrap');
-    ctx.bus.registerNamespace(finalizer.namespace);
+    hostBus.registerNamespace(finalizer.namespace);
     let markFinalizerStarted: () => void = () => undefined;
     const finalizerStarted = new Promise<void>((resolve) => {
       markFinalizerStarted = resolve;

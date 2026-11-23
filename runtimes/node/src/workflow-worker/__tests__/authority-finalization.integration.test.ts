@@ -45,6 +45,7 @@ import {
   WorkflowStorageSubjects,
 } from '../../../../../subsystems/workflow-engine/src/storage/namespace.js';
 import {
+  createWorkflowTestNamespaceCapability,
   setupWorkflowExecutorWithSubagentServiceTest,
   teardownWorkflowExecutorWithSubagentServiceTest,
 } from '../../../../../subsystems/workflow-engine/src/__tests__/workflow-executor.test-setup.js';
@@ -358,6 +359,7 @@ describe('authority Worker finalization integration', () => {
     });
     const executor = new WorkflowExecutor(
       MakaioBus,
+      createWorkflowTestNamespaceCapability(),
       {
         stepCooldownMs: 0,
         stepTimeoutMs: 10_000,
@@ -377,8 +379,7 @@ describe('authority Worker finalization integration', () => {
       }),
     });
     const finalizerId = 'test.authority-finalizer';
-    const { namespace, subjects } = createWorkflowFinalizerNamespace(finalizerId);
-    MakaioBus.registerNamespace(namespace);
+    const { subjects } = createWorkflowFinalizerNamespace(finalizerId);
     cleanups.push(
       MakaioBus.on(subjects.finalize, async (ctx) => {
         const before = await MakaioBus.request(ctx.call, WorkflowStorageSubjects.getExecution, {
@@ -394,7 +395,7 @@ describe('authority Worker finalization integration', () => {
       }),
     );
     await executor.init();
-    await executor.registerSuccessFinalizer(finalizerId);
+    cleanups.push(await executor.registerSuccessFinalizer(finalizerId));
     const delegateFinalizer = createWorkflowDelegateResultFinalizerNamespace('test.artifact-read-wrap');
     MakaioBus.registerNamespace(delegateFinalizer.namespace);
     const finalizedDelegateResults: unknown[] = [];

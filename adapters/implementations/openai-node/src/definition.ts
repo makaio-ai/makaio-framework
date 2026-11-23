@@ -6,13 +6,14 @@ import type { AIAdapterDefinition } from '@makaio/ai-adapters-core';
 import { createOpenAINodeAdapter } from './adapter.js';
 import { OpenAINodeAdapterName, DEFAULT_TIMEOUTS } from './constants.js';
 import { OpenAINodeProviderConfigSchema } from './schemas.js';
-import type { OpenAINodeConnectorBus } from './namespaces/index.js';
+import { OpenAINodeConnectorNamespace, type OpenAINodeConnectorBus } from './namespaces/index.js';
 import type { OpenAINodeConnector } from './connector.js';
 import type { OpenAIAgent } from './agent.js';
 import { defaultPresetId, providerAuthById, providerIds } from './provider.js';
 
 export const adapterDefinition: AIAdapterDefinition<OpenAINodeConnectorBus, OpenAINodeConnector, OpenAIAgent> = {
   name: OpenAINodeAdapterName,
+  busNamespace: OpenAINodeConnectorNamespace.definition,
   displayName: 'OpenAI',
   defaultPresetId,
   description: 'OpenAI chat completions with streaming and tool calling',

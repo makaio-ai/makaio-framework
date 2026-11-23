@@ -34,6 +34,8 @@ afterEach(() => {
   MakaioBus.__resetHandlers?.();
 });
 
+MakaioBus.registerNamespaces([OpenAINodeConnectorNamespace.definition]);
+
 describe('OpenAI Factory Gateway request correlation', () => {
   it('sends the allowlisted headers and emits the same per-request LLM call ID on usage', async () => {
     const bus = await OpenAINodeConnectorNamespace.scopedBus(MakaioBus);

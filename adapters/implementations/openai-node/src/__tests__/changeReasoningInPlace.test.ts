@@ -6,6 +6,7 @@ import { OpenAINodeConnectorNamespace } from '../namespaces/index.js';
 
 describeChangeReasoningInPlaceContract('OpenAINodeConnector', async () => {
   const globalBus = createTestBusInstance();
+  globalBus.registerNamespaces([OpenAINodeConnectorNamespace.definition]);
   const bus = await OpenAINodeConnectorNamespace.scopedBus(globalBus);
   return new OpenAINodeConnector({
     bus,

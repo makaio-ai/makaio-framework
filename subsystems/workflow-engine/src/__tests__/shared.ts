@@ -1,4 +1,4 @@
-import { MakaioBus, type IMakaioBus } from '@makaio/bus-core';
+import { MakaioBus, type IHostMakaioBus, type IMakaioBus } from '@makaio/bus-core';
 import { createTempDb, createDbCleanup, type TestDbContextWithCleanup } from '@makaio/test-utils/drizzle-harness';
 import { readMigrations } from '@makaio/storage-migrations';
 import { applyMigrations } from '@makaio/storage-migrations/apply-migrations';
@@ -26,7 +26,7 @@ const TEST_MIGRATIONS_TABLE = '__drizzle_migrations_test_workflow_engine_storage
  * @returns A function that removes the frame handlers.
  */
 export function registerInMemoryFrameStore(
-  bus: IMakaioBus,
+  bus: IHostMakaioBus,
   options: { readonly failFirstWrite?: boolean } = {},
 ): () => void {
   bus.registerNamespace(WorkflowStorageNamespace);

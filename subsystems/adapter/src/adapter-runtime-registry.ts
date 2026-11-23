@@ -14,7 +14,6 @@ import {
   completeAdapterRetirementFlight,
   completeDeferredAdapterDeregistration,
   deinitializedAdapterIdentity,
-  removeAdapterNameFromPackageTracking,
 } from './adapter-runtime-deferred-cleanup.js';
 import {
   deferAdapterActivationAfterActive,
@@ -95,6 +94,7 @@ export class AdapterRuntimeRegistry {
   private readonly bus: IMakaioBus;
   private readonly machineId: string;
   private readonly resolveOwnerInstanceId: () => string;
+  private onAdapterRemoved?: (adapter: LoadedAdapter, pending?: Promise<AdapterInstanceTeardownResult>) => void;
 
   /**
    * All loaded adapter definitions, keyed by adapter name.
@@ -263,6 +263,16 @@ export class AdapterRuntimeRegistry {
   // ---------------------------------------------------------------------------
 
   /**
+   * Attach the contribution processor's cleanup to confirmed adapter removal.
+   * @param handler - Release the definition's resources, waiting for evidence if shutdown is still pending.
+   */
+  public setAdapterRemovalHandler(
+    handler: (adapter: LoadedAdapter, pending?: Promise<AdapterInstanceTeardownResult>) => void,
+  ): void {
+    this.onAdapterRemoved = handler;
+  }
+
+  /**
    * Register a loaded adapter definition and update package tracking.
    * @param loadedAdapter - Fully-constructed adapter definition to register.
    * @param packageName - NPM package name that contributed this adapter.
@@ -374,58 +384,35 @@ export class AdapterRuntimeRegistry {
     if (!adapter) return;
 
     const adapterId = this.resolveLoadedAdapterId(adapter);
+    /** Remove only this adapter epoch once its runtime slot is gone. */
+    const removeDefinition = (): void => {
+      if (this.loadedAdapters.get(adapterName) !== adapter) return;
+      completeDeferredAdapterDeregistration(
+        this.loadedAdapters,
+        this.adapterEntries,
+        this.packageAdapters,
+        adapterName,
+        adapter,
+        adapterId,
+      );
+      if (!this.loadedAdapters.has(adapterName)) this.onAdapterRemoved?.(adapter);
+    };
     const deferredSettled = await settleDeferredAdapterDeregistration(
       this.deferredActivations,
       adapter,
       () => this.loadedAdapters.get(adapterName) === adapter,
       () => this.adapterEntries.get(adapterId),
-      () => {
-        this.loadedAdapters.delete(adapterName);
-        removeAdapterNameFromPackageTracking(this.packageAdapters, adapter.packageName, adapterName);
-      },
+      removeDefinition,
     );
     if (deferredSettled) return;
     const attempt = await this.retireAdapterEntry(adapterId, adapter.name);
-    if (attempt === undefined || teardownWasObserved(attempt.report.evidence)) this.loadedAdapters.delete(adapterName);
-    else if (attempt.pendingCompletion !== undefined) {
+    if (attempt === undefined || teardownWasObserved(attempt.report.evidence)) {
+      removeDefinition();
+    } else if (attempt.pendingCompletion !== undefined) {
       void attempt.pendingCompletion.then((lateReport) => {
-        if (teardownWasObserved(lateReport.evidence)) {
-          completeDeferredAdapterDeregistration(
-            this.loadedAdapters,
-            this.adapterEntries,
-            this.packageAdapters,
-            adapterName,
-            adapter,
-            adapterId,
-          );
-        }
+        if (teardownWasObserved(lateReport.evidence)) removeDefinition();
       });
     }
-  }
-
-  /**
-   * Remove the package-to-adapter tracking entry without touching loaded
-   * adapters or live instances.
-   *
-   * Used by the contribution processor during rollback: individual adapters
-   * are deregistered via {@link deregisterAdapter} first, then this method
-   * clears the package-level tracking that was partially built before the
-   * failure.
-   * @param packageName - Package name whose tracking entry should be removed.
-   */
-  public removePackageTracking(packageName: string): void {
-    const adapterNames = this.packageAdapters.get(packageName);
-    if (
-      adapterNames?.some((adapterName) => {
-        const adapter = this.loadedAdapters.get(adapterName);
-        return (
-          adapter !== undefined && this.adapterEntries.get(this.resolveLoadedAdapterId(adapter))?.state === 'retiring'
-        );
-      })
-    ) {
-      return;
-    }
-    this.packageAdapters.delete(packageName);
   }
 
   /**
@@ -436,28 +423,12 @@ export class AdapterRuntimeRegistry {
    * @param packageName - Name of the package that transitioned to `stopped`.
    */
   public async deregisterPackage(packageName: string): Promise<void> {
-    const adapterNames = this.packageAdapters.get(packageName);
-    if (!adapterNames?.length) return;
-
-    let failed = false;
-    for (const adapterName of adapterNames) {
+    for (const adapterName of this.packageAdapters.get(packageName) ?? []) {
       try {
         await this.deregisterAdapter(adapterName);
-        const adapter = this.loadedAdapters.get(adapterName);
-        if (
-          adapter !== undefined &&
-          this.adapterEntries.get(this.resolveLoadedAdapterId(adapter))?.state === 'retiring'
-        ) {
-          failed = true;
-        }
       } catch (err) {
-        failed = true;
         console.error(`[AdapterRuntimeRegistry] Error shutting down adapter "${adapterName}":`, err);
       }
-    }
-
-    if (!failed) {
-      this.packageAdapters.delete(packageName);
     }
   }
 
@@ -534,6 +505,7 @@ export class AdapterRuntimeRegistry {
    * Used when provider definitions change while the adapter package remains
    * active. A replacement is admitted only after the prior handle has proved
    * it stopped; weak evidence leaves that handle retiring for a later retry.
+   * The replacement factory receives the contributor's carrier from the loaded definition.
    * @param adapter - Loaded adapter definition to instantiate.
    * @param platformDefaults - Platform-provided defaults forwarded to the factory.
    */
@@ -575,21 +547,32 @@ export class AdapterRuntimeRegistry {
    */
   public async shutdownAll(): Promise<AdapterInstanceShutdownReport> {
     await settleDeferredActivationsForShutdown(this.deferredActivations);
-    const results = await Promise.all(
+    const attempts = await Promise.all(
       [...this.adapterEntries.keys()].map(async (adapterId) => {
         const adapterName = [...this.loadedAdapters.values()].find(
           (candidate) => this.resolveLoadedAdapterId(candidate) === adapterId,
         )?.name;
         if (adapterName === undefined) throw new Error(`Managed adapter ${adapterId} has no loaded definition`);
         const attempt = await this.retireAdapterEntry(adapterId, adapterName);
-        return attempt === undefined ? { adapterId, evidence: 'released' as const } : attempt.report;
+        return [adapterId, attempt] as const;
       }),
     );
-    const report = aggregateAdapterInstanceTeardowns(results);
+    const attemptsById = new Map(attempts);
+    const removedAdapters = [...this.loadedAdapters.values()];
     this.loadedAdapters.clear();
     this.packageAdapters.clear();
     this.adapterEntries.clear();
-    return report;
+    for (const adapter of removedAdapters) {
+      const attempt = attemptsById.get(this.resolveLoadedAdapterId(adapter));
+      if (attempt === undefined || teardownWasObserved(attempt.report.evidence)) {
+        this.onAdapterRemoved?.(adapter);
+      } else if (attempt.pendingCompletion !== undefined) {
+        this.onAdapterRemoved?.(adapter, attempt.pendingCompletion);
+      }
+    }
+    return aggregateAdapterInstanceTeardowns(
+      attempts.map(([adapterId, attempt]) => attempt?.report ?? { adapterId, evidence: 'released' }),
+    );
   }
 
   /**

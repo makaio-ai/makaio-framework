@@ -32,7 +32,9 @@ describe('cursor SDK event routing', () => {
   });
 
   it('routes non-JSON shell output through the real scoped bus', async () => {
-    const bus = await CursorSdkNamespace.scopedBus(createTestBusInstance());
+    const hostBus = createTestBusInstance();
+    hostBus.registerNamespaces([CursorSdkNamespace.definition]);
+    const bus = await CursorSdkNamespace.scopedBus(hostBus);
     const routedPayloads: Array<{ delta: string }> = [];
     const unsubscribe = bus.on(CursorSdkSubjects.shell_output_delta, ({ payload }) => {
       routedPayloads.push(payload);
@@ -64,7 +66,9 @@ describe('cursor SDK event routing', () => {
   });
 
   it('derives tool completion errors from Cursor status payloads', async () => {
-    const bus = await CursorSdkNamespace.scopedBus(createTestBusInstance());
+    const hostBus = createTestBusInstance();
+    hostBus.registerNamespaces([CursorSdkNamespace.definition]);
+    const bus = await CursorSdkNamespace.scopedBus(hostBus);
     const routedPayloads: Array<{ isError: boolean; result?: unknown }> = [];
     const unsubscribe = bus.on(CursorSdkSubjects.tool_completed, ({ payload }) => {
       routedPayloads.push(payload);
@@ -111,7 +115,9 @@ describe('cursor SDK event routing', () => {
 
   it('handles rejected step lifecycle transitions explicitly', async () => {
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
-    const bus = await CursorSdkNamespace.scopedBus(createTestBusInstance());
+    const hostBus = createTestBusInstance();
+    hostBus.registerNamespaces([CursorSdkNamespace.definition]);
+    const bus = await CursorSdkNamespace.scopedBus(hostBus);
     const call = createTestCall();
     const turn = new RoutingTurnHarness(true);
     const state = createTurnEventState();

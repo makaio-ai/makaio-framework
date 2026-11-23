@@ -68,15 +68,17 @@ export function resourceStep(name: string, run: ShutdownStep): BoundedShutdownSt
  * window must not make the runtime report the step as failed, nor close the
  * credential channel and the transport under it.
  * @param coordinator - The coordinator that owns the extensions.
+ * @param scheduleNamespaceRelease - Schedules release after runtime transport disconnect.
  * @returns The step.
  */
 export function extensionsStep(
   coordinator: Pick<ExtensionCoordinator, 'stopBudgetMs' | 'shutdown'>,
+  scheduleNamespaceRelease?: (release: () => void) => void,
 ): BoundedShutdownStep {
   return {
     name: 'extensions',
     budgetMs: () => outerBoundMs(coordinator.stopBudgetMs()),
-    run: () => coordinator.shutdown(),
+    run: () => coordinator.shutdown(scheduleNamespaceRelease),
   };
 }
 

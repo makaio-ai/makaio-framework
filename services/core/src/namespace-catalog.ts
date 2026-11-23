@@ -8,10 +8,8 @@ import { ContextRulesStorageNamespace } from './context-rules/storage-namespace.
 import { DefinitionNamespace } from './definition/namespace.js';
 import { DialogNamespace } from './dialog/namespace.js';
 import { DockerNamespace } from './execution-target/container-namespace.js';
-import { ExecutionTargetNamespace } from './execution-target/namespace.js';
 import { FsNamespace } from './filesystem/namespace.js';
 import { HarnessStorageNamespace } from './harness/storage/namespace.js';
-import { CLIDetectionNamespace } from './cli-detection/namespace.js';
 import { LocalNotificationNamespace } from './local-notification/namespace.js';
 import { ModelRegistryNamespace } from './model-registry/namespace.js';
 import { ModelRegistryPublicNamespace } from '@makaio/contracts/model-registry';
@@ -30,14 +28,13 @@ import { SubagentTemplateKernelNamespace } from './subagent-template/namespace.j
 import { ImportCursorStorageNamespace } from '@makaio/ai-adapters-core';
 
 /**
- * Framework service namespace definitions registered by runtime composition roots.
+ * Host-owned service namespace definitions registered by runtime composition roots.
  */
 export const FrameworkServicesCoreNamespaces = [
   AdapterRuntimeNamespace,
   AdapterSubsystemNamespace,
   AgentRuntimeNamespace,
   AgentStorageNamespace,
-  CLIDetectionNamespace,
   ClientStorageNamespace,
   CodebaseNamespace,
   CompressionNamespace,
@@ -46,7 +43,6 @@ export const FrameworkServicesCoreNamespaces = [
   DefinitionNamespace,
   DialogNamespace,
   DockerNamespace,
-  ExecutionTargetNamespace,
   ExtensionConfigStorageNamespace,
   FsNamespace,
   HarnessStorageNamespace,

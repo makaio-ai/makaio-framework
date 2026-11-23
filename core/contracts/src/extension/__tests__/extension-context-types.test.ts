@@ -1,6 +1,12 @@
 import type { CallContext, OwnWorkPurpose } from '@makaio/core';
 import { describe, expectTypeOf, it } from 'vitest';
-import type { ExtensionContext, MakaioExtension, NodeExtensionContext } from '../index.js';
+import type {
+  ExtensionContext,
+  MakaioExtension,
+  NamespaceCapability,
+  NamespaceLease,
+  NodeExtensionContext,
+} from '../index.js';
 
 type HasKey<T, K extends PropertyKey> = K extends keyof T ? true : false;
 
@@ -18,6 +24,11 @@ describe('ExtensionContext host-specific fields', () => {
     expectTypeOf<NodeExtensionContext['makaioHome']>().toEqualTypeOf<string>();
     expectTypeOf<NodeExtensionContext['username']>().toEqualTypeOf<string>();
     expectTypeOf<NodeExtensionContext['busUrl']>().toEqualTypeOf<string | undefined>();
+  });
+
+  it('exposes the namespace capability and lease through the extension contract', () => {
+    expectTypeOf<ExtensionContext['namespaces']>().toEqualTypeOf<NamespaceCapability>();
+    expectTypeOf<NamespaceCapability['lease']>().returns.toEqualTypeOf<NamespaceLease>();
   });
 
   it('offers the own call context only through bus.own(purpose)', () => {

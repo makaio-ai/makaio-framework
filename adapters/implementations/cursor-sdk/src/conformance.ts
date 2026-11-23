@@ -288,6 +288,7 @@ function logConnectorWorkspace(workspace: ConnectorWorkspace): void {
 export const createTestConfig = async (
   options?: CreateConformanceTestConfigOptions,
 ): Promise<ConformanceTestConfig<CursorSdkBus, CursorSdkConnector, CursorSdkAgent>> => {
+  MakaioBus.registerNamespaces([CursorSdkNamespace.definition]);
   const bus = await CursorSdkNamespace.scopedBus(MakaioBus);
   const testPreset = resolveConformanceTestPreset({
     adapterName: CursorSdkAdapterName,

@@ -79,9 +79,16 @@ function createConnector(
   });
 }
 
+/** Create an isolated host with the connector schemas installed. */
+function createRegisteredHostBus(): ReturnType<typeof createTestBusInstance> {
+  const bus = createTestBusInstance();
+  bus.registerNamespaces([OpenAINodeConnectorNamespace.definition]);
+  return bus;
+}
+
 describe('openai-node connector/session', () => {
   it('does not mutate connector cwd when changeCwdInPlace runs before session init', async () => {
-    const globalBus = createTestBusInstance();
+    const globalBus = createRegisteredHostBus();
     const bus = await OpenAINodeConnectorNamespace.scopedBus(globalBus);
     const initialCwd = os.tmpdir();
     const connector = createConnector(bus, globalBus, {
@@ -96,7 +103,7 @@ describe('openai-node connector/session', () => {
   });
 
   it('does not mutate connector model when changeModelInPlace runs before session init', async () => {
-    const globalBus = createTestBusInstance();
+    const globalBus = createRegisteredHostBus();
     const bus = await OpenAINodeConnectorNamespace.scopedBus(globalBus);
     const initialModel = 'gpt-4o-mini';
     const connector = createConnector(bus, globalBus, {
@@ -111,7 +118,7 @@ describe('openai-node connector/session', () => {
   });
 
   it('aborts message_complete wait when signal is already aborted', async () => {
-    const globalBus = createTestBusInstance();
+    const globalBus = createRegisteredHostBus();
     const bus = await OpenAINodeConnectorNamespace.scopedBus(globalBus);
     const session = createSession(bus, globalBus);
 
@@ -128,7 +135,7 @@ describe('openai-node connector/session', () => {
   });
 
   it('filters message_complete wait by event type and connector identity', async () => {
-    const globalBus = createTestBusInstance();
+    const globalBus = createRegisteredHostBus();
     const bus = await OpenAINodeConnectorNamespace.scopedBus(globalBus);
     const session = createSession(bus, globalBus);
 
@@ -159,7 +166,7 @@ describe('openai-node connector/session', () => {
   });
 
   it('syncs session cwd without mutating connector cwd directly', async () => {
-    const globalBus = createTestBusInstance();
+    const globalBus = createRegisteredHostBus();
     const bus = await OpenAINodeConnectorNamespace.scopedBus(globalBus);
     const tempRoot = fs.mkdtempSync(`${os.tmpdir()}/openai-node-connector-session-`);
     const initialCwd = `${tempRoot}/initial`;
@@ -179,7 +186,7 @@ describe('openai-node connector/session', () => {
   });
 
   it('captures systemPrompt from initialize options', async () => {
-    const globalBus = createTestBusInstance();
+    const globalBus = createRegisteredHostBus();
     const bus = await OpenAINodeConnectorNamespace.scopedBus(globalBus);
     const connector = createConnector(bus, globalBus, {
       adapterAuth: {
@@ -201,7 +208,7 @@ describe('openai-node connector/session', () => {
   });
 
   it('captures empty-string systemPrompt without treating it as unset', async () => {
-    const globalBus = createTestBusInstance();
+    const globalBus = createRegisteredHostBus();
     const bus = await OpenAINodeConnectorNamespace.scopedBus(globalBus);
     const connector = createConnector(bus, globalBus);
 
@@ -215,7 +222,7 @@ describe('openai-node connector/session', () => {
   });
 
   it('captures systemPrompt from start options', async () => {
-    const globalBus = createTestBusInstance();
+    const globalBus = createRegisteredHostBus();
     const bus = await OpenAINodeConnectorNamespace.scopedBus(globalBus);
     const connector = createConnector(bus, globalBus);
 
@@ -238,7 +245,7 @@ describe('openai-node connector/session', () => {
   });
 
   it('prepends system message to messages array when systemPrompt is set', async () => {
-    const globalBus = createTestBusInstance();
+    const globalBus = createRegisteredHostBus();
     const bus = await OpenAINodeConnectorNamespace.scopedBus(globalBus);
     const session = createSession(bus, globalBus, { systemPrompt: 'You are a helpful assistant.' });
 
@@ -260,7 +267,7 @@ describe('openai-node connector/session', () => {
   });
 
   it('prepends empty-string system message when explicitly configured', async () => {
-    const globalBus = createTestBusInstance();
+    const globalBus = createRegisteredHostBus();
     const bus = await OpenAINodeConnectorNamespace.scopedBus(globalBus);
     const session = createSession(bus, globalBus, { systemPrompt: '' });
 
@@ -279,7 +286,7 @@ describe('openai-node connector/session', () => {
   });
 
   it('moves history system message to index 0, updates it, and preserves non-system order', async () => {
-    const globalBus = createTestBusInstance();
+    const globalBus = createRegisteredHostBus();
     const bus = await OpenAINodeConnectorNamespace.scopedBus(globalBus);
     const session = createSession(bus, globalBus, { systemPrompt: 'Configured system prompt' });
 
@@ -312,7 +319,7 @@ describe('openai-node connector/session', () => {
   });
 
   it('updates existing system message at index 0 without adding a duplicate', async () => {
-    const globalBus = createTestBusInstance();
+    const globalBus = createRegisteredHostBus();
     const bus = await OpenAINodeConnectorNamespace.scopedBus(globalBus);
     const session = createSession(bus, globalBus, { systemPrompt: 'Configured system prompt' });
 
@@ -343,7 +350,7 @@ describe('openai-node connector/session', () => {
   });
 
   it('does not feed reasoning-only completion back as assistant content', async () => {
-    const globalBus = createTestBusInstance();
+    const globalBus = createRegisteredHostBus();
     const bus = await OpenAINodeConnectorNamespace.scopedBus(globalBus);
     const session = createSession(bus, globalBus);
 
@@ -384,7 +391,7 @@ describe('openai-node connector/session', () => {
   });
 
   it('accepts block-only user input when content contains non-text parts', async () => {
-    const globalBus = createTestBusInstance();
+    const globalBus = createRegisteredHostBus();
     const bus = await OpenAINodeConnectorNamespace.scopedBus(globalBus);
     const session = createSession(bus, globalBus);
 
@@ -419,7 +426,7 @@ describe('openai-node connector/session', () => {
   });
 
   it('passes the real agentId (not adapterId) to stream metadata', async () => {
-    const globalBus = createTestBusInstance();
+    const globalBus = createRegisteredHostBus();
     const bus = await OpenAINodeConnectorNamespace.scopedBus(globalBus);
     const mockClient = new OpenAI({ apiKey: 'test-api-key' });
     const createSpy = vi.spyOn(mockClient.chat.completions, 'create').mockResolvedValue(

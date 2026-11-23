@@ -15,6 +15,7 @@ import {
   type ExtensionConfigResolutionMode,
   resolveConfigOutcome,
 } from './resolve-config.js';
+import { namespaceCapabilityFor, namespaceRegistrationFor } from './namespace-capability.js';
 import type { ExtensionContextBase, ExtensionEntry, KernelExtensionContext } from './types.js';
 
 /**
@@ -33,7 +34,7 @@ export interface ExtensionContextHost {
   /**
    * Node platform/user context supplied by the composition root.
    *
-   * Omits coordinator-owned fields (`config`, `signal`, `hasExtension`, `openContributions`) that
+   * Omits coordinator-owned fields (`config`, `signal`, `hasExtension`, `openContributions`, `namespaces`) that
    * are assembled by `buildExtensionContext` from the host interface.
    */
   readonly extensionContextBase: ExtensionContextBase | undefined;
@@ -224,7 +225,7 @@ function extensionCarrierOf(identity: ExtensionIdentity): PartyRef {
  * @returns Bus instance bound to the extension's carrier.
  */
 export function createExtensionCarrierBus(hostBus: IMakaioBus, identity: ExtensionIdentity): IMakaioBus {
-  return createCarrierBus(hostBus, extensionCarrierOf(identity));
+  return createCarrierBus(hostBus, extensionCarrierOf(identity), namespaceRegistrationFor(hostBus, identity));
 }
 
 /**
@@ -291,6 +292,7 @@ export function buildExtensionContext(
   return {
     ...base,
     bus,
+    namespaces: namespaceCapabilityFor(host.bus, entry.identity),
     ...(credentials !== undefined ? { credentials } : {}),
     identity: entry.identity,
     dataDir: path.join(host.extensionContextBase.makaioHome, EXTENSION_DATA_DIR_SEGMENT, segment),

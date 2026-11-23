@@ -5,7 +5,7 @@ import { hostPartyOf } from './call-context/carrier.js';
 import type {
   BusMessageObserver,
   ConnectOptions,
-  IMakaioBus,
+  IHostMakaioBus,
   MakaioBusContext,
   TransportRegistration,
 } from './types/bus.js';
@@ -472,11 +472,11 @@ function resolveBusContext(options?: CreateBusOptions<string | undefined>): Maka
  * @param options - Optional creation options. `context` defaults to a fresh `createBusContext()`.
  * `namespace` scopes the instance (e.g. `'adapter:claudeCode'`). `transports` are registered
  * immediately after creation.
- * @returns A new IMakaioBus instance with methods for on, emit, request, scoped, and schema management
+ * @returns A new IHostMakaioBus instance with methods for on, emit, request, scoped, and schema management
  */
 export function createBusInstance<Namespace extends string | undefined = undefined>(
   options?: CreateBusOptions<Namespace>,
-): IMakaioBus<Namespace> {
+): IHostMakaioBus<Namespace> {
   // Each call creates a fresh context by default, so wireLifecycleEmitter
   // (called below) installs on an isolated transport registry. The only way
   // to share a context is to pass one explicitly; carrier-bound instances reuse
@@ -508,7 +508,7 @@ export function createBusInstance<Namespace extends string | undefined = undefin
  * coordination point for all cross-component communication.
  *
  * **Core Methods:**
- * - `registerNamespace()` - Register typed subjects with Zod schemas
+ * - `registerNamespace(definition)` - Register a namespace as the host
  * - `on()` - Subscribe to events or requests with typed handlers
  * - `emit()` - Event broadcasting; awaiting it awaits the local handlers
  * - `request()` - Request-response with middleware chain
@@ -521,26 +521,30 @@ export function createBusInstance<Namespace extends string | undefined = undefin
  * - Transport-backed remote messaging
  * - Hierarchical namespace support (e.g., `adapter:claudeCode`)
  * - Middleware chains for request processing
- * @example Basic usage
+ *
+ * Extensions declare definitions in their manifest's `namespaces` or claim
+ * them at runtime with `ctx.namespaces.lease(definition)`.
+ * @example Host usage
  * ```typescript
  * import { MakaioBus } from '@makaio/bus-core';
+ * import { createBusNamespace } from '@makaio/core';
  * import { z } from 'zod';
  *
- * // Register namespace with typed subjects
- * const { subjects } = MakaioBus.registerNamespace('agent', {
+ * const definition = createBusNamespace('agent', {
  *   started: z.object({ agentId: z.string() }),
  *   toolApprove: {
  *     request: z.object({ toolName: z.string() }),
  *     response: z.object({ approved: z.boolean() }),
  *   },
  * });
+ * const { subjects } = MakaioBus.registerNamespace(definition);
  *
  * // Subscribe to events
  * MakaioBus.on(subjects.started, (context) => {
  *   console.debug('Agent started:', context.payload.agentId);
  * });
  *
- * // Emit events (the call context comes from `own`, or from a received `context.call`)
+ * // ORIGIN: The host initiates the start operation.
  * const call = MakaioBus.own('start');
  * await MakaioBus.emit(call, subjects.started, { agentId: 'agent-123' });
  *
@@ -555,6 +559,6 @@ export function createBusInstance<Namespace extends string | undefined = undefin
  * });
  * ```
  */
-export const MakaioBus: IMakaioBus = createBusInstance();
+export const MakaioBus: IHostMakaioBus = createBusInstance();
 
 export type { ScopedBus };

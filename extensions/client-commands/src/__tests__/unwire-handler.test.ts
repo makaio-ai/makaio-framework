@@ -7,7 +7,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { createBusInstance, type IMakaioBus } from '@makaio/bus-core';
+import { createBusInstance, type IHostMakaioBus, type IMakaioBus } from '@makaio/bus-core';
 import { ClientWiringRemoveResponseSchema } from '@makaio/subsystem-client';
 import { createBusNamespace } from '@makaio/core';
 import { z } from 'zod';
@@ -62,7 +62,7 @@ function createContext(
  * @param clientId - Test-only client identifier.
  * @returns Subjects registered on the local test bus.
  */
-function registerTestClientWiringRemoveNamespace(bus: IMakaioBus, clientId: string) {
+function registerTestClientWiringRemoveNamespace(bus: IHostMakaioBus, clientId: string) {
   return bus.registerNamespace(
     createBusNamespace(`client:${clientId}`, {
       'wiring.remove': {
@@ -81,7 +81,7 @@ function registerTestClientWiringRemoveNamespace(bus: IMakaioBus, clientId: stri
 // ---------------------------------------------------------------------------
 
 describe('runClientUnwireCommand', () => {
-  let bus: IMakaioBus;
+  let bus: IHostMakaioBus;
 
   beforeEach(() => {
     bus = createBusInstance();

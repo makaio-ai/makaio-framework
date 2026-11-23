@@ -124,11 +124,17 @@ export type IMakaioBus<
    * @returns Unsubscribe function
    * @example Basic event handler with typed payload
    * ```typescript
-   * const { subjects: AgentSubjects } = MakaioBus.registerNamespace('agent', {
+   * import { createBusNamespace } from '@makaio/core';
+   * import { createBusInstance } from '@makaio/bus-core';
+   * import { z } from 'zod';
+   *
+   * const definition = createBusNamespace('agent', {
    *   started: z.object({ agentId: z.string() }),
    * });
+   * const bus = createBusInstance();
+   * const { subjects: AgentSubjects } = bus.registerNamespace(definition);
    *
-   * const unsubscribe = on(AgentSubjects.started, (context) => {
+   * const unsubscribe = bus.on(AgentSubjects.started, (context) => {
    *   context.payload.agentId; // ✅ string - fully typed
    *   console.debug('Agent started:', context.payload.agentId);
    * });
@@ -136,30 +142,36 @@ export type IMakaioBus<
    * @example Wildcard handlers for namespace-level events
    * ```typescript
    * // Matches all subjects in namespace
-   * on(AgentSubjects.$all, (context) => {
+   * bus.on(AgentSubjects.$all, (context) => {
    *   context.payload; // unknown - must use type guards
-   *   if ('agentId' in context.payload) {
+   *   if (typeof context.payload === 'object' && context.payload !== null && 'agentId' in context.payload) {
    *     console.debug('Any agent event:', context.payload.agentId);
    *   }
    * });
    * ```
    * @example Request handler with typed request/response
    * ```typescript
-   * const { subjects: AgentSubjects } = MakaioBus.registerNamespace('agent', {
+   * import { createBusNamespace } from '@makaio/core';
+   * import { createBusInstance } from '@makaio/bus-core';
+   * import { z } from 'zod';
+   *
+   * const definition = createBusNamespace('agent', {
    *   toolApprove: {
    *     request: z.object({ toolName: z.string() }),
    *     response: z.object({ approved: z.boolean() }),
    *   },
    * });
+   * const bus = createBusInstance();
+   * const { subjects: AgentSubjects } = bus.registerNamespace(definition);
    *
-   * on(AgentSubjects.toolApprove, (context) => {
+   * bus.on(AgentSubjects.toolApprove, (context) => {
    *   const { toolName } = context.payload; // ✅ fully typed
    *   context.setResult({ approved: true });
    * });
    * ```
    * @example Middleware pattern for request chain
    * ```typescript
-   * on(AgentSubjects.toolApprove, async (context) => {
+   * bus.on(AgentSubjects.toolApprove, async (context) => {
    *   console.debug('Before approval');
    *   await context.next();
    *   console.debug('After approval');
@@ -195,50 +207,68 @@ export type IMakaioBus<
    * @returns Unsubscribe function for manual cleanup if needed
    * @example Basic one-time event handler
    * ```typescript
-   * const { subjects: AgentSubjects } = MakaioBus.registerNamespace('agent', {
+   * import { createBusNamespace } from '@makaio/core';
+   * import { createBusInstance } from '@makaio/bus-core';
+   * import { z } from 'zod';
+   *
+   * const definition = createBusNamespace('agent', {
    *   started: z.object({ agentId: z.string() }),
    * });
+   * const bus = createBusInstance();
+   * const { subjects: AgentSubjects } = bus.registerNamespace(definition);
    *
-   * once(AgentSubjects.started, (context) => {
+   * bus.once(AgentSubjects.started, (context) => {
    *   context.payload.agentId; // ✅ string - fully typed
    *   console.debug('Agent started once:', context.payload.agentId);
    * });
    *
-   * await emit(AgentSubjects.started, { agentId: 'agent-123' }); // Handler fires
-   * await emit(AgentSubjects.started, { agentId: 'agent-456' }); // Handler does NOT fire
+   * // ORIGIN: The example initiates this event.
+   * await bus.emit(bus.own('root'), AgentSubjects.started, { agentId: 'agent-123' }); // Handler fires
+   * // ORIGIN: The example initiates this event.
+   * await bus.emit(bus.own('root'), AgentSubjects.started, { agentId: 'agent-456' }); // Handler does NOT fire
    * ```
    * @example Manual unsubscribe before first fire
    * ```typescript
-   * const unsubscribe = once(AgentSubjects.started, (context) => {
+   * const unsubscribe = bus.once(AgentSubjects.started, (context) => {
    *   console.debug('This will never run');
    * });
    *
    * unsubscribe(); // Manually unsubscribe before event fires
-   * await emit(AgentSubjects.started, { agentId: 'agent-123' }); // Handler does NOT fire
+   * // ORIGIN: The example initiates this event.
+   * await bus.emit(bus.own('root'), AgentSubjects.started, { agentId: 'agent-123' }); // Handler does NOT fire
    * ```
    * @example Wildcard handler for one-time namespace monitoring
    * ```typescript
-   * once(AgentSubjects.$all, (context) => {
+   * bus.once(AgentSubjects.$all, (context) => {
    *   context.payload; // unknown - must use type guards
    *   console.debug('First agent event:', context.payload);
    * });
    * ```
    * @example One-time request handler
    * ```typescript
-   * const { subjects: AgentSubjects } = MakaioBus.registerNamespace('agent', {
+   * import { createBusNamespace } from '@makaio/core';
+   * import { createBusInstance } from '@makaio/bus-core';
+   * import { z } from 'zod';
+   *
+   * const definition = createBusNamespace('agent', {
    *   toolApprove: {
    *     request: z.object({ toolName: z.string() }),
    *     response: z.object({ approved: z.boolean() }),
    *   },
    * });
+   * const bus = createBusInstance();
+   * const { subjects: AgentSubjects } = bus.registerNamespace(definition);
    *
-   * once(AgentSubjects.toolApprove, (context) => {
+   * bus.once(AgentSubjects.toolApprove, (context) => {
    *   const { toolName } = context.payload; // ✅ fully typed
    *   context.setResult({ approved: true });
    * });
    *
-   * await request(AgentSubjects.toolApprove, { toolName: 'deleteFile' }); // Handler fires
-   * await request(AgentSubjects.toolApprove, { toolName: 'createFile' }); // Handler does NOT fire
+   * // ORIGIN: The example initiates this request.
+   * await bus.request(bus.own('root'), AgentSubjects.toolApprove, { toolName: 'deleteFile' }); // Handler fires
+   * // ORIGIN: The example initiates this request.
+   * const result = await bus.requestOptional(bus.own('root'), AgentSubjects.toolApprove, { toolName: 'createFile' });
+   * console.debug(result.handled); // false
    * ```
    */
   once<Subject extends Subjects & StrictNamespace, IsChannel = Subject['$meta']['channel']>(
@@ -428,33 +458,6 @@ export type IMakaioBus<
    */
   own(purpose: OwnWorkPurpose): CallContext;
 
-  /**
-   * Register a namespace from a `BusNamespaceDefinition` created by `createBusNamespace()`.
-   *
-   * Returns a `BusNamespace` that extends the definition with a `scopedBus()` method.
-   * @param definition - Namespace definition created by `createBusNamespace()` from `@makaio/core`
-   * @returns Registered namespace with `scopedBus()` and pre-computed FilterPayload type
-   */
-  registerNamespace<Domain extends string, Schemas extends Record<string, SubjectSchema>>(
-    definition: BusNamespaceDefinition<Domain, Schemas>,
-  ): BusNamespace<
-    Domain,
-    SubjectRecordFromSchemaRecord<Schemas>,
-    FilterablePayloadIntersection<SubjectRecordFromSchemaRecord<Schemas>>,
-    Schemas
-  >;
-
-  /**
-   * Register multiple namespaces in a single call.
-   *
-   * Convenience wrapper for composition roots that register a catalog of namespaces at boot:
-   * ```typescript
-   * MakaioBus.registerNamespaces(FrameworkContractNamespaces);
-   * ```
-   * @param definitions - Array of namespace definitions to register
-   */
-  registerNamespaces(definitions: readonly RegistrableBusNamespaceDefinition[]): void;
-
   /** Get the schema for a registered subject, or undefined if not found. */
   getSchema<T extends SubjectDefinition>(subject: T | string): SubjectSchema | undefined;
 
@@ -477,3 +480,34 @@ export type IMakaioBus<
     extensions: Ext,
   ): import('../extend-subject.js').ExtendedSubjectDefinition<SD, Ext>;
 } & BusSendOperations<Subjects, StrictNamespace>;
+
+/** Bus operations and namespace registration for host composition. */
+export interface IHostMakaioBus<NamespaceDomain = unknown> extends IMakaioBus<NamespaceDomain> {
+  /**
+   * Register a namespace as the host. Extensions use `ctx.namespaces.lease()`.
+   *
+   * Returns a `BusNamespace` that extends the definition with a `scopedBus()` method.
+   * @param definition - Namespace definition created by `createBusNamespace()` from `@makaio/core`
+   * @returns Registered namespace with `scopedBus()` and pre-computed FilterPayload type
+   */
+  registerNamespace<Domain extends string, Schemas extends Record<string, SubjectSchema>>(
+    definition: BusNamespaceDefinition<Domain, Schemas>,
+  ): BusNamespace<
+    Domain,
+    SubjectRecordFromSchemaRecord<Schemas>,
+    FilterablePayloadIntersection<SubjectRecordFromSchemaRecord<Schemas>>,
+    Schemas
+  >;
+
+  /**
+   * Register multiple namespaces as the host.
+   *
+   * Convenience wrapper for composition roots that register a catalog of namespaces at boot:
+   * ```typescript
+   * const bus = createBusInstance();
+   * bus.registerNamespaces(FrameworkContractNamespaces);
+   * ```
+   * @param definitions - Array of namespace definitions to register
+   */
+  registerNamespaces(definitions: readonly RegistrableBusNamespaceDefinition[]): void;
+}

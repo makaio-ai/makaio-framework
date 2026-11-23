@@ -1,5 +1,5 @@
 import type { ProceduralConnectorSession, ProcessingState } from '@makaio/ai-adapters-core';
-import { MakaioBus } from '@makaio/bus-core';
+import { MakaioBus, type IHostMakaioBus, type IMakaioBus } from '@makaio/bus-core';
 import { McpSubjects, type CallContext } from '@makaio/contracts';
 import { createTestBusInstance, createTestCall, makeStubExtensionBus } from '@makaio/test-utils';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -53,16 +53,19 @@ class TestCursorSdkConnector extends CursorSdkConnector {
 /**
  * Create a Cursor SDK connector configured for unit tests.
  * @param providerConfig - Optional Cursor SDK provider configuration.
- * @param hostBus - Host bus that owns the scoped adapter namespace
+ * @param globalBus - Carrier bus the connector sends on.
+ * @param hostBus - Host bus that registers the adapter namespace; the carrier's host.
  * @returns Test connector instance.
  */
 async function createConnector(
   providerConfig?: CursorSdkProviderConfig,
-  hostBus = MakaioBus,
+  globalBus: IMakaioBus = MakaioBus,
+  hostBus: IHostMakaioBus = MakaioBus,
 ): Promise<TestCursorSdkConnector> {
+  hostBus.registerNamespaces([CursorSdkNamespace.definition]);
   return new TestCursorSdkConnector({
-    bus: await CursorSdkNamespace.scopedBus(hostBus),
-    globalBus: hostBus,
+    bus: await CursorSdkNamespace.scopedBus(globalBus),
+    globalBus,
     adapterId: 'adapter-1',
     adapterName: 'cursor-sdk',
     agentId: 'agent-1',
@@ -140,14 +143,15 @@ describe('CursorSdkConnector', () => {
   });
 
   it('registers MCP as the adapter carrier and preserves the initializing principal', async () => {
-    const carrierBus = makeStubExtensionBus(createTestBusInstance(), 'cursor-sdk');
+    const hostBus = createTestBusInstance();
+    const carrierBus = makeStubExtensionBus(hostBus, 'cursor-sdk');
     const principal = { kind: 'acme.person', id: 'cursor-initializer' };
     const calls: CallContext[] = [];
     carrierBus.on(McpSubjects.session.register, (ctx) => {
       calls.push(ctx.call);
       ctx.setResult({ port: 4123 });
     });
-    const connector = await createConnector(undefined, carrierBus);
+    const connector = await createConnector(undefined, carrierBus, hostBus);
 
     await connector.initialize({ call: createTestCall({ principal }) });
 
@@ -158,14 +162,15 @@ describe('CursorSdkConnector', () => {
   });
 
   it('unregisters the MCP session with the adapter carrier on close', async () => {
-    const carrierBus = makeStubExtensionBus(createTestBusInstance(), 'cursor-sdk');
+    const hostBus = createTestBusInstance();
+    const carrierBus = makeStubExtensionBus(hostBus, 'cursor-sdk');
     const stop = carrierBus.own('stop');
     const unregistrations: Array<{ adapterSessionId: string; call: CallContext }> = [];
     carrierBus.on(McpSubjects.session.unregister, (ctx) => {
       unregistrations.push({ adapterSessionId: ctx.payload.adapterSessionId, call: ctx.call });
       ctx.setResult({});
     });
-    const connector = await createConnector(undefined, carrierBus);
+    const connector = await createConnector(undefined, carrierBus, hostBus);
     const call = createTestCall();
     await connector.initialize({ call });
     const adapterSessionId = await connector.getAdapterSessionId(call);

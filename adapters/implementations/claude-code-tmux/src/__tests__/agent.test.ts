@@ -52,6 +52,7 @@ class TestTmuxConnector extends ClaudeCodeTmuxConnector {
 }
 
 async function makeAgent(call: CallContext): Promise<{ agent: ClaudeCodeTmuxAgent; connector: TestTmuxConnector }> {
+  MakaioBus.registerNamespaces([ClaudeCodeTmuxConnectorNamespace.definition]);
   const adapterBus = await ClaudeCodeTmuxConnectorNamespace.scopedBus(MakaioBus);
   let connector: TestTmuxConnector | undefined;
   const agent = new ClaudeCodeTmuxAgent({

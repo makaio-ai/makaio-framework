@@ -144,8 +144,7 @@ describe('authority runner result acceptance', () => {
     if (!setup) throw new Error('Workflow executor test setup did not initialize.');
     const executionId = 'authority-finalizer-retry';
     const finalizerId = 'test.authority-retry';
-    const { namespace, subjects } = createWorkflowFinalizerNamespace(finalizerId);
-    MakaioBus.registerNamespace(namespace);
+    const { subjects } = createWorkflowFinalizerNamespace(finalizerId);
     const workflow = await seedAuthorityExecution({ executionId, finalizerId });
     const result: WorkflowRunResult = { executionId, workflowId: workflow.id, status: 'completed' };
 
@@ -179,8 +178,7 @@ describe('authority runner result acceptance', () => {
     if (!setup) throw new Error('Workflow executor test setup did not initialize.');
     const executionId = 'authority-finalizer-delayed-ack';
     const finalizerId = 'test.authority-delayed-ack';
-    const { namespace, subjects } = createWorkflowFinalizerNamespace(finalizerId);
-    MakaioBus.registerNamespace(namespace);
+    const { subjects } = createWorkflowFinalizerNamespace(finalizerId);
     const workflow = await seedAuthorityExecution({ executionId, finalizerId });
     const result: WorkflowRunResult = { executionId, workflowId: workflow.id, status: 'completed' };
     let claimToken: string | undefined;
@@ -249,8 +247,7 @@ describe('authority runner result acceptance', () => {
     const executionId = `authority-cleanup-${status}`;
     const finalizerId = status === 'finalizing' ? 'test.cleanup-pending' : undefined;
     if (finalizerId !== undefined) {
-      const { namespace, subjects } = createWorkflowFinalizerNamespace(finalizerId);
-      MakaioBus.registerNamespace(namespace);
+      const { subjects } = createWorkflowFinalizerNamespace(finalizerId);
       MakaioBus.on(subjects.finalize, (ctx) => {
         ctx.setResult({ accepted: true });
       });

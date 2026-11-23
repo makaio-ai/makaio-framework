@@ -33,7 +33,7 @@ interface FactorySpec {
   schemasArgIndex: number;
   /**
    * When `true`, the schemas arg is an object literal with a `schemas` property
-   * (e.g. `createStorageNamespace(domain, { schemas: {...} })`).
+   * (e.g. `createStorageNamespaceDefinition(domain, { schemas: {...} })`).
    * When `false`, the schemas arg IS the schema record directly.
    */
   schemasInConfig: boolean;
@@ -164,7 +164,7 @@ export function extractNamespaces(
  *
  * Handles:
  * - `export const FooNamespace = MakaioBus.registerNamespace('foo', FooSchemas);`
- * - `export const FooNamespace = createStorageNamespace('foo', { schemas: ... });`
+ * - `export const FooNamespace = createStorageNamespaceDefinition('foo', { schemas: ... });`
  * - `const { subjects } = createClientNamespace('codex', schemas);`
  * - Destructuring patterns for `createClientNamespace`
  * @param sourceFile - The TypeScript source file to walk.
@@ -232,7 +232,7 @@ function extractDirectRegisterHit(
 
 /**
  * Extracts a `RawNamespaceHit` from a factory function call (e.g.
- * `createStorageNamespace`, `createAdapterNamespace`, etc.).
+ * `createStorageNamespaceDefinition`, `createAdapterNamespace`, etc.).
  *
  * Resolves the domain string (including variable references) and locates the
  * schema record argument, unwrapping it from a config object when the factory
@@ -290,7 +290,7 @@ interface SchemaRecordResult {
  *
  * When `schemasInConfig` is `true`, the argument is an object literal whose
  * `schemas` property holds the actual record (e.g.
- * `createStorageNamespace(domain, { schemas: FooSchemas })`).
+ * `createStorageNamespaceDefinition(domain, { schemas: FooSchemas })`).
  * Otherwise the argument itself is the schema record.
  * @param schemasArgNode - The argument node at the schemas position (may be `undefined`).
  * @param schemasInConfig - Whether schemas are nested in a `schemas` property.

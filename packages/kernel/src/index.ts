@@ -39,6 +39,7 @@ export type {
 export {
   ExtensionCoordinator,
   ExtensionOperatorConfigError,
+  NamespaceCapabilityClosedError,
   coalesceExtensionOverrides,
   filterEligibleExtensions,
   resolveInstalledExtensionRecord,

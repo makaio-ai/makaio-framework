@@ -63,6 +63,7 @@ interface ObservedMovement {
  * @returns Agent wired to the real CLI connector
  */
 async function makeResumeArmedAgent(): Promise<ClaudeCodeCliAgent> {
+  MakaioBus.registerNamespaces([ClaudeCodeCliConnectorNamespace.definition]);
   const adapterBus = await ClaudeCodeCliConnectorNamespace.scopedBus(MakaioBus);
   return new ClaudeCodeCliAgent({
     adapterBus,

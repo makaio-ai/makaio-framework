@@ -341,7 +341,16 @@ export async function bootMakaioRuntimeCore(
     // 3. Transport (Phase 0 — resolves in ~50ms)
     // -----------------------------------------------------------------------
     await transport.connect(bus, machineId);
-    shutdownSteps.push(resourceStep('bus transport', () => transport.disconnect()));
+    const transportDisconnected = Promise.withResolvers<void>();
+    shutdownSteps.push(
+      resourceStep('bus transport', async () => {
+        try {
+          await transport.disconnect();
+        } finally {
+          transportDisconnected.resolve();
+        }
+      }),
+    );
     checkpoint();
 
     console.info('[boot] Transport ready on %s:%d', boundHost, boundPort);
@@ -815,7 +824,7 @@ export async function bootMakaioRuntimeCore(
     // reverse shutdown order this runs after coordinator.shutdown() (which
     // stops all extension activity) and before transport.disconnect().
     shutdownSteps.push(resourceStep('credentials channel', () => credentialBinder.close()));
-    shutdownSteps.push(extensionsStep(coordinator));
+    shutdownSteps.push(extensionsStep(coordinator, (release) => void transportDisconnected.promise.then(release)));
     collectHostCleanups(
       shutdownSteps,
       'host coordinator cleanup',

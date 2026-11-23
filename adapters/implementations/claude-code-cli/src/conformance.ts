@@ -36,8 +36,8 @@ import { adapterDefinition } from './definition.js';
 export const createTestConfig = async (
   options?: CreateConformanceTestConfigOptions,
 ): Promise<ConformanceTestConfig<ClaudeCodeCliConnectorBus, ClaudeCliConnector, ClaudeCodeCliAgent>> => {
-  const { scopedBus } = ClaudeCodeCliConnectorNamespace;
-  const bus = await scopedBus(MakaioBus);
+  MakaioBus.registerNamespaces([ClaudeCodeCliConnectorNamespace.definition]);
+  const bus = await ClaudeCodeCliConnectorNamespace.scopedBus(MakaioBus);
   const testPreset = resolveConformanceTestPreset({
     adapterName: ClaudeCodeCliAdapterName,
     testProviderDefinitionId: testPresetId,

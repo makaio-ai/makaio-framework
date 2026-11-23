@@ -29,9 +29,14 @@ interface TestInstance extends AdapterInstance {
  * @returns Map in shutdown order: clean, stuck, throwing.
  */
 function threeInstances(stuck: Promise<void>, failure: Error): Map<string, AdapterInstance> {
-  const clean: TestInstance = { adapterId: 'clean', closeAsync: async () => undefined };
-  const timesOut: TestInstance = { adapterId: 'times-out', closeAsync: () => stuck };
+  const clean: TestInstance = { namespaceName: 'adapter:clean', adapterId: 'clean', closeAsync: async () => undefined };
+  const timesOut: TestInstance = {
+    namespaceName: 'adapter:times-out',
+    adapterId: 'times-out',
+    closeAsync: () => stuck,
+  };
   const throws: TestInstance = {
+    namespaceName: 'adapter:throws',
     adapterId: 'throws',
     closeAsync: async () => {
       throw failure;
@@ -90,7 +95,9 @@ describe('case 207b: per-instance shutdown results', () => {
   });
 
   it('reports `released` for an instance that exposes no close hook', async () => {
-    const instances = new Map<string, AdapterInstance>([['hookless', { adapterId: 'hookless' }]]);
+    const instances = new Map<string, AdapterInstance>([
+      ['hookless', { namespaceName: 'adapter:hookless', adapterId: 'hookless' }],
+    ]);
 
     const report = await shutdownAdapterInstances(instances);
 
@@ -104,7 +111,11 @@ describe('case 207b: per-instance shutdown results', () => {
     const instances = new Map<string, AdapterInstance>([
       [
         'reported',
-        { adapterId: 'reported', closeAsync: async () => ({ evidence: 'exited', detail: 'provider exited' }) },
+        {
+          namespaceName: 'adapter:reported',
+          adapterId: 'reported',
+          closeAsync: async () => ({ evidence: 'exited', detail: 'provider exited' }),
+        },
       ],
     ]);
 
@@ -122,7 +133,11 @@ describe('case 207b: per-instance shutdown results', () => {
   });
 
   it('raises a typed timeout so a reporting caller need not parse prose', async () => {
-    const instance: TestInstance = { adapterId: 'slow', closeAsync: () => new Promise<void>(() => {}) };
+    const instance: TestInstance = {
+      namespaceName: 'adapter:slow',
+      adapterId: 'slow',
+      closeAsync: () => new Promise<void>(() => {}),
+    };
 
     const closing = closeAdapterInstance('slow', instance, 1_000).catch((error: unknown) => error);
     await vi.advanceTimersByTimeAsync(1_000);
@@ -139,7 +154,11 @@ describe('case 207b: per-instance shutdown results', () => {
     const late = new Promise<void>((_, reject) => {
       failLate = reject;
     });
-    const instance: TestInstance = { adapterId: 'late-failure', closeAsync: () => late };
+    const instance: TestInstance = {
+      namespaceName: 'adapter:late-failure',
+      adapterId: 'late-failure',
+      closeAsync: () => late,
+    };
     const instances = new Map<string, AdapterInstance>([['late-failure', instance]]);
 
     const shutdown = shutdownAdapterInstances(instances);

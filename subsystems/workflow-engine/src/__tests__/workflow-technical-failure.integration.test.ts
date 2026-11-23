@@ -27,6 +27,7 @@ import { driveTestAttemptToAllocated } from '../testing/attempt-fixtures.js';
 import { AttemptGateTransport, attemptPeer } from './execution-attempt-gate-harness.js';
 import { createTestDbForBus, createWorkflowDefinition, createWorkflowExecution, type TestDbContext } from './shared.js';
 import {
+  createWorkflowTestNamespaceCapability,
   setupWorkflowExecutorTest,
   teardownWorkflowExecutorTest,
   type WorkflowExecutorTestSetup,
@@ -59,7 +60,7 @@ describe.each([
     authority = new ExecutionAttemptAuthority(createInMemoryAttemptRepository(workflowAttemptOutcomeCodec), {
       bootstrapTimeoutMs: 60_000,
     });
-    executor = new WorkflowExecutor(bus, undefined, undefined, authority);
+    executor = new WorkflowExecutor(bus, createWorkflowTestNamespaceCapability(bus), undefined, undefined, authority);
     transport = new AttemptGateTransport();
     bus.registerTransport(transport);
     await executor.init();
@@ -161,7 +162,13 @@ describe('workflow owner technical failure convergence', () => {
     repository = createInMemoryAttemptRepository(workflowAttemptOutcomeCodec);
     authority = new ExecutionAttemptAuthority(repository, { bootstrapTimeoutMs: 60_000 });
     await setup.workflowExecutor.destroy();
-    setup.workflowExecutor = new WorkflowExecutor(MakaioBus, undefined, undefined, authority);
+    setup.workflowExecutor = new WorkflowExecutor(
+      MakaioBus,
+      createWorkflowTestNamespaceCapability(),
+      undefined,
+      undefined,
+      authority,
+    );
     MakaioBus.registerNamespace(WorkerNamespace);
     MakaioBus.registerNamespace(ExecutionAttemptNamespace);
     transport = new AttemptGateTransport();

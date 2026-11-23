@@ -1,5 +1,5 @@
 import { createBusInstance, type IMakaioBus } from '@makaio/bus-core';
-import { FrameworkContractNamespaces, FrameworkStorageNamespaces } from '@makaio/contracts';
+import { FrameworkContractNamespaces, FrameworkStorageNamespaces, WorkflowNamespace } from '@makaio/contracts';
 import { ExtensionCoordinator, type KernelMakaioExtension, KernelSubjects } from '@makaio/kernel';
 import {
   canonicalModelPackage,
@@ -121,7 +121,8 @@ export async function createIsolatedWorkflowRuntime(
   options: CreateIsolatedWorkflowRuntimeOptions,
 ): Promise<IsolatedWorkflowRuntime> {
   const bus = createBusInstance();
-  bus.registerNamespaces([...FrameworkContractNamespaces, ...FrameworkStorageNamespaces]);
+  // The runtime hosts the workflow contract for executor traffic without loading the workflow engine extension.
+  bus.registerNamespaces([...FrameworkContractNamespaces, ...FrameworkStorageNamespaces, WorkflowNamespace]);
 
   const { context } = options;
   const coordinator = new ExtensionCoordinator(bus, {
@@ -138,8 +139,16 @@ export async function createIsolatedWorkflowRuntime(
     },
   });
 
-  let identity: ReturnType<typeof activateAdapterRuntimeIdentity> | undefined;
-  const shutdownSteps: ShutdownStep[] = [() => bus.disconnect()];
+  const transportDisconnected = Promise.withResolvers<void>();
+  const shutdownSteps: ShutdownStep[] = [
+    () => {
+      try {
+        bus.disconnect();
+      } finally {
+        transportDisconnected.resolve();
+      }
+    },
+  ];
   const shutdown = createReverseShutdownRunner(shutdownSteps);
 
   try {
@@ -191,14 +200,11 @@ export async function createIsolatedWorkflowRuntime(
     // contribution would install behaviour for an extension that does not run.
     const retainedPackages = coordinator.load(packagesToLoad);
     shutdownSteps.push(...registerExtensionBootContributions(retainedPackages, bus, coordinator));
-    shutdownSteps.push(() => coordinator.shutdown());
+    shutdownSteps.push(() => coordinator.shutdown((release) => void transportDisconnected.promise.then(release)));
     await coordinator.startAll();
 
-    identity = activateIsolatedAdapterRuntimeIdentity(bus, coordinator, context.machineId);
-    shutdownSteps.push(() => {
-      identity?.cleanup();
-      identity = undefined;
-    });
+    const identity = activateIsolatedAdapterRuntimeIdentity(bus, coordinator, context.machineId);
+    shutdownSteps.push(identity.cleanup);
     const toolRegistry = coordinator.getExtensionService(ToolRegistryToken);
     if (toolRegistry === undefined) {
       throw new Error('Isolated workflow tool registry did not start.');

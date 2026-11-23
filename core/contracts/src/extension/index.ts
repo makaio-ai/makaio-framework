@@ -89,7 +89,18 @@ export type {
   ExtensionService,
   ExtensionServiceLifecycle,
 } from './extension-lifecycle.js';
-export type { CredentialResolver, ExtensionContext, NodeExtensionContext } from './extension-context.js';
+export {
+  NAMESPACE_ALREADY_OWNED,
+  NAMESPACE_CAPABILITY_CLOSED,
+  WORKER_NAMESPACE_CLAIM_UNAVAILABLE,
+} from './extension-context.js';
+export type {
+  CredentialResolver,
+  ExtensionContext,
+  NamespaceCapability,
+  NamespaceLease,
+  NodeExtensionContext,
+} from './extension-context.js';
 export type {
   ExtensionCliBeforeRunContext,
   ExtensionCliBeforeRunResult,

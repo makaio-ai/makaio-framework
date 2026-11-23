@@ -8,8 +8,9 @@ import type { StorageNamespaceConfig, StorageNamespaceExtensions } from './types
  * Created by {@link createStorageNamespaceDefinition}. Extends
  * {@link BusNamespaceDefinition} with storage-specific fields (`domain`,
  * `extensions`) and carries typed subject tokens for immediate use in bus
- * operations. Registration is deferred until
- * `createStorageNamespace(definition)` is called at a composition root.
+ * operations. Extensions supply it in the manifest's `namespaces` array or
+ * claim it at runtime with `ctx.namespaces.lease(definition)`. Host code
+ * registers it through `IHostMakaioBus.registerNamespace(definition)`.
  * @typeParam N - Storage domain name without the `'storage:'` prefix
  * @typeParam Schemas - Schema record mapping subject keys to Zod schemas
  * @typeParam Ext - Extension type preserving specific ORM table types
@@ -34,10 +35,8 @@ export interface StorageNamespaceDefinition<
 /**
  * Creates a storage namespace definition with typed subject tokens.
  *
- * Pure function — no side-effects, no bus singleton mutation. The returned
- * definition can be used immediately for bus operations (`bus.on()`,
- * `bus.emit()`, etc.) and registered later at a composition root via
- * `createStorageNamespace(definition)`.
+ * Pure function. The returned definition supplies typed subjects and schemas
+ * for registration by the host or the owning extension.
  * @param domain - Storage domain name without the `'storage:'` prefix
  *   (e.g., `'session'` becomes `'storage:session'`)
  * @param config - Namespace configuration with schemas and optional extensions

@@ -106,6 +106,7 @@ let connectors: ClaudeSdkConnector[] = [];
  * @returns Initialized connector instance.
  */
 async function makeConnector(sessionId = 'session-1'): Promise<ClaudeSdkConnector> {
+  MakaioBus.registerNamespaces([ClaudeCodeConnectorNamespace.definition]);
   const bus = await ClaudeCodeConnectorNamespace.scopedBus(MakaioBus);
   const connector = new ClaudeSdkConnector({
     bus,

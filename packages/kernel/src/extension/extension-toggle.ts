@@ -14,6 +14,8 @@ import {
   resolveExtensionEntryConfig,
 } from './extension-context-builder.js';
 import { createAndInitService, releaseService } from './extension-shutdown-runner.js';
+import { claimManifestNamespaces, releaseEntryNamespaces } from './extension-start-runner.js';
+import { reopenExtensionNamespaces } from './namespace-capability.js';
 import { transitionPackageEntry } from './state-transition.js';
 import { runContributionProcessors } from './contribution-processor-runner.js';
 import { registerPackageTrayMenuEntry, unregisterPackageTrayMenuEntry } from './tray-menu-entry-bridge.js';
@@ -213,6 +215,7 @@ export async function applyExtensionTransition(
   const entry = host.entries.get(name);
   if (!entry) return 'rejected';
 
+  // ORIGIN: The coordinator owns this internal lifecycle transition.
   const call = host.bus.own(enabled ? 'start' : 'stop');
   const outcome = enabled
     ? await enableExtension(call, host, name, entry)
@@ -466,10 +469,12 @@ async function persistForUnloadedName(
 /** Why a re-enable is refused while the entry still owns a service it could not destroy. */
 const RETAINED_SERVICE_MESSAGE =
   'A previous instance of the service could not be destroyed; it is retained until shutdown';
+const RESTARTABLE_STATES: ReadonlyArray<ExtensionEntry['state']> = ['stopped', 'failed', 'skipped'];
 
 /**
  * Marks a re-enable attempt as failed: records the reason on the entry, logs
- * it, and transitions the entry to `'failed'`.
+ * it, and transitions the entry to `'failed'`. A retained service keeps its
+ * namespaces until shutdown because its handlers can still be running.
  * @param call - Call responsible for the lifecycle transition.
  * @param host - Coordinator surface providing the bus for the transition.
  * @param entry - Mutable runtime entry for the extension.
@@ -484,6 +489,7 @@ function failReEnable(
   name: string,
   message: string,
 ): 'rejected' {
+  if (entry.pendingService === undefined) releaseEntryNamespaces(entry);
   entry.error = message;
   console.error(`[ExtensionCoordinator] Cannot re-enable "${name}":`, message);
   transitionPackageEntry(call, host.bus, entry, 'failed');
@@ -525,7 +531,7 @@ async function enableExtension(
     return 'applied';
   }
 
-  if (entry.state !== 'stopped' && entry.state !== 'failed' && entry.state !== 'skipped') return 'rejected';
+  if (!RESTARTABLE_STATES.includes(entry.state)) return 'rejected';
 
   // Invariant: this primitive must never activate an entry boot never
   // started. `'skipped'` is reached two ways — a self-skip during this
@@ -581,8 +587,12 @@ async function enableExtension(
   // the shutdown to retry; creating a second one would orphan it.
   if (entry.pendingService !== undefined) return failReEnable(call, host, entry, name, RETAINED_SERVICE_MESSAGE);
 
+  const conflict = claimManifestNamespaces(host.bus, entry);
+  if (conflict) return failReEnable(call, host, entry, name, `${conflict.code}: ${conflict.message}`);
+
   entry.enabled = true;
   entry.error = undefined;
+  reopenExtensionNamespaces(entry.identity);
   transitionPackageEntry(call, host.bus, entry, 'initializing');
 
   // Config resolution fails only when an operator-supplied layer cannot be
@@ -606,10 +616,7 @@ async function enableExtension(
         entry.storageCleanup = cleanup;
       }
     } catch (err) {
-      entry.error = getErrorString(err);
-      console.error(`[ExtensionCoordinator] Extension "${name}" storage re-registration failed:`, err);
-      transitionPackageEntry(call, host.bus, entry, 'failed');
-      return 'rejected';
+      return failReEnable(call, host, entry, name, getErrorString(err));
     }
   }
 
@@ -624,10 +631,7 @@ async function enableExtension(
     // Hard failures transition the extension to `failed`. The runner already
     // rolled back previously-invoked processors before re-throwing.
     await cleanupFailedEnable(name, storageCleanup, entry);
-    entry.error = getErrorString(err);
-    console.error(`[ExtensionCoordinator] Extension "${name}" contribution processing failed:`, err);
-    transitionPackageEntry(call, host.bus, entry, 'failed');
-    return 'rejected';
+    return failReEnable(call, host, entry, name, getErrorString(err));
   }
 
   transitionPackageEntry(call, host.bus, entry, 'active');
@@ -684,20 +688,15 @@ async function reinitializeService(
     return true;
   } catch (err) {
     await cleanupFailedEnable(name, storageCleanup, entry);
-    if (err instanceof ServiceSkipError) {
-      if (!entry.pkg.critical) {
-        entry.error = err.reason;
-        transitionPackageEntry(call, host.bus, entry, 'skipped');
-        return false;
-      }
-      entry.error = `Critical extension cannot skip startup: ${err.reason}`;
-      console.error(`[ExtensionCoordinator] Extension "${name}" failed to re-initialize:`, entry.error);
-      transitionPackageEntry(call, host.bus, entry, 'failed');
+    if (err instanceof ServiceSkipError && !entry.pkg.critical) {
+      if (entry.pendingService === undefined) releaseEntryNamespaces(entry);
+      entry.error = err.reason;
+      transitionPackageEntry(call, host.bus, entry, 'skipped');
       return false;
     }
-    entry.error = getErrorString(err);
-    console.error(`[ExtensionCoordinator] Extension "${name}" failed to re-initialize:`, err);
-    transitionPackageEntry(call, host.bus, entry, 'failed');
+    const message =
+      err instanceof ServiceSkipError ? `Critical extension cannot skip startup: ${err.reason}` : getErrorString(err);
+    failReEnable(call, host, entry, name, message);
     return false;
   }
 }
@@ -708,13 +707,10 @@ async function reinitializeService(
  * Stops contribution processors, destroys the service, unregisters storage
  * handlers, unregisters the tray menu entry, and transitions to `stopped`.
  *
- * Teardown is completed even when a step fails — the service fails to
- * destroy, storage cleanup throws, or the tray menu service rejects the
- * unregister request — the extension really is stopped and must not be left
- * claiming otherwise, nor left with a stale, clickable tray entry pointing at
- * a destroyed service. Every one of those failures is recorded on
- * `entry.error` rather than changing the outcome: the runtime really did
- * reach `stopped`, so this still reports `'applied'`.
+ * Every teardown step is attempted even when an earlier one fails. Failures
+ * are recorded on `entry.error` and the transition still reports `'applied'`.
+ * If service destruction fails, the entry retains the service and its
+ * namespace claims until final shutdown.
  *
  * When the extension is already inactive — `stopped`, `failed`, `skipped`, or
  * never started this boot (`discovered`) — there is nothing to tear down, but
@@ -783,6 +779,7 @@ async function disableExtension(
       await entry.service.destroy?.();
     } catch (err) {
       teardownFailures.push(err);
+      entry.pendingService = entry.service;
       console.error(`[ExtensionCoordinator] Error during disable destroy of "${name}":`, err);
     } finally {
       entry.service = undefined;
@@ -818,13 +815,10 @@ async function disableExtension(
 
   if (teardownFailures.length > 0) {
     const detail = teardownFailures.map((failure) => getErrorString(failure)).join('; ');
-    const teardownError = new AggregateError(
-      teardownFailures,
-      `Extension "${name}" disabled with ${teardownFailures.length} teardown failure(s): ${detail}`,
-    );
-    entry.error = getErrorString(teardownError);
+    entry.error = `Extension "${name}" disabled with ${teardownFailures.length} teardown failure(s): ${detail}`;
   }
 
+  if (entry.pendingService === undefined) releaseEntryNamespaces(entry);
   transitionPackageEntry(call, host.bus, entry, 'stopped');
 
   entry.warnings = [];

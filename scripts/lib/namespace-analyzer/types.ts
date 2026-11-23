@@ -34,7 +34,7 @@ export interface NamespaceEntry {
   /**
    * How this namespace was registered.
    * - `'bus'` — direct `MakaioBus.registerNamespace()` or `registerNamespace()`
-   * - `'storage'` — `createStorageNamespace()`
+   * - `'storage'` — `createStorageNamespaceDefinition()`
    * - `'adapter'` — `createAdapterNamespace()`
    * - `'client'` — `createClientNamespace()`
    * - `'extension'` — `createExtensionNamespace()`

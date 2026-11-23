@@ -20,6 +20,7 @@ import type { AdapterClientRef, AdapterDefinitionContract } from '@makaio/contra
  * ```typescript
  * export const adapterDefinition: AIAdapterDefinition<OpenAINodeBus, OpenAINodeConnector, OpenAIAgent> = {
  *   name: 'openai-node',
+ *   busNamespace: OpenAINodeConnectorNamespace.definition,
  *   displayName: 'OpenAI',
  *   description: 'OpenAI chat completions with streaming and tool calling',
  *   createAdapter: (options) => createOpenAINodeAdapter(options),

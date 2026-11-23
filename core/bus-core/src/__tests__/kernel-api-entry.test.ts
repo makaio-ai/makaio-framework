@@ -6,8 +6,11 @@ import * as packageIndex from '../index.js';
 // Expected lists (explicit and sorted, so a later change shows up as a diff)
 // ---------------------------------------------------------------------------
 
-/** The ten kernel names, exported by `kernel-api.ts` only. */
+/** The kernel names (call contexts, carrier buses, namespace ownership), exported by `kernel-api.ts` only. */
 const KERNEL_NAMES = [
+  'CORE_NAMESPACE_PREFIXES',
+  'HOST_NAMESPACE_HOLDER',
+  'NamespaceOwnershipError',
   'assertCallCarrier',
   'busCarrierOf',
   'busContextOf',
@@ -15,9 +18,14 @@ const KERNEL_NAMES = [
   'createBusContext',
   'createCarrierBus',
   'createFilteredBus',
+  'hasNamespace',
   'hostPartyOf',
+  'leaseNamespace',
+  'listOwners',
   'mintCallContext',
+  'namespaceOf',
   'ownCarrierOf',
+  'ownerOf',
 ] as const;
 
 /** Bus-core internals that neither entry point may export. */
@@ -41,7 +49,7 @@ const AUTHOR_NAMES = [
 ] as const;
 
 describe('kernel-api entry point', () => {
-  it('exports exactly the ten kernel names', () => {
+  it('exports exactly the kernel names', () => {
     expect(Object.keys(kernelApi).sort()).toEqual([...KERNEL_NAMES]);
   });
 });

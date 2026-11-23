@@ -18,8 +18,10 @@ async function makeTurn(
   onInterruptSettledWithoutStop = vi.fn(),
   interruptSettleMs = 1_000,
 ): Promise<TmuxConnectorTurn> {
+  const hostBus = createTestBusInstance();
+  hostBus.registerNamespaces([ClaudeCodeTmuxConnectorNamespace.definition]);
   return new TmuxConnectorTurn(
-    await ClaudeCodeTmuxConnectorNamespace.scopedBus(createTestBusInstance()),
+    await ClaudeCodeTmuxConnectorNamespace.scopedBus(hostBus),
     'adapter-1',
     'claude-code-tmux',
     'agent-1',
@@ -37,7 +39,9 @@ describe('TmuxConnectorTurn', () => {
   });
 
   it('transitions through the full hook-driven lifecycle', async () => {
-    const bus = await ClaudeCodeTmuxConnectorNamespace.scopedBus(createTestBusInstance());
+    const hostBus = createTestBusInstance();
+    hostBus.registerNamespaces([ClaudeCodeTmuxConnectorNamespace.definition]);
+    const bus = await ClaudeCodeTmuxConnectorNamespace.scopedBus(hostBus);
     const turn = new TmuxConnectorTurn(
       bus,
       'adapter-1',

@@ -54,6 +54,7 @@ async function makeSession(
   overrides: Partial<ConstructorParameters<typeof TmuxConnectorSession>[0]> = {},
 ): Promise<TmuxConnectorSession> {
   const hostBus = createBusInstance();
+  hostBus.registerNamespaces([ClaudeCodeTmuxConnectorNamespace.definition]);
   return new TmuxConnectorSession({
     tmuxSession: makeTmuxSession(hostBus),
     bus: await ClaudeCodeTmuxConnectorNamespace.scopedBus(hostBus),
@@ -130,6 +131,7 @@ describe('TmuxConnectorSession', () => {
     // callbacks would pass without any fix at all; the turn transition does not
     // refuse, and emits `turn.turn_finished` every time it is driven.
     const hostBus = createBusInstance();
+    hostBus.registerNamespaces([ClaudeCodeTmuxConnectorNamespace.definition]);
     const bus = await ClaudeCodeTmuxConnectorNamespace.scopedBus(hostBus);
     const turnFinishedEvents: unknown[] = [];
     await bus.on(ClaudeCodeTmuxConnectorSubjects.turn.turn_finished, (payload) => {

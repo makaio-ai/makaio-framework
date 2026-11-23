@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { asc, eq, sql } from 'drizzle-orm';
-import { createBusInstance, MakaioBus, ValidationError, type IMakaioBus } from '@makaio/bus-core';
+import { createBusInstance, MakaioBus, ValidationError, type IHostMakaioBus } from '@makaio/bus-core';
 import { getRawSqlExecutor } from '@makaio/storage-drizzle';
 import { WorkflowNamespace, WorkflowSubjects } from '../namespace.js';
 import { WorkflowStorageNamespace, WorkflowStorageSubjects } from '../storage/namespace.js';
@@ -1605,7 +1605,7 @@ describe('workflow storage handlers', () => {
 });
 
 describe.each(STORAGE_VALIDATION_MODES)('stored definition validation ($name)', ({ name, nodeEnv }) => {
-  let bus: IMakaioBus;
+  let bus: IHostMakaioBus;
   let context: TestDbContext;
   let definitionEvents: string[];
   let cleanups: Array<() => void>;

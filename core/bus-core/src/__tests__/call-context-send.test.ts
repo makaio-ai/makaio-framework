@@ -450,11 +450,11 @@ describe('carrier instances of one host share one registry', () => {
     expect(intercepted).toEqual([CARRIER_B]);
   });
 
-  it('uses a namespace registered through one carrier for a send through another', async () => {
+  it('shares a host-registered namespace across carriers', async () => {
     const host = createBusInstance();
     const busA = createCarrierBus(host, CARRIER_A);
     const busB = createCarrierBus(host, CARRIER_B);
-    const subjects = registerSubjects(busA, 'sendSharedNamespace');
+    const subjects = registerSubjects(host, 'sendSharedNamespace');
     const seen: Party[] = [];
     host.on(subjects.changed, (ctx) => {
       seen.push(ctx.call.caller);
@@ -463,6 +463,7 @@ describe('carrier instances of one host share one registry', () => {
     await busB.emit(passedCall(), subjects.changed, { id: '1' });
 
     expect(seen).toEqual([CARRIER_B]);
+    expect(host.getSchema(subjects.changed)).toBe(busA.getSchema(subjects.changed));
     expect(host.getSchema(subjects.changed)).toBe(busB.getSchema(subjects.changed));
     expect(host.getSchema(subjects.changed)).toBeDefined();
   });

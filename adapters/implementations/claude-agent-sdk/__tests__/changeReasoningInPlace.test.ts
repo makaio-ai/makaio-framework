@@ -9,6 +9,7 @@ import { createSessionAccountObservationRequester } from '../src/account-observa
 
 describe('ClaudeSdkConnector.changeReasoningInPlace()', () => {
   async function makeConnector(): Promise<ClaudeSdkConnector> {
+    MakaioBus.registerNamespaces([ClaudeCodeConnectorNamespace.definition]);
     const bus = await ClaudeCodeConnectorNamespace.scopedBus(MakaioBus);
     return new ClaudeSdkConnector({
       bus,

@@ -7,7 +7,7 @@
 import type { AIAdapterDefinition } from '@makaio/ai-adapters-core';
 import { ADAPTER_NAME, DEFAULT_TIMEOUTS } from './constants.js';
 import { ClaudeCodeTmuxProviderConfigSchema } from './schemas.js';
-import type { ClaudeCodeTmuxConnectorBus } from './namespace/index.js';
+import { ClaudeCodeTmuxConnectorNamespace, type ClaudeCodeTmuxConnectorBus } from './namespace/index.js';
 import type { ClaudeCodeTmuxConnector } from './connector.js';
 import type { ClaudeCodeTmuxAgent } from './agent.js';
 import { defaultPresetId, providerAuthById, providerIds } from './provider.js';
@@ -27,6 +27,7 @@ export const adapterDefinition: AIAdapterDefinition<
   ClaudeCodeTmuxAgent
 > = {
   name: ADAPTER_NAME,
+  busNamespace: ClaudeCodeTmuxConnectorNamespace.definition,
   displayName: 'Claude Code (tmux)',
   defaultPresetId,
   description: 'Claude Code integration via interactive tmux sessions with hook-driven orchestration',

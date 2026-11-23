@@ -117,6 +117,7 @@ function makeHandle(call: CallContext, messageId: string): MessageHandle {
  */
 async function createApprovalConnector(decide: () => Promise<'allow' | 'deny'> = async () => 'allow') {
   const hostBus = createBusInstance();
+  hostBus.registerNamespaces([QwenAcpNamespace.definition]);
   const bus = await QwenAcpNamespace.scopedBus(hostBus);
   const connector = new QwenAcpConnector({
     bus,

@@ -6,6 +6,7 @@ import {
   WORKFLOW_CANCELLED_REASON,
   WorkflowError,
   createWorkflowCancelSubject,
+  type ExtensionContext,
   type IWorkflowRunner,
   type WorkflowDefinition,
   type WorkflowExecution,
@@ -99,12 +100,14 @@ export class WorkflowExecutor extends BaseService {
   /**
    * Create a new workflow executor.
    * @param bus - The message bus for communication
+   * @param namespaces - Extension capability for success finalizer registration.
    * @param config - Optional partial configuration (merged with defaults)
    * @param workflowRunner - Optional workflow-level runner for isolated execution
    * @param executionAttemptAuthority - Optional Authority for Worker dispatch runners
    */
   public constructor(
     bus: IMakaioBus,
+    private readonly namespaces: ExtensionContext['namespaces'],
     config?: Partial<ExecutorConfig>,
     private readonly workflowRunner?: IWorkflowRunner,
     private readonly executionAttemptAuthority?: ExecutionAttemptAuthority<WorkflowAttemptOutcome>,
@@ -161,24 +164,22 @@ export class WorkflowExecutor extends BaseService {
       throw new Error(`[WorkflowExecutor] Success finalizer already registered: ${finalizerId}`);
     }
     const { namespace, subjects } = createWorkflowFinalizerNamespace(finalizerId);
-    this.bus.registerNamespace(namespace);
+    const lease = this.namespaces.lease(namespace);
     const registration: WorkflowSuccessFinalizer = { finalizerId, finalizeSubject: subjects.finalize };
     this.successFinalizers.set(finalizerId, registration);
+    const dispose = (): void => {
+      if (this.successFinalizers.get(finalizerId) === registration) {
+        this.successFinalizers.delete(finalizerId);
+        lease.release();
+      }
+    };
     try {
       await recoverSuccessFinalizations(call, { ...this.buildFinalizerDeps(), replayingExecutionId });
     } catch (error) {
-      if (this.successFinalizers.get(finalizerId) === registration) this.successFinalizers.delete(finalizerId);
+      dispose();
       throw error;
     }
-
-    let disposed = false;
-    return () => {
-      if (disposed) return;
-      disposed = true;
-      if (this.successFinalizers.get(finalizerId) === registration) {
-        this.successFinalizers.delete(finalizerId);
-      }
-    };
+    return dispose;
   }
 
   /**

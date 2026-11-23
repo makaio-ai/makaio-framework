@@ -1,6 +1,12 @@
 import type { IMakaioBus } from '@makaio/bus-core';
+import { leaseNamespace, type NamespaceLease } from '@makaio/bus-core/kernel-api';
 import type { CallContext } from '@makaio/core';
-import type { AdapterContribution, ProtocolId, ProviderAIModel } from '@makaio/contracts';
+import {
+  teardownWasObserved,
+  type AdapterContribution,
+  type ProtocolId,
+  type ProviderAIModel,
+} from '@makaio/contracts';
 import type { ProtocolRef } from '@makaio/contracts/extension';
 import { ExtensionSubjects } from '@makaio/kernel';
 import type { ExtensionCoordinator } from '@makaio/kernel';
@@ -8,8 +14,10 @@ import type { ContributionProcessor, KernelExtensionContext, KernelMakaioExtensi
 import { buildDeterministicAdapterId } from '@makaio/services-core/adapter-runtime';
 import type { AdapterConfigStore } from './adapter-config-store.js';
 import type { AdapterRuntimeRegistry } from './adapter-runtime-registry.js';
+import { AdapterDefinitionInvalidError } from './adapter-runtime-admission.js';
 import type { PlatformDefaults } from './adapter-runtime-lifecycle.js';
 import type { LoadedAdapter } from './adapter-runtime-types.js';
+import type { AdapterInstanceTeardownResult } from './adapter-instance-teardown.js';
 import { contributesToAdapterSubsystem } from './adapter-subsystem-contribution-factory.js';
 import {
   cloneAdapterClientRefs,
@@ -125,6 +133,7 @@ export class AdapterContributionProcessor {
   private readonly machineId: string;
   private readonly platformDefaults: PlatformDefaults;
   private readonly prepareAuthRuntime: unknown;
+  private readonly packageLeases = new Map<string, Map<NamespaceLease, string>>();
 
   /**
    * Create a new adapter contribution processor.
@@ -137,6 +146,9 @@ export class AdapterContributionProcessor {
     this.machineId = options.machineId;
     this.platformDefaults = options.platformDefaults;
     this.prepareAuthRuntime = options.prepareAuthRuntime;
+    this.registry.setAdapterRemovalHandler(({ packageName, name }, pending) =>
+      this.releaseAdapterLeases(packageName, name, pending),
+    );
   }
 
   /**
@@ -180,7 +192,7 @@ export class AdapterContributionProcessor {
    * observers with a false live-registration event.
    * @param packageName - Name of the package that transitioned to `active`.
    * @param pkg - Extension manifest with `adapters` contributions.
-   * @param ctx - Per-extension context containing the contributing extension’s carrier bus.
+   * @param ctx - Context of the contributing extension: its carrier bus and its identity, the holder of the adapter namespace leases.
    */
   public async onPackageActivated(
     packageName: string,
@@ -188,8 +200,7 @@ export class AdapterContributionProcessor {
     ctx: KernelExtensionContext,
   ): Promise<void> {
     const contributions = pkg.adapters ?? [];
-    const activated: string[] = [];
-    const completed: LoadedAdapter[] = [];
+    const registered: LoadedAdapter[] = [];
     const providerModelCache = new Map<string, ProviderAIModel[]>();
 
     // ORIGIN: activation lookups run on the activated extension's carrier.
@@ -207,36 +218,30 @@ export class AdapterContributionProcessor {
 
     try {
       for (const contribution of contributions) {
-        const loadedAdapter = await this.activateAdapterContribution(
+        await this.activateAdapterContribution(
           call,
           packageName,
           contribution,
-          ctx.bus,
+          ctx,
+          registered,
           providerModelCache,
           providerDefinitionCache,
           clientCatalog,
           loadedProviderIds,
         );
-        activated.push(contribution.definition.name);
-        completed.push(loadedAdapter);
       }
     } catch (err) {
-      let rollbackFailed = false;
-      for (const adapterName of activated.reverse()) {
+      for (const { name: adapterName } of registered.reverse()) {
         try {
           await this.registry.deregisterAdapter(adapterName);
         } catch (rollbackErr) {
-          rollbackFailed = true;
           console.error(`[AdapterContributionProcessor] Rollback error for adapter "${adapterName}":`, rollbackErr);
         }
-      }
-      if (!rollbackFailed) {
-        this.registry.removePackageTracking(packageName);
       }
       throw err;
     }
 
-    await this.publishActivatedAdapters(completed);
+    await this.publishActivatedAdapters(registered);
     const initializedWaitingAdapters = await this.initializeAdaptersWaitingForProviders(
       call,
       ctx.bus,
@@ -248,66 +253,34 @@ export class AdapterContributionProcessor {
   }
 
   /**
-   * Process a single adapter contribution from an active package.
-   *
-   * Steps:
-   * 1. Build a `LoadedAdapter` from the manifest and definition
-   * 2. Ensure the file-backed config exists
-   * 3. Register in the in-memory registry and update package tracking
-   * 4. Initialize the instance when enabled
-   * 5. Publish `adapter.registered` through the serialized publication chain
-   * @param call - Call context under which the provider and client lookups are sent.
-   * @param packageName - Owning package name.
-   * @param contribution - Adapter contribution from the package manifest.
-   * @param bus - Contributing extension carrier used for provider model lookups and adapter runtime sends.
-   */
-  public async processAdapterContribution(
-    call: CallContext,
-    packageName: string,
-    contribution: AdapterContribution,
-    bus: IMakaioBus,
-  ): Promise<void> {
-    const loadedProviderIds = this.coordinator.getLoadedProviderDefinitionIds();
-    const loadedAdapter = await this.activateAdapterContribution(
-      call,
-      packageName,
-      contribution,
-      bus,
-      new Map<string, ProviderAIModel[]>(),
-      undefined,
-      undefined,
-      loadedProviderIds,
-    );
-    await this.publishActivatedAdapters([loadedAdapter]);
-  }
-
-  /**
    * Register and initialize one adapter contribution without publishing its
    * `adapter.registered` event.
    *
    * Publication is intentionally deferred until the package has fully
-   * activated. If registration succeeds and a later step fails, this method
-   * deregisters the current adapter before re-throwing.
+   * activated. Track each successful registration before initialization so
+   * package rollback includes the adapter if initialization fails.
    * @param call - Call context under which the provider and client lookups are sent.
    * @param packageName - Owning package name.
    * @param contribution - Adapter contribution from the package manifest.
-   * @param bus - Contributing extension carrier used for provider model lookups and adapter runtime sends.
+   * @param ctx - Activating extension context: its carrier bus serves lookups and the adapter's runtime sends; its identity holds the namespace lease.
+   * @param registered - Definitions registered so far, in registration order.
    * @param providerModelCache - Per-batch cache deduplicating provider model bus calls.
    * @param providerDefinitionCache - Pre-built provider definition map from the batch caller.
    * @param clientCatalog - Pre-built active client catalog from the batch caller.
    * @param loadedProviderIds - Universe of active or activation-eligible provider definition IDs.
-   * @returns Loaded adapter after successful registration and optional initialization.
    */
   private async activateAdapterContribution(
     call: CallContext,
     packageName: string,
     contribution: AdapterContribution,
-    bus: IMakaioBus,
+    ctx: KernelExtensionContext,
+    registered: LoadedAdapter[],
     providerModelCache: Map<string, ProviderAIModel[]>,
     providerDefinitionCache: Map<string, ProviderDefinitionCacheEntry> | undefined,
     clientCatalog: readonly AdapterClientCatalogEntry[] | undefined,
     loadedProviderIds: ReadonlySet<string>,
-  ): Promise<LoadedAdapter> {
+  ): Promise<void> {
+    const { bus } = ctx;
     const loadedAdapter = await this.buildLoadedAdapter(
       call,
       packageName,
@@ -317,45 +290,39 @@ export class AdapterContributionProcessor {
       providerDefinitionCache,
       clientCatalog,
     );
-    let registered = false;
-
-    try {
-      await this.ensureAdapterConfig(loadedAdapter);
-      const enabled = this.configStore.isAdapterEnabled(loadedAdapter.name);
-      if (enabled) {
-        await this.validateEnabledAdapterClientRefs(call, loadedAdapter, bus, clientCatalog);
-      }
-
-      this.registry.registerAdapter(loadedAdapter, packageName);
-      registered = true;
-
-      if (enabled) {
-        if (this.getMissingProviderDefinitionIds(loadedAdapter, loadedProviderIds).length > 0) {
-          console.info(
-            `[AdapterContributionProcessor] Deferring adapter "${loadedAdapter.name}" initialization until declared providers are active.`,
-          );
-        } else {
-          await this.registry.initializeAdapter(loadedAdapter, this.platformDefaults);
-          console.info(
-            `[AdapterContributionProcessor] Initialized adapter: ${loadedAdapter.name} (${loadedAdapter.packageName})`,
-          );
-        }
-      }
-    } catch (err) {
-      if (registered) {
-        try {
-          await this.registry.deregisterAdapter(loadedAdapter.name);
-        } catch (rollbackErr) {
-          console.error(
-            `[AdapterContributionProcessor] Rollback error for adapter "${loadedAdapter.name}":`,
-            rollbackErr,
-          );
-        }
-      }
-      throw err;
+    await this.ensureAdapterConfig(loadedAdapter);
+    const enabled = this.configStore.isAdapterEnabled(loadedAdapter.name);
+    if (enabled) {
+      await this.validateEnabledAdapterClientRefs(call, loadedAdapter, bus, clientCatalog);
     }
 
-    return loadedAdapter;
+    // The adapter can outlive a failed extension start while its teardown is pending.
+    const lease = leaseNamespace(bus, loadedAdapter.busNamespace, {
+      kind: 'extension',
+      extension: ctx.identity.extensionName,
+    });
+    try {
+      this.registry.registerAdapter(loadedAdapter, packageName);
+    } catch (err) {
+      lease.release();
+      throw err;
+    }
+    const leases = this.packageLeases.get(packageName) ?? new Map<NamespaceLease, string>();
+    leases.set(lease, loadedAdapter.name);
+    this.packageLeases.set(packageName, leases);
+    registered.push(loadedAdapter);
+
+    if (!enabled) return;
+    if (this.getMissingProviderDefinitionIds(loadedAdapter, loadedProviderIds).length > 0) {
+      console.info(
+        `[AdapterContributionProcessor] Deferring adapter "${loadedAdapter.name}" initialization until declared providers are active.`,
+      );
+      return;
+    }
+    await this.registry.initializeAdapter(loadedAdapter, this.platformDefaults);
+    console.info(
+      `[AdapterContributionProcessor] Initialized adapter: ${loadedAdapter.name} (${loadedAdapter.packageName})`,
+    );
   }
 
   /**
@@ -492,6 +459,8 @@ export class AdapterContributionProcessor {
     const def = contribution.definition;
     const manifest = contribution.manifest;
     const adapterName = def.name;
+    const busNamespace = def.busNamespace;
+    if (busNamespace == null) throw new AdapterDefinitionInvalidError(adapterName);
     const resolvedClientCatalog =
       clientCatalog ?? (await bus.request(call, ExtensionSubjects.contributions.catalog, {})).clients;
     await validateAdapterClientRefs(call, adapterName, manifest.clients, resolvedClientCatalog, bus, {
@@ -511,6 +480,7 @@ export class AdapterContributionProcessor {
       description: def.description,
       packageName,
       carrierBus: bus,
+      busNamespace,
       factory: def.createAdapter as LoadedAdapter['factory'],
       options: {
         adapterId: buildDeterministicAdapterId(this.machineId, adapterName),
@@ -565,6 +535,37 @@ export class AdapterContributionProcessor {
     await this.registry.deregisterPackage(packageName);
     const updatedAdapters = await this.registry.removeProviderPackage(packageName, this.platformDefaults);
     await this.publishActivatedAdapters(updatedAdapters);
+  }
+
+  /**
+   * Release contribution leases after the registry removes the adapter.
+   * @param packageName - Package that contributed the adapter.
+   * @param adapterName - Adapter whose deregistration completed.
+   * @param pending - Potential late confirmation for a close that exceeded the shutdown budget.
+   */
+  private releaseAdapterLeases(
+    packageName: string,
+    adapterName: string,
+    pending?: Promise<AdapterInstanceTeardownResult>,
+  ): void {
+    const leases = this.packageLeases.get(packageName);
+    if (leases === undefined) return;
+    const captured = [...leases].filter(([, name]) => name === adapterName);
+    /** Release only the leases that belonged to the adapter when removal started. */
+    const release = (): void => {
+      for (const [lease] of captured) {
+        lease.release();
+        leases.delete(lease);
+      }
+      if (leases.size === 0 && this.packageLeases.get(packageName) === leases) this.packageLeases.delete(packageName);
+    };
+    if (pending === undefined) {
+      release();
+    } else {
+      void pending.then(({ evidence }) => {
+        if (teardownWasObserved(evidence)) release();
+      });
+    }
   }
 
   /**

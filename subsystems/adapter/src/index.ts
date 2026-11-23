@@ -130,6 +130,7 @@ export function createAdapterSubsystemPackage(
 }
 
 export { AdapterSubsystemService } from './adapter-subsystem-service.js';
+export { AdapterDefinitionInvalidError, type AdapterDefinitionInvalidErrorCode } from './adapter-runtime-admission.js';
 export {
   contributesToAdapterSubsystem,
   createAdapterSubsystemContributionProcessor,

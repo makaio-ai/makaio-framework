@@ -88,6 +88,8 @@ function makeHandle(): MessageHandle {
   );
 }
 
+MakaioBus.registerNamespaces([ClaudeCodeCliConnectorNamespace.definition]);
+
 describe('ClaudeCliSession native fork validation', () => {
   beforeEach(() => {
     MakaioBus.__resetHandlers?.();

@@ -108,6 +108,7 @@ function makeHandle(): MessageHandle {
  * @returns A session that has not yet spawned anything.
  */
 async function makeSession(onTurnComplete?: OnTurnCompleteCallback): Promise<ClaudeCliSession> {
+  MakaioBus.registerNamespaces([ClaudeCodeCliConnectorNamespace.definition]);
   return new ClaudeCliSession({
     bus: await ClaudeCodeCliConnectorNamespace.scopedBus(MakaioBus),
     globalBus: MakaioBus,

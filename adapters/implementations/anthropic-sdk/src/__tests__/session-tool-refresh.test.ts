@@ -22,6 +22,7 @@ class TestAnthropicSdkSession extends AnthropicSdkSession {
 describe('AnthropicSdkSession tool refresh', () => {
   it('rebuilds the live tool set from the latest native tools after refresh', async () => {
     const globalBus = createTestBusInstance();
+    globalBus.registerNamespaces([AnthropicSdkConnectorNamespace.definition]);
     const session = new TestAnthropicSdkSession({
       bus: await AnthropicSdkConnectorNamespace.scopedBus(globalBus),
       globalBus,

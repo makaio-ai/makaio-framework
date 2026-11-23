@@ -135,6 +135,7 @@ function deferredExit(): { promise: Promise<number | null>; settle: () => void }
  * @returns A connector on a scoped bus with native auth.
  */
 async function makeConnector(): Promise<QwenAcpConnector> {
+  MakaioBus.registerNamespaces([QwenAcpNamespace.definition]);
   return new QwenAcpConnector({
     bus: await QwenAcpNamespace.scopedBus(MakaioBus),
     globalBus: MakaioBus,

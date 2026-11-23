@@ -56,6 +56,7 @@ function createConnectorBus() {
 describe('connector call propagation', () => {
   it('keeps each message principal through the stream connector and session', async () => {
     const globalBus = createConnectorBus();
+    globalBus.registerNamespaces([OpenAINodeConnectorNamespace.definition]);
     const bus = await OpenAINodeConnectorNamespace.scopedBus(globalBus);
     const { sdk, turn } = OpenAINodeConnectorNamespace.subjects;
     const sends: ObservedSend[] = [];
@@ -105,6 +106,7 @@ describe('connector call propagation', () => {
 
   it('keeps each message principal through Codex turn dispatch and completion', async () => {
     const globalBus = createConnectorBus();
+    globalBus.registerNamespaces([CodexAppServerNamespace.definition]);
     const bus = await CodexAppServerNamespace.scopedBus(globalBus);
     const { turn_state_changed, agent_message } = CodexAppServerNamespace.subjects;
     const sends: ObservedSend[] = [];

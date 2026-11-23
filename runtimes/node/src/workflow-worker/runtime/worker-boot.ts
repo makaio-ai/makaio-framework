@@ -1,6 +1,11 @@
 import { createBusInstance, type IMakaioBus } from '@makaio/bus-core';
 import { WebSocketClientTransport } from '@makaio/bus-transport-websocket';
-import { FrameworkContractNamespaces, FrameworkStorageNamespaces, type WorkflowWorkerBusAuth } from '@makaio/contracts';
+import {
+  FrameworkContractNamespaces,
+  FrameworkStorageNamespaces,
+  WorkflowNamespace,
+  type WorkflowWorkerBusAuth,
+} from '@makaio/contracts';
 import { McpServerBridgeService } from '@makaio/subsystem-mcp-http-server';
 import { ToolRegistry } from '@makaio/services-core/tools';
 import type { WorkerRuntimeContributions } from './worker-contributions.js';
@@ -46,7 +51,8 @@ export function createWorkerBus(config: {
   readonly identityId?: string;
 }): BootstrapRuntimeConnection {
   const bus = createBusInstance();
-  bus.registerNamespaces(FrameworkContractNamespaces);
+  // The worker hosts the workflow contract locally without loading the workflow engine extension.
+  bus.registerNamespaces([...FrameworkContractNamespaces, WorkflowNamespace]);
   bus.registerNamespaces(FrameworkStorageNamespaces);
 
   if (!config.busUrl) {

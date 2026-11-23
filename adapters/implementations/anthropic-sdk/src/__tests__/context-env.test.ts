@@ -29,6 +29,7 @@ describe('AnthropicSdkConnector context environment', () => {
   });
 
   it('keeps connector authentication out of tool execution contexts', async () => {
+    MakaioBus.registerNamespaces([AnthropicSdkConnectorNamespace.definition]);
     const connector = new TestAnthropicSdkConnector({
       bus: await AnthropicSdkConnectorNamespace.scopedBus(MakaioBus),
       globalBus: MakaioBus,

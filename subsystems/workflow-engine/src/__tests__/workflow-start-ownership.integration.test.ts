@@ -15,6 +15,7 @@ import { WorkflowStorageSubjects } from '../storage/namespace.js';
 import { createInMemoryAttemptRepository } from '../testing/in-memory-attempt-repository.js';
 import { createWorkflowDefinition } from './shared.js';
 import {
+  createWorkflowTestNamespaceCapability,
   setupWorkflowExecutorTest,
   teardownWorkflowExecutorTest,
   type WorkflowExecutorTestSetup,
@@ -82,6 +83,7 @@ describe('workflow start terminal ownership', () => {
     await setup.workflowExecutor.destroy();
     setup.workflowExecutor = new WorkflowExecutor(
       MakaioBus,
+      createWorkflowTestNamespaceCapability(),
       undefined,
       {
         run: async (call, config) => {

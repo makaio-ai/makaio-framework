@@ -3,10 +3,11 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { createBusInstance } from '@makaio/bus-core';
+import { ownerOf } from '@makaio/bus-core/kernel-api';
 import { ToolSubjects, WorkflowSubjects } from '@makaio/contracts';
 import { createTestCall } from '@makaio/test-utils';
 import { bootWorkerBus, bootWorkerRuntime } from '../worker-boot.js';
-import { loadWorkerRuntimeContributions } from '../worker-contributions.js';
+import { loadWorkerRuntimeContributions, WorkerNamespaceClaimError } from '../worker-contributions.js';
 
 describe('loadWorkerRuntimeContributions', () => {
   let root: string;
@@ -154,6 +155,37 @@ describe('loadWorkerRuntimeContributions', () => {
     await expect(loadWorkerRuntimeContributions([readerEntrypoint])).rejects.toThrow(
       'Open contributions are not available in the workflow worker',
     );
+  });
+
+  it('throws a clear error when a toolset factory claims a namespace', async () => {
+    const claimerEntrypoint = path.join(root, 'claimer.mjs');
+    await fs.writeFile(
+      claimerEntrypoint,
+      `export default { name: 'claimer', displayName: 'Claimer', tools: { createToolsets: (ctx) => { ctx.namespaces.lease({ domain: 'claimer', subjects: {} }); return []; } } };`,
+    );
+
+    await expect(loadWorkerRuntimeContributions([claimerEntrypoint])).rejects.toThrow(
+      'Namespace claims are not available in the workflow worker',
+    );
+  });
+
+  it.each([
+    ['lease', 'ctx.namespaces.lease(definition)'],
+    ['registerNamespace', 'ctx.bus.registerNamespace(definition)'],
+    ['registerNamespaces', 'ctx.bus.registerNamespaces([definition])'],
+  ])('rejects %s with the same namespace claim error', async (method, claim) => {
+    const entrypoint = path.join(root, `claimer-${method}.mjs`);
+    await fs.writeFile(
+      entrypoint,
+      `const definition = { name: 'worker-probe', schemas: {}, subjects: {} };
+      export default { name: 'claimer', tools: { createToolsets: (ctx) => { ${claim}; return []; } } };`,
+    );
+
+    const bus = createBusInstance();
+    await expect(loadWorkerRuntimeContributions([entrypoint], { bus })).rejects.toBeInstanceOf(
+      WorkerNamespaceClaimError,
+    );
+    expect(ownerOf(bus, 'worker-probe')).toBeUndefined();
   });
 
   it('fails closed when a verified entrypoint cannot import', async () => {

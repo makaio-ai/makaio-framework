@@ -56,13 +56,14 @@ describe('AIAdapter scoped bus context', () => {
     expect(scopedBusSpy).toHaveBeenCalledWith(hostBus);
   });
 
-  it('registers adapter namespace schemas on the injected globalBus before creating the scoped bus', async () => {
+  it.each([true, false])('uses host configuration with explicit namespace registration: %s', async (registered) => {
     const hostBus = createBusInstance();
     const namespace = createAdapterNamespace(
       'scoped-bus-host-registration-test',
       { chunk: z.object({ content: z.string() }) },
       { busValidationMode: 'skip' },
     );
+    if (registered) hostBus.registerNamespaces([namespace.definition]);
 
     const adapter = new TestAdapter({
       ownerInstanceId: OWNER_INSTANCE_ID,
@@ -88,10 +89,28 @@ describe('AIAdapter scoped bus context', () => {
 
     await adapter.init();
 
-    expect(hostBus.getSchema(namespace.subjects.chunk)).toBeDefined();
-    expect(
-      busContextOf(hostBus).namespaceRegistry.getValidationConfig('scoped-bus-host-registration-test.chunk').mode,
-    ).toBe('skip');
+    if (registered) {
+      expect(hostBus.getSchema(namespace.subjects.chunk)).toBeDefined();
+      expect(
+        busContextOf(hostBus).namespaceRegistry.getValidationConfig('scoped-bus-host-registration-test.chunk').mode,
+      ).toBe('skip');
+    } else {
+      expect(hostBus.getSchema(namespace.subjects.chunk)).toBeUndefined();
+      vi.stubEnv('MAKAIO_DEBUG', 'true');
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      try {
+        const scoped = await namespace.scopedBus(hostBus);
+        // ORIGIN: This standalone test sends through the scoped host carrier.
+        await scoped.emit(hostBus.own('root'), namespace.subjects.chunk, { content: 'test' });
+        expect(warn).toHaveBeenCalledWith(
+          expect.stringContaining("namespace 'scoped-bus-host-registration-test' is not registered"),
+        );
+      } finally {
+        warn.mockRestore();
+        vi.unstubAllEnvs();
+      }
+    }
+    await adapter.closeAsync();
   });
 
   it('passes the injected runtime identity and globalBus to created agents', async () => {

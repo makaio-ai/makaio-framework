@@ -179,16 +179,22 @@ const MySchemas = {
   },
 } as const;
 
-const MyNamespace = createExtensionNamespace('my-extension', {
+export const MyNamespace = createExtensionNamespace('my-extension', {
   schemas: MySchemas,
 });
 
 export const MySubjects = MyNamespace.subjects;
 ```
 
-`createExtensionNamespace` registers the namespace under `extension:my-extension.*` and
-returns typed subject references. TypeScript infers handler and response types directly
-from the Zod schemas — no manual type annotations needed.
+`createExtensionNamespace` defines subjects under `extension:my-extension.*` without
+registering them. TypeScript infers handler and response types from the Zod schemas.
+List a static namespace in the extension's `namespaces` array so the coordinator can
+claim it on the extension's behalf. For a namespace created at runtime, use
+`ctx.namespaces.lease(definition)` instead. The extension can release that lease early;
+the kernel also releases its leases on activation failure or unload.
+
+`bus.registerNamespace()` claims a namespace for the host, not the extension. A
+claim by a second holder fails with `namespace-already-owned`.
 
 ### Server-Side: Handling Requests and Emitting Events
 
@@ -197,11 +203,12 @@ Use `ctx.bus.on()` to register a request handler and `ctx.bus.emit()` to fire ev
 ```typescript
 // src/server.ts
 import type { MakaioExtension, ExtensionContext, ExtensionServiceLifecycle } from '@makaio/contracts';
-import { MySubjects } from './namespace.js';
+import { MyNamespace, MySubjects } from './namespace.js';
 
 const extension: MakaioExtension = {
   name: 'my-extension',
   displayName: 'My Extension',
+  namespaces: [MyNamespace],
 
   create({ bus }: ExtensionContext): ExtensionServiceLifecycle {
     let unsubscribe: (() => void) | null = null;

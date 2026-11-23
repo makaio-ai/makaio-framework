@@ -73,6 +73,7 @@ async function flushEvents(): Promise<void> {
  */
 async function makeSession(piSession: FakePiSession) {
   const parentBus = createTestBusInstance();
+  parentBus.registerNamespaces([PiSdkNamespace.definition]);
   const bus = await PiSdkNamespace.scopedBus(parentBus);
   const observer = parentBus.own('observer');
   const session = new PiConnectorSession({

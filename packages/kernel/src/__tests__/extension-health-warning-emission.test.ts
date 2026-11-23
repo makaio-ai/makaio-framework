@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
 import { createBusInstance } from '@makaio/bus-core';
-import type { IMakaioBus } from '@makaio/bus-core';
+import type { IHostMakaioBus, IMakaioBus } from '@makaio/bus-core';
 import { createBusNamespace } from '@makaio/core';
 import type { Party } from '@makaio/core';
 import type { ExtensionWarning } from '@makaio/contracts';
@@ -397,7 +397,7 @@ describe('Extension warning emission', () => {
  * @param clientId - Client identifier (e.g. `'test-client'`).
  * @returns Typed subjects for the registered namespace.
  */
-function registerWiringApplyNamespace(bus: IMakaioBus, clientId: string) {
+function registerWiringApplyNamespace(bus: IHostMakaioBus, clientId: string) {
   return bus.registerNamespace(
     createBusNamespace(`client:${clientId}`, {
       'wiring.apply': {
@@ -413,7 +413,7 @@ function registerWiringApplyNamespace(bus: IMakaioBus, clientId: string) {
 // ---------------------------------------------------------------------------
 
 describe('Extension warning toast action dispatch', () => {
-  let bus: IMakaioBus;
+  let bus: IHostMakaioBus;
 
   beforeEach(() => {
     bus = createBusInstance();

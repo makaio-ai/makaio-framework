@@ -2,7 +2,7 @@ import path from 'node:path';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { z } from 'zod';
 import { createBusInstance, localSubject } from '@makaio/bus-core';
-import type { IMakaioBus } from '@makaio/bus-core';
+import type { IHostMakaioBus, IMakaioBus } from '@makaio/bus-core';
 import { createBusNamespace } from '@makaio/core';
 import {
   createClientDefinition,
@@ -162,7 +162,7 @@ const TEST_PKG_CTX_BASE: ExtensionContextBase = {
 // ---------------------------------------------------------------------------
 
 describe('ExtensionCoordinator', () => {
-  let bus: IMakaioBus;
+  let bus: IHostMakaioBus;
 
   beforeEach(() => {
     bus = createBusInstance();
@@ -864,18 +864,18 @@ describe('ExtensionCoordinator', () => {
     const outcome = await coordinator.applyExtensionTransition('unclean-disable-primitive', false);
     consoleSpy.mockRestore();
 
-    // The extension really is stopped, but teardown left a failure behind on
-    // `entry.error`. That failure does not change the outcome: the runtime
-    // did reach `stopped`, so this still reports `'applied'` and still
-    // announces `enabledChanged` — 'applied-unclean' no longer exists as a
-    // separate outcome.
+    // The disable is applied and announced while the failed teardown stays visible
+    // on the entry and is reported again at shutdown.
     expect(outcome).toBe('applied');
     const info = coordinator.list()[0];
     expect(info?.state).toBe('stopped');
     expect(info?.error).toContain('teardown failed');
     await expect(enabledChanged.promise).resolves.toEqual({ name: 'unclean-disable-primitive', enabled: false });
 
-    await coordinator.shutdown();
+    await expect(coordinator.shutdown()).rejects.toMatchObject({
+      message: expect.stringContaining('unclean-disable-primitive'),
+      errors: [expect.objectContaining({ message: expect.stringContaining('teardown failed') })],
+    });
   });
 
   // 14. Window registration during load
@@ -1282,70 +1282,45 @@ describe('ExtensionCoordinator', () => {
   // Namespace registration dependency closure
   // ---------------------------------------------------------------------------
 
-  it('never attempts to register a disabled extension namespace, so it cannot abort boot on collision', async () => {
-    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
-    try {
-      // A framework namespace registered outside the coordinator, exactly as
-      // `framework/core/contracts`'s namespace catalog would before extension
-      // boot runs. It wins any later duplicate registration attempt for the
-      // same domain because namespace registration is idempotent.
-      const frameworkNamespace = createBusNamespace('shared:collide', {
-        ping: z.object({ id: z.string() }),
-      });
-      bus.registerNamespace(frameworkNamespace);
+  it('skips a disabled extension claiming a host namespace while rejecting an enabled claimant', async () => {
+    const frameworkNamespace = createBusNamespace('shared:collide', {
+      ping: z.object({ id: z.string() }),
+    });
+    bus.registerNamespace(frameworkNamespace);
 
-      // The active extension declares the same domain with a schema that
-      // drifts from the framework's (an extra required field) — this only
-      // ever warns (`warnOnSchemaCollision`), it does not throw.
-      const activeNamespace = createBusNamespace('shared:collide', {
-        ping: z.object({ id: z.string(), extra: z.string() }),
-      });
+    const activeNamespace = createBusNamespace('shared:collide', {
+      ping: z.object({ id: z.string(), extra: z.string() }),
+    });
+    const disabledNamespace = createBusNamespace('shared:collide', {
+      ping: localSubject(z.object({ id: z.string() })),
+    });
+    const coordinator = new ExtensionCoordinator(bus, {
+      extensionContextBase: TEST_PKG_CTX_BASE,
+      loadEnabled: (name) => (name === 'disabled-ext' ? false : undefined),
+    });
 
-      // The disabled extension declares the same domain with routing
-      // metadata that would throw on collision (`failOnRoutingMetadataCollision`)
-      // if it were ever registered: a `localSubject()` cannot silently
-      // disagree with the framework's plain event on the same subject key.
-      const disabledNamespace = createBusNamespace('shared:collide', {
-        ping: localSubject(z.object({ id: z.string() })),
-      });
+    expect(() =>
+      coordinator.load([
+        makePackage('active-ext', {
+          namespaces: [activeNamespace],
+          create: (ctx) => makeMockService(ctx.bus),
+        }),
+        makePackage('disabled-ext', { namespaces: [disabledNamespace] }),
+      ]),
+    ).not.toThrow();
 
-      const coordinator = new ExtensionCoordinator(bus, {
-        extensionContextBase: TEST_PKG_CTX_BASE,
-        loadEnabled: (name) => (name === 'disabled-ext' ? false : undefined),
-      });
+    await coordinator.startAll();
 
-      // Registering the disabled extension's namespace would throw and abort
-      // load() entirely under the pre-fix behavior (namespaces registered
-      // for every entry regardless of `enabled`), defeating disabling it as
-      // a recovery path. It must not throw now.
-      expect(() =>
-        coordinator.load([
-          makePackage('active-ext', {
-            namespaces: [activeNamespace],
-            create: (ctx) => makeMockService(ctx.bus),
-          }),
-          makePackage('disabled-ext', {
-            namespaces: [disabledNamespace],
-          }),
-        ]),
-      ).not.toThrow();
+    expect(coordinator.getInfo('active-ext')).toMatchObject({
+      state: 'failed',
+      error: expect.stringMatching(/namespace-already-owned.*the host.*active-ext/),
+    });
+    expect(coordinator.getInfo('disabled-ext')).toMatchObject({ state: 'skipped' });
+    const schema = bus.getSchema('shared:collide.ping') as z.ZodObject<z.ZodRawShape> | undefined;
+    expect(schema?.safeParse({ id: 'x' }).success).toBe(true);
+    expect(coordinator.namespaceOwners().ownerOf('shared:collide')).toEqual({ kind: 'host' });
 
-      await coordinator.startAll();
-
-      // The framework's registration wins: the schema at the shared subject
-      // still only accepts the framework's shape (no `extra` field required),
-      // proving the active extension's colliding registerNamespaces() call
-      // returned the existing namespace instead of overwriting it.
-      const schema = bus.getSchema('shared:collide.ping') as z.ZodObject<z.ZodRawShape> | undefined;
-      expect(schema?.safeParse({ id: 'x' }).success).toBe(true);
-      expect(warnSpy).toHaveBeenCalledWith(
-        expect.stringContaining("Namespace 'shared:collide' already registered with different schemas"),
-      );
-
-      await coordinator.shutdown();
-    } finally {
-      warnSpy.mockRestore();
-    }
+    await coordinator.shutdown();
   });
 
   it('does not register a namespace for an enabled extension whose required dependency is disabled', () => {

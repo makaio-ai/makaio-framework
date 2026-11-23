@@ -7,8 +7,21 @@ import { resetSeenCorrelationIds } from './utils/invoke-any-handlers.js';
 import { validateMessage } from './utils/message-safeguards.js';
 import { extendSubjectImpl } from './extend-subject.js';
 import { createBroadcastSend, createSendSurface } from './send-surface.js';
-import type { IMakaioBus, MakaioBusContext } from './types/bus.js';
-import type { PartyRef, PayloadFilter, SubjectDefinition } from '@makaio/core';
+import type { NamespaceLease } from '@makaio/contracts/extension';
+import type { TypedNamespace } from './registries/namespace-registry.js';
+import type { IHostMakaioBus, IMakaioBus, MakaioBusContext } from './types/bus.js';
+import type { BusNamespaceDefinition, PartyRef, PayloadFilter, SubjectDefinition, SubjectSchema } from '@makaio/core';
+
+/**
+ * Register on behalf of a carrier, recording the lease for a bulk call's rollback when requested.
+ * @param definition - Namespace to register.
+ * @param recordLease - Optional callback to record the acquired lease.
+ * @returns The registered namespace.
+ */
+export type CarrierNamespaceRegistration = <Domain extends string, Schemas extends Record<string, SubjectSchema>>(
+  definition: BusNamespaceDefinition<Domain, Schemas>,
+  recordLease?: (lease: NamespaceLease) => void,
+) => TypedNamespace<Domain, Schemas>;
 
 /**
  * The transport lifecycle methods of a bus instance (`registerTransport`, `connect`, `ready`, ...).
@@ -76,6 +89,7 @@ function resetAllHandlers(context: MakaioBusContext): void {
  * @param carrier - The party this instance acts as.
  * @param transportMethods - Transport lifecycle methods of the context (shared by every instance of it).
  * @param namespace - Namespace scope of the instance, if any.
+ * @param registerNamespace - Registration on behalf of the carrier, when supplied.
  * @returns The bus instance.
  */
 export function buildBusInstance<Namespace extends string | unknown = undefined>(
@@ -83,11 +97,14 @@ export function buildBusInstance<Namespace extends string | unknown = undefined>
   carrier: PartyRef,
   transportMethods: BusTransportMethods,
   namespace?: Namespace,
-): IMakaioBus<Namespace> {
+  registerNamespace?: CarrierNamespaceRegistration,
+): IHostMakaioBus<Namespace> {
   // The namespace domain as a string, for validation; any other domain (`unknown`) is unscoped.
   const scope = typeof namespace === 'string' ? namespace : undefined;
   const sendSurface = createSendSurface(context, carrier, scope);
-  const bus: IMakaioBus<Namespace> = {
+  const register: CarrierNamespaceRegistration =
+    registerNamespace ?? context.namespaceRegistry.registerNamespace.bind(context.namespaceRegistry);
+  const bus: IHostMakaioBus<Namespace> = {
     namespace,
     on: (subject, handler, opts) => {
       validateMessage('on', subject, scope);
@@ -110,8 +127,17 @@ export function buildBusInstance<Namespace extends string | unknown = undefined>
     own: (purpose) => ownContextOf(context, carrier, purpose),
     ...transportMethods,
     getSchema: (subject) => context.namespaceRegistry.getSchema(subject),
-    registerNamespace: (definition) => context.namespaceRegistry.registerNamespace(definition),
-    registerNamespaces: (definitions) => context.namespaceRegistry.registerNamespaces(definitions),
+    registerNamespace: (definition) => register(definition),
+    registerNamespaces: (definitions) => {
+      const leases: NamespaceLease[] = [];
+      try {
+        for (const definition of definitions)
+          register(definition as BusNamespaceDefinition, (lease) => leases.push(lease));
+      } catch (error) {
+        for (const lease of leases) lease.release();
+        throw error;
+      }
+    },
     extendSubject: (subject, extensions) => {
       if (scope && subject.$meta.namespace !== scope)
         throw new Error(`Subject namespace ${subject.$meta.namespace} does not match scoped bus namespace ${scope}`);
@@ -134,7 +160,7 @@ export function buildBusInstance<Namespace extends string | unknown = undefined>
       };
     },
     __resetHandlers: process.env.NODE_ENV === 'test' ? () => resetAllHandlers(context) : undefined,
-  } as IMakaioBus<Namespace>;
+  } as IHostMakaioBus<Namespace>;
 
   // Object spread evaluates getters once at spread time and copies the resulting
   // value as a plain data property. `transportMethods.ready` would be frozen as
@@ -165,15 +191,17 @@ export function buildBusInstance<Namespace extends string | unknown = undefined>
  * Kernel-internal: not exported from the package index.
  * @param host - Bus instance whose context is shared.
  * @param carrier - The party the new instance acts as.
+ * @param registerNamespace - Carrier registration policy. Omitting it preserves host registration for trusted callers.
  * @returns A bus instance bound to `carrier` with the namespace of `host`.
  * @throws BusError When `host` was not built by `buildBusInstance`.
  */
 export function createCarrierBus<Namespace extends string | unknown = unknown>(
   host: IMakaioBus<Namespace>,
   carrier: PartyRef,
+  registerNamespace?: CarrierNamespaceRegistration,
 ): IMakaioBus<Namespace> {
   const { context, transportMethods } = recordOf(host);
-  return buildBusInstance(context, carrier, transportMethods, host.namespace);
+  return buildBusInstance(context, carrier, transportMethods, host.namespace, registerNamespace);
 }
 
 /**

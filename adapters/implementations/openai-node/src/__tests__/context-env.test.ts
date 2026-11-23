@@ -29,6 +29,7 @@ describe('OpenAINodeConnector context environment', () => {
   });
 
   it('keeps connector authentication out of tool execution contexts', async () => {
+    MakaioBus.registerNamespaces([OpenAINodeConnectorNamespace.definition]);
     const connector = new TestOpenAINodeConnector({
       bus: await OpenAINodeConnectorNamespace.scopedBus(MakaioBus),
       globalBus: MakaioBus,

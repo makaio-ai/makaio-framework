@@ -174,6 +174,7 @@ function successResult(sessionId: string) {
  * @returns Agent ready for initialize/start calls.
  */
 async function makeAgent(opts: { sessionId?: string; clientId?: string } = {}): Promise<ClaudeCodeAgent> {
+  MakaioBus.registerNamespaces([ClaudeCodeConnectorNamespace.definition]);
   const adapterBus = await ClaudeCodeConnectorNamespace.scopedBus(MakaioBus);
 
   return new ClaudeCodeAgent({

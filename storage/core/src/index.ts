@@ -5,9 +5,7 @@
  *
  * Provides:
  * - `createStorageNamespaceDefinition` — pure factory for declaring storage
- *   namespaces without touching the bus singleton
- * - `createStorageNamespace` — registers a definition on the bus at a
- *   composition root and returns a full `StorageNamespace` with `scopedBus()`
+ *   namespaces without touching a bus
  * - `createExtensionStorageNamespace` — convenience wrapper for extension
  *   storage namespaces
  * - `StorageNamespaceDefinition` — type for the declarative definition object
@@ -16,7 +14,8 @@
  *   extensions
  * @example
  * ```typescript
- * import { createStorageNamespaceDefinition, createStorageNamespace } from '@makaio/storage-core';
+ * import { createBusInstance } from '@makaio/bus-core';
+ * import { createStorageNamespaceDefinition } from '@makaio/storage-core';
  * import { z } from 'zod';
  *
  * // Pure declaration (no side-effects):
@@ -27,14 +26,15 @@
  *   },
  * });
  *
- * // At composition root (registers on the bus):
- * const SessionStorage = createStorageNamespace(SessionStorageDefinition);
- * await bus.request(SessionStorage.subjects.get, { sessionId: '123' });
+ * // At the host composition root:
+ * const bus = createBusInstance();
+ * bus.registerNamespace(SessionStorageDefinition);
  * ```
+ * Extensions include static definitions in their manifest's `namespaces`
+ * array or claim runtime definitions with `ctx.namespaces.lease(definition)`.
  * @packageDocumentation
  */
 
-export { createStorageNamespace } from './create-storage-namespace';
 export { createExtensionStorageNamespace } from './create-extension-storage-namespace';
 export { createStorageNamespaceDefinition } from './create-storage-namespace-definition';
 export type { StorageNamespaceDefinition } from './create-storage-namespace-definition';

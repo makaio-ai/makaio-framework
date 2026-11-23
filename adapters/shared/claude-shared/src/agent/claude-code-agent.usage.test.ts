@@ -128,6 +128,7 @@ class TestClaudeAgent extends ClaudeCodeAgent<typeof TEST_NAMESPACE, TestClaudeC
  * @returns Agent under test and its connector
  */
 async function makeAgent(call: CallContext): Promise<{ agent: TestClaudeAgent; connector: TestClaudeConnector }> {
+  MakaioBus.registerNamespaces([TestNamespace.definition]);
   const adapterBus = await TestNamespace.scopedBus(MakaioBus);
   let connector: TestClaudeConnector | undefined;
   const agent = new TestClaudeAgent({

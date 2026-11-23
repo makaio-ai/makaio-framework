@@ -1,3 +1,4 @@
+import { createBusNamespace } from '@makaio/core';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { makeStubExtensionBus } from '@makaio/test-utils';
 import { z } from 'zod';
@@ -100,7 +101,8 @@ describe('registerRuntimeHandlers', () => {
         name: 'claude-agent-sdk',
         packageName: '@makaio/adapter-claude-agent-sdk',
         carrierBus: makeStubExtensionBus(MakaioBus, '@makaio/adapter-claude-agent-sdk'),
-        factory: async () => ({}),
+        busNamespace: createBusNamespace('adapter:claude-agent-sdk', {}),
+        factory: async () => ({ namespaceName: 'adapter:claude-agent-sdk' }),
         options: {},
         providerDefinitionIds: ['anthropic-oauth'],
         providerRefs: [],
@@ -120,7 +122,8 @@ describe('registerRuntimeHandlers', () => {
         name: 'codex-app-server',
         packageName: '@makaio/adapter-codex-app-server',
         carrierBus: makeStubExtensionBus(MakaioBus, '@makaio/adapter-codex-app-server'),
-        factory: async () => ({}),
+        busNamespace: createBusNamespace('adapter:codex-app-server', {}),
+        factory: async () => ({ namespaceName: 'adapter:codex-app-server' }),
         options: {},
         providerDefinitionIds: ['openai-codex'],
         providerRefs: [],
@@ -212,20 +215,26 @@ describe('registerRuntimeHandlers', () => {
     ]);
     const wrongInstance: AdapterInstance & { fetchModels: typeof wrongFetchModels } = {
       adapterId: 'wrong-adapter-id',
+      namespaceName: 'adapter:wrong-adapter',
       fetchModels: wrongFetchModels,
     };
     const boundInstance: AdapterInstance & { fetchModels: typeof boundFetchModels } = {
       adapterId: 'bound-adapter-id',
+      namespaceName: 'adapter:bound-adapter',
       fetchModels: boundFetchModels,
     };
-    const noFetchInstance: AdapterInstance = { adapterId: 'no-fetch-adapter-id' };
+    const noFetchInstance: AdapterInstance = {
+      adapterId: 'no-fetch-adapter-id',
+      namespaceName: 'adapter:no-fetch-adapter',
+    };
     const adapters: LoadedAdapter[] = [
       {
         name: 'wrong-adapter',
         protocol: 'anthropic',
         packageName: 'wrong-package',
         carrierBus: makeStubExtensionBus(MakaioBus, 'wrong-package'),
-        factory: async () => ({ adapterId: 'wrong-adapter-id' }),
+        busNamespace: createBusNamespace('adapter:wrong-adapter', {}),
+        factory: async () => ({ namespaceName: 'adapter:wrong-adapter', adapterId: 'wrong-adapter-id' }),
         options: { adapterId: 'wrong-adapter-id' },
         providerDefinitionIds: [providerDefinition.id],
         providerRefs: [{ definitionId: providerDefinition.id, protocol: 'anthropic', auth: adapterProviderAuth }],
@@ -236,7 +245,8 @@ describe('registerRuntimeHandlers', () => {
         protocol: 'anthropic',
         packageName: 'bound-package',
         carrierBus: makeStubExtensionBus(MakaioBus, 'bound-package'),
-        factory: async () => ({ adapterId: 'bound-adapter-id' }),
+        busNamespace: createBusNamespace('adapter:bound-adapter', {}),
+        factory: async () => ({ namespaceName: 'adapter:bound-adapter', adapterId: 'bound-adapter-id' }),
         options: { adapterId: 'bound-adapter-id' },
         providerDefinitionIds: [providerDefinition.id],
         providerRefs: [{ definitionId: providerDefinition.id, protocol: 'openai', auth: adapterProviderAuth }],
@@ -247,7 +257,8 @@ describe('registerRuntimeHandlers', () => {
         protocol: 'openai',
         packageName: 'no-fetch-package',
         carrierBus: makeStubExtensionBus(MakaioBus, 'no-fetch-package'),
-        factory: async () => ({ adapterId: 'no-fetch-adapter-id' }),
+        busNamespace: createBusNamespace('adapter:no-fetch-adapter', {}),
+        factory: async () => ({ namespaceName: 'adapter:no-fetch-adapter', adapterId: 'no-fetch-adapter-id' }),
         options: { adapterId: 'no-fetch-adapter-id' },
         providerDefinitionIds: [providerDefinition.id],
         providerRefs: [{ definitionId: providerDefinition.id, protocol: 'openai', auth: adapterProviderAuth }],
@@ -416,7 +427,8 @@ describe('registerRuntimeHandlers', () => {
       protocol: 'openai',
       packageName: 'compatible-package',
       carrierBus: makeStubExtensionBus(MakaioBus, 'compatible-package'),
-      factory: async () => ({ adapterId: 'compatible-adapter-id' }),
+      busNamespace: createBusNamespace('adapter:compatible-but-unbound', {}),
+      factory: async () => ({ namespaceName: 'adapter:compatible-but-unbound', adapterId: 'compatible-adapter-id' }),
       options: { adapterId: 'compatible-adapter-id' },
       providerDefinitionIds: [providerDefinition.id],
       providerRefs: [{ definitionId: providerDefinition.id, protocol: 'openai', auth: adapterProviderAuth }],
@@ -424,6 +436,7 @@ describe('registerRuntimeHandlers', () => {
     };
     const instance: AdapterInstance & { fetchModels: typeof fetchModels } = {
       adapterId: 'compatible-adapter-id',
+      namespaceName: adapter.busNamespace.name,
       fetchModels,
     };
     const offSnapshot = MakaioBus.on(AdapterSubsystemSubjects.resolveAdapterRuntimeSnapshot, ({ setResult }) => {

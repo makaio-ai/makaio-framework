@@ -34,6 +34,8 @@ function setCurrentTurnForTest(session: ClaudeConnectorSession, currentTurn: unk
   expect(Reflect.set(session, 'currentTurn', currentTurn)).toBe(true);
 }
 
+MakaioBus.registerNamespaces([ClaudeCodeConnectorNamespace.definition]);
+
 describe('ClaudeConnectorSession onTurnComplete seam', () => {
   beforeEach(() => {
     MakaioBus.__resetHandlers?.();

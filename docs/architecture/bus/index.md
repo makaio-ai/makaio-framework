@@ -89,7 +89,7 @@ Subjects are grouped into **namespaces**. A namespace is a named, self-contained
 domain that owns a set of subjects:
 
 ```ts
-import { MakaioBus } from '@makaio/bus-core';
+import { createBusNamespace } from '@makaio/core';
 import { z } from 'zod';
 
 const NotificationSchemas = {
@@ -107,15 +107,11 @@ const NotificationSchemas = {
   },
 };
 
-const NotificationNamespace = MakaioBus.registerNamespace(
-  'notification',
-  NotificationSchemas,
-);
-
+export const NotificationNamespace = createBusNamespace('notification', NotificationSchemas);
 export const NotificationSubjects = NotificationNamespace.subjects;
 ```
 
-After registration:
+The definition provides typed subject references:
 
 - `NotificationSubjects.sent` is the typed reference for the `notification.sent`
   event subject
@@ -124,20 +120,38 @@ After registration:
 - `NotificationSubjects.resolve` is the typed reference for the
   `notification.resolve` request subject
 
-Registration is idempotent — calling `registerNamespace` with the same domain
-name returns the cached namespace.
+`createBusNamespace()` is pure. Declare static extension namespaces in the
+extension manifest with `namespaces: [NotificationNamespace]`. For a namespace
+created at runtime, claim it with `ctx.namespaces.lease(definition)`. The host
+releases extension claims on unload or startup failure. Releasing the final
+claim unregisters an extension namespace and makes it available to a new holder.
+
+Host code registers definitions at composition time through `IHostMakaioBus`:
+
+```ts
+import { createBusInstance, type IHostMakaioBus } from '@makaio/bus-core';
+
+const bus: IHostMakaioBus = createBusInstance();
+bus.registerNamespace(NotificationNamespace);
+```
+
+The same holder can register the same definition again. A claim by a different
+holder fails with `namespace-already-owned`. Domains under `makaio:` and
+`channel:` belong to the host even before registration.
 
 **Hierarchical namespaces** use colon separators for sub-domains:
 
 ```ts
-const ClaudeCodeNamespace = MakaioBus.registerNamespace('adapter:claudeCode', {
+import { createAdapterNamespace } from '@makaio/ai-adapters-core';
+
+const ClaudeCodeNamespace = createAdapterNamespace('adapter:claudeCode', {
   thinking: z.object({ agentId: z.string(), content: z.string() }),
 });
 // Subject key: adapter:claudeCode.thinking
 ```
 
-This is how adapter implementations register their provider-specific subjects
-while remaining discoverable under the `adapter:` prefix.
+An adapter contribution declares `busNamespace: ClaudeCodeNamespace.definition`.
+The processor leases it for the contributing extension before invoking the factory.
 
 ### Real Examples from the Codebase
 
@@ -477,7 +491,7 @@ relay behavior, and how to implement a custom transport, see
 | `domain.action` | `agent.started` | Standard event |
 | `domain.entity.action` | `agent.tool.use` | Nested entity lifecycle |
 | `domain:qualifier.action` | `adapter:claudeCode.thinking` | Implementation-specific |
-| `storage:domain.operation` | `storage:session.get` | Storage CRUD (via `createStorageNamespace`) |
+| `storage:domain.operation` | `storage:session.get` | Storage CRUD (via `createStorageNamespaceDefinition`) |
 
 Keep domains short and descriptive. Use dotted keys for logical nesting — the
 bus transforms them into nested accessor objects on the `subjects` export.

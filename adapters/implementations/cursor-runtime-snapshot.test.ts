@@ -54,11 +54,13 @@ function cursorSnapshot(): ProviderRuntimeSnapshot {
 /** Build loaded metadata from the real Cursor adapter/provider declarations. */
 function loadedCursorAdapter(): LoadedAdapter {
   if (cursorProviderRef === undefined) throw new Error('Cursor adapter must declare its provider reference.');
+  const busNamespace = adapterDefinition.busNamespace;
   return {
     name: adapterDefinition.name,
     packageName: '@makaio/adapter-cursor-sdk',
     carrierBus: makeStubExtensionBus(MakaioBus, '@makaio/adapter-cursor-sdk'),
-    factory: async () => ({}),
+    busNamespace,
+    factory: async () => ({ namespaceName: busNamespace.name }),
     options: {},
     providerDefinitionIds: [cursorProviderRef.definitionId],
     providerRefs: [cursorProviderRef],

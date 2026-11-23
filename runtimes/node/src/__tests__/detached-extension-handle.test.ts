@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createBusInstance, DEFAULT_REQUEST_TIMEOUT_MS } from '@makaio/bus-core';
+import { ownerOf } from '@makaio/bus-core/kernel-api';
 import type { DetachedDescriptor, ExtensionServiceLifecycle } from '@makaio/contracts/extension';
 import { processStopBudgetMs } from '@makaio/subprocess';
 import { makeStubNodeExtensionContext, stubExtensionIdentity } from '@makaio/test-utils';
@@ -198,7 +199,6 @@ describe('createDetachedExtensionPackage', () => {
         transport: undefined,
       });
       const bus = createBusInstance();
-      const registerNamespace = vi.spyOn(bus, 'registerNamespace');
       const request = vi.spyOn(bus, 'request').mockResolvedValue({ ready: true } as never);
       const pkg = createDetachedExtensionPackage(
         makeBusWebSocketDescriptor({
@@ -222,6 +222,7 @@ describe('createDetachedExtensionPackage', () => {
         platform: process.platform,
         username: 'test',
       });
+      const lease = vi.spyOn(mockCtx.namespaces, 'lease');
       const service = pkg.create!(mockCtx) as ExtensionServiceLifecycle;
 
       await service.init?.();
@@ -241,13 +242,16 @@ describe('createDetachedExtensionPackage', () => {
       );
       expect(start).toHaveBeenCalledOnce();
       expect(stop).toHaveBeenCalledOnce();
-      expect(registerNamespace).toHaveBeenCalledOnce();
+      expect(ownerOf(bus, 'extension.my-ws-ext')).toEqual({ kind: 'extension', extension: 'my-ws-ext' });
+      expect(lease).toHaveBeenCalledOnce();
+      // ORIGIN: Match the context minted for detached startup.
       expect(request).toHaveBeenCalledWith(
         bus.own('start'),
         expect.anything(),
         expect.objectContaining({ config: { enabled: true } }),
         expect.objectContaining({ timeout: undefined }),
       );
+      // ORIGIN: Match the context minted for detached teardown.
       expect(request).toHaveBeenCalledWith(
         bus.own('stop'),
         expect.anything(),

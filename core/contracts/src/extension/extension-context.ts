@@ -1,8 +1,33 @@
-import type { CallContext, MakaioBusLike } from '@makaio/core';
+import type { CallContext, MakaioBusLike, RegistrableBusNamespaceDefinition } from '@makaio/core';
 import type { CredentialRef } from '../config/credential-ref.js';
 import type { ExtensionToken } from './extension-token.js';
 import type { ExtensionIdentity } from './extension-lifecycle.js';
 import type { OpenContributionReader } from './open-contributions.js';
+
+/** Error code for a namespace claim rejected because a different holder owns the domain. */
+export const NAMESPACE_ALREADY_OWNED = 'namespace-already-owned';
+
+/** Error code for a namespace claim attempted after the extension capability closed. */
+export const NAMESPACE_CAPABILITY_CLOSED = 'namespace-capability-closed';
+
+/** Error code for a namespace claim attempted in a workflow worker without an activated extension. */
+export const WORKER_NAMESPACE_CLAIM_UNAVAILABLE = 'worker-namespace-claim-unavailable';
+
+/** Handle for a namespace claim. */
+export interface NamespaceLease {
+  /** Release this claim. The namespace is unregistered when its final claim is released. Repeated calls have no effect. */
+  release(): void;
+}
+
+/** Host-supplied namespace registration capability bound to one extension. */
+export interface NamespaceCapability {
+  /**
+   * Claim a bus namespace for this extension. The host releases its claims on unload or start failure.
+   * @param definition - Namespace definition to register.
+   * @returns The lease for this claim.
+   */
+  lease(definition: RegistrableBusNamespaceDefinition): NamespaceLease;
+}
 
 /**
  * Host-supplied capability for resolving credential references at extension init time.
@@ -55,6 +80,8 @@ export interface ExtensionContext<TBus extends MakaioBusLike = MakaioBusLike> {
    * call context comes from `bus.own(purpose)`.
    */
   readonly bus: TBus;
+  /** Claim bus namespaces on behalf of this extension. */
+  readonly namespaces: NamespaceCapability;
   /** Coordinator-minted identity for the extension being created. */
   readonly identity: ExtensionIdentity;
   /**

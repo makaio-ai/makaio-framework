@@ -1,4 +1,5 @@
 import type { IMakaioBus } from '@makaio/bus-core';
+import { leaseNamespace, NamespaceOwnershipError, type NamespaceLease } from '@makaio/bus-core/kernel-api';
 import type { CallContext } from '@makaio/core';
 import { getErrorString } from '@makaio/utils';
 import { cancellationRejection } from '../cancellation.js';
@@ -12,9 +13,50 @@ import {
   resolveExtensionEntryConfig,
 } from './extension-context-builder.js';
 import { createAndInitService, releaseService } from './extension-shutdown-runner.js';
+import { releaseExtensionNamespaces, reopenExtensionNamespaces } from './namespace-capability.js';
 import { registerPackageTrayMenuEntry } from './tray-menu-entry-bridge.js';
 import { transitionPackageEntry } from './state-transition.js';
 import type { ContributionProcessor, ExtensionEntry } from './types.js';
+
+const manifestClaims = new WeakMap<ExtensionEntry, NamespaceLease[] | NamespaceOwnershipError>();
+
+/**
+ * Claim all manifest namespaces before collecting static surfaces or retrying activation.
+ * @param bus - Bus whose namespace registry receives the claims.
+ * @param entry - Extension entry making the claims.
+ * @returns The ownership conflict that prevented the claims, if any.
+ */
+export function claimManifestNamespaces(bus: IMakaioBus, entry: ExtensionEntry): NamespaceOwnershipError | undefined {
+  const existing = manifestClaims.get(entry);
+  if (existing) return existing instanceof NamespaceOwnershipError ? existing : undefined;
+
+  const holder = { kind: 'extension', extension: entry.identity.extensionName } as const;
+  const leases: NamespaceLease[] = [];
+  try {
+    for (const definition of entry.pkg.namespaces ?? []) leases.push(leaseNamespace(bus, definition, holder));
+  } catch (error) {
+    for (const lease of leases) lease.release();
+    if (!(error instanceof NamespaceOwnershipError)) throw error;
+    // A load-time conflict skips static surfaces, which cannot be replayed by a live retry.
+    if (!entry.surfacesCollected) manifestClaims.set(entry, error);
+    return error;
+  }
+  manifestClaims.set(entry, leases);
+  return undefined;
+}
+
+/**
+ * Release the manifest and runtime claims after service teardown or at final shutdown.
+ * @param entry - Extension entry whose namespaces are released.
+ */
+export function releaseEntryNamespaces(entry: ExtensionEntry): void {
+  const leases = manifestClaims.get(entry);
+  if (Array.isArray(leases)) {
+    for (const lease of leases) lease.release();
+    manifestClaims.delete(entry);
+  }
+  releaseExtensionNamespaces(entry.identity);
+}
 
 /** Coordinator state required to start one extension entry. */
 export interface ExtensionStartHost {
@@ -50,10 +92,18 @@ export async function startExtensionEntry(
   name: string,
   entry: ExtensionEntry,
 ): Promise<void> {
+  // ORIGIN: The coordinator starts an entry as the host.
   const call = host.bus.own('start');
   if (!entry.enabled) {
     transitionPackageEntry(call, host.bus, entry, 'skipped');
     host.bootProgress.skipped(entry.pkg, 'disabled');
+    return;
+  }
+
+  const claim = entry.surfacesCollected ? claimManifestNamespaces(host.bus, entry) : manifestClaims.get(entry);
+  if (claim instanceof NamespaceOwnershipError) {
+    failEntry(call, host, name, entry, `${claim.code}: ${claim.message}`);
+    if (entry.pkg.critical) throw claim;
     return;
   }
 
@@ -92,6 +142,8 @@ export async function startExtensionEntry(
   }
 
   host.bootProgress.starting(entry.pkg);
+  reopenExtensionNamespaces(entry.identity);
+  entry.error = undefined;
   transitionPackageEntry(call, host.bus, entry, 'initializing');
   // Config resolution fails only when an operator-supplied layer cannot be
   // honoured; loadConfig and stored-config parse failures stay non-throwing and
@@ -219,6 +271,7 @@ function handleServiceSkipError(
     throw new Error(`Critical package "${name}" failed: ${message}`, { cause: err });
   }
 
+  if (entry.pendingService === undefined) releaseEntryNamespaces(entry);
   entry.error = err.reason;
   console.info(`[ExtensionCoordinator] Package "${name}" skipped: ${err.reason}`);
   transitionPackageEntry(call, host.bus, entry, 'skipped');
@@ -281,6 +334,7 @@ function runStorageCleanup(name: string, entry: ExtensionEntry): unknown[] {
 
 /**
  * Mark an extension entry failed and update boot progress.
+ * A service retained for shutdown keeps its namespaces until teardown.
  * @param call - Call responsible for starting the extension.
  * @param host - Coordinator state required for failure recording.
  * @param name - Extension name used for log messages.
@@ -294,6 +348,7 @@ function failEntry(
   entry: ExtensionEntry,
   message: string,
 ): void {
+  if (entry.pendingService === undefined) releaseEntryNamespaces(entry);
   entry.error = message;
   console.error(`[ExtensionCoordinator] Package "${name}" failed:`, message);
   transitionPackageEntry(call, host.bus, entry, 'failed');

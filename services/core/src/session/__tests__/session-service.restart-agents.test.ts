@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { createBusInstance, type IMakaioBus } from '@makaio/bus-core';
+import { createBusInstance, type IHostMakaioBus, type IMakaioBus } from '@makaio/bus-core';
 import {
   AdapterNamespace,
   AdapterSubjects,
@@ -46,7 +46,7 @@ function registerRuntimeIdentityAndCapabilities(bus: IMakaioBus, machineId: stri
 }
 
 describe('MakaioSessionService - restartAgents', () => {
-  let bus: IMakaioBus;
+  let bus: IHostMakaioBus;
   let service: MakaioSessionService;
   let storageCleanups: Array<() => void> = [];
 
@@ -200,7 +200,7 @@ describe('MakaioSessionService - restartAgents', () => {
 });
 
 describe('MakaioSessionService - restartAgents with locality', () => {
-  let bus: IMakaioBus;
+  let bus: IHostMakaioBus;
   let service: MakaioSessionService;
   let storageCleanups: Array<() => void> = [];
 

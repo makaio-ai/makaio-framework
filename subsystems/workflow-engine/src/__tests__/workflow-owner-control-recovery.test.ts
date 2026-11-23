@@ -17,6 +17,7 @@ import { getRawSqlExecutor } from '@makaio/storage-drizzle';
 import { readMigrations } from '@makaio/storage-migrations';
 import { applyMigrations } from '@makaio/storage-migrations/apply-migrations';
 import { createTestCall } from '@makaio/test-utils';
+import { createWorkflowTestNamespaceCapability } from './workflow-executor.test-setup.js';
 import { createRestartableTempDb } from '@makaio/test-utils/drizzle-harness';
 import { ExecutionAttemptAuthority } from '../execution-attempt-authority.js';
 import { WorkflowExecutor } from '../workflow-executor.js';
@@ -64,7 +65,13 @@ async function connectOwner(store: ReturnType<typeof createRestartableTempDb>) {
   const unregisterStorage = registerDrizzleWorkflowStorage(bus, db);
   const repository = await createSqliteAttemptRepository(db, workflowAttemptOutcomeCodec);
   const authority = new ExecutionAttemptAuthority(repository, { bootstrapTimeoutMs: 60_000 });
-  const executor = new WorkflowExecutor(bus, undefined, undefined, authority);
+  const executor = new WorkflowExecutor(
+    bus,
+    createWorkflowTestNamespaceCapability(bus),
+    undefined,
+    undefined,
+    authority,
+  );
   await executor.init();
   const events: string[] = [];
   const unsubscribe = [

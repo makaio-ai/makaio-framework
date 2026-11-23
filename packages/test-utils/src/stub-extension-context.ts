@@ -16,7 +16,7 @@
  */
 
 import type { IMakaioBus } from '@makaio/bus-core';
-import { createCarrierBus } from '@makaio/bus-core/kernel-api';
+import { createCarrierBus, leaseNamespace } from '@makaio/bus-core/kernel-api';
 import type {
   ExtensionContext,
   NodeExtensionContext,
@@ -88,7 +88,11 @@ export function stubExtensionIdentity(name: string): ExtensionContext['identity'
  * @returns A bus instance bound to the extension `name`.
  */
 export function makeStubExtensionBus(host: IMakaioBus, name: string): IMakaioBus {
-  return createCarrierBus(host, { kind: 'makaio.extension', id: name });
+  return createCarrierBus(
+    host,
+    { kind: 'makaio.extension', id: name },
+    (definition) => leaseNamespace(host, definition, { kind: 'extension', extension: name }).namespace,
+  );
 }
 
 /**
@@ -105,16 +109,21 @@ export function makeStubExtensionContext(
   bus: IMakaioBus,
   overrides: Partial<ExtensionContext<IMakaioBus>> = {},
 ): ExtensionContext<IMakaioBus> {
+  const identity = overrides.identity ?? stubExtensionIdentity('test.stub');
   return {
     bus,
     machineId: 'test-machine-id',
     dataDir: createStubDataDir(),
-    identity: stubExtensionIdentity('test.stub'),
+    identity,
     getService: () => undefined,
     tryImport: async () => null,
     signal: new AbortController().signal,
     hasExtension: () => false,
     openContributions: makeStubOpenContributionReader(),
+    // Real leases on the given bus, held by the stub's extension, like the kernel binds them.
+    namespaces: {
+      lease: (definition) => leaseNamespace(bus, definition, { kind: 'extension', extension: identity.extensionName }),
+    },
     ...overrides,
   };
 }
@@ -133,9 +142,10 @@ export function makeStubNodeExtensionContext(
   bus: IMakaioBus,
   overrides: Partial<NodeExtensionContext<IMakaioBus>> = {},
 ): NodeExtensionContext<IMakaioBus> {
-  // The base is built without overrides on purpose: `homedir` and `makaioHome` stay in the
+  // The base gets only the identity, so its namespace leases name the same extension.
+  // Everything else stays out on purpose: `homedir` and `makaioHome` stay in the
   // unique stub temp directory even when a caller pins `dataDir` through `overrides`.
-  const base = makeStubExtensionContext(bus);
+  const base = makeStubExtensionContext(bus, overrides.identity === undefined ? {} : { identity: overrides.identity });
   return {
     ...base,
     platform: 'linux',

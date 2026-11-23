@@ -116,6 +116,8 @@ async function makeActiveSession() {
   return { emitSdkEvent, handle, onTurnComplete, session };
 }
 
+MakaioBus.registerNamespaces([ClaudeCodeCliConnectorNamespace.definition]);
+
 describe('ClaudeCliSession result message handling', () => {
   beforeEach(() => {
     MakaioBus.__resetHandlers?.();

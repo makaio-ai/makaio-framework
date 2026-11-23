@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { MessageHandle, type MessageResult, type NormalizedMessageInput } from '@makaio/ai-adapters-core';
-import { createBusInstance, type IMakaioBus, MakaioBus } from '@makaio/bus-core';
+import { createBusInstance, type IHostMakaioBus, MakaioBus } from '@makaio/bus-core';
 import { ToolSubjects, type Party } from '@makaio/contracts';
 import { createTestCall } from '@makaio/test-utils';
 import { TerminalManager } from '@makaio/ai-adapters-acp-client';
@@ -86,8 +86,10 @@ function createDeferred<T>(): Deferred<T> {
  * Create a connector configured for unit tests.
  * @param options - Optional connector overrides.
  */
-async function makeConnector(options: { globalBus?: IMakaioBus } = {}) {
-  const bus = await QwenAcpNamespace.scopedBus(options.globalBus ?? MakaioBus);
+async function makeConnector(options: { globalBus?: IHostMakaioBus } = {}) {
+  const hostBus = options.globalBus ?? MakaioBus;
+  hostBus.registerNamespaces([QwenAcpNamespace.definition]);
+  const bus = await QwenAcpNamespace.scopedBus(hostBus);
   return new QwenAcpConnector({
     bus,
     adapterId: 'adapter-1',
@@ -109,6 +111,8 @@ function allowToolApproval(connector: QwenAcpConnector) {
     action: 'allow',
   });
 }
+
+MakaioBus.registerNamespaces([QwenAcpNamespace.definition]);
 
 describe('QwenAcpConnector', () => {
   beforeEach(() => {

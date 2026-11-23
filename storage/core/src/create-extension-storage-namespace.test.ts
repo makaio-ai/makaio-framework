@@ -2,6 +2,14 @@ import { beforeEach, describe, expect, expectTypeOf, it } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
 import { z } from 'zod';
 import { createExtensionStorageNamespace } from './create-extension-storage-namespace';
+import * as storageCore from './index';
+
+describe('storage namespace exports', () => {
+  it('exposes the definition factory and leaves registration to the namespace holder', () => {
+    expect(storageCore.createStorageNamespaceDefinition).toBeTypeOf('function');
+    expect(storageCore).not.toHaveProperty('createStorageNamespace');
+  });
+});
 
 describe('createExtensionStorageNamespace', () => {
   beforeEach(() => {

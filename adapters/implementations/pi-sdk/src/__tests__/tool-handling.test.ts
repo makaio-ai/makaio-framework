@@ -129,6 +129,7 @@ const TOOL_PAYLOAD: PiToolCallPayload = { toolCallId: 'tool-call-1', toolName: '
  */
 async function createApprovalConnector() {
   const hostBus = createBusInstance();
+  hostBus.registerNamespaces([PiSdkNamespace.definition]);
   const bus = await PiSdkNamespace.scopedBus(hostBus);
   const connector = new ApprovalPiConnector({
     bus,
