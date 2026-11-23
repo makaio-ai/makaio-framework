@@ -1,18 +1,14 @@
 // Intentionally export only the thin Piscina name; the previous runner name
 // implied self-contained Worker execution isolation that this path does not provide.
 export { ThinWorkflowPiscinaRunner } from './thin-workflow-piscina-runner.js';
+export { materializeWorkerTask, type MaterializedWorkerTask } from './worker-task-materialization.js';
+export { PiscinaPoolRunner, type PiscinaPoolRunnerOptions } from './runtime/piscina-pool-runner.js';
 export { resolveWorkflowWorkerEntry } from './worker-entry-resolver.js';
 export { createWorkerBusAuth } from './worker-bus-auth.js';
-export {
-  runWorkerBootstrapExchange,
-  withWorkerBootstrapDeadline,
-  BootstrapDeadlineExceededError,
-  type BootstrapExchangeResult,
-  type WorkerBootstrapExchangeOptions,
-} from './worker-bootstrap-exchange.js';
 export { createNodeWorkflowRunner, createNodeWorkflowRunnerPackageOptions } from './node-workflow-runner-factory.js';
 export type {
   IWorkflowRunner,
+  MaterializedWorkspace,
   RuntimeLoadedWorkflow,
   WorkflowRunResult,
   ThinWorkflowPiscinaRunnerOptions,
@@ -22,12 +18,7 @@ export type {
   NodeWorkflowRunnerPackageOptions,
 } from './node-workflow-runner-factory.js';
 export type { WorkflowWorkerEntryMode, WorkflowWorkerEntryResolverOptions } from './worker-entry-resolver.js';
-export { WorkerRunner } from './worker-runner.js';
-export type { WorkerRunnerOptions } from './worker-runner.js';
-export { PiscinaThinWorkflowProvider } from './piscina-thin-workflow-provider.js';
-export type { PiscinaThinWorkflowProviderOptions } from './piscina-thin-workflow-provider.js';
-export { createWorkflowLaunchResolver } from './workflow-launch-resolver.js';
-export type { WorkflowAttemptInstructionReader, WorkflowLaunchResolver } from './workflow-launch-resolver.js';
+export { createReplayOnceSignal } from './replay-once-signal.js';
 export { InProcessWorkflowRunner } from './in-process-workflow-runner.js';
 export type { InProcessWorkflowRunnerOptions } from './in-process-workflow-runner.js';
 export {
@@ -39,47 +30,18 @@ export {
   type WorkflowRuntimeContributionLoader,
 } from './isolated-workflow-runtime.js';
 export {
-  runHeadlessWorkflowWorker,
-  type HeadlessWorkerBootstrapCredentials,
-  type HeadlessWorkerBootstrap,
-  type HeadlessWorkerBusConnector,
-  type MaterializedWorkspace,
-  type HeadlessWorkerMaterializer,
-  type HeadlessWorkerContributionLoader,
-  type HeadlessWorkerExecutor,
-  type HeadlessWorkerPostCommitObserver,
-  type HeadlessWorkflowWorkerDeps,
-  type HeadlessWorkflowWorkerResult,
-} from './headless-workflow-worker.js';
-export {
-  runHeadlessWorker,
-  type HeadlessWorkerDeps,
-  type HeadlessWorkerResult,
-} from './headless-worker.js';
-export {
   AuthorityRequestDeliveryError,
-  AttemptOutcomeDeliveryError,
   OutcomeDeliveryError,
   submitOutcomeWithAck,
-  submitAttemptOutcomeWithAck,
+  requestAuthorityWithRetry,
+  submitWithAck,
   DELIVERED_DECISIONS,
   type OutcomeSubmitRetryConfig,
+  type OutcomeSubmitOptions,
+  type OutcomeDeliveryFailureReason,
   type OutcomeSubmitPayload,
-  type AttemptOutcomeSubmitPayload,
   type OutcomeReconnect,
 } from './outcome-submission.js';
-export {
-  runWorkloadInvocation,
-  type InstalledWorkloadAdapter,
-  type RunWorkloadInvocationOptions,
-  type WorkloadInvocationPreparation,
-  type WorkloadControlBinding,
-  type WorkloadInvocationResult,
-} from './workload-invocation.js';
-export {
-  createLocalGitWorkspacePreparation,
-  type LocalGitSourceOptions,
-} from './local-git-workspace-preparation.js';
 export { loadWorkflowFromConfig } from './workflow-loader.js';
 export { loadWorkflowModule, loadWorkflowModules } from './workflow-file-loader.js';
 export {
@@ -96,36 +58,7 @@ export {
   type WorkspaceRootResolver,
   type LocalDirectoryMaterializerOptions,
 } from './local-directory-materializer.js';
-export {
-  installOperationDeliveryEndpoint,
-  registerWorkerRuntime,
-  admitWorkflowRunOperation,
-  registerAndAdmitWorkflowRun,
-  RuntimeRegistrationRefusedError,
-  OperationAdmissionRefusedError,
-  type DeliverableOperationKind,
-  type OperationDeliveryHandler,
-  type OperationDeliveryHandlers,
-  type OperationDeliveryEndpoint,
-  type OperationDeliveryEndpointIdentity,
-  type RegisterWorkerRuntimeOptions,
-  type AdmitWorkflowRunOperationOptions,
-  type RegisterAndAdmitWorkflowRunOptions,
-  type AdmittedWorkflowRun,
-} from './runtime-registration-client.js';
-export {
-  bootstrapWorkerRuntime,
-  BootstrapStartRefusedError,
-  type BootstrapRuntimeConnection,
-  type BootstrapWorkerRuntimeOptions,
-  type StartedWorkerRuntime,
-} from './bootstrap-start-client.js';
-export {
-  installAttemptControlEndpoint,
-  type AttemptControlEndpointDeps,
-  type AttemptControlEndpointIdentity,
-  type AttemptControlReportOptions,
-  type InstalledAttemptControlEndpoint,
-  type AttemptControlLastReport,
-} from './attempt-control-client.js';
 export { runLocalCodeStep, type CodeStepProcessResult, type LocalCodeStepInvocation } from './code-step-process.js';
+export { isCooperativeCancellation } from '../cooperative-cancellation.js';
+export type { BootstrapRuntimeConnection } from './runtime/worker-boot.js';
+export type { ConnectedWorker, WorkerConnector, WorkerConnectorContext } from './worker-entry.js';

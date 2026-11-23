@@ -1,4 +1,4 @@
-# @makaio/services/filesystem
+# @makaio/framework/services/filesystem
 
 Directory browsing service providing filesystem navigation via bus requests.
 
@@ -14,8 +14,8 @@ Directory browsing service providing filesystem navigation via bus requests.
 
 ```typescript
 import { MakaioBus } from '@makaio/bus-core';
-import { FileSystemSubjects } from '@makaio/services/filesystem/namespace';
-import { FileSystemService } from '@makaio/services/filesystem';
+import { FileSystemSubjects } from '@makaio/framework/services/filesystem/namespace';
+import { FileSystemService } from '@makaio/framework/services/filesystem';
 
 // Initialize the service with a unique machine identifier
 const fsService = new FileSystemService(MakaioBus, 'local-node', 'Local');
@@ -76,7 +76,7 @@ Directory listings return partial results when individual entries fail (permissi
 |--------|-------------|
 | `FileSystemService` | Main service class handling bus requests |
 
-### Types (from @makaio/services/filesystem/schemas)
+### Types (from @makaio/framework/services/filesystem/schemas)
 
 | Export | Description |
 |--------|-------------|

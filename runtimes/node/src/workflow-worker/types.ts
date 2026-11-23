@@ -2,6 +2,7 @@ import type {
   CodeStepHandler,
   LoopCheckHandler,
   WorkerContributionManifest,
+  WorkerRuntimeContext,
   WorkflowDefinition,
   WorkflowZodSchemas,
 } from '@makaio/contracts';
@@ -27,6 +28,16 @@ export interface RuntimeLoadedWorkflow {
    * Used by the orchestrator to evaluate loop convergence.
    */
   readonly runtimeLoopChecks?: ReadonlyMap<string, LoopCheckHandler>;
+}
+
+/**
+ * Worker-local workspace and optional cleanup for materialized executables.
+ */
+export interface MaterializedWorkspace {
+  /** Runtime context with absolute local paths. */
+  readonly context: WorkerRuntimeContext;
+  /** Idempotent cleanup of the materialized executable root. */
+  readonly cleanup?: () => Promise<void>;
 }
 
 /**

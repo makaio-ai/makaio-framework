@@ -10,6 +10,8 @@
   },
   "exports": {
     ".": "./src/index.ts",
+    "./errors": "./src/errors.ts",
+    "./transaction-locks": "./src/transaction-locks.ts",
     "./package.json": "./package.json"
   },
   "files": [
@@ -35,7 +37,6 @@
     "@makaio/build-tooling": "workspace:*",
     "@makaio/framework": "workspace:*",
     "@makaio/storage-drizzle": "workspace:*",
-    "@makaio/subsystem-workflow-engine": "workspace:*",
     "@types/node": "^24.3.0",
     "drizzle-kit": "^0.31.8",
     "tsdown": "0.22.0",

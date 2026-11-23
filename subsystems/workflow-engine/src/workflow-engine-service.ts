@@ -1,12 +1,10 @@
+import type { RunCancellationHook, WorkflowRunnerSelector } from './workflow-runner-selector.js';
 import type { IMakaioBus } from '@makaio/bus-core';
 import type { CallContext } from '@makaio/core';
 import type { ExtensionContext, IWorkflowRunner } from '@makaio/contracts';
 import { BaseService } from '@makaio/service-base';
 import type { AutomationTriggerBindingRuntime } from '@makaio/services-core/automation-trigger';
 import { WorkflowTriggerReconciler } from './workflow-trigger-reconciler.js';
-import { ExecutionAttemptAuthority } from './execution-attempt-authority.js';
-import type { ExecutionAttemptRepository } from './execution-attempt-repository.js';
-import type { WorkflowAttemptOutcome } from './workflow-attempt-outcome.js';
 import type { ExecutorConfig, WorkflowMaterializationSpecResolver, WorkflowWorkspaceRootResolver } from './types.js';
 import { WorkflowExecutor } from './workflow-executor.js';
 
@@ -28,31 +26,6 @@ export interface WorkflowEngineServiceOptions {
   workflowRunner?: IWorkflowRunner;
   /** Partial executor configuration merged with defaults. */
   executorConfig?: Partial<ExecutorConfig>;
-  /**
-   * Injected execution attempt persistence port.
-   *
-   * Required when the workflow runner uses Worker dispatch mode. The
-   * consuming host application provides the concrete implementation that owns
-   * durable attempt records and accept/duplicate/conflict/fence decisions.
-   *
-   * When omitted, the workflow engine operates without attempt tracking
-   * (framework-only, in-process, and Piscina modes).
-   */
-  executionAttemptRepository?: ExecutionAttemptRepository<WorkflowAttemptOutcome>;
-  /** Explicit creation-time bootstrap budget, required only when constructing an Authority. */
-  executionAttemptBootstrapTimeoutMs?: number;
-  /**
-   * Pre-built execution attempt Authority.
-   *
-   * When provided, the service uses this Authority directly instead of
-   * constructing one from the repository. This allows the Authority to be
-   * shared with the runner that was constructed before this service.
-   *
-   * Takes precedence over `executionAttemptRepository` for Authority
-   * construction. When both are provided, the pre-built Authority is used
-   * and the repository is ignored.
-   */
-  executionAttemptAuthority?: ExecutionAttemptAuthority<WorkflowAttemptOutcome>;
   /** Host-owned resolvers that create portable specs for path-backed starts. */
   workflowMaterializationSpecResolvers?: readonly WorkflowMaterializationSpecResolver[];
   /**
@@ -79,12 +52,11 @@ export interface WorkflowEngineServiceOptions {
 export class WorkflowEngineService extends BaseService {
   private readonly workflowExecutor: WorkflowExecutor;
   private readonly triggerReconcilerInstance: WorkflowTriggerReconciler;
-  private readonly attemptAuthority: ExecutionAttemptAuthority<WorkflowAttemptOutcome> | undefined;
   private readonly workspaceRootResolvers = new Set<WorkflowWorkspaceRootResolver>();
 
   /**
    * @param bus - Shared runtime bus.
-   * @param namespaces - Extension capability for success finalizer registration.
+   * @param namespaces - Extension capability used for finalizer namespace leases.
    * @param options - Optional workflow runner and executor config overrides.
    */
   public constructor(
@@ -93,22 +65,7 @@ export class WorkflowEngineService extends BaseService {
     options?: WorkflowEngineServiceOptions,
   ) {
     super(bus);
-    let authority = options?.executionAttemptAuthority;
-    if (!authority && options?.executionAttemptRepository) {
-      const bootstrapTimeoutMs = options.executionAttemptBootstrapTimeoutMs;
-      if (bootstrapTimeoutMs === undefined) {
-        throw new Error('An ExecutionAttemptRepository requires executionAttemptBootstrapTimeoutMs');
-      }
-      authority = new ExecutionAttemptAuthority(options.executionAttemptRepository, { bootstrapTimeoutMs });
-    }
-    this.attemptAuthority = authority;
-    this.workflowExecutor = new WorkflowExecutor(
-      bus,
-      namespaces,
-      options?.executorConfig,
-      options?.workflowRunner,
-      this.attemptAuthority,
-    );
+    this.workflowExecutor = new WorkflowExecutor(bus, namespaces, options?.executorConfig, options?.workflowRunner);
     for (const resolver of options?.workflowMaterializationSpecResolvers ?? []) {
       this.workflowExecutor.registerWorkflowMaterializationSpecResolver(resolver);
     }
@@ -122,17 +79,6 @@ export class WorkflowEngineService extends BaseService {
    */
   public get executor(): WorkflowExecutor {
     return this.workflowExecutor;
-  }
-
-  /**
-   * Execution attempt Authority owned by this package service.
-   *
-   * Present when the host supplies a prebuilt Authority or a repository with
-   * an explicit bootstrap budget, independently of runner mode.
-   * @returns Authority instance, or `undefined` when no repository is injected.
-   */
-  public get executionAttemptAuthority(): ExecutionAttemptAuthority<WorkflowAttemptOutcome> | undefined {
-    return this.attemptAuthority;
   }
 
   /**
@@ -161,6 +107,73 @@ export class WorkflowEngineService extends BaseService {
     result: Parameters<WorkflowExecutor['acceptAuthorityRunnerResult']>[2],
   ): ReturnType<WorkflowExecutor['acceptAuthorityRunnerResult']> {
     return this.workflowExecutor.acceptAuthorityRunnerResult(call, executionId, result);
+  }
+
+  /**
+   * Apply the technical failure already accepted by the host.
+   * @param call - Call context of the outcome submission.
+   * @param executionId - Owner of the technical failure.
+   * @param error - Failure text that belongs to the owner.
+   * @returns Durable lifecycle status after the failure.
+   */
+  public acceptAuthorityTechnicalFailure(
+    call: CallContext,
+    executionId: string,
+    error: string,
+  ): ReturnType<WorkflowExecutor['acceptAuthorityTechnicalFailure']> {
+    return this.workflowExecutor.acceptAuthorityTechnicalFailure(call, executionId, error);
+  }
+
+  /**
+   * Apply a cancellation observed by the host.
+   * @param call - Call context of the outcome submission.
+   * @param executionId - Execution whose worker has stopped.
+   * @param reason - Optional reason reported by the host.
+   * @returns Durable lifecycle status after cancellation.
+   */
+  public acceptAuthorityCancellation(
+    call: CallContext,
+    executionId: string,
+    reason?: string,
+  ): ReturnType<WorkflowExecutor['acceptAuthorityCancellation']> {
+    return this.workflowExecutor.acceptAuthorityCancellation(call, executionId, reason);
+  }
+
+  /**
+   * Use a host selector to choose a runner for definition-backed runs.
+   * @param selector - Selection callback owned by the host.
+   * @returns Cleanup for this registration.
+   */
+  public registerWorkflowRunnerSelector(selector: WorkflowRunnerSelector): () => void {
+    return this.workflowExecutor.registerWorkflowRunnerSelector(selector);
+  }
+
+  /**
+   * Use a host callback to persist cancel intent before the lifecycle transition.
+   * @param hook - Cancellation callback owned by the host.
+   * @returns Cleanup for this registration.
+   */
+  public registerRunCancellationHook(hook: RunCancellationHook): () => void {
+    return this.workflowExecutor.registerRunCancellationHook(hook);
+  }
+
+  /**
+   * Request cancellation of active runs before the host drains its workers.
+   * @param call - Call context of the host shutdown.
+   * @param reason - Reason recorded for each cancelled run.
+   * @returns Promise that resolves after cancellation has been requested.
+   */
+  public cancelActiveRuns(call: CallContext, reason: string): Promise<void> {
+    return this.workflowExecutor.cancelActiveRuns(call, reason);
+  }
+
+  /**
+   * Abort and drain run tasks after the host has released its workers.
+   * @param call - Call context of the host shutdown.
+   * @returns Promise that resolves once the runs have settled.
+   */
+  public settleRuns(call: CallContext): Promise<void> {
+    return this.workflowExecutor.settleRuns(call);
   }
 
   /**

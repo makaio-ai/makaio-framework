@@ -5827,7 +5827,6 @@ __metadata:
     "@makaio/build-tooling": "workspace:*"
     "@makaio/framework": "workspace:*"
     "@makaio/storage-drizzle": "workspace:*"
-    "@makaio/subsystem-workflow-engine": "workspace:*"
     "@types/node": "npm:^24.3.0"
     drizzle-kit: "npm:^0.31.8"
     drizzle-orm: "npm:0.45.4"

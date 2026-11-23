@@ -1,11 +1,5 @@
 import type { IMakaioBus } from '@makaio/bus-core';
-import {
-  ExecutionAttemptSubjects,
-  WorkerSubjects,
-  type ExecutionAttemptOutcome,
-  type OutcomeAckDecision,
-  type WorkflowRunResult,
-} from '@makaio/contracts';
+import { WorkerSubjects, type OutcomeAckDecision, type WorkflowRunResult } from '@makaio/contracts';
 import type { CallContext } from '@makaio/core';
 
 // ─────────────────────────────────────────────────────────────
@@ -62,21 +56,8 @@ const DEFAULT_DEADLINE_MS = 120_000;
  * Payload for an outcome submission request.
  */
 export interface OutcomeSubmitPayload {
-  readonly executionAttemptId: string;
   readonly executionId: string;
   readonly result: WorkflowRunResult;
-}
-
-/** Payload for the generic terminal Attempt outcome ingress. */
-export interface AttemptOutcomeSubmitPayload {
-  /** Authority-created Attempt identity. */
-  readonly executionAttemptId: string;
-  /** Runtime generation accepted during registration. */
-  readonly runtimeGeneration: number;
-  /** Admitted operation for non-startup outcomes. */
-  readonly operationId?: string;
-  /** Technical failure or opaque workload result. */
-  readonly outcome: ExecutionAttemptOutcome;
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -89,7 +70,7 @@ export interface AttemptOutcomeSubmitPayload {
  * Only `accepted` and `duplicate` mean the Authority has committed
  * (or already had) the canonical outcome.
  */
-export const DELIVERED_DECISIONS = new Set<OutcomeAckDecision>(['accepted', 'duplicate']);
+export const DELIVERED_DECISIONS: ReadonlySet<string> = new Set(['accepted', 'duplicate']);
 
 /**
  * Reason an outcome could not be delivered.
@@ -98,7 +79,7 @@ export type OutcomeDeliveryFailureReason = 'authority-rejected' | 'deadline-exce
 
 /**
  * Error thrown when the Authority rejects an outcome with a non-transient
- * decision (`conflict` or `fenced`), or when its overall delivery deadline
+ * decision (`conflict`), or when its overall delivery deadline
  * expires.
  */
 export class OutcomeDeliveryError extends Error {
@@ -118,26 +99,6 @@ export class OutcomeDeliveryError extends Error {
         `executionId=${result.executionId}, status=${result.status})`,
     );
     this.name = 'OutcomeDeliveryError';
-  }
-}
-
-/** Error from delivery through the generic Attempt outcome ingress. */
-export class AttemptOutcomeDeliveryError extends Error {
-  /**
-   * @param decision - Authority rejection decision or deadline marker.
-   * @param payload - Immutable Attempt outcome that could not be acknowledged.
-   * @param reason - Stable delivery failure classification.
-   */
-  public constructor(
-    public readonly decision: OutcomeAckDecision | 'deadline-exceeded',
-    public readonly payload: AttemptOutcomeSubmitPayload,
-    public readonly reason: OutcomeDeliveryFailureReason = 'authority-rejected',
-  ) {
-    super(
-      `Attempt outcome delivery ${reason === 'deadline-exceeded' ? 'deadline exceeded' : 'rejected by Authority'} ` +
-        `(decision=${decision}, executionAttemptId=${payload.executionAttemptId}, outcome=${payload.outcome.kind})`,
-    );
-    this.name = 'AttemptOutcomeDeliveryError';
   }
 }
 
@@ -167,7 +128,7 @@ export class AuthorityRequestDeliveryError extends Error {
  */
 export type OutcomeReconnect = () => Promise<void>;
 
-/** Common retry options for either legacy workflow or generic Attempt outcome delivery. */
+/** Common retry options for outcome delivery. */
 export interface OutcomeSubmitOptions {
   readonly retry?: OutcomeSubmitRetryConfig;
   readonly reconnect?: OutcomeReconnect;
@@ -401,13 +362,15 @@ export async function requestAuthorityWithRetry<TResponse>(
  * @param request - Bounded terminal-outcome request and cancellation signal.
  * @param createError - Builds the outcome-specific terminal delivery error.
  * @param options - Retry, reconnect, and cancellation behavior.
+ * @param classifyDeliveryFailure - Recognizes terminal errors in the caller's protocol.
  * @returns Durable acknowledgement decision.
  */
-async function submitWithAck(
-  request: (timeout: number, signal: AbortSignal | undefined) => Promise<OutcomeAckDecision>,
-  createError: (decision: OutcomeAckDecision | 'deadline-exceeded', reason?: OutcomeDeliveryFailureReason) => Error,
+export async function submitWithAck<TDecision extends string>(
+  request: (timeout: number, signal: AbortSignal | undefined) => Promise<TDecision>,
+  createError: (decision: TDecision | 'deadline-exceeded', reason?: OutcomeDeliveryFailureReason) => Error,
   options: OutcomeSubmitOptions | undefined,
-): Promise<OutcomeAckDecision> {
+  classifyDeliveryFailure: (error: unknown) => OutcomeDeliveryFailureReason | undefined,
+): Promise<TDecision> {
   return await retryAuthorityRequest(
     async (timeout, signal) => {
       const decision = await request(timeout, signal);
@@ -416,7 +379,7 @@ async function submitWithAck(
     },
     () => createError('deadline-exceeded', 'deadline-exceeded'),
     options,
-    (error) => error instanceof OutcomeDeliveryError || error instanceof AttemptOutcomeDeliveryError,
+    (error) => classifyDeliveryFailure(error) !== undefined,
   );
 }
 
@@ -440,7 +403,7 @@ async function submitWithAck(
  * bus request; expiry throws a deterministic {@link OutcomeDeliveryError}.
  * @param call - Call that triggered the workflow provisioning.
  * @param bus - Worker-local bus connected to the Authority.
- * @param payload - Attempt identity and terminal result.
+ * @param payload - Run identity and terminal result.
  * @param options - Optional retry configuration, reconnect callback, and cancellation signal.
  * @returns Durable ACK decision (`accepted` or `duplicate`).
  * @throws {@link OutcomeDeliveryError} On non-transient rejection or deadline expiry.
@@ -457,7 +420,6 @@ export async function submitOutcomeWithAck(
         call,
         WorkerSubjects.control.outcome.submit,
         {
-          executionAttemptId: payload.executionAttemptId,
           executionId: payload.executionId,
           result: payload.result,
         },
@@ -470,37 +432,6 @@ export async function submitOutcomeWithAck(
         ? new OutcomeDeliveryError(decision, payload.result)
         : new OutcomeDeliveryError(decision, payload.result, reason),
     options,
-  );
-}
-
-/**
- * Submit a generic Attempt terminal outcome with the same bounded retry policy
- * as legacy workflow results.
- * @param bus - Runtime bus authenticated as the Attempt peer.
- * @param payload - Fenced Attempt result and optional admitted operation.
- * @param options - Retry, reconnect, and cancellation behavior.
- * @returns Durable Authority acknowledgement.
- */
-export async function submitAttemptOutcomeWithAck(
-  bus: IMakaioBus,
-  payload: AttemptOutcomeSubmitPayload,
-  options?: OutcomeSubmitOptions,
-): Promise<OutcomeAckDecision> {
-  return await submitWithAck(
-    async (timeout, signal) => {
-      // ORIGIN: The runtime reports its own terminal outcome, not a reply to a bus message.
-      const response = await bus.request(
-        bus.own('root'),
-        ExecutionAttemptSubjects.outcome.submit,
-        payload,
-        signal === undefined ? { timeout } : { timeout, signal },
-      );
-      return response.decision;
-    },
-    (decision, reason) =>
-      reason === undefined
-        ? new AttemptOutcomeDeliveryError(decision, payload)
-        : new AttemptOutcomeDeliveryError(decision, payload, reason),
-    options,
+    (error) => (error instanceof OutcomeDeliveryError ? error.reason : undefined),
   );
 }

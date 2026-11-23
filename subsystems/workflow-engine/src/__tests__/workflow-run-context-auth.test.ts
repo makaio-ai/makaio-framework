@@ -456,14 +456,25 @@ describe('workflow.finalizeDelegateResult authority gateway', () => {
 
   const allowedCaller = {
     kind: CorePartyKind.jobRun,
-    id: 'attempt-gateway',
+    id: 'opaque-gateway-party',
     claims: { executionId: runContext.executionId },
   };
 
-  it('allows an authenticated attempt for its selected durable delegate finalizer', async () => {
+  it('uses the authenticated job run claim to authorize its durable delegate finalizer', async () => {
     await expect(requestFinalization({ caller: allowedCaller })).resolves.toMatchObject({
       type: 'response',
       result: { output: { finalized: 'raw' } },
+    });
+  });
+
+  it('requires the job run claim even when the caller ID matches the execution', async () => {
+    await expect(
+      requestFinalization({
+        caller: { kind: CorePartyKind.jobRun, id: runContext.executionId },
+      }),
+    ).resolves.toMatchObject({
+      type: 'response',
+      error: { message: expect.stringContaining('requires its authenticated job run caller') },
     });
   });
 

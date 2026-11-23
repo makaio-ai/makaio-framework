@@ -107,7 +107,7 @@ describe('worker capability contracts', () => {
   });
 });
 
-describe('WorkerProvisionRequest uses executionAttemptId', () => {
+describe('WorkerProvisionRequest uses the run identity', () => {
   it('accepts runtime inputs and an ephemeral connection without workflow source or config', () => {
     const connection: WorkerRuntimeConnection = {
       busAuth: { kind: 'none' },
@@ -115,7 +115,6 @@ describe('WorkerProvisionRequest uses executionAttemptId', () => {
     };
     const request: WorkerProvisionRequest = {
       executionId: 'report-1',
-      executionAttemptId: 'attempt-1',
       environment: 'process',
       runtimeInputs: {
         workerManifest: { contributionRefs: [] },
@@ -131,10 +130,9 @@ describe('WorkerProvisionRequest uses executionAttemptId', () => {
     expectTypeOf<WorkerProviderContext>().not.toHaveProperty('workerManifest');
   });
 
-  it('requires executionAttemptId on provision requests', () => {
+  it('requires executionId on provision requests', () => {
     const request: WorkerProvisionRequest = {
       executionId: 'exec-1',
-      executionAttemptId: 'attempt-1',
       environment: 'piscina',
       runtimeInputs: {
         workerManifest: { contributionRefs: [] },
@@ -144,7 +142,6 @@ describe('WorkerProvisionRequest uses executionAttemptId', () => {
       bootstrapDeadlineAt: '2026-07-23T10:01:00Z',
     };
 
-    expect(request.executionAttemptId).toBe('attempt-1');
     expect(request.executionId).toBe('exec-1');
   });
 
@@ -169,15 +166,15 @@ describe('WorkerProvisionRequest uses executionAttemptId', () => {
 });
 
 describe('WorkerHandle is allocation-only', () => {
-  it('carries executionAttemptId instead of nodeId', () => {
+  it('carries the job run identity', () => {
     const handle: WorkerHandle = {
-      executionAttemptId: 'attempt-1',
+      executionId: 'attempt-1',
       cancel: async () => {},
       terminate: async () => {},
       release: async () => {},
     };
 
-    expect(handle.executionAttemptId).toBe('attempt-1');
+    expect(handle.executionId).toBe('attempt-1');
     expectTypeOf<WorkerHandle>().not.toHaveProperty('nodeId');
   });
 
@@ -212,7 +209,7 @@ describe('IWorkerProvider provision contract', () => {
           providerData: { machineId: 'machine-1' },
         },
         handle: {
-          executionAttemptId: 'attempt-1',
+          executionId: 'attempt-1',
           cancel: async () => {},
           terminate: async () => {},
           release: async () => {},
@@ -238,7 +235,7 @@ describe('IWorkerProvider provision contract', () => {
           providerData: { instanceId: 'i-123' },
         },
         handle: {
-          executionAttemptId: 'attempt-1',
+          executionId: 'attempt-1',
           cancel: async () => {},
           terminate: async () => {},
           release: async () => {},
@@ -250,7 +247,6 @@ describe('IWorkerProvider provision contract', () => {
       createTestCall(),
       {
         executionId: 'exec-1',
-        executionAttemptId: 'attempt-1',
         environment: 'test',
         runtimeInputs: {
           workerManifest: { contributionRefs: [] },
@@ -266,7 +262,7 @@ describe('IWorkerProvider provision contract', () => {
     if (result.kind !== 'allocated') throw new Error('expected an allocated outcome');
     expect(result.allocationRef.version).toBe(PROVIDER_ALLOCATION_REF_VERSION);
     expect(result.allocationRef.providerId).toBe('test.provider');
-    expect(result.handle.executionAttemptId).toBe('attempt-1');
+    expect(result.handle.executionId).toBe('attempt-1');
   });
 
   it('does not expose resumeExecution', () => {
@@ -461,7 +457,7 @@ describe('boundedProviderEvidence', () => {
 
 describe('OutcomeAckDecision', () => {
   it('accepts all four ACK decisions', () => {
-    for (const decision of ['accepted', 'duplicate', 'conflict', 'fenced'] as const) {
+    for (const decision of ['accepted', 'duplicate', 'conflict'] as const) {
       expect(OutcomeAckDecisionSchema.parse(decision)).toBe(decision);
     }
   });
@@ -471,8 +467,8 @@ describe('OutcomeAckDecision', () => {
     expect(() => OutcomeAckDecisionSchema.parse('retry')).toThrow();
   });
 
-  it('has a union type matching the four decisions', () => {
-    expectTypeOf<OutcomeAckDecision>().toEqualTypeOf<'accepted' | 'duplicate' | 'conflict' | 'fenced'>();
+  it('has a union type matching the three decisions', () => {
+    expectTypeOf<OutcomeAckDecision>().toEqualTypeOf<'accepted' | 'duplicate' | 'conflict'>();
   });
 });
 
@@ -763,7 +759,7 @@ describe('WorkerProvisionOutcome', () => {
         providerData: { threadId: 42 },
       },
       handle: {
-        executionAttemptId: 'attempt-1',
+        executionId: 'attempt-1',
         cancel: async () => {},
         terminate: async () => {},
         release: async () => {},
@@ -772,7 +768,7 @@ describe('WorkerProvisionOutcome', () => {
 
     if (outcome.kind !== 'allocated') throw new Error('expected an allocated outcome');
     expect(outcome.allocationRef.providerId).toBe('piscina');
-    expect(outcome.handle.executionAttemptId).toBe('attempt-1');
+    expect(outcome.handle.executionId).toBe('attempt-1');
   });
 
   it('carries only bounded evidence when confirmed absent', () => {
@@ -1085,7 +1081,7 @@ describe('IWorkerRecoveryCapability', () => {
     const recovery: IWorkerRecoveryCapability = {
       discoverProvisioning: async (_call, _request, _signal) => ({ kind: 'unknown' as const, evidence: EVIDENCE }),
       attach: async (_call, _ref, _request, _signal) => ({
-        executionAttemptId: 'attempt-1',
+        executionId: 'attempt-1',
         cancel: async () => {},
         terminate: async () => {},
         release: async () => {},
@@ -1127,7 +1123,7 @@ describe('IRecoverableWorkerProvider', () => {
           providerData: { machineId: 'm-1' },
         },
         handle: {
-          executionAttemptId: 'attempt-1',
+          executionId: 'attempt-1',
           cancel: async () => {},
           terminate: async () => {},
           release: async () => {},
@@ -1136,7 +1132,7 @@ describe('IRecoverableWorkerProvider', () => {
       recovery: {
         discoverProvisioning: async (_call, _request, _signal) => ({ kind: 'unknown' as const, evidence: EVIDENCE }),
         attach: async (_call, _ref, _request, _signal) => ({
-          executionAttemptId: 'attempt-1',
+          executionId: 'attempt-1',
           cancel: async () => {},
           terminate: async () => {},
           release: async () => {},
@@ -1191,7 +1187,7 @@ describe('non-recoverable provider shape', () => {
           providerData: {},
         },
         handle: {
-          executionAttemptId: 'attempt-1',
+          executionId: 'attempt-1',
           cancel: async () => {},
           terminate: async () => {},
           release: async () => {},

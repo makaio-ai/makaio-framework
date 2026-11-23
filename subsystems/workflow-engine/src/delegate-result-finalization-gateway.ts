@@ -14,7 +14,7 @@ import { WorkflowStorageSubjects } from './storage/namespace.js';
 /**
  * Register the static Authority gateway for delegate result finalization.
  *
- * Remote attempts can address only this stable subject. The Authority derives
+ * Remote job runs can address only this stable subject. The Authority derives
  * the dynamic finalizer subject exclusively after validating the durable run
  * context and delegate-node selector.
  * @param bus - Authority-local workflow bus.
@@ -23,7 +23,7 @@ import { WorkflowStorageSubjects } from './storage/namespace.js';
 export function registerDelegateResultFinalizationGateway(bus: IMakaioBus): () => void {
   return bus.on(WorkflowSubjects.finalizeDelegateResult, async (ctx) => {
     const payload = ctx.payload;
-    assertExecutionAttemptPeer(ctx, payload.executionId);
+    assertJobRunCaller(ctx, payload.executionId);
 
     const { execution } = await bus.request(ctx.call, WorkflowStorageSubjects.getExecution, {
       executionId: payload.executionId,
@@ -63,14 +63,13 @@ export function registerDelegateResultFinalizationGateway(bus: IMakaioBus): () =
 }
 
 /**
- * Require that a remote finalization request is bound to its exact Authority
- * dispatch attempt. Local Authority callers are trusted composition paths.
+ * Require that a remote finalization request is bound to its authenticated job run. Local Authority callers are trusted composition paths.
  * @param ctx - Incoming gateway request context.
  * @param executionId - Requested workflow execution.
  */
-function assertExecutionAttemptPeer(ctx: BaseMessageContext, executionId: string): void {
+function assertJobRunCaller(ctx: BaseMessageContext, executionId: string): void {
   if (isExecutionBoundAccessAllowed(ctx, executionId)) return;
-  throw new Error('delegate result finalization requires its authenticated workflow-execution-attempt peer');
+  throw new Error('delegate result finalization requires its authenticated job run caller');
 }
 
 /**

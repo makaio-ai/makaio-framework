@@ -2,6 +2,7 @@ import { z } from 'zod';
 import type { CallContext } from '@makaio/core';
 import type { ICapabilityProvider } from '../../capability/index.js';
 import type { WorkflowWorkerBusAuth, WorkflowWorkerConfig, WorkerContributionManifest } from '../../workflow/index.js';
+import type { JobRunId } from '../../workflow/identifiers.js';
 import { JsonObjectContractSchema } from '../../shared/json-value.js';
 import type { WorkerRuntimeInputs } from '../../worker/runtime-inputs.js';
 
@@ -538,17 +539,11 @@ export interface WorkerRuntimeConnection {
 }
 
 /**
- * Attempt context shared by initial provisioning and allocation recovery.
- *
- * The Authority creates `executionAttemptId` before dispatch. Providers and
- * pools never generate it. Pool identity and resource allocation details live
- * in the host-owned dispatch layer above this contract.
+ * Run context shared by initial provisioning and allocation recovery.
  */
 export interface WorkerProviderContext {
-  /** Generic execution-owner key that scopes this Worker allocation. */
-  readonly executionId: string;
-  /** Authority-created attempt identifier for this dispatch. */
-  readonly executionAttemptId: string;
+  /** Job run this provider call belongs to, also the provider's allocation correlation key. */
+  readonly executionId: JobRunId;
   /** Execution environment tag matching the provider's `environment` field. */
   readonly environment: string;
   /** Non-secret Runtime composition selected for this Worker allocation. */
@@ -619,14 +614,12 @@ export interface WorkerInfrastructureConclusion {
  * handoff may release that local handle while provider-side work remains open.
  *
  * The handle controls allocation infrastructure only. It does NOT expose a
- * `ready` promise or a `waitForResult()` method. Readiness is signaled through
- * the `execution-attempt.runtime.ready` bus subject. Workflow outcomes are
- * submitted and acknowledged through the Authority's `control.outcome.submit`
- * bus subject.
+ * `ready` promise or a `waitForResult()` method. Readiness and outcomes
+ * are reported independently from provider infrastructure control.
  */
 export interface WorkerHandle {
-  /** Authority-created attempt identifier for this allocation. */
-  readonly executionAttemptId: string;
+  /** Job run served by this allocation. */
+  readonly executionId: JobRunId;
   /**
    * Request graceful cancellation of the allocated execution environment.
    * @param reason - Optional human-readable cancellation reason.
@@ -1037,15 +1030,14 @@ export interface IRecoverableWorkerProvider extends IWorkerProvider {
  *
  * - `accepted`: the outcome was committed as canonical.
  * - `duplicate`: an identical outcome was already committed; this is a replay.
- * - `conflict`: a different outcome was already committed for this attempt.
- * - `fenced`: the attempt is no longer the active attempt for this execution.
+ * - `conflict`: the submitted result conflicts with the durable run.
  */
-export type OutcomeAckDecision = 'accepted' | 'duplicate' | 'conflict' | 'fenced';
+export type OutcomeAckDecision = 'accepted' | 'duplicate' | 'conflict';
 
 /**
  * Zod schema for outcome ACK decisions.
  */
-export const OutcomeAckDecisionSchema = z.enum(['accepted', 'duplicate', 'conflict', 'fenced']);
+export const OutcomeAckDecisionSchema = z.enum(['accepted', 'duplicate', 'conflict']);
 
 // ─────────────────────────────────────────────────────────────
 // Dispatch Acknowledgment
@@ -1055,14 +1047,14 @@ export const OutcomeAckDecisionSchema = z.enum(['accepted', 'duplicate', 'confli
  * Allocation acknowledgment returned by the dispatch RPC.
  *
  * Dispatch returns after allocation persistence, not after the workflow
- * completes. The ack carries the attempt ID and the persisted allocation
+ * completes. The ack carries the run ID and the persisted allocation
  * reference so callers can correlate the allocation with later lifecycle
  * and outcome events.
  */
 export interface WorkerDispatchAck {
-  /** Authority-created attempt identifier for this allocation. */
-  readonly executionAttemptId: string;
-  /** Provider allocation reference persisted through the Authority. */
+  /** Job run for which the allocation was provisioned. */
+  readonly executionId: JobRunId;
+  /** Persisted provider allocation reference. */
   readonly allocationRef: ProviderAllocationRef;
 }
 
@@ -1082,15 +1074,13 @@ export interface WorkerDispatchAck {
  * persisted. Callers that need the workflow result must await it through the
  * Authority's in-process waiter (`waitForOutcome`).
  * @param call - Handled workflow run's call forwarded to dispatch.
- * @param request - Dispatch request containing config, optional manifest, optional requirements,
- *   and the Authority-created attempt identifier.
+ * @param request - Run configuration and optional manifest, requirements, and metadata.
  * @param signal - AbortSignal for cooperative cancellation.
  * @returns Allocation acknowledgment after provider provisioning succeeds.
  */
 export type WorkerDispatch = (
   call: CallContext,
   request: {
-    readonly executionAttemptId: string;
     readonly config: WorkflowWorkerConfig;
     readonly manifest?: WorkerContributionManifest;
     readonly requirements?: WorkerRequirements;

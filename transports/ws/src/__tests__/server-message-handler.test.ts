@@ -838,10 +838,10 @@ describe('subscribe/unsubscribe subject restriction', () => {
 
   it('enforces an option-only required filter without directional allow-lists', async () => {
     const identityId = 'filter-only-identity';
-    const protectedSubject = 'execution-attempt.operation.deliver';
+    const protectedSubject = 'workload.operation.deliver';
     registerHmacIdentitySecret(identityId, 'filter-only-secret', {
-      partyKind: 'test.workflow-execution-attempt',
-      requiredSubscriptionFilters: { [protectedSubject]: { executionAttemptId: 'attempt-a' } },
+      partyKind: 'test.job-run',
+      requiredSubscriptionFilters: { [protectedSubject]: { executionId: 'attempt-a' } },
     });
 
     const restrictedSocket = new MockWebSocket();
@@ -861,18 +861,18 @@ describe('subscribe/unsubscribe subject restriction', () => {
       makeDeps({ auth, registry }),
     );
 
-    expect(registry.getInterestedRequestClients(protectedSubject, { executionAttemptId: 'attempt-a' })).toEqual([
+    expect(registry.getInterestedRequestClients(protectedSubject, { executionId: 'attempt-a' })).toEqual([
       restrictedSocket,
     ]);
-    expect(registry.getInterestedRequestClients(protectedSubject, { executionAttemptId: 'attempt-b' })).toEqual([]);
+    expect(registry.getInterestedRequestClients(protectedSubject, { executionId: 'attempt-b' })).toEqual([]);
   });
 
   it('allows a filter-only wildcard advertisement when the policy is enforced at delivery', async () => {
     const identityId = 'filter-only-wildcard-identity';
-    const protectedSubject = 'execution-attempt.operation.deliver';
+    const protectedSubject = 'workload.operation.deliver';
     registerHmacIdentitySecret(identityId, 'filter-only-wildcard-secret', {
-      partyKind: 'test.workflow-execution-attempt',
-      requiredSubscriptionFilters: { [protectedSubject]: { executionAttemptId: 'attempt-a' } },
+      partyKind: 'test.job-run',
+      requiredSubscriptionFilters: { [protectedSubject]: { executionId: 'attempt-a' } },
     });
 
     const restrictedSocket = new MockWebSocket();
@@ -886,31 +886,31 @@ describe('subscribe/unsubscribe subject restriction', () => {
     await routeMessage(
       {
         type: 'subscribe',
-        subjects: { 'execution-attempt.*': [100] },
-        deliveryClasses: { 'execution-attempt.*': 'relayable' },
+        subjects: { 'workload.*': [100] },
+        deliveryClasses: { 'workload.*': 'relayable' },
       },
       restrictedSocket,
       makeDeps({ auth, handlers: new Set([handler]), registry }),
     );
 
     expect(handler).toHaveBeenCalledWith(
-      expect.objectContaining({ type: 'subscribe', subjects: { 'execution-attempt.*': [100] } }),
+      expect.objectContaining({ type: 'subscribe', subjects: { 'workload.*': [100] } }),
       expect.anything(),
     );
-    expect(registry.getInterestedRequestClients(protectedSubject, { executionAttemptId: 'attempt-a' })[0]).toBe(
+    expect(registry.getInterestedRequestClients(protectedSubject, { executionId: 'attempt-a' })[0]).toBe(
       restrictedSocket,
     );
-    expect(registry.getInterestedRequestClients(protectedSubject, { executionAttemptId: 'attempt-b' })).toEqual([]);
+    expect(registry.getInterestedRequestClients(protectedSubject, { executionId: 'attempt-b' })).toEqual([]);
   });
 
   it('allows a wildcard advertisement granted to a restricted identity', async () => {
     const identityId = 'wildcard-filter-identity';
-    const protectedSubject = 'execution-attempt.operation.deliver';
+    const protectedSubject = 'workload.operation.deliver';
     registerHmacIdentitySecret(identityId, 'wildcard-filter-secret', {
-      partyKind: 'test.workflow-execution-attempt',
+      partyKind: 'test.job-run',
       allowedMessageSubjects: [],
-      allowedSubscriptionSubjects: ['execution-attempt.*'],
-      requiredSubscriptionFilters: { [protectedSubject]: { executionAttemptId: 'attempt-a' } },
+      allowedSubscriptionSubjects: ['workload.*'],
+      requiredSubscriptionFilters: { [protectedSubject]: { executionId: 'attempt-a' } },
     });
 
     const restrictedSocket = new MockWebSocket();
@@ -924,31 +924,31 @@ describe('subscribe/unsubscribe subject restriction', () => {
     await routeMessage(
       {
         type: 'subscribe',
-        subjects: { 'execution-attempt.*': [100] },
-        deliveryClasses: { 'execution-attempt.*': 'relayable' },
+        subjects: { 'workload.*': [100] },
+        deliveryClasses: { 'workload.*': 'relayable' },
       },
       restrictedSocket,
       makeDeps({ auth, handlers: new Set([handler]), registry }),
     );
 
     expect(handler).toHaveBeenCalledWith(
-      expect.objectContaining({ type: 'subscribe', subjects: { 'execution-attempt.*': [100] } }),
+      expect.objectContaining({ type: 'subscribe', subjects: { 'workload.*': [100] } }),
       expect.anything(),
     );
-    expect(registry.getInterestedRequestClients(protectedSubject, { executionAttemptId: 'attempt-a' })[0]).toBe(
+    expect(registry.getInterestedRequestClients(protectedSubject, { executionId: 'attempt-a' })[0]).toBe(
       restrictedSocket,
     );
-    expect(registry.getInterestedRequestClients(protectedSubject, { executionAttemptId: 'attempt-b' })).toEqual([]);
+    expect(registry.getInterestedRequestClients(protectedSubject, { executionId: 'attempt-b' })).toEqual([]);
   });
 
   it('allows a concrete protected advertisement through a wildcard grant with its trusted filter', async () => {
     const identityId = 'wildcard-concrete-filter-identity';
-    const protectedSubject = 'execution-attempt.operation.deliver';
+    const protectedSubject = 'workload.operation.deliver';
     registerHmacIdentitySecret(identityId, 'wildcard-concrete-filter-secret', {
-      partyKind: 'test.workflow-execution-attempt',
+      partyKind: 'test.job-run',
       allowedMessageSubjects: [],
-      allowedSubscriptionSubjects: ['execution-attempt.*'],
-      requiredSubscriptionFilters: { [protectedSubject]: { executionAttemptId: 'attempt-a' } },
+      allowedSubscriptionSubjects: ['workload.*'],
+      requiredSubscriptionFilters: { [protectedSubject]: { executionId: 'attempt-a' } },
     });
 
     const restrictedSocket = new MockWebSocket();
@@ -963,26 +963,26 @@ describe('subscribe/unsubscribe subject restriction', () => {
         type: 'subscribe',
         subjects: { [protectedSubject]: [100] },
         deliveryClasses: { [protectedSubject]: 'relayable' },
-        filters: { [protectedSubject]: { executionAttemptId: 'attempt-a' } },
+        filters: { [protectedSubject]: { executionId: 'attempt-a' } },
       },
       restrictedSocket,
       makeDeps({ auth, registry }),
     );
 
-    expect(registry.getInterestedRequestClients(protectedSubject, { executionAttemptId: 'attempt-a' })).toEqual([
+    expect(registry.getInterestedRequestClients(protectedSubject, { executionId: 'attempt-a' })).toEqual([
       restrictedSocket,
     ]);
-    expect(registry.getInterestedRequestClients(protectedSubject, { executionAttemptId: 'attempt-b' })).toEqual([]);
+    expect(registry.getInterestedRequestClients(protectedSubject, { executionId: 'attempt-b' })).toEqual([]);
   });
 
   it('allows an unrelated wildcard advertisement alongside required concrete filters', async () => {
     const identityId = 'safe-wildcard-filter-identity';
-    const protectedSubject = 'execution-attempt.operation.deliver';
+    const protectedSubject = 'workload.operation.deliver';
     registerHmacIdentitySecret(identityId, 'safe-wildcard-filter-secret', {
-      partyKind: 'test.workflow-execution-attempt',
+      partyKind: 'test.job-run',
       allowedMessageSubjects: [],
-      allowedSubscriptionSubjects: ['execution-attempt.*', 'worker.*'],
-      requiredSubscriptionFilters: { [protectedSubject]: { executionAttemptId: 'attempt-a' } },
+      allowedSubscriptionSubjects: ['workload.*', 'worker.*'],
+      requiredSubscriptionFilters: { [protectedSubject]: { executionId: 'attempt-a' } },
     });
 
     const restrictedSocket = new MockWebSocket();
@@ -1466,7 +1466,7 @@ describe('outbound subject restriction on forwarding', () => {
 // ---------------------------------------------------------------------------
 
 describe('outbound required recipient filters', () => {
-  const PROTECTED_SUBJECT = 'execution-attempt.operation.deliver';
+  const PROTECTED_SUBJECT = 'workload.operation.deliver';
 
   afterEach(() => {
     clearHmacIdentitySecretsForTesting();
@@ -1482,12 +1482,12 @@ describe('outbound required recipient filters', () => {
       [attemptBSocket, 'attempt-b'],
     ]);
     registerHmacIdentitySecret('attempt-a', 'attempt-a-secret', {
-      partyKind: 'test.workflow-execution-attempt',
-      requiredSubscriptionFilters: { [PROTECTED_SUBJECT]: { executionAttemptId: 'attempt-a' } },
+      partyKind: 'test.job-run',
+      requiredSubscriptionFilters: { [PROTECTED_SUBJECT]: { executionId: 'attempt-a' } },
     });
     registerHmacIdentitySecret('attempt-b', 'attempt-b-secret', {
-      partyKind: 'test.workflow-execution-attempt',
-      requiredSubscriptionFilters: { [PROTECTED_SUBJECT]: { executionAttemptId: 'attempt-b' } },
+      partyKind: 'test.job-run',
+      requiredSubscriptionFilters: { [PROTECTED_SUBJECT]: { executionId: 'attempt-b' } },
     });
     const registry = new ClientRegistry({
       requiredSubscriptionFilterResolver: (client) => {
@@ -1501,10 +1501,10 @@ describe('outbound required recipient filters', () => {
 
     const event = {
       type: 'event' as const,
-      namespace: 'execution-attempt',
+      namespace: 'workload',
       subject: 'operation.deliver',
       messageId: 'attempt-filtered-event',
-      payload: { executionAttemptId: 'attempt-a' },
+      payload: { executionId: 'attempt-a' },
     };
     registry.forwardEventToClients(senderSocket, event, sendSafely);
     expect(sendSafely).toHaveBeenCalledWith(attemptASocket, expect.any(String));
@@ -1539,8 +1539,8 @@ describe('outbound required recipient filters', () => {
     });
     registry.addClient(socket);
     registerHmacIdentitySecret(identityId, secret, {
-      partyKind: 'test.workflow-execution-attempt',
-      requiredSubscriptionFilters: { [PROTECTED_SUBJECT]: { executionAttemptId: 'attempt-a' } },
+      partyKind: 'test.job-run',
+      requiredSubscriptionFilters: { [PROTECTED_SUBJECT]: { executionId: 'attempt-a' } },
     });
     await routeMessage(
       {
@@ -1552,20 +1552,20 @@ describe('outbound required recipient filters', () => {
       socket,
       makeDeps({ auth, registry }),
     );
-    const payload = { executionAttemptId: 'attempt-b', kind: 'expected' };
+    const payload = { executionId: 'attempt-b', kind: 'expected' };
     expect(registry.getInterestedClients(PROTECTED_SUBJECT, payload)).toEqual([]);
     registerHmacIdentitySecret(identityId, secret, {
-      partyKind: 'test.workflow-execution-attempt',
+      partyKind: 'test.job-run',
       requiredSubscriptionFilters: {
-        [PROTECTED_SUBJECT]: { executionAttemptId: { $in: ['attempt-a', 'attempt-b'] } },
+        [PROTECTED_SUBJECT]: { executionId: { $in: ['attempt-a', 'attempt-b'] } },
       },
     });
     expect(registry.getInterestedClients(PROTECTED_SUBJECT, payload)).toEqual([socket]);
     expect(registry.getInterestedRequestClients(PROTECTED_SUBJECT, payload)).toEqual([socket]);
     expect(registry.getInterestedClients(PROTECTED_SUBJECT, { ...payload, kind: 'unwanted' })).toEqual([]);
     registerHmacIdentitySecret(identityId, secret, {
-      partyKind: 'test.workflow-execution-attempt',
-      requiredSubscriptionFilters: { [PROTECTED_SUBJECT]: { executionAttemptId: 'attempt-c' } },
+      partyKind: 'test.job-run',
+      requiredSubscriptionFilters: { [PROTECTED_SUBJECT]: { executionId: 'attempt-c' } },
     });
     expect(registry.getInterestedClients(PROTECTED_SUBJECT, payload)).toEqual([]);
     expect(registry.getInterestedRequestClients(PROTECTED_SUBJECT, payload)).toEqual([]);
@@ -1586,12 +1586,12 @@ describe('outbound required recipient filters', () => {
       allowedMessageSubjects: [PROTECTED_SUBJECT],
     });
     registerHmacIdentitySecret('attempt-a', 'attempt-a-secret', {
-      partyKind: 'test.workflow-execution-attempt',
-      requiredSubscriptionFilters: { [PROTECTED_SUBJECT]: { executionAttemptId: 'attempt-a' } },
+      partyKind: 'test.job-run',
+      requiredSubscriptionFilters: { [PROTECTED_SUBJECT]: { executionId: 'attempt-a' } },
     });
     registerHmacIdentitySecret('attempt-b', 'attempt-b-secret', {
-      partyKind: 'test.workflow-execution-attempt',
-      requiredSubscriptionFilters: { [PROTECTED_SUBJECT]: { executionAttemptId: 'attempt-b' } },
+      partyKind: 'test.job-run',
+      requiredSubscriptionFilters: { [PROTECTED_SUBJECT]: { executionId: 'attempt-b' } },
     });
     const auth = makePerSocketAuth(identities, 'test.test-peer');
     const registry = new ClientRegistry({
@@ -1607,11 +1607,11 @@ describe('outbound required recipient filters', () => {
     await routeMessage(
       {
         type: 'broadcast',
-        namespace: 'execution-attempt',
+        namespace: 'workload',
         subject: 'operation.deliver',
         correlationId: 'attempt-filtered-broadcast',
         messageId: 'attempt-filtered-broadcast-id',
-        payload: { executionAttemptId: 'attempt-a' },
+        payload: { executionId: 'attempt-a' },
       },
       senderSocket,
       makeDeps({ auth, registry, sendSafely }),

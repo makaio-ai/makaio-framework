@@ -1,9 +1,15 @@
 import { describe, expect, it } from 'vitest';
-import * as storageDrizzle from '../index';
+import * as storageDrizzle from '@makaio/storage-drizzle';
+import * as postgresHostTransaction from '@makaio/storage-drizzle/internal/postgres-host-transaction';
 
 describe('@makaio/storage-drizzle main entry', () => {
   it('does not expose the runtime-specific database client factory', () => {
     expect('createDatabaseClient' in storageDrizzle).toBe(false);
+  });
+
+  it('exposes the PostgreSQL host session only through the internal entry', () => {
+    expect(storageDrizzle).not.toHaveProperty('getPostgresHostTransactionSession');
+    expect(Object.keys(postgresHostTransaction)).toEqual(['getPostgresHostTransactionSession']);
   });
 
   it('does not expose createSqliteRawSqlExecutor (engine-internal, kept off the barrel)', () => {

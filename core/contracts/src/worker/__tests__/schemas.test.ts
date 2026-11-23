@@ -49,7 +49,6 @@ describe('Worker bootstrap claim schema', () => {
   it('validates execution-scoped bootstrap claims without a repeated secret', () => {
     const request = WorkerSchemas['control.bootstrap.claim'].request.parse({
       executionId: 'exec-1',
-      executionAttemptId: 'attempt-1',
     });
     const response = WorkerSchemas['control.bootstrap.claim'].response.parse({
       status: 'granted',
@@ -57,7 +56,7 @@ describe('Worker bootstrap claim schema', () => {
       runtimeEnv: {},
     });
 
-    expect(request.executionAttemptId).toBe('attempt-1');
+    expect(request.executionId).toBe('exec-1');
     if (response.status !== 'granted') throw new Error('Expected a grant');
     expect(response.credentials.busAuthSecret).toBe('execution-secret');
     expect(response.runtimeEnv).toEqual({});
@@ -72,12 +71,11 @@ describe('Worker bootstrap claim schema', () => {
     ).toThrow();
   });
 
-  it('rejects bootstrap claim request with unknown fields', () => {
+  it('rejects an unknown identity key in bootstrap requests', () => {
     expect(() =>
       WorkerSchemas['control.bootstrap.claim'].request.parse({
         executionId: 'exec-1',
-        executionAttemptId: 'attempt-1',
-        unknownField: 'should-fail',
+        unknownIdentity: 'unsupported-id',
       }),
     ).toThrow();
   });
@@ -150,16 +148,14 @@ describe('Worker bootstrap claim schema', () => {
     expect(() =>
       WorkerSchemas['control.bootstrap.claim'].request.parse({
         executionId: '',
-        executionAttemptId: 'attempt-1',
       }),
     ).toThrow();
   });
 });
 
 describe('control.outcome.submit schema', () => {
-  it('validates outcome submission with executionAttemptId', () => {
+  it('validates outcome submission by run identity', () => {
     const request = WorkerSchemas['control.outcome.submit'].request.parse({
-      executionAttemptId: 'attempt-1',
       executionId: 'exec-1',
       result: {
         executionId: 'exec-1',
@@ -168,13 +164,12 @@ describe('control.outcome.submit schema', () => {
       },
     });
 
-    expect(request.executionAttemptId).toBe('attempt-1');
+    expect(request.executionId).toBe('exec-1');
     expect(request.result.status).toBe('completed');
   });
 
   it('validates failed outcome submission', () => {
     const request = WorkerSchemas['control.outcome.submit'].request.parse({
-      executionAttemptId: 'attempt-1',
       executionId: 'exec-1',
       result: {
         executionId: 'exec-1',
@@ -189,7 +184,6 @@ describe('control.outcome.submit schema', () => {
 
   it('validates cancelled outcome submission', () => {
     const request = WorkerSchemas['control.outcome.submit'].request.parse({
-      executionAttemptId: 'attempt-1',
       executionId: 'exec-1',
       result: {
         executionId: 'exec-1',
@@ -205,7 +199,6 @@ describe('control.outcome.submit schema', () => {
   it('rejects an outcome for a parked execution', () => {
     expect(
       WorkerSchemas['control.outcome.submit'].request.safeParse({
-        executionAttemptId: 'attempt-1',
         executionId: 'exec-1',
         result: {
           executionId: 'exec-1',
@@ -221,7 +214,6 @@ describe('control.outcome.submit schema', () => {
   it('rejects outcome when envelope and result executionId differ', () => {
     expect(() =>
       WorkerSchemas['control.outcome.submit'].request.parse({
-        executionAttemptId: 'attempt-1',
         executionId: 'exec-1',
         result: {
           executionId: 'exec-2',
@@ -249,7 +241,6 @@ describe('control.outcome.submit schema', () => {
   it('rejects outcome request with unknown fields (strict)', () => {
     expect(() =>
       WorkerSchemas['control.outcome.submit'].request.parse({
-        executionAttemptId: 'attempt-1',
         executionId: 'exec-1',
         result: {
           executionId: 'exec-1',
@@ -262,7 +253,7 @@ describe('control.outcome.submit schema', () => {
   });
 
   it('returns ACK decision in response', () => {
-    for (const decision of ['accepted', 'duplicate', 'conflict', 'fenced'] as const) {
+    for (const decision of ['accepted', 'duplicate', 'conflict'] as const) {
       const response = WorkerSchemas['control.outcome.submit'].response.parse({
         decision,
       });

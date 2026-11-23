@@ -25,10 +25,14 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { sql, type SQL } from 'drizzle-orm';
 import { createBusInstance } from '@makaio/bus-core';
-import { WorkflowDefinitionSchema, WorkflowNamespace, WorkflowSubjects } from '@makaio/contracts';
+import {
+  WorkflowDefinitionSchema,
+  WorkflowNamespace,
+  WorkflowRunResultSchema,
+  WorkflowSubjects,
+} from '@makaio/contracts';
 import {
   registerDrizzleWorkflowStorage,
-  WorkflowAttemptOutcomeSchema,
   WorkflowStorageNamespace,
   WorkflowStorageSubjects,
 } from '@makaio/subsystem-workflow-engine';
@@ -846,9 +850,7 @@ describeStorageConformance('waiting-removal data migration', (config) => {
     // Own workflow attempt with a recorded `status: 'paused'` outcome and an opaque NUL elsewhere in the same
     // outcome text (unconverted outcome): stays byte-identical on Postgres for the
     // same whole-text reason and is rejected only when read, because the outcome codec no longer accepts
-    // `status: 'paused'` after this migration ships
-    // (`framework/subsystems/workflow-engine/src/execution-attempt-owner-recovery.ts`,
-    // `framework/storage/pg/src/execution-attempt-control.ts`). On SQLite it still converts to
+    // `status: 'paused'` after this migration ships. On SQLite it still converts to
     // `failed` with the named-pair reason like every other `paused` outcome.
     await run(
       ctx,
@@ -1270,7 +1272,7 @@ describeStorageConformance('waiting-removal data migration', (config) => {
           )
         )[0];
         if (dialect === 'sqlite') {
-          expect(WorkflowAttemptOutcomeSchema.parse(outcomes.get('attempt-paused-nul'))).toEqual({
+          expect(WorkflowRunResultSchema.parse(outcomes.get('attempt-paused-nul'))).toEqual({
             executionId: 'ev-done',
             workflowId: 'wf',
             status: 'failed',
@@ -1279,7 +1281,7 @@ describeStorageConformance('waiting-removal data migration', (config) => {
         } else {
           const parsedOutcome = JSON.parse(String(pausedNulRow?.['outcome_text']));
           expect(parsedOutcome['status']).toBe('paused');
-          expect(() => WorkflowAttemptOutcomeSchema.parse(parsedOutcome)).toThrow();
+          expect(() => WorkflowRunResultSchema.parse(parsedOutcome)).toThrow();
         }
         // Observable count: only the NUL and surrogate probes remain in each class on Postgres;
         // SQLite leaves neither behind (count 0 for both).
@@ -1375,7 +1377,7 @@ describeStorageConformance('waiting-removal data migration', (config) => {
 
     it('rewrites a stored paused outcome as a failed result with the named-pair reason, and keeps other outcomes', () => {
       const { outcomes } = afterData();
-      const rewritten = WorkflowAttemptOutcomeSchema.parse(outcomes.get('attempt-ev-status'));
+      const rewritten = WorkflowRunResultSchema.parse(outcomes.get('attempt-ev-status'));
       expect(rewritten).toEqual({
         executionId: 'ev-status',
         workflowId: 'wf',
@@ -1391,7 +1393,7 @@ describeStorageConformance('waiting-removal data migration', (config) => {
 
     it('a reason with a space and a backslash in each identifier round-trips byte-exactly', () => {
       const { outcomes } = afterData();
-      const trickyRewritten = WorkflowAttemptOutcomeSchema.parse(outcomes.get('attempt-ev-tricky'));
+      const trickyRewritten = WorkflowRunResultSchema.parse(outcomes.get('attempt-ev-tricky'));
       expect(trickyRewritten).toEqual({
         executionId: 'ev-tricky',
         workflowId: 'wf',

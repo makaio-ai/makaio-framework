@@ -290,11 +290,9 @@ const ContainerLocalSessionSpawnRequestSchema = ContainerLocalSpawnRequestBaseSc
 
 /** Container-local workflow request with one complete execution identity. */
 export const ContainerLocalWorkflowSpawnRequestSchema = ContainerLocalSpawnRequestBaseSchema.extend({
-  /** Workflow execution identifier. */
-  executionId: z.string(),
-  /** Authority-created attempt identifier for this workflow dispatch. */
-  executionAttemptId: z.string(),
-  /** Immutable bootstrap deadline from the attempt's durable record. */
+  /** Job run for this workflow dispatch. */
+  executionId: z.string().min(1),
+  /** Immutable bootstrap deadline for this run. */
   bootstrapDeadlineAt: WorkerBootstrapDeadlineAtSchema,
 }).strict();
 export type ContainerLocalWorkflowSpawnRequest = z.infer<typeof ContainerLocalWorkflowSpawnRequestSchema>;

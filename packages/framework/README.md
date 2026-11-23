@@ -98,6 +98,20 @@ A `postgres://` or `postgresql://` URL from the first two sources selects Postgr
 
 **Switching an existing SQLite install.** Install `@makaio/storage-pg` and set `MAKAIO_DATABASE_URL`; delete any custom `dbPath` wiring (a URL outranks it, so leftover path configuration is inert). Data is not migrated across backends — the Postgres database starts empty.
 
+## Upgrading workflow workers
+
+Before upgrading a host that already provisions workflow workers, check for
+open attempts carrying an older identifier.
+
+```sql
+SELECT execution_attempt_id, execution_id FROM execution_attempt WHERE execution_attempt_id <> execution_id AND settlement_kind IS NULL
+```
+
+Let those attempts finish or cancel them through the current host, then run the
+query again. An open historical attempt causes the upgraded host to refuse a
+new attempt for that workflow run. A replay of an existing owner request still
+returns its original attempt.
+
 ## Documentation
 
 - [Getting Started](https://github.com/makaio-ai/makaio-framework/blob/main/docs/getting-started.md)

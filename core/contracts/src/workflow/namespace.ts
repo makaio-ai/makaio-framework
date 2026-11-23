@@ -364,7 +364,7 @@ export const WorkflowSchemas = {
    *
    * Trust-boundary rules (enforced by the handler, not the schema):
    * - Local callers: always permitted.
-   * - Direct HMAC callers: authenticated `workflow-execution-attempt` peer
+   * - Direct HMAC callers: authenticated `makaio.job-run` peer
    *   whose Authority-issued `executionId` claim matches the request.
    * - Relay/E2E callers: authenticated, encrypted peer bound to `executionId`.
    */

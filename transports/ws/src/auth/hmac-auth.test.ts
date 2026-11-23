@@ -88,7 +88,7 @@ describe('HmacAuth claims propagation', () => {
     const executionId = 'exec-claims-test';
     const secret = 'claims-test-secret';
     registerHmacIdentitySecret(attemptId, secret, {
-      partyKind: 'workflow.execution-attempt',
+      partyKind: 'test.job-run',
       claims: { executionId },
     });
 
@@ -111,7 +111,7 @@ describe('HmacAuth claims propagation', () => {
     expect(ctx).toBeDefined();
     expect(ctx?.authenticated).toBe(true);
     expect(ctx?.caller).toEqual({
-      kind: 'workflow.execution-attempt',
+      kind: 'test.job-run',
       id: attemptId,
       claims: { executionId },
     });
@@ -132,7 +132,7 @@ describe('HmacAuth secret rotation fencing', () => {
     const executionId = 'exec-rotate-fence';
     const oldSecret = 'old-secret-fence';
     registerHmacIdentitySecret(attemptId, oldSecret, {
-      partyKind: 'workflow.execution-attempt',
+      partyKind: 'test.job-run',
       claims: { executionId },
     });
 
@@ -166,7 +166,7 @@ describe('HmacAuth secret rotation fencing', () => {
     const oldSecret = 'old-secret-reconnect';
     const newSecret = 'new-secret-reconnect';
     registerHmacIdentitySecret(attemptId, oldSecret, {
-      partyKind: 'workflow.execution-attempt',
+      partyKind: 'test.job-run',
       claims: { executionId },
     });
 
@@ -202,7 +202,7 @@ describe('HmacAuth secret rotation fencing', () => {
     expect(serverAuth.isSocketAuthenticated(socket2)).toBe(true);
     expect(serverAuth.getReceiveContext(socket2)?.authenticated).toBe(true);
     expect(serverAuth.getReceiveContext(socket2)?.caller).toEqual({
-      kind: 'workflow.execution-attempt',
+      kind: 'test.job-run',
       id: attemptId,
       claims: { executionId },
     });
@@ -216,11 +216,11 @@ describe('HmacAuth secret rotation fencing', () => {
     const secretB = 'secret-B';
 
     registerHmacIdentitySecret(attemptA, secretA, {
-      partyKind: 'workflow.execution-attempt',
+      partyKind: 'test.job-run',
       claims: { executionId },
     });
     registerHmacIdentitySecret(attemptB, secretB, {
-      partyKind: 'workflow.execution-attempt',
+      partyKind: 'test.job-run',
       claims: { executionId },
     });
 
@@ -253,7 +253,7 @@ describe('HmacAuth secret rotation fencing', () => {
     // Revoke attempt A by clearing its registry entry.
     clearHmacIdentitySecretsForTesting();
     registerHmacIdentitySecret(attemptB, secretB, {
-      partyKind: 'workflow.execution-attempt',
+      partyKind: 'test.job-run',
       claims: { executionId },
     });
 
@@ -267,7 +267,7 @@ describe('HmacAuth secret rotation fencing', () => {
     const executionId = 'exec-fenced-ctx';
     const oldSecret = 'old-fenced-secret';
     registerHmacIdentitySecret(attemptId, oldSecret, {
-      partyKind: 'workflow.execution-attempt',
+      partyKind: 'test.job-run',
       claims: { executionId },
     });
 

@@ -36,6 +36,7 @@ import {
   type FinalizerDeps,
   type WorkflowSuccessFinalizer,
 } from './workflow-execution-finalizer.js';
+import type { RunCancellationHook, WorkflowRunnerSelector } from './workflow-runner-selector.js';
 import type { RunnerTaskDeps } from './workflow-runner-tasks.js';
 import { startExecution, startFileExecution, type StartExecutionDeps } from './workflow-execution-start.js';
 import { rerunExecution } from './workflow-execution-rerun.js';
@@ -47,20 +48,9 @@ import { resolveWorkflowArtifactBinding } from './artifact-context/artifact-bind
 import { normalizeConfig, normalizeStartInput } from './workflow-executor-input-normalization.js';
 import { buildWorkflowRunContext } from './workflow-run-context-builder.js';
 import { registerAuthorityStateBootstrapHandler } from './authority-state-bootstrap.js';
-import { registerOutcomeSubmissionHandler } from './workflow-outcome-submission.js';
-import { registerRuntimeLifecycleHandlers } from './runtime-lifecycle-handlers.js';
-import { registerBootstrapStartHandler } from './bootstrap-start-handler.js';
 import { registerDelegateResultFinalizationGateway } from './delegate-result-finalization-gateway.js';
-import type { ExecutionAttemptAuthority } from './execution-attempt-authority.js';
-import type {
-  WorkflowAttemptOutcome,
-  WorkflowAttemptTechnicalFailure,
-  WorkflowAttemptCancellation,
-} from './workflow-attempt-outcome.js';
 import { acceptWorkflowTechnicalFailure } from './workflow-technical-failure.js';
 import { acceptWorkflowCancellation } from './workflow-cancellation-outcome.js';
-import { acceptWorkflowOwnerOutcome } from './workflow-owner-outcome.js';
-import type { OutcomeConvergenceInput } from './outcome-convergence.js';
 import {
   acceptAuthorityRunnerResult as acceptRunnerResult,
   loadAuthorityRunnerContext as loadRunnerContext,
@@ -81,7 +71,6 @@ export class WorkflowExecutor extends BaseService {
   public static readonly storage = { drizzle: registerDrizzleWorkflowStorage } as const;
 
   private readonly config: ExecutorConfig;
-  private stopBootstrapWaits?: () => void;
   private readonly activeExecutions = new Map<string, ActiveExecution>();
   private readonly executionTasks = new Map<string, Promise<void>>();
   private readonly shellAbortControllers = new Map<string, AbortController>();
@@ -95,6 +84,8 @@ export class WorkflowExecutor extends BaseService {
   private readonly durableLifecycleTransitions = new Map<string, Promise<void>>();
   private readonly lifecyclePublications = new Map<string, Promise<void>>();
   private readonly publishingLifecycleExecutions = new Set<string>();
+  private runnerSelection?: { readonly select: WorkflowRunnerSelector };
+  private runCancellation?: { readonly record: RunCancellationHook };
   private readonly materializationSpecResolvers = new Set<WorkflowMaterializationSpecResolver>();
 
   /**
@@ -103,17 +94,43 @@ export class WorkflowExecutor extends BaseService {
    * @param namespaces - Extension capability for success finalizer registration.
    * @param config - Optional partial configuration (merged with defaults)
    * @param workflowRunner - Optional workflow-level runner for isolated execution
-   * @param executionAttemptAuthority - Optional Authority for Worker dispatch runners
    */
   public constructor(
     bus: IMakaioBus,
     private readonly namespaces: ExtensionContext['namespaces'],
     config?: Partial<ExecutorConfig>,
     private readonly workflowRunner?: IWorkflowRunner,
-    private readonly executionAttemptAuthority?: ExecutionAttemptAuthority<WorkflowAttemptOutcome>,
   ) {
     super(bus);
     this.config = { ...DEFAULT_EXECUTOR_CONFIG, ...config };
+  }
+
+  /**
+   * Register the single host selector for definition-backed runs.
+   * @param select - Selector called with the originating execution request.
+   * @returns Idempotent release of this registration.
+   */
+  public registerWorkflowRunnerSelector(select: WorkflowRunnerSelector): () => void {
+    if (this.runnerSelection !== undefined) throw new Error('Workflow runner selector already registered');
+    const registration = { select };
+    this.runnerSelection = registration;
+    return () => {
+      if (this.runnerSelection === registration) this.runnerSelection = undefined;
+    };
+  }
+
+  /**
+   * Register the single host recorder of cancel intent.
+   * @param record - Hook called before the owner transitions to cancelled.
+   * @returns Idempotent release of this registration.
+   */
+  public registerRunCancellationHook(record: RunCancellationHook): () => void {
+    if (this.runCancellation !== undefined) throw new Error('Run cancellation hook already registered');
+    const registration = { record };
+    this.runCancellation = registration;
+    return () => {
+      if (this.runCancellation === registration) this.runCancellation = undefined;
+    };
   }
 
   /**
@@ -214,54 +231,26 @@ export class WorkflowExecutor extends BaseService {
   }
 
   /**
-   * Fail the workflow owner after a technical Attempt outcome has been committed.
+   * Fail the workflow owner after the authority reports a technical failure.
    * Startup and Preparation failures can precede loading the workflow definition,
    * so this path uses the durable owner context, not a fabricated runner result.
    * @param call - Call context of the work that commits the failure.
    * @param executionId - Durable authority-owned execution identity.
-   * @param failure - Canonical technical failure retained in Attempt storage.
+   * @param error - Final error text reported by the authority.
    * @returns The durable status after idempotent failure convergence.
    */
-  public readonly acceptAuthorityTechnicalFailure = (
-    call: CallContext,
-    executionId: string,
-    failure: WorkflowAttemptTechnicalFailure,
-  ) => acceptWorkflowTechnicalFailure(call, this.buildFinalizerDeps(), executionId, failure);
+  public readonly acceptAuthorityTechnicalFailure = (call: CallContext, executionId: string, error: string) =>
+    acceptWorkflowTechnicalFailure(call, this.buildFinalizerDeps(), executionId, error);
 
   /**
-   * Cancel the workflow owner after its technical Attempt cancellation is committed.
+   * Cancel the workflow owner after the authority reports that work has stopped.
    * @param call - Call context of the work that commits the cancellation.
    * @param executionId - Durable authority-owned execution identity.
-   * @param cancellation - Canonical cancellation retained in Attempt storage.
+   * @param reason - Optional explanation supplied by the authority.
    * @returns The durable status after idempotent cancellation convergence.
    */
-  public readonly acceptAuthorityCancellation = (
-    call: CallContext,
-    executionId: string,
-    cancellation: WorkflowAttemptCancellation,
-  ) => acceptWorkflowCancellation(call, this.buildFinalizerDeps(), executionId, cancellation);
-
-  /**
-   * Interpret a canonical Attempt outcome under durable owner lifecycle ordering.
-   * @param input - Committed outcome and its frozen control observation.
-   * @returns Explicit lifecycle projection or technical-fact-only acceptance.
-   */
-  public readonly acceptAuthorityOutcome = (input: OutcomeConvergenceInput<WorkflowAttemptOutcome>) => {
-    const { call } = input;
-    return acceptWorkflowOwnerOutcome(
-      call,
-      {
-        lifecycle: this.buildFinalizerDeps(),
-        acceptTerminalResult: (outcomeCall, executionId, result) =>
-          this.acceptAuthorityRunnerResult(outcomeCall, executionId, result),
-        acceptTechnicalFailure: (outcomeCall, executionId, failure) =>
-          this.acceptAuthorityTechnicalFailure(outcomeCall, executionId, failure),
-        acceptCancellation: (outcomeCall, executionId, cancellation) =>
-          this.acceptAuthorityCancellation(outcomeCall, executionId, cancellation),
-      },
-      input,
-    );
-  };
+  public readonly acceptAuthorityCancellation = (call: CallContext, executionId: string, reason?: string) =>
+    acceptWorkflowCancellation(call, this.buildFinalizerDeps(), executionId, reason);
 
   private async loadAuthorityRunnerContext(call: CallContext, executionId: string, workflowId: string) {
     return loadRunnerContext(call, this.bus, executionId, workflowId);
@@ -295,59 +284,50 @@ export class WorkflowExecutor extends BaseService {
     );
     // Delegate results complete already-admitted remote work during the drain.
     this.addCleanup(registerDelegateResultFinalizationGateway(this.bus));
-    if (this.executionAttemptAuthority !== undefined) {
-      this.stopBootstrapWaits = registerBootstrapStartHandler(this.bus, this.executionAttemptAuthority);
-      this.addCleanup(this.stopBootstrapWaits);
-      // Outcome submission completes already-admitted worker attempts.
-      this.addCleanup(
-        registerOutcomeSubmissionHandler(this.bus, {
-          bus: this.bus,
-          authority: this.executionAttemptAuthority,
-          acceptOutcome: this.acceptAuthorityOutcome,
-        }),
-      );
-      // Runtime registration and operation admission are the WorkerPool
-      // protocol that onDestroy drains; keep them available until it settles.
-      registerRuntimeLifecycleHandlers(this.bus, this.executionAttemptAuthority, (cleanup) => this.addCleanup(cleanup));
-    }
     registerWorkflowStorageDelegationHandlers(this.bus).forEach((cleanup) => this.addHandlerCleanup(cleanup));
     registerWorkflowStateHandlers(this.bus).forEach((cleanup) => this.addHandlerCleanup(cleanup));
   }
 
   /**
-   * Release in-flight executions and abort shell processes.
-   * Called by `destroy()` before handler unsubscription.
+   * Request cancellation of every active execution before draining runners.
+   * @param call - Call context of the host shutdown.
+   * @param reason - Reason recorded with each cancelled execution.
    */
-  protected async onDestroy(): Promise<void> {
-    // BaseService runs addCleanup after onDestroy: stop bootstrap waits before draining work.
-    this.stopBootstrapWaits?.();
+  public async cancelActiveRuns(call: CallContext, reason: string): Promise<void> {
     const finalizerDeps = this.buildFinalizerDeps();
-    const call = this.bus.own('stop');
     // 1. Cancel all active executions (aborts controllers, schedules hard-kill timers).
     await Promise.allSettled(
       [...this.activeExecutions.keys()].map(async (executionId) => {
-        const cancelled = await requestExecutionCancellation(
-          call,
-          finalizerDeps,
-          executionId,
-          'Workflow engine shutdown',
-        );
+        const cancelled = await requestExecutionCancellation(call, finalizerDeps, executionId, reason);
         if (cancelled) {
           this.workflowAbortControllers.get(executionId)?.abort();
           this.workflowAbortControllers.delete(executionId);
         }
       }),
     );
-    // 2. Abort all pending workflow-level runners (cooperative cancellation).
+  }
+
+  /**
+   * Abort and drain runner tasks and pending lifecycle operations.
+   * @param _call - Call context of the host shutdown.
+   */
+  public async settleRuns(_call: CallContext): Promise<void> {
+    // Abort all pending workflow-level runners (cooperative cancellation).
     for (const controller of this.workflowAbortControllers.values()) {
       controller.abort();
     }
     this.workflowAbortControllers.clear();
-    // 3. Await all execution tasks to settle (runners terminate via abort or forceKill).
+    // Await all execution tasks to settle (runners terminate via abort or forceKill).
     await Promise.allSettled(this.executionTasks.values());
     await Promise.allSettled(this.durableLifecycleTransitions.values());
     await Promise.allSettled(this.lifecyclePublications.values());
-    // 4. Clean up remaining timers and maps after all tasks have settled.
+  }
+
+  /** Release in-flight executions and abort shell processes. */
+  protected async onDestroy(): Promise<void> {
+    const call = this.bus.own('stop');
+    await this.cancelActiveRuns(call, 'Workflow engine shutdown');
+    await this.settleRuns(call);
     for (const controller of this.shellAbortControllers.values()) {
       controller.abort();
     }
@@ -368,19 +348,14 @@ export class WorkflowExecutor extends BaseService {
    * @returns Finalizer dependency bundle.
    */
   private buildFinalizerDeps(): FinalizerDeps {
-    const authority = this.executionAttemptAuthority;
     return {
       bus: this.bus,
       activeExecutions: this.activeExecutions,
       shellAbortControllers: this.shellAbortControllers,
       activeRunnerSteps: this.activeRunnerSteps,
       cancelTimeoutMs: this.config.cancelTimeoutMs,
-      requestAttemptCancellation:
-        authority === undefined
-          ? undefined
-          : (executionId, reason) => authority.requestCancellation({ executionId, reason }),
-      notifyAttemptCancellation: (call, executionId, reason) =>
-        this.notifyAttemptCancellation(call, executionId, reason),
+      recordCancellationIntent: this.runCancellation?.record,
+      notifyRunCancellation: (call, executionId, reason) => this.notifyRunCancellation(call, executionId, reason),
       successFinalizers: this.successFinalizers,
       resolveSuccessFinalizerId: (executionId) => this.activeExecutions.get(executionId)?.workflow.successFinalizerId,
       durableLifecycleTransitions: this.durableLifecycleTransitions,
@@ -395,7 +370,7 @@ export class WorkflowExecutor extends BaseService {
    * @param executionId - Owner whose cancellation request was accepted.
    * @param reason - Optional cancellation explanation.
    */
-  private async notifyAttemptCancellation(call: CallContext, executionId: string, reason?: string): Promise<void> {
+  private async notifyRunCancellation(call: CallContext, executionId: string, reason?: string): Promise<void> {
     this.workflowAbortControllers.get(executionId)?.abort(reason ?? WORKFLOW_CANCELLED_REASON);
     await this.bus
       .emit(call, createWorkflowCancelSubject(`workflow.${executionId}.cancel`), { executionId, reason })
@@ -470,13 +445,13 @@ export class WorkflowExecutor extends BaseService {
       activeExecutions: this.activeExecutions,
       executionTasks: this.executionTasks,
       workflowRunner: this.workflowRunner,
+      workflowRunnerSelector: this.runnerSelection?.select,
       buildRunContext: (params) => buildWorkflowRunContext(params, this.config),
       buildRunnerTaskDeps: (runner) => this.buildRunnerTaskDeps(runner),
       buildFinalizerDeps: () => this.buildFinalizerDeps(),
       resolveExecutionWorkspaceRoot: (call, parentSessionId) =>
         this.resolveExecutionWorkspaceRoot(call, parentSessionId),
       runExecution: (call, executionId) => this.runExecution(call, executionId),
-      executionAttemptAuthority: this.executionAttemptAuthority,
       materializationSpecResolvers: this.materializationSpecResolvers,
     };
   }

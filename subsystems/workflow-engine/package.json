@@ -6,11 +6,6 @@
   "private": true,
   "exports": {
     ".": "./src/index.ts",
-    "./execution-attempt-repository": "./src/execution-attempt-repository.ts",
-    "./provider-operation": "./src/provider-operation.ts",
-    "./testing": "./src/testing/index.ts",
-    "./testing/conformance": "./src/testing/conformance.ts",
-    "./testing/sqlite": "./src/testing/sqlite.ts",
     "./package": "./src/package.ts",
     "./workflow-orchestrator": "./src/workflow-orchestrator.ts",
     "./workflow-trigger-binding-consumer": "./src/workflow-trigger-binding-consumer.ts",
@@ -47,11 +42,6 @@
   "publishConfig": {
     "exports": {
       ".": "./dist/index.mjs",
-      "./execution-attempt-repository": "./dist/execution-attempt-repository.mjs",
-      "./provider-operation": "./dist/provider-operation.mjs",
-      "./testing": "./dist/testing/index.mjs",
-      "./testing/conformance": "./dist/testing/conformance.mjs",
-      "./testing/sqlite": "./dist/testing/sqlite.mjs",
       "./package": "./dist/package.mjs",
       "./workflow-orchestrator": "./dist/workflow-orchestrator.mjs",
       "./workflow-trigger-binding-consumer": "./dist/workflow-trigger-binding-consumer.mjs",

@@ -4,7 +4,6 @@ import { createTestCall } from '@makaio/test-utils';
 import { type IWorkflowRunner, type WorkflowRunnerCompletion, WorkflowRunContextSchema } from '@makaio/contracts';
 import { WorkflowSubjects } from '../namespace.js';
 import { WorkflowStorageSubjects } from '../storage/namespace.js';
-import { toCommittedWorkflowRunnerCompletion } from '../workflow-attempt-outcome.js';
 import { type ActiveExecution } from '../types.js';
 import { buildExecutionTask, type RunnerTaskDeps } from '../workflow-runner-tasks.js';
 import {
@@ -27,22 +26,9 @@ describe('recorded-only runner results', () => {
   });
 
   it.each([
-    {
-      scenario: 'records a failed stop diagnostic after public cancellation',
-      outcomeStatus: 'technical-failure',
-      abort: true,
-    },
-    {
-      scenario: 'records a cancelled owner diagnostic without a local abort signal',
-      outcomeStatus: 'technical-failure',
-      abort: false,
-    },
-    {
-      scenario: 'records Completed after owner cancellation without success projection',
-      outcomeStatus: 'completed',
-      abort: false,
-    },
-  ] as const)('$scenario', async ({ abort, outcomeStatus }) => {
+    true,
+    false,
+  ])('preserves public cancellation for a recorded-only completion (local abort: %s)', async (abort) => {
     const workflow = createWorkflowDefinition({ id: 'wf-faulty-authority-commit' });
     const execution = createWorkflowExecution({ id: 'exec-faulty-authority-commit', workflowId: workflow.id });
     const runContext = WorkflowRunContextSchema.parse({
@@ -85,25 +71,11 @@ describe('recorded-only runner results', () => {
           }),
         ).toMatchObject({ cancelled: true });
         if (abort) workflowAbortControllers.get(execution.id)?.abort('Operator stopped work');
-        return toCommittedWorkflowRunnerCompletion(
-          {
-            outcome:
-              outcomeStatus === 'technical-failure'
-                ? {
-                    kind: 'technical-failure',
-                    stage: 'workload-invocation',
-                    message: 'Process group did not stop',
-                  }
-                : {
-                    executionId: config.executionId,
-                    workflowId: config.workflowId,
-                    status: 'completed',
-                  },
-            controlObservation: null,
-            acceptance: 'recorded-only',
-          },
-          config,
-        );
+        return {
+          state: 'authority-recorded-only',
+          executionId: config.executionId,
+          workflowId: config.workflowId,
+        };
       },
     };
     let observedFinalizerCalls = 0;

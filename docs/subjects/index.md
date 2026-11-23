@@ -11,11 +11,11 @@ next: false
 
 | Metric | Count |
 |--------|-------|
-| Namespaces | 109 |
-| Subjects | 975 (363 events, 612 RPCs) |
-| framework | 104 |
+| Namespaces | 108 |
+| Subjects | 964 (361 events, 603 RPCs) |
+| framework | 103 |
 | extension | 5 |
-| kind: bus | 79 |
+| kind: bus | 78 |
 | kind: adapter | 7 |
 | kind: client | 2 |
 | kind: extension | 3 |
@@ -59,7 +59,6 @@ next: false
 | [`code-execution`](./code-execution.md) | bus | 1 | 0E / 1R |
 | [`config`](./config.md) | bus | 2 | 0E / 2R |
 | [`credential`](./credential.md) | bus | 12 | 0E / 12R |
-| [`execution-attempt`](./execution-attempt.md) | bus | 11 | 2E / 9R |
 | [`facet`](./facet.md) | bus | 3 | 1E / 2R |
 | [`gitHook`](./githook.md) | bus | 3 | 2E / 1R |
 | [`harness`](./harness.md) | bus | 10 | 3E / 7R |

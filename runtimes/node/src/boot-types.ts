@@ -9,14 +9,8 @@ import type {
   MakaioNodeExtension,
   TrayManifest,
   WorkerContributionManifest,
-  WorkerDispatch,
-  WorkerRequirements,
 } from '@makaio/contracts';
-import type {
-  ExecutionAttemptRepository,
-  WorkflowAttemptOutcome,
-  WorkflowMaterializationSpecResolver,
-} from '@makaio/subsystem-workflow-engine';
+import type { WorkflowMaterializationSpecResolver } from '@makaio/subsystem-workflow-engine';
 import type { PersistedMachineIdentity } from '@makaio/machine-identity';
 import type { ConfigProvider } from '@makaio/providers';
 import type { FileAccessRuleProvider } from '@makaio/tools-core';
@@ -96,40 +90,6 @@ export type WorkflowRunnerBootOptions =
       readonly maxConcurrency?: number;
       /** Idle timeout before worker threads are reaped. */
       readonly idleTimeoutMs?: number;
-    }
-  | {
-      /**
-       * Delegate workflow executions to a product-owned Worker dispatch seam.
-       *
-       * The dispatch function is supplied by the host composition root and
-       * typically wired to `workerPool.dispatch`. Framework code remains
-       * decoupled from any pool implementation details.
-       */
-      readonly mode: 'worker';
-      /**
-       * Worker dispatch function injected by the host composition root.
-       *
-       * Called once per workflow execution with the full worker config and
-       * manifest. Product hosts may wire this to `workerPool.dispatch`.
-       * When omitted, the Node runtime dispatches through the framework
-       * `worker.dispatch` bus subject and requires a bus instance.
-       */
-      readonly dispatch?: WorkerDispatch;
-      /**
-       * Contribution manifest forwarded to each dispatch call.
-       *
-       * When omitted, no explicit manifest is forwarded. Product hosts that
-       * resolve project-level manifests in the dispatch function can leave this
-       * empty so the dispatch layer can perform resolution.
-       */
-      readonly manifest?: WorkerContributionManifest;
-      /**
-       * Optional resource requirements forwarded to pool dispatch.
-       *
-       * When provided, the pool uses these to select a compatible provider.
-       * Omit to accept any available pool with no constraints.
-       */
-      readonly requirements?: WorkerRequirements;
     };
 
 /**
@@ -491,21 +451,6 @@ export interface CoreBootOptions {
 
   /** Host-owned resolvers that create portable specs for path-backed workflow starts. */
   readonly workflowMaterializationSpecResolvers?: readonly WorkflowMaterializationSpecResolver[];
-
-  /**
-   * Injected execution attempt persistence port for Worker dispatch.
-   *
-   * Required when `workflowRunner.mode` is `'worker'`. The consuming
-   * Factory provides the concrete implementation that owns durable attempt
-   * records and accept/duplicate/conflict/fence decisions.
-   *
-   * When omitted, framework-only, in-process, and Piscina modes operate
-   * without attempt tracking. Worker mode fails fast at boot when this
-   * is not provided.
-   */
-  readonly executionAttemptRepository?: ExecutionAttemptRepository<WorkflowAttemptOutcome>;
-  /** Required when constructing an attempt Authority: creation-time bootstrap budget in milliseconds. */
-  readonly executionAttemptBootstrapTimeoutMs?: number;
 
   /**
    * Runtime data home for config, database, machine identity, and installed

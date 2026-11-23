@@ -167,7 +167,7 @@ describe.each(schemaCases)('$name run-context invariants', ({ schema }) => {
     const candidate = {
       ...context,
       suspensionStrategy: 'exit-and-redispatch', // legacy-input
-      dispatchMetadata: { target: 'worker-1' }, // legacy-input
+      workerRouting: { target: 'worker-1' }, // unknown-input
     };
 
     expect(schema.parse(candidate)).toEqual(context);

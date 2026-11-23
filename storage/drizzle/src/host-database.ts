@@ -3,6 +3,8 @@
  * @packageDocumentation
  */
 
+import type { SQL } from 'drizzle-orm';
+import type { RawSqlSession } from './raw-sql';
 import type { HostDatabase, HostTransaction } from '@makaio/contracts';
 import { HostTransactionError } from './host-transaction';
 import type { DriverTransaction, TransactionQueryContext } from './host-transaction';
@@ -19,8 +21,11 @@ interface Lifetime {
 
 /** What the storage owner knows about one minted `HostTransaction`. */
 interface TransactionState {
+  /** Database handle on which the host opened this transaction. */
+  readonly db: MakaioDatabase;
   /** Query surface bound to the driver transaction. */
   readonly context: TransactionQueryContext;
+  readonly driver: DriverTransaction;
   /** Authorization lifetime the context's guard reads. */
   readonly lifetime: Lifetime;
 }
@@ -73,7 +78,7 @@ function mintHostTransaction(db: MakaioDatabase, tx: DriverTransaction): MintedT
   // The single sanctioned assertion: `HostTransaction` is an opaque brand that only
   // the storage owner may mint, so no structurally valid value exists to build it from.
   const hostTx = Object.freeze({}) as HostTransaction;
-  transactions.set(hostTx, { context, lifetime });
+  transactions.set(hostTx, { db, context, driver: tx, lifetime });
   return { hostTx, lifetime };
 }
 
@@ -123,6 +128,15 @@ export function createHostDatabase(db: MakaioDatabase): HostDatabase {
  * @throws A `HostTransactionError` (`transaction-finished`) when the transaction already ended.
  */
 export function getTransactionQueryContext(tx: HostTransaction): TransactionQueryContext {
+  return requireTransactionState(tx).context;
+}
+
+/**
+ * Resolve a live host transaction and its underlying storage state.
+ * @param tx - Host transaction to authorize.
+ * @returns State owned by the storage facade.
+ */
+function requireTransactionState(tx: HostTransaction): TransactionState {
   const state = transactions.get(tx);
   if (state === undefined) {
     throw new HostTransactionError(
@@ -131,5 +145,60 @@ export function getTransactionQueryContext(tx: HostTransaction): TransactionQuer
     );
   }
   if (state.lifetime.finished) throw transactionFinishedError();
-  return state.context;
+  return state;
+}
+
+/**
+ * Adapt a PostgreSQL host transaction for storage implementations that use raw SQL.
+ * Each statement checks that the host callback still owns the driver transaction.
+ * @param tx - Transaction supplied by the host database callback.
+ * @param db - Database handle the adapter writes through.
+ * @returns Raw SQL session on the same pinned connection.
+ * @throws A `HostTransactionError` (`foreign-transaction`) when `tx` was not minted by `createHostDatabase`.
+ * @throws A `HostTransactionError` (`transaction-finished`) when the transaction already ended.
+ * @throws A `HostTransactionError` (`transaction-dialect-unsupported`) when the host is not using PostgreSQL.
+ * @throws A `HostTransactionError` (`transaction-database-mismatch`) when the transaction belongs to another database handle.
+ * @throws A `HostTransactionError` (`transaction-result-invalid`) when the driver cannot provide a valid query result.
+ * @internal
+ */
+export function getPostgresHostTransactionSession(tx: HostTransaction, db: MakaioDatabase): RawSqlSession {
+  const state = requireTransactionState(tx);
+  if (state.context.dialect !== 'postgres') {
+    throw new HostTransactionError('transaction-dialect-unsupported', 'Expected a PostgreSQL host transaction');
+  }
+  if (state.db !== db) {
+    throw new HostTransactionError(
+      'transaction-database-mismatch',
+      'The host transaction belongs to another database handle',
+    );
+  }
+  // The portable Drizzle type uses SQLite builders. PostgreSQL transactions
+  // execute through the pinned client, and their result is checked below.
+  const driver = state.driver as DriverTransaction & { execute?: (query: SQL) => PromiseLike<unknown> };
+  const { execute } = driver;
+  if (typeof execute !== 'function') {
+    throw new HostTransactionError('transaction-result-invalid', 'PostgreSQL host transaction has no execute method');
+  }
+  const executeLive = async (query: SQL): Promise<object> => {
+    requireTransactionState(tx);
+    const result = await execute.call(driver, query);
+    if (typeof result !== 'object' || result === null || Array.isArray(result)) {
+      throw new HostTransactionError('transaction-result-invalid', 'Expected a PostgreSQL query result');
+    }
+    return result;
+  };
+  return {
+    async run(query) {
+      const result = await executeLive(query);
+      const count = 'rowCount' in result ? result.rowCount : undefined;
+      return { rowsAffected: typeof count === 'number' ? count : 0 };
+    },
+    async all<TRow extends Record<string, unknown>>(query: SQL): Promise<TRow[]> {
+      const result = await executeLive(query);
+      if (!('rows' in result) || !Array.isArray(result.rows)) {
+        throw new HostTransactionError('transaction-result-invalid', 'Expected PostgreSQL result rows');
+      }
+      return result.rows as TRow[];
+    },
+  };
 }

@@ -248,6 +248,18 @@ describe('makaio config', () => {
   });
 
   describe('parseMakaioConfig', () => {
+    it('rejects the retired worker runner mode at the shared configuration boundary', () => {
+      expect(() => parseMakaioConfig({ workflowRunner: { mode: 'worker' } }, { baseDir: tmpDir, makaioHome })).toThrow(
+        'workflowRunner',
+      );
+    });
+
+    it('preserves the configurable Piscina runner settings', () => {
+      const workflowRunner = { mode: 'piscina', maxConcurrency: 2, idleTimeoutMs: 500 };
+      const parsed = parseMakaioConfig({ workflowRunner }, { baseDir: tmpDir, makaioHome });
+      expect(parsed.workflowRunner).toEqual(workflowRunner);
+    });
+
     it('treats null input as empty config with all defaults', () => {
       const parsed = parseMakaioConfig(null, { baseDir: tmpDir, makaioHome });
 

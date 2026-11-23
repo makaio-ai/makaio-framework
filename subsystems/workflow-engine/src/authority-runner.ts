@@ -8,8 +8,11 @@ import {
 } from '@makaio/contracts';
 import { WorkflowStorageSubjects } from './storage/namespace.js';
 import type { ActiveExecution } from './types.js';
-import { isAcceptedRunnerResultStatus, type FinalizerDeps } from './workflow-execution-finalizer.js';
-import { resolveAuthorityRunnerReplay } from './workflow-owner-outcome.js';
+import {
+  isAcceptedRunnerResultStatus,
+  recoverSuccessFinalizations,
+  type FinalizerDeps,
+} from './workflow-execution-finalizer.js';
 import { finalizeResolvedRunnerResult } from './workflow-runner-tasks.js';
 
 /** Executor state and callbacks the authority runner result acceptance needs. */
@@ -146,4 +149,38 @@ export async function acceptAuthorityRunnerResult(
     throw new Error(`Authority runner result did not settle compatibly with ${result.status}`);
   }
   return { accepted: true, status: settled.execution.status };
+}
+
+/**
+ * Resolve an already terminal runner result through existing success-finalizer recovery.
+ * @param call - Call context of the work that replays the runner result.
+ * @param deps - Owner storage and registered success finalizers.
+ * @param execution - Durable execution read before result acceptance.
+ * @param result - Correlated terminal workflow result.
+ * @returns Compatible terminal status, or undefined for a not-yet-terminal owner.
+ */
+async function resolveAuthorityRunnerReplay(
+  call: CallContext,
+  deps: FinalizerDeps,
+  execution: WorkflowExecution,
+  result: WorkflowRunResult,
+): Promise<WorkflowExecution['status'] | undefined> {
+  if (execution.status === 'finalizing') {
+    if (result.status !== 'completed') {
+      throw new Error('authority runner result conflicts with terminal execution');
+    }
+    await recoverSuccessFinalizations(call, deps);
+    const replayed = await deps.bus.request(call, WorkflowStorageSubjects.getExecution, { executionId: execution.id });
+    if (!replayed.execution) throw new Error('Authority runner success finalization execution is missing');
+    if (!isAcceptedRunnerResultStatus(replayed.execution.status, result.status)) {
+      throw new Error('authority runner result conflicts with terminal execution');
+    }
+    return replayed.execution.status;
+  }
+  if (execution.status !== 'completed' && execution.status !== 'failed' && execution.status !== 'cancelled') {
+    return undefined;
+  }
+  if (!isAcceptedRunnerResultStatus(execution.status, result.status))
+    throw new Error('authority runner result conflicts with terminal execution');
+  return execution.status;
 }

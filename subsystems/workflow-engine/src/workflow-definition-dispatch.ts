@@ -1,8 +1,8 @@
 import type { IWorkflowRunner } from '@makaio/contracts';
 import type { CallContext } from '@makaio/core';
 import type { StartExecutionDeps } from './workflow-execution-start.js';
+import type { WorkflowRunnerSelectionInput } from './workflow-runner-selector.js';
 import { buildExecutionTask, type DefinitionRunnerTaskParams } from './workflow-runner-tasks.js';
-import { createWorkerDispatchRunner } from './worker-dispatch-runner.js';
 
 /** Selected execution mechanism, retained from initial persistence through launch. */
 export interface DefinitionExecutionDispatch {
@@ -12,23 +12,17 @@ export interface DefinitionExecutionDispatch {
 
 /**
  * Select execution ownership and its runner together before persisting a run.
+ * @param call - Context of the request starting the definition.
  * @param deps - Shared executor state and callbacks.
- * @param workflow - Workflow whose requirements select the runner.
+ * @param input - Execution identity and declared requirements.
  * @returns The exact runner instance that will launch this execution.
  */
 export function selectDefinitionExecutionDispatch(
-  deps: StartExecutionDeps,
-  workflow: DefinitionRunnerTaskParams['workflow'],
+  call: CallContext,
+  deps: Pick<StartExecutionDeps, 'workflowRunner' | 'workflowRunnerSelector'>,
+  input: WorkflowRunnerSelectionInput,
 ): DefinitionExecutionDispatch {
-  const runner =
-    (deps.executionAttemptAuthority !== undefined
-      ? createWorkerDispatchRunner({
-          bus: deps.bus,
-          requirements: workflow.requirements,
-          authority: deps.executionAttemptAuthority,
-        })
-      : undefined) ?? deps.workflowRunner;
-  return { runner };
+  return { runner: deps.workflowRunnerSelector?.(call, input) ?? deps.workflowRunner };
 }
 
 /**

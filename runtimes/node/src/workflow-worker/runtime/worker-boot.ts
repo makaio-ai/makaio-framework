@@ -1,3 +1,4 @@
+import type { RegistrableBusNamespaceDefinition } from '@makaio/core';
 import { createBusInstance, type IMakaioBus } from '@makaio/bus-core';
 import { WebSocketClientTransport } from '@makaio/bus-transport-websocket';
 import {
@@ -10,7 +11,19 @@ import { McpServerBridgeService } from '@makaio/subsystem-mcp-http-server';
 import { ToolRegistry } from '@makaio/services-core/tools';
 import type { WorkerRuntimeContributions } from './worker-contributions.js';
 import { createWorkerBusAuth } from '../worker-bus-auth.js';
-import type { BootstrapRuntimeConnection } from '../bootstrap-start-client.js';
+
+/** Synchronously acquired connection ownership, including an unfinished connect. */
+export interface BootstrapRuntimeConnection {
+  /** Fresh isolated bus, owned until close or successful transfer. */
+  readonly bus: IMakaioBus;
+  /**
+   * Connect authentication and subscription readiness.
+   * @param signal - Cancellation of this pre-registration connection phase.
+   */
+  connect(signal: AbortSignal): Promise<void>;
+  /** Revoke this session, including an unfinished connection. */
+  close(): void | Promise<void>;
+}
 
 /**
  * Handle returned by {@link bootWorkerBus} representing an active
@@ -40,8 +53,7 @@ export interface WorkerRuntimeHandle {
  * transport for challenge/response authentication. An `identityId` turns that
  * handshake identity-bound, so the server resolves a trusted peer context for
  * the socket instead of authenticating it against the process-global secret.
- * Attempt-owned workers claim their `executionAttemptId` here, because the
- * Authority's attempt gates take their caller identity from that peer.
+ * The host owns the credential's identity and its authenticated claims.
  * @param config - Bus connection configuration from the workflow worker config.
  * @returns A handle with the bus instance, connect and close methods.
  */
@@ -49,11 +61,12 @@ export function createWorkerBus(config: {
   readonly busUrl?: string;
   readonly busAuth: WorkflowWorkerBusAuth;
   readonly identityId?: string;
+  readonly namespaces?: readonly RegistrableBusNamespaceDefinition[];
 }): BootstrapRuntimeConnection {
   const bus = createBusInstance();
   // The worker hosts the workflow contract locally without loading the workflow engine extension.
   bus.registerNamespaces([...FrameworkContractNamespaces, WorkflowNamespace]);
-  bus.registerNamespaces(FrameworkStorageNamespaces);
+  bus.registerNamespaces([...FrameworkStorageNamespaces, ...(config.namespaces ?? [])]);
 
   if (!config.busUrl) {
     return {

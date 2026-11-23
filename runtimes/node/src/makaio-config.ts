@@ -29,13 +29,16 @@ export interface ConfiguredDiscoveryRoot {
   readonly source: ConfiguredDiscoverySource;
 }
 
-const WorkflowRunnerConfigSchema = z
-  .object({
-    mode: z.enum(['in-process', 'piscina', 'worker']).optional(),
+const WorkflowRunnerConfigSchema = z.union([
+  z.strictObject({
+    mode: z.literal('in-process').optional(),
+  }),
+  z.strictObject({
+    mode: z.literal('piscina'),
     maxConcurrency: z.number().int().positive().optional(),
     idleTimeoutMs: z.number().int().positive().optional(),
-  })
-  .strict();
+  }),
+]);
 
 const MakaioConfigSchema = z
   .object({

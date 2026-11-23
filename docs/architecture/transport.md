@@ -144,51 +144,38 @@ to derive `TransportReceiveContext.caller`. Shared-secret HMAC alone supplies
 no per-identity caller. E2E auth derives the caller from the verified remote
 identity.
 
-#### Workflow Execution Attempt Access
+#### Job Run Access
 
-Node hosts can provision the canonical restricted identity for a remote workflow
-execution attempt through the public runtime API:
+Node hosts can register an identity-bound credential for a remote workflow run:
 
 ```ts
 import { registerWorkflowExecutionBusSecret } from '@makaio/framework/runtime-node/workflow-execution-bus-access';
 
 const registration = registerWorkflowExecutionBusSecret({
-  executionAttemptId,
+  identityId,
   executionId,
   secret: providerDeliveredSecret,
 });
 ```
 
-The registration sets the authenticated caller's kind to `makaio.job-run` and
-its ID to `executionAttemptId`. It attaches `executionId` as an authenticated
-claim, available as `ctx.call.caller.claims.executionId`, and defaults to the
-framework's execution-attempt subject set. Call `registration.cleanup()` when
-the attempt ends to revoke that exact secret.
+The registration sets the authenticated caller kind to `makaio.job-run`, uses
+`identityId` as the opaque transport identity, and attests the run identifier
+in `ctx.call.caller.claims.executionId`. Call `registration.cleanup()` when
+the run ends to revoke that exact credential.
 
-`allowedSubjects` has been removed. Use the directional authorization fields
-instead:
-
-| Field | Authorizes | Default for an execution-attempt registration |
+| Field | Authorizes | Default |
 | --- | --- | --- |
-| `allowedMessageSubjects` | Messages the attempt may send to the authority | The canonical attempt-to-authority subject matrix |
-| `allowedSubscriptionSubjects` | Subjects the attempt may advertise as request handlers | `execution-attempt.operation.deliver`, `execution-attempt.control.deliver`, and `workflow.<executionId>.cancel` |
+| `allowedMessageSubjects` | Messages the worker may send | Run inputs, outcome reporting, and execution services |
+| `allowedSubscriptionSubjects` | Request subjects the worker may advertise | `workflow.<executionId>.cancel` |
+| `requiredSubscriptionFilters` | Required payload filters for specific subscriptions | Host-defined |
 
-The workflow-attempt helpers apply the corresponding default matrix when either
-field is omitted. Each matrix is deny-by-default: a subject absent from its
-direction is rejected. At the lower-level `registerHmacIdentitySecret` API,
-providing either directional list makes an omitted other direction an empty
-allow-list; omitting both leaves that generic identity unrestricted.
+An omitted direction uses the workflow execution default. With the generic
+`registerHmacIdentitySecret` API, specifying either directional list makes an
+omitted direction empty. Omitting both leaves the generic identity unrestricted.
 
-An allowed subscription authorizes only an advertisement. It does not advertise
-request-handler interest: a remote attempt receives a server-routed request
-only after it has advertised a matching request subscription.
-
-`execution-attempt.operation.deliver` and `execution-attempt.control.deliver`
-are additionally server-bound to the authenticated
-Attempt identity. The WebSocket server evaluates the current required recipient
-filter for every outbound request, event, and broadcast delivery independently
-of subscription advertisements. An attempt cannot receive another Attempt's
-delivery by omitting or withdrawing subscriptions or forging a subscription filter.
+The WebSocket server checks required recipient filters on each outbound
+request, event, and broadcast independently of a peer's advertisements.
+Request routing also requires a matching advertised subscription.
 
 ### MessagePort Transport
 

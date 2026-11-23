@@ -22,17 +22,17 @@ describe('worker namespace', () => {
       expect(WorkerSubjects.runtime.inputs.get.subject).toBe('runtime.inputs.get');
     });
 
-    it('queries by Attempt identity without a caller-supplied owner', () => {
-      expect(WorkerSchemas['runtime.inputs.get'].request.parse({ executionAttemptId: 'attempt-1' })).toStrictEqual({
-        executionAttemptId: 'attempt-1',
+    it('queries by run identity without a caller-supplied attempt', () => {
+      expect(WorkerSchemas['runtime.inputs.get'].request.parse({ executionId: 'wfx-1' })).toStrictEqual({
+        executionId: 'wfx-1',
       });
       expect(
         WorkerSchemas['runtime.inputs.get'].request.safeParse({
-          executionAttemptId: 'attempt-1',
+          unknownIdentity: 'attempt-1',
           executionId: 'other-owner',
         }).success,
       ).toBe(false);
-      expect(WorkerSchemas['runtime.inputs.get'].request.safeParse({ executionAttemptId: '' }).success).toBe(false);
+      expect(WorkerSchemas['runtime.inputs.get'].request.safeParse({ executionId: '' }).success).toBe(false);
     });
 
     it('returns selected contribution inputs without defaulting', () => {
@@ -61,9 +61,19 @@ describe('worker namespace', () => {
     expect(WorkerSubjects.control.outcome.submit.subject).toBe('control.outcome.submit');
   });
 
+  it('accepts a run-keyed outcome and rejects the Attempt-only ACK', () => {
+    const outcome = {
+      executionId: 'wfx-1',
+      result: { executionId: 'wfx-1', workflowId: 'workflow', status: 'completed' },
+    };
+    const schema = WorkerSchemas['control.outcome.submit'];
+    expect(schema.request.parse(outcome)).toEqual(outcome);
+    expect(schema.request.safeParse({ ...outcome, unknownIdentity: 'unsupported-id' }).success).toBe(false);
+    expect(schema.response.safeParse({ decision: 'fenced' }).success).toBe(false);
+  });
+
   describe('control.cancel-undelivered', () => {
     const undelivered = {
-      executionAttemptId: 'attempt-1',
       executionId: 'wfx-1',
       environment: 'piscina',
       kind: 'unavailable',
@@ -106,7 +116,6 @@ describe('worker namespace', () => {
 
   it('keeps pool identity out of framework lifecycle payloads', () => {
     const parsed = WorkerSchemas['lifecycle.ready'].parse({
-      executionAttemptId: 'attempt-1',
       executionId: 'wfx-1',
       environment: 'piscina',
       poolId: 'pool-1',
@@ -114,7 +123,6 @@ describe('worker namespace', () => {
     });
 
     expect(parsed).toStrictEqual({
-      executionAttemptId: 'attempt-1',
       executionId: 'wfx-1',
       environment: 'piscina',
       metadata: { source: 'test' },
@@ -122,27 +130,23 @@ describe('worker namespace', () => {
     expect('poolId' in parsed).toBe(false);
   });
 
-  it('lifecycle events use executionAttemptId instead of nodeId', () => {
+  it('projects lifecycle events by run identity', () => {
     const parsed = WorkerSchemas['lifecycle.ready'].parse({
-      executionAttemptId: 'attempt-1',
       executionId: 'wfx-1',
       environment: 'piscina',
     });
 
-    expect(parsed.executionAttemptId).toBe('attempt-1');
-    expect('nodeId' in parsed).toBe(false);
+    expect(parsed).toEqual({ executionId: 'wfx-1', environment: 'piscina' });
   });
 
   it('keeps adapter composition out of lifecycle.ready payloads', () => {
     const parsed = WorkerSchemas['lifecycle.ready'].parse({
-      executionAttemptId: 'attempt-1',
       executionId: 'wfx-1',
       environment: 'piscina',
       adapters: ['claude-code'],
     });
 
     expect(parsed).toStrictEqual({
-      executionAttemptId: 'attempt-1',
       executionId: 'wfx-1',
       environment: 'piscina',
     });
