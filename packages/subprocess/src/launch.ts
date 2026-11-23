@@ -10,7 +10,8 @@
 import { constants as bufferConstants } from 'node:buffer';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { statSync } from 'node:fs';
-import { mergeEnvironment } from './launch-env.js';
+import type { Readable, Writable } from 'node:stream';
+import { mergeEnvironment, replacementSpawnEnvironment } from './launch-env.js';
 import { createOutputCapture, type LaunchCapturedOutput, type OutputCapture } from './launch-output.js';
 import type { ProcessExit, ProcessTreeEvidence, UnobservedExitReason } from './process-end.js';
 import {
@@ -61,6 +62,8 @@ export interface LaunchOptions extends SubprocessSpawnOptions {
   /** Cancels this one command. */
   readonly signal?: AbortSignal;
   readonly output: LaunchOutput;
+  /** Whether the caller sends the child input. Defaults to no input. */
+  readonly stdin?: 'none' | 'pipe';
   /**
    * Longest time, in milliseconds, the group's quiescence is awaited after the close. Defaults to 2000.
    * When set: a whole number from 1 to 2147483647, else refused as `invalid-stop-timing`.
@@ -91,8 +94,7 @@ export type LaunchStatus =
   | 'stop-failed'; // the exit stayed unobserved, or a stop did not prove the tree quiescent
 
 /**
- * Why no process ran. A closed list that later packages extend by members (owner closed, cwd outside the
- * workspace, reserved environment entry, home unavailable); the form stays.
+ * Why no local process ran.
  *
  * - `invalid-timeout`: `timeoutMs` is not a whole number from 1 to 2147483647.
  * - `invalid-stop-timing`: a set `killGraceMs` or `exitObservationMs` is not a whole number from 0 to 2147483647,
@@ -112,7 +114,7 @@ export type LaunchRefusal =
   | 'unsupported-platform';
 
 /** Facts about the spawned process group, recorded by the launcher itself. */
-export interface LaunchGroupFacts {
+export interface LocalLaunchGroupFacts {
   readonly pid: number;
   /** Evidence about the group after the leader's close. Never `not-owned`: a launch always owns its group. */
   readonly tree: ProcessTreeEvidence;
@@ -130,7 +132,7 @@ export interface LaunchResult {
    */
   readonly exit?: LeaderExit;
   /** Present exactly when a process was spawned. */
-  readonly group?: LaunchGroupFacts;
+  readonly group?: LocalLaunchGroupFacts;
   /** Present exactly when `output.kind === 'capture'` and a process was spawned. Truncated at the limit. */
   readonly output?: LaunchCapturedOutput;
   /** Present exactly when `status === 'spawn-failed'`. */
@@ -139,16 +141,22 @@ export interface LaunchResult {
   readonly message?: string;
 }
 
-/** A started (or refused) command. Later packages add fields (streams) here; `result` stays. */
-export interface LaunchedProcess {
+/** A command handle, including its configured pipes and terminal result. */
+export interface LocalLaunchedProcess {
   /** PID of the group leader; `undefined` when nothing was spawned. */
   readonly pid: number | undefined;
+  /** Present when stdin was requested as a pipe. */
+  readonly stdin?: Writable;
+  /** Present when output is captured. The launch still enforces its capture limit. */
+  readonly stdout?: Readable;
+  /** Present when output is captured. The launch still enforces its capture limit. */
+  readonly stderr?: Readable;
   /** Settles exactly once; never rejects. */
   readonly result: Promise<LaunchResult>;
 }
 
 /** The type of `launch`: the port at the operating-system boundary that callers take as a parameter. */
-export type LaunchFunction = (options: LaunchOptions) => LaunchedProcess;
+export type LaunchFunction = (options: LaunchOptions) => LocalLaunchedProcess;
 
 /** Longest time the group's quiescence is awaited after the close. */
 const DEFAULT_QUIESCENCE_PROOF_TIMEOUT_MS = 2_000;
@@ -249,7 +257,7 @@ function isMissingCommand(error: Error, cwd: string): boolean {
  * @param refusal - Why no process ran; absent for `cancelled`.
  * @returns The settled handle.
  */
-function refused(status: 'spawn-failed' | 'cancelled', refusal?: LaunchRefusal): LaunchedProcess {
+export function refuseLaunch(status: 'spawn-failed' | 'cancelled', refusal?: LaunchRefusal): LocalLaunchedProcess {
   const result: LaunchResult = refusal === undefined ? { status } : { status, refusal, message: MESSAGES[refusal] };
   return { pid: undefined, result: Promise.resolve(result) };
 }
@@ -274,26 +282,45 @@ function refused(status: 'spawn-failed' | 'cancelled', refusal?: LaunchRefusal):
  * @param options - Command, environment, bounds and output handling.
  * @returns The leader's PID and the result.
  */
-export function launch(options: LaunchOptions): LaunchedProcess {
-  if (options.signal?.aborted === true) return refused('cancelled');
-  if (!isValidLaunchTimeoutMs(options.timeoutMs)) return refused('spawn-failed', 'invalid-timeout');
-  if (!hasValidStopTiming(options)) return refused('spawn-failed', 'invalid-stop-timing');
-  if (!hasValidOutputLimit(options.output)) return refused('spawn-failed', 'invalid-output-limit');
+export function launch(options: LaunchOptions): LocalLaunchedProcess {
+  return launchLocalProcess(options);
+}
+
+/**
+ * Launch through the native supervisor with an explicit local stop policy.
+ * @param options - Native launch options.
+ * @param forcefulFirst - Whether the local site requires an immediate forceful stop.
+ * @returns Native process handle.
+ */
+export function launchLocalProcess(options: LaunchOptions, forcefulFirst = false): LocalLaunchedProcess {
+  if (options.signal?.aborted === true) return refuseLaunch('cancelled');
+  if (!isValidLaunchTimeoutMs(options.timeoutMs)) return refuseLaunch('spawn-failed', 'invalid-timeout');
+  if (!hasValidStopTiming(options)) return refuseLaunch('spawn-failed', 'invalid-stop-timing');
+  if (!hasValidOutputLimit(options.output)) return refuseLaunch('spawn-failed', 'invalid-output-limit');
+  const platform = options.stopHost?.platform ?? process.platform;
+  const env = mergeEnvironment(process.env, options.env, options.envMode, platform);
   let child: ChildProcess;
+  const outputStream = options.output.kind === 'capture' ? 'pipe' : 'ignore';
   try {
     child = spawn(options.command, [...(options.args ?? [])], {
       cwd: options.cwd,
-      env: mergeEnvironment(process.env, options.env, options.envMode, options.stopHost?.platform ?? process.platform),
+      env: options.envMode === 'replace' ? replacementSpawnEnvironment(env, platform) : env,
       shell: false,
       windowsHide: true,
       ...spawnOptionsForOwnership('process-group'),
       // Output is captured in memory under a bound; it is never retained on disk.
-      stdio: options.output.kind === 'capture' ? ['ignore', 'pipe', 'pipe'] : 'ignore',
+      stdio: [options.stdin === 'pipe' ? 'pipe' : 'ignore', outputStream, outputStream],
     });
   } catch {
-    return refused('spawn-failed', 'spawn-error');
+    return refuseLaunch('spawn-failed', 'spawn-error');
   }
-  return { pid: child.pid, result: new Run(child, options).result };
+  return {
+    pid: child.pid,
+    result: new Run(child, options, forcefulFirst).result,
+    ...(child.stdin === null ? {} : { stdin: child.stdin }),
+    ...(child.stdout === null ? {} : { stdout: child.stdout }),
+    ...(child.stderr === null ? {} : { stderr: child.stderr }),
+  };
 }
 
 /** One running command: its timers, listeners and the single settle. */
@@ -318,10 +345,12 @@ class Run {
    * Wire the child.
    * @param child - The spawned (or failed) child.
    * @param options - Options of the launch.
+   * @param forcefulFirst - Whether the site requires an immediate forceful stop.
    */
   public constructor(
     private readonly child: ChildProcess,
     private readonly options: LaunchOptions,
+    private readonly forcefulFirst: boolean,
   ) {
     this.result = new Promise((resolve) => {
       this.resolve = resolve;
@@ -334,6 +363,7 @@ class Run {
     child.once('error', (error) => this.onError(error));
     child.once('exit', (code, signal) => this.onExit({ kind: 'exited', code, signal }));
     child.once('close', (code, signal) => this.onClose({ kind: 'exited', code, signal }));
+    child.stdin?.on('error', () => undefined);
     for (const stream of ['stdout', 'stderr'] as const) {
       // Pipe errors carry no result of their own; the close and the bounds settle the run.
       child[stream]?.on('error', () => undefined);
@@ -400,6 +430,7 @@ class Run {
     this.escalation = startStopEscalation({
       pid,
       ownership: 'process-group',
+      forcefulFirst: this.forcefulFirst,
       killGraceMs: this.options.killGraceMs ?? LAUNCH_KILL_GRACE_MS,
       exitObservationMs: this.options.exitObservationMs ?? LAUNCH_EXIT_OBSERVATION_MS,
       deadline: undefined,
@@ -430,6 +461,7 @@ class Run {
   }
 
   private destroyPipes(): void {
+    this.child.stdin?.destroy();
     this.child.stdout?.destroy();
     this.child.stderr?.destroy();
   }
@@ -463,7 +495,7 @@ class Run {
     if (pid === undefined) return { status: 'spawn-failed', refusal: 'spawn-error', message: MESSAGES['spawn-error'] };
     const windows = (this.host?.platform ?? process.platform) === 'win32';
     const tree = await this.observeTree(pid, windows);
-    const group: LaunchGroupFacts = { pid, tree, signalDelivered: this.signalDelivered, observedAt: new Date() };
+    const group: LocalLaunchGroupFacts = { pid, tree, signalDelivered: this.signalDelivered, observedAt: new Date() };
     const output = this.capture?.finish();
     // Windows without a stop has no tree termination to wait for: the status follows the exit code.
     const proofRequired = !windows || this.escalation !== undefined;

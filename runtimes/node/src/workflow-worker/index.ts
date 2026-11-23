@@ -128,3 +128,4 @@ export {
   type InstalledAttemptControlEndpoint,
   type AttemptControlLastReport,
 } from './attempt-control-client.js';
+export { runLocalCodeStep, type CodeStepProcessResult, type LocalCodeStepInvocation } from './code-step-process.js';

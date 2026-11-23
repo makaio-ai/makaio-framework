@@ -3,7 +3,7 @@ import * as fs from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { launch, type LaunchOptions, type LaunchedProcess } from '../launch.js';
+import { launch, type LaunchOptions, type LocalLaunchedProcess } from '../launch.js';
 import { WindowsTreeTerminationError, type ProcessSignalPort } from '../process-tree.js';
 import type { StopHost } from '../stop-escalation.js';
 import { isAlive, killQuietly } from './fixtures/jsonl-children.js';
@@ -48,7 +48,7 @@ afterEach(async () => {
  * @param overrides - Options that replace the defaults.
  * @returns The launched process.
  */
-function run(source: string, overrides: Partial<LaunchOptions> = {}): LaunchedProcess {
+function run(source: string, overrides: Partial<LaunchOptions> = {}): LocalLaunchedProcess {
   const launched = launch({
     command: process.execPath,
     args: ['-e', source],
@@ -195,7 +195,7 @@ describe('launch', () => {
     });
 
     it('does not throw for a command the host rejects synchronously', async () => {
-      let launched: LaunchedProcess | undefined;
+      let launched: LocalLaunchedProcess | undefined;
       expect(() => {
         launched = run('', { command: 'invalid\0command' });
       }).not.toThrow();

@@ -74,12 +74,26 @@ export type { LaunchForOutputOptions, LaunchForOutputResult } from './launch-for
 export type {
   LaunchCapturedOutput,
   LaunchFunction,
-  LaunchGroupFacts,
+  LocalLaunchGroupFacts,
   LaunchOptions,
   LaunchOutput,
   LaunchRefusal,
   LaunchResult,
   LaunchStatus,
-  LaunchedProcess,
+  LocalLaunchedProcess,
 } from './launch.js';
 export type { StopHost } from './stop-escalation.js';
+export { createLocalLauncher } from './local-launcher.js';
+export type { LocalExecutionSite, LocalLauncherSetup, LocalOwnerPaths } from './local-launcher.js';
+export type {
+  ContainmentBoundary,
+  ExecutionSiteHandle,
+  Launcher,
+  OwnerLaunchOptions,
+  OwnerQuiescence,
+  ProcessOwner,
+  SiteLaunchResult,
+  SiteProcessOutcome,
+  SiteLaunchRefusal,
+  SiteLaunchStatus,
+} from './launcher.js';

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { LaunchGroupFacts } from '@makaio/subprocess';
+import type { LocalLaunchGroupFacts } from '@makaio/subprocess';
 import { deriveAttemptControlConclusion, type AttemptControlState } from '../attempt-control-conclusion.js';
 
 const NOW = new Date('2026-09-10T12:00:00.000Z');
@@ -214,7 +214,7 @@ describe('deriveAttemptControlConclusion', () => {
     ],
   ] as const satisfies readonly (readonly [
     string,
-    Pick<LaunchGroupFacts, 'tree' | 'signalDelivered'>,
+    Pick<LocalLaunchGroupFacts, 'tree' | 'signalDelivered'>,
     string,
     string,
   ])[])('maps the %s group facts onto a %s setup-process-group conclusion', (outcome, facts, status, summary) => {
