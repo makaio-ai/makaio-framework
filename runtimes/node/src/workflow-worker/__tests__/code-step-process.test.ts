@@ -210,9 +210,13 @@ describe.skipIf(process.platform === 'win32')('local code step output boundary',
     ).resolves.toMatchObject({ kind: 'process-failed', reason: 'invalid-output' });
   });
 
-  it('projects a child-reported failure into a content-free diagnostic', async () => {
+  it.each([
+    'synthetic-child-diagnostic',
+    'WORKFLOW_SOURCE_MISMATCH',
+    'makaio.step-execution-failed',
+  ])('projects a generic child-reported failure into a content-free diagnostic (%s)', async (error) => {
     const result = await run(`${submit}
-      submit(1, { status: 'failed', error: 'synthetic-child-diagnostic', telemetry: { duration: 0 } })
+      submit(1, { status: 'failed', error: ${JSON.stringify(error)}, telemetry: { duration: 0 } })
         .finally(finish);
     `);
     expect(result).toMatchObject({

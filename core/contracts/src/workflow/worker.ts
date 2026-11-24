@@ -64,6 +64,8 @@ export type WorkflowTriggerMode = z.infer<typeof WorkflowTriggerModeSchema>;
  * load the workflow definition, and begin execution in isolation.
  */
 export const WorkflowWorkerConfigSchema = z.object({
+  /** Host-configured timeout for managed processes in caller-local Code Steps. */
+  stepTimeoutMs: z.number().int().positive().optional(),
   /** Workflow source descriptor — tells the worker where to load the workflow from. */
   source: WorkflowWorkerSourceSchema,
   /**
@@ -179,12 +181,12 @@ interface WorkflowRunResultBase {
 /**
  * Result produced when execution completes successfully.
  *
- * Carries an optional {@link ArtifactRevision} written by the workflow.
+ * Carries an optional {@link ArtifactRevision} bound at workflow start.
  */
 export interface WorkflowCompletedRunResult extends WorkflowRunResultBase {
   /** Completed execution status. */
   readonly status: 'completed';
-  /** Artifact revision written by the workflow, if any. */
+  /** Artifact revision bound at workflow start, if any. Later revisions are not reflected here. */
   readonly artifact?: ArtifactRevision;
   /** Top-level output is no longer carried on run results. */
   readonly output?: never;
@@ -264,7 +266,7 @@ export const WorkflowRunResultSchema = z.discriminatedUnion('status', [
   WorkflowRunResultBaseSchema.extend({
     /** Completed execution status. */
     status: z.literal('completed'),
-    /** Artifact revision written by the workflow, if any. */
+    /** Artifact revision bound at workflow start, if any. Later revisions are not reflected here. */
     artifact: ArtifactRevisionSchema.optional(),
   }).strict(),
   WorkflowRunResultBaseSchema.extend({

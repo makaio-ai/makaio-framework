@@ -28,6 +28,7 @@ import type {
   SubjectRecordFromSchemaRecord,
   SubjectSchema,
   SubjectSchemaInspection,
+  TransportRoutingDefault,
 } from '@makaio/core';
 
 /**
@@ -153,6 +154,8 @@ export interface RegisteredSubjectSchema {
   channel: boolean;
   /** Whether the subject was registered through `hostLocalRequest()`. */
   hostLocalRequest: boolean;
+  /** Transport policy explicitly declared on this subject. */
+  defaultTransports?: TransportRoutingDefault;
   /** Journal declaration of a `journalSubject()`-wrapped subject, if any. */
   journal?: JournalOptions;
 }
@@ -431,6 +434,7 @@ export class NamespaceRegistry {
     for (const [subject, inspection] of inspections) {
       const fullSubject = `${domain}.${subject}`;
       const { local, collectorOnly, channel, hostLocalRequest, journal } = inspection.marks;
+      const subjectDefaultTransports = inspection.marks.defaultTransports;
       const registrations = this.registeredSubjects.get(fullSubject) ?? [];
       registrations.push({
         namespace: domain,
@@ -441,6 +445,7 @@ export class NamespaceRegistry {
         collectorOnly,
         channel,
         hostLocalRequest,
+        ...(subjectDefaultTransports !== undefined && { defaultTransports: subjectDefaultTransports }),
         journal,
       });
       this.registeredSubjects.set(fullSubject, registrations);

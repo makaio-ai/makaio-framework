@@ -145,8 +145,11 @@ function siteHandle(
   child: LocalLaunchedProcess,
   cancellationSource: () => 'owner' | 'request' = () => 'request',
 ): ExecutionSiteHandle {
+  const result = child.result.then((outcome) => siteResult(outcome, cancellationSource()));
+  // Node may allocate pipes even when spawn failed. Only a started child exposes them.
+  if (child.pid === undefined) return { result };
   return {
-    result: child.result.then((result) => siteResult(result, cancellationSource())),
+    result,
     stdin: child.stdin && Writable.toWeb(child.stdin),
     stdout: child.stdout && Readable.toWeb(child.stdout),
     stderr: child.stderr && Readable.toWeb(child.stderr),

@@ -132,6 +132,7 @@ describe('ThinWorkflowPiscinaRunner', () => {
           ...config,
           source: { kind: 'path', path: '/workspace-a/workflows/example.mjs' },
         },
+        workspaceRoot: '/workspace-a',
         manifest,
         contributionEntrypoints: ['/workspace-a/node_modules/pkg-a/dist/worker.mjs'],
       },

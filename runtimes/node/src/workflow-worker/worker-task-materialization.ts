@@ -5,6 +5,8 @@ import { materializeLocalDirectory, type WorkspaceRootResolver } from './local-d
 export interface MaterializedWorkerTask {
   /** Configuration whose path source points at the verified local path. */
   readonly config: WorkflowWorkerConfig;
+  /** Canonical local root of the verified workspace, when materialized. */
+  readonly workspaceRoot?: string;
   /** Verified worker-local entrypoints in manifest order. */
   readonly contributionEntrypoints: readonly string[];
 }
@@ -49,6 +51,7 @@ export async function materializeWorkerTask(
   }
   return {
     config: { ...config, source: { kind: 'path', path: runtimeContext.sourcePath } },
+    workspaceRoot: runtimeContext.workspaceRoot,
     contributionEntrypoints: runtimeContext.contributionEntrypoints,
   };
 }

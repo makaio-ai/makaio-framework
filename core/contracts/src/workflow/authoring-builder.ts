@@ -10,7 +10,7 @@ import type {
 } from './schemas.js';
 import type { WorkflowFinalizerId } from './finalization.js';
 import type { CompletionMode } from '../subagent/schemas.js';
-import type { CodeStepHandler, IterateHandler, PreviousStepOutput, StepContext } from './authoring-context.js';
+import type { CodeStepHandler, IterateHandler, StepContext } from './authoring-context.js';
 import type { WorkflowTriggerDef } from './authoring-triggers.js';
 import type { LoopCheckHandler } from './loop.js';
 
@@ -196,8 +196,8 @@ export interface WorkflowZodSchemas {
  * Typed state contract accepted by the fluent `.state()` builder method.
  *
  * The JSON Schema is serialized onto the workflow definition. The optional
- * initial value is typed for authoring-time handler context inference and is
- * also stored on the serializable definition when provided.
+ * initial value is typed when the state contract is declared and is stored
+ * on the serializable definition when provided.
  * @typeParam TState - Workflow run-state shape declared by the author.
  */
 export interface WorkflowStateAuthoringDefinition<TState extends JsonValue = JsonValue> {
@@ -334,7 +334,7 @@ export interface WorkflowBuilder<TTrigger = never, TState extends JsonValue | un
    * The state definition specifies a JSON Schema and optional initial value.
    * At execution start, the engine initializes the state snapshot from
    * `initial` (or `{}` when omitted). Code step handlers access the state
-   * via `ctx.state.get()` and `ctx.state.update()`.
+   * through the registered workflow state requests.
    * @param definition - State contract with JSON Schema and optional initial value
    * @returns This builder for chaining
    */
@@ -351,17 +351,7 @@ export interface WorkflowBuilder<TTrigger = never, TState extends JsonValue | un
    * @param options - Optional node conditions (`when`, `skip`)
    * @returns This builder for chaining
    */
-  codeStep(
-    id: string,
-    handler: CodeStepHandler<
-      TTrigger,
-      Record<string, PreviousStepOutput<JsonValue>>,
-      Record<string, unknown>,
-      unknown,
-      TState
-    >,
-    options?: NodeOptions,
-  ): WorkflowBuilder<TTrigger, TState>;
+  codeStep(id: string, handler: CodeStepHandler, options?: NodeOptions): WorkflowBuilder<TTrigger, TState>;
   /**
    * Appends an agent step node to the root sequence.
    * @param id - Unique node identifier
@@ -389,17 +379,7 @@ export interface WorkflowBuilder<TTrigger = never, TState extends JsonValue | un
    * @param options - Iterate configuration including collection expression
    * @returns This builder for chaining
    */
-  iterate(
-    id: string,
-    handler: IterateHandler<
-      TTrigger,
-      Record<string, PreviousStepOutput<JsonValue>>,
-      Record<string, unknown>,
-      unknown,
-      TState
-    >,
-    options: IterateOptions,
-  ): WorkflowBuilder<TTrigger, TState>;
+  iterate(id: string, handler: IterateHandler, options: IterateOptions): WorkflowBuilder<TTrigger, TState>;
   /**
    * Appends an iterate-chain node to the root sequence.
    *

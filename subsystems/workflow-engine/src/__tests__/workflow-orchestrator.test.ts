@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, expectTypeOf, it, vi } from 'vitest';
 import { createBusInstance } from '@makaio/bus-core';
 import { createTestCall } from '@makaio/test-utils';
 import {
@@ -70,7 +70,7 @@ function makeArtifactRevision(
 }
 
 describe('runWorkflowOrchestrator artifact bindings', () => {
-  it('resolves the workflow artifact binding before code step contexts are built', async () => {
+  it('returns the artifact revision bound at startup after a Code Step writes a newer revision', async () => {
     const bus = createBusInstance();
     bus.registerNamespace(WorkflowNamespace);
     bus.registerNamespace(WorkflowStorageNamespace);
@@ -103,13 +103,26 @@ describe('runWorkflowOrchestrator artifact bindings', () => {
         statusPath: 'status',
       })
       .codeStep('write-report', async (ctx) => {
-        if (ctx.artifact !== undefined) {
-          await ctx.artifact.updateArtifact({
-            operation: 'merge',
-            data: { status: 'written' },
-          });
-        }
-        return { wroteArtifact: ctx.artifact !== undefined };
+        const title =
+          typeof ctx.inputs === 'object' && ctx.inputs !== null && 'title' in ctx.inputs
+            ? (ctx.inputs.title ?? null)
+            : null;
+        const result = await ctx.request({
+          subject: 'artifact.revise',
+          payload: {
+            previous: { refClass: 'artifact', kind: 'workflow-report', id: 'artifact-report-1', revision: 'rev-0' },
+            revision: {
+              kind: 'workflow-report',
+              schemaVersion: 1,
+              scope: { level: 'global' },
+              data: { status: 'written', title },
+              relations: [],
+              actor: { kind: 'workflow-execution', id: ctx.executionId },
+            },
+          },
+        });
+        if (!result.ok) throw new Error(result.code);
+        return { wroteArtifact: true };
       });
 
     try {
@@ -145,8 +158,8 @@ describe('runWorkflowOrchestrator artifact bindings', () => {
         artifact: expect.objectContaining({
           kind: 'workflow-report',
           id: 'artifact-report-1',
-          revision: 'rev-1',
-          data: { status: 'written', title: 'Runtime report' },
+          revision: 'rev-0',
+          data: { status: 'draft', title: 'Runtime report' },
         }),
       });
       expect(createdArtifacts).toHaveLength(1);
@@ -456,6 +469,45 @@ describe('runWorkflowOrchestrator terminal finalization', () => {
 });
 
 describe('runWorkflowOrchestrator node execution', () => {
+  it('keeps host fallback out of the public orchestrator options', () => {
+    expectTypeOf<Parameters<typeof runWorkflowOrchestrator>[0]>().not.toHaveProperty('allowHostRequestFallback');
+  });
+
+  it.each([true, { allowed: true }])('requires a registered subject even with an extra option %j', async (option) => {
+    const bus = createBusInstance();
+    bus.registerNamespace(WorkflowNamespace);
+    bus.registerNamespace(WorkflowStorageNamespace);
+    const dbContext = await createTestDbForBus(bus);
+    const subject = 'test-host-only.echo';
+    const dispatched: string[] = [];
+    const stopObserving = bus.observeMessages((message) => {
+      if (message.type === 'request') dispatched.push(`${message.namespace}.${message.subject}`);
+    });
+    const workflow = defineWorkflow('unregistered-request').codeStep('request', (ctx) =>
+      ctx.request({ subject, payload: { message: 'hello' } }),
+    );
+    const config = makeWorkerConfig({ workflowId: workflow.id });
+
+    try {
+      const extraOptions: Record<string, unknown> = { allowHostRequestFallback: option };
+      const result = await runWorkflowOrchestrator({
+        ...extraOptions,
+        call: createTestCall(),
+        config,
+        loaded: workflow,
+        bus,
+        signal: new AbortController().signal,
+      });
+      const { frames } = await bus.request(WorkflowStorageSubjects.listFrames, { executionId: config.executionId });
+      expect(result.status).toBe('completed');
+      expect(frames).toMatchObject([{ output: { ok: false, code: 'request-not-granted' } }]);
+      expect(dispatched).not.toContain(subject);
+    } finally {
+      stopObserving();
+      dbContext.cleanup();
+    }
+  });
+
   it('completes a mixed workflow without sending pause events or gate messages', async () => {
     const bus = createBusInstance();
     bus.registerNamespaces(FrameworkContractNamespaces);

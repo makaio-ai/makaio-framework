@@ -17,7 +17,13 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { z } from 'zod';
 import { createBusNamespace, defaultTransports, type CallContext } from '@makaio/core';
-import { createBusInstance, type BusMessage, type BusTransportRegistry, type EmitOptions } from '../index.js';
+import {
+  createBusInstance,
+  resolveRegisteredRequestSubject,
+  type BusMessage,
+  type BusTransportRegistry,
+  type EmitOptions,
+} from '../index.js';
 import { busContextOf } from '../kernel-api.js';
 import { MockTransport } from './helpers/transport-fixtures.js';
 
@@ -410,5 +416,40 @@ describe('namespace-registry getDefaultTransports', () => {
     const bus = createBusInstance();
     const registry = busContextOf(bus).namespaceRegistry;
     expect(registry.getDefaultTransports('dtv-nonexistent.subject')).toBe('all');
+  });
+});
+
+describe('qualified request lookup preserves subject-level transport visibility', () => {
+  it.each([
+    { namespaceDefault: 'all', subjectDefault: 'local-only', relayed: false },
+    { namespaceDefault: 'local-only', subjectDefault: 'all', relayed: true },
+  ] as const)('resolves $subjectDefault inside $namespaceDefault', async ({
+    namespaceDefault,
+    subjectDefault,
+    relayed,
+  }) => {
+    const schema = { request: z.object({}), response: z.object({ output: z.string() }) };
+    const definition = createBusNamespace(
+      'dtv-lookup',
+      { query: defaultTransports(schema, subjectDefault) },
+      { defaultTransports: namespaceDefault },
+    );
+    const { bus, transport, subjects } = createTestSetup(definition, 'dtv-transport-a');
+    await transport.simulateReceive({
+      type: 'subscribe',
+      subjects: { 'dtv-lookup.query': [0] },
+      deliveryClasses: { 'dtv-lookup.query': 'relayable' },
+    });
+    const resolved = resolveRegisteredRequestSubject(bus, 'dtv-lookup.query');
+    if (resolved === undefined) throw new Error('The registered request must resolve');
+
+    const original = await bus.requestOptional(bus.own('root'), subjects.query, {});
+    expect(original.handled).toBe(relayed);
+    expect(transport.messages.filter(({ type }) => type === 'request')).toHaveLength(relayed ? 1 : 0);
+    transport.clear();
+
+    const reconstructed = await bus.requestOptional(bus.own('root'), resolved, {});
+    expect(reconstructed).toEqual(original);
+    expect(transport.messages.filter(({ type }) => type === 'request')).toHaveLength(relayed ? 1 : 0);
   });
 });

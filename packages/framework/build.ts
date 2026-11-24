@@ -180,6 +180,8 @@ const standardPackages = FRAMEWORK_PUBLIC_PACKAGE_SUBPATHS.filter(
  * assembled distribution without being part of the umbrella's public API.
  */
 const PRIVATE_CORE_ENTRIES: Record<string, string> = {
+  'runtime-node/workflow-worker/checkout-code-step-entry':
+    './runtimes/node/src/workflow-worker/checkout-code-step-entry.ts',
   'code-execution/worker-entry': './runtimes/node/src/code-execution/worker-entry.ts',
 };
 

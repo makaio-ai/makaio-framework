@@ -11,13 +11,15 @@ import { createBroadcastSend, createSendSurface } from './send-surface.js';
 import type { NamespaceLease } from '@makaio/contracts/extension';
 import type { TypedNamespace } from './registries/namespace-registry.js';
 import type { IHostMakaioBus, IMakaioBus, MakaioBusContext } from './types/bus.js';
-import type {
-  BusNamespaceDefinition,
-  HandlerForSubjectDefinition,
-  PartyRef,
-  PayloadFilter,
-  SubjectDefinition,
-  SubjectSchema,
+import {
+  isRequestSchema,
+  type BusNamespaceDefinition,
+  type HandlerForSubjectDefinition,
+  type PartyRef,
+  type PayloadFilter,
+  type RequestMessagePayload,
+  type SubjectDefinition,
+  type SubjectSchema,
 } from '@makaio/core';
 
 /**
@@ -225,6 +227,35 @@ export function createCarrierBus<Namespace extends string | unknown = unknown>(
  */
 export function busContextOf(bus: object): MakaioBusContext {
   return recordOf(bus).context;
+}
+
+/**
+ * Resolve a concrete registered request for callers that only have its qualified name.
+ * @param bus - The bus instance that will send the request.
+ * @param name - A fully qualified registered subject key.
+ * @returns The request token, including registered routing metadata.
+ */
+export function resolveRegisteredRequestSubject(
+  bus: IMakaioBus,
+  name: string,
+):
+  | (SubjectDefinition<Record<string, RequestMessagePayload>> & { $meta: { isRequest: true; channel: false } })
+  | undefined {
+  const registry = busContextOf(bus).namespaceRegistry;
+  const entry = name.includes('*') ? undefined : registry.getRegisteredSubject(name);
+  if (entry === undefined || entry.channel || !isRequestSchema(entry.schema)) return undefined;
+  return {
+    subject: entry.subject,
+    $meta: {
+      namespace: entry.namespace,
+      isRequest: true,
+      payload: { request: {}, response: {} },
+      local: entry.local,
+      channel: false,
+      hostLocalRequest: entry.hostLocalRequest,
+      defaultTransports: entry.defaultTransports,
+    },
+  };
 }
 
 /**

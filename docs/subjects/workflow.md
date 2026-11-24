@@ -95,10 +95,8 @@ Type: Request (RPC)
 
 ### <a id="workflow.artifact.updated"></a>`workflow.artifact.updated` (event)
 
-Emitted when a workflow frame produces an artifact update.
-
-Enables "show me all artifact writes produced by this execution" queries
-without scanning the artifact store.
+Frame-scoped artifact update notification. Explicit Code Step artifact
+requests update the artifact without publishing this workflow event.
 
 Subject: `workflow.artifact.updated`
 Type: Event
@@ -337,10 +335,10 @@ Type: Event
 
 ### <a id="workflow.execution.progress"></a>`workflow.execution.progress` (event)
 
-Ephemeral progress signal emitted by a code step handler via `ctx.updateProgress()`.
+Ephemeral workflow progress notification.
 
-Progress events are not persisted as WorkLog entries. Observers and
-materialization providers consume them for real-time projections.
+The event contract is retained for observers. The Code Step authoring
+context exposes only request and process-launch capabilities.
 
 Subject: `workflow.execution.progress`
 Type: Event

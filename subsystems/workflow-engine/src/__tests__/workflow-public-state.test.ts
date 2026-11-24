@@ -1,13 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { MakaioBus } from '@makaio/bus-core';
+import { getFullSubjectForSubjectDefinition, MakaioBus } from '@makaio/bus-core';
 import { createTestCall } from '@makaio/test-utils';
 import {
   type CodeStepHandler,
+  type CodeStepRequestResult,
   type IWorkflowRunner,
   type WorkflowCodeStepNode,
   type WorkflowRunnerCompletion,
 } from '@makaio/contracts';
-import { WorkflowSubjects } from '../namespace.js';
+import { WorkflowNamespace, WorkflowSubjects } from '../namespace.js';
 import { WorkflowStorageSubjects } from '../storage/namespace.js';
 import { runWorkflowOrchestrator } from '../workflow-orchestrator.js';
 import {
@@ -16,6 +17,8 @@ import {
   type WorkflowExecutorTestSetup,
 } from './workflow-executor.test-setup.js';
 import { createWorkflowDefinition } from './shared.js';
+
+const stateGetSubject = getFullSubjectForSubjectDefinition(WorkflowSubjects.state.get);
 
 /**
  * Register the host seam required to freeze a path-backed test execution.
@@ -42,6 +45,7 @@ describe('workflow public state subjects', () => {
   let setup: WorkflowExecutorTestSetup | undefined;
 
   beforeEach(async () => {
+    MakaioBus.registerNamespace(WorkflowNamespace);
     setup = await setupWorkflowExecutorTest();
   });
 
@@ -326,9 +330,9 @@ describe('workflow public state subjects', () => {
         initial: { count: 0 },
       },
     };
-    let observedState: unknown;
-    const readState: CodeStepHandler = async (ctx) => {
-      observedState = await ctx.state?.get();
+    let observedState: CodeStepRequestResult | undefined;
+    const readState: CodeStepHandler = async ({ executionId, request }) => {
+      observedState = await request({ subject: stateGetSubject, payload: { executionId } });
       return { ok: true };
     };
     const workflowRunner: IWorkflowRunner = {
@@ -365,7 +369,7 @@ describe('workflow public state subjects', () => {
       executionId,
     });
 
-    expect(observedState).toEqual({ count: 0 });
+    expect(observedState).toEqual({ ok: true, response: { executionId, sequence: 0, value: { count: 0 } } });
     expect(state).toEqual({ executionId, sequence: 0, value: { count: 0 } });
     expect(runContext?.source).toEqual({ kind: 'path', path: 'workflows/file-state.ts' });
     expect(runContext?.materializationSpec).toEqual({
@@ -416,9 +420,9 @@ describe('workflow public state subjects', () => {
         initial: { count: 7 },
       },
     };
-    let observedState: unknown;
-    const readState: CodeStepHandler = async (ctx) => {
-      observedState = await ctx.state?.get();
+    let observedState: CodeStepRequestResult | undefined;
+    const readState: CodeStepHandler = async ({ executionId, request }) => {
+      observedState = await request({ subject: stateGetSubject, payload: { executionId } });
       return { ok: true };
     };
     const workflowRunner: IWorkflowRunner = {
@@ -456,7 +460,7 @@ describe('workflow public state subjects', () => {
       executionId,
     });
 
-    expect(observedState).toEqual({ count: 7 });
+    expect(observedState).toEqual({ ok: true, response: { executionId, sequence: 0, value: { count: 7 } } });
     expect(state).toEqual({ executionId, sequence: 0, value: { count: 7 } });
     expect(runContext?.source).toEqual({
       kind: 'path',

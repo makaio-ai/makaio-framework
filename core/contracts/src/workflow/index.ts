@@ -260,12 +260,7 @@ export {
 export { defineWorkflow } from './authoring.js';
 export type {
   ArtifactBindingOptions,
-  ArtifactContext,
-  ArtifactPatch,
-  ArtifactUpdateOperation,
-  ArtifactUpdater,
   BuiltWorkflow,
-  CodeStepContext,
   CodeStepHandler,
   CronTriggerPayload,
   DefineWorkflowOptions,
@@ -280,11 +275,8 @@ export type {
   PreviousStepOutput,
   StepContext,
   WorkflowBuilder,
-  WorkflowContext,
-  WorkflowContextBase,
   WorkflowProgressUpdate,
   WorkflowStateAuthoringDefinition,
-  WorkflowStateContext,
   WorkflowTriggerDef,
   WorkflowZodSchemas,
 } from './authoring-exports.js';
@@ -332,3 +324,19 @@ export type {
   OutcomeSubmitRequest,
   OutcomeSubmitResponse,
 } from './job-run-outcome.js';
+
+export {
+  CODE_STEP_INVALID_REQUEST,
+  CODE_STEP_REQUEST_REJECTED,
+  CodeStepDataSchema,
+  CodeStepRequestInputSchema,
+  CodeStepRequestResultSchema,
+  CodeStepLaunchInputSchema,
+  CodeStepLaunchRefusalSchema,
+  type CodeStepData,
+  type CodeStepRequestInput,
+  type CodeStepRequestResult,
+  type CodeStepLaunchInput,
+  type CodeStepLaunchResult,
+  type StepLaunchedProcess,
+} from './code-step-context.js';

@@ -92,7 +92,7 @@ export function buildPreviousStepsFromFrames(
     if (entry.status === 'completed') {
       result[nodeId] = {
         status: 'completed',
-        output: entry.output as JsonValue,
+        output: entry.output ?? null,
       };
     } else if (entry.status === 'skipped') {
       result[nodeId] = { status: 'skipped' };
@@ -187,6 +187,8 @@ export interface CreateFrameParams {
  * All fields are optional; sensible defaults are applied by {@link RuntimeContext}.
  */
 export interface RuntimeExecutionOptions {
+  /** Executor-configured timeout for managed Code Step launches. */
+  readonly stepTimeoutMs?: number;
   /**
    * Loop check handler functions keyed by handler name.
    * Populated by `.loop()` calls and standalone `loop()` factories.
@@ -394,6 +396,7 @@ export class RuntimeContext {
     this.artifactBinding = artifactBinding;
     this.platformContext = platform.context;
     this.env = platform.env;
+    this.stepTimeoutMs = options.stepTimeoutMs;
     this.runtimeLoopChecks = options.runtimeLoopChecks ?? new Map();
   }
 
@@ -402,6 +405,9 @@ export class RuntimeContext {
 
   /** Extra environment variables exposed to code step handlers. */
   public readonly env: Record<string, string>;
+
+  /** Executor-configured timeout for managed Code Step launches. */
+  public readonly stepTimeoutMs?: number;
 
   /**
    * Loop check handler functions keyed by handler name.
@@ -436,6 +442,7 @@ export class RuntimeContext {
       { context: this.platformContext, env: this.env },
       {
         runtimeLoopChecks: this.runtimeLoopChecks,
+        stepTimeoutMs: this.stepTimeoutMs,
       },
     );
   }
