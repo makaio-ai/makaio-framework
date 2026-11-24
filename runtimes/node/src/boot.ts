@@ -591,15 +591,6 @@ export async function bootMakaioRuntimeCore(
       frameworkPackageNames,
     });
 
-    reportOperatorConfig = () =>
-      warnOnUnappliedExtensionOperatorConfig(
-        operatorConfig,
-        coordinator.list().map((extension) => ({
-          ...extension,
-          configSchema: coordinator.getExtension(extension.name)?.configSchema,
-        })),
-      );
-
     // Framework-level packages load unconditionally — they provide core
     // infrastructure (e.g. preferences storage) that the shell and framework
     // layer depend on regardless of whether a host descriptor is present.
@@ -748,8 +739,16 @@ export async function bootMakaioRuntimeCore(
       ),
       loadedPackageNames,
     );
-    // Diagnose unaddressable names only for packages retained on this surface.
+    reportOperatorConfig = () =>
+      warnOnUnappliedExtensionOperatorConfig(
+        operatorConfig,
+        coordinator.list().map((extension) => ({
+          ...extension,
+          configSchema: coordinator.getExtension(extension.name)?.configSchema,
+        })),
+      );
     const retainedPackages = coordinator.load(packagesToLoad, configDefaults);
+    // Diagnose unaddressable names only for packages retained on this surface.
     warnOnUnaddressableExtensionOperatorConfigNames(retainedPackages);
 
     // -----------------------------------------------------------------------
