@@ -22,6 +22,7 @@
     "@makaio/storage-core": "workspace:*",
     "@makaio/storage-drizzle": "workspace:*",
     "@makaio/storage-handlers": "workspace:*",
+    "@makaio/subprocess": "workspace:*",
     "@makaio/utils": "workspace:*",
     "ajv": "^8.18.0",
     "drizzle-orm": "0.45.4",

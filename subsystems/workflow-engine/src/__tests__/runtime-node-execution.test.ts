@@ -1,12 +1,15 @@
+import * as fsPromises from 'node:fs/promises';
 import { describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 import { createBusInstance, ValidationError } from '@makaio/bus-core';
+import { createBusNamespace } from '@makaio/core';
 import {
   AgentSubjects,
   createWorkflowDelegateResultFinalizerNamespace,
   SessionSubjects,
   SubagentSubjects,
   WorkflowNamespace,
+  WorkflowSchemas,
   WorkflowSubjects,
   type CodeStepHandler,
   type JsonValue,
@@ -24,7 +27,6 @@ import {
 import { createTestCall } from '@makaio/test-utils';
 import { RuntimeContext } from '../runtime/runtime-context.js';
 import { executeCodeStepNode } from '../runtime/code-step-node.js';
-import { createWorkflowStateContext } from '../runtime/workflow-state-context.js';
 import { executeAgentStepNode } from '../runtime/delegate-node.js';
 import { elapsedDelegateDuration } from '../runtime/role-subagent-node.js';
 import { executeParallelNode, type ParallelOutput } from '../runtime/parallel-node.js';
@@ -32,6 +34,11 @@ import { executeSequence } from '../runtime/primitive-runtime.js';
 import { WorkflowStorageNamespace, WorkflowStorageSubjects } from '../storage/namespace.js';
 import { runWorkflowOrchestrator } from '../workflow-orchestrator.js';
 import { registerInMemoryFrameStore } from './shared.js';
+
+vi.mock('node:fs/promises', async (importOriginal) => {
+  const actual = await importOriginal<typeof fsPromises>();
+  return { ...actual, rm: vi.fn(actual.rm) };
+});
 
 // ─────────────────────────────────────────────────────────────
 // Test helpers
@@ -117,6 +124,14 @@ const emptyExpressionCtx = {
   frames: {},
   previousSteps: {},
 };
+
+const StepRequestTestNamespace = createBusNamespace('runtime-step-test', {
+  progress: {
+    request: WorkflowSchemas['execution.progress'],
+    response: z.object({ accepted: z.boolean() }),
+  },
+  pending: { request: z.object({}), response: z.object({ completed: z.boolean() }) },
+});
 
 const SESSION_LINK_TEST_CLEANUP_TIMEOUT_MS = 60_000;
 
@@ -242,137 +257,74 @@ describe('code step and agent step execution', () => {
     expect((receivedPreviousSteps as Record<string, unknown>)['failed-step']).toBeUndefined();
   });
 
-  it('emits structured progress updates with execution, workflow, frame, and node identity', async () => {
-    const node: WorkflowCodeStepNode = {
-      id: 'progress-step',
-      type: 'code-step',
-    };
-    const handler: CodeStepHandler = async (ctx) => {
-      await ctx.updateProgress({
-        message: 'Review draft ready',
-        details: 'The review artifact has been updated.',
-        kind: 'checkpoint',
-        metadata: { artifactId: 'artifact-1', percent: 50 },
+  it.each([
+    'success',
+    'invalid',
+    'observer-failure',
+    'observer-validation-failure',
+  ] as const)('uses the declared progress request with a %s outcome', async (scenario) => {
+    const node: WorkflowCodeStepNode = { id: 'progress-step', type: 'code-step' };
+    const handler: CodeStepHandler = async (step) =>
+      step.request({
+        subject: 'runtime-step-test.progress',
+        payload: {
+          executionId: step.executionId,
+          workflowId: step.workflowId,
+          frameId: 'frame-progress',
+          nodeId: node.id,
+          progress: {
+            message: scenario === 'invalid' ? '' : 'Review draft ready',
+            kind: 'checkpoint',
+            metadata: { percent: 50 },
+          },
+          emittedAt: Date.now(),
+        },
       });
-      return 'done';
-    };
-    const ctx = makeCtx({ 'progress-step': handler });
-    let receivedPayload: unknown;
-    const unsubscribe = ctx.bus.on(WorkflowSubjects.execution.progress, (eventCtx) => {
-      receivedPayload = eventCtx.payload;
-    });
-
-    const outcome = await executeCodeStepNode(createTestCall(), node, ctx, emptyExpressionCtx, 'frame-progress');
-
-    expect(outcome.status).toBe('completed');
-    expect(receivedPayload).toMatchObject({
-      executionId: 'exec-test',
-      workflowId: 'workflow-test',
-      frameId: 'frame-progress',
-      nodeId: 'progress-step',
-      progress: {
-        message: 'Review draft ready',
-        details: 'The review artifact has been updated.',
-        kind: 'checkpoint',
-        metadata: { artifactId: 'artifact-1', percent: 50 },
-      },
-    });
-    expect((receivedPayload as { emittedAt: number }).emittedAt).toBeGreaterThan(0);
-    unsubscribe();
-  });
-
-  it('fails the code step when updateProgress receives a payload rejected by the progress schema', async () => {
-    const node: WorkflowCodeStepNode = {
-      id: 'invalid-progress',
-      type: 'code-step',
-    };
-    const handler: CodeStepHandler = async (ctx) => {
-      await ctx.updateProgress({ message: '' });
-      return 'done';
-    };
-    const ctx = makeCtx({ 'invalid-progress': handler });
-    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
-
-    try {
-      const outcome = await executeCodeStepNode(
-        createTestCall(),
-        node,
-        ctx,
-        emptyExpressionCtx,
-        'frame-invalid-progress',
-      );
-
-      expect(outcome.status).toBe('failed');
-      if (outcome.status === 'failed') {
-        expect(outcome.error).toContain('message');
-      }
-    } finally {
-      consoleError.mockRestore();
-    }
-  });
-
-  it('does not fail the code step when a progress subscriber fails', async () => {
-    const node: WorkflowCodeStepNode = {
-      id: 'progress-observer-failure',
-      type: 'code-step',
-    };
-    const handler: CodeStepHandler = async (ctx) => {
-      await ctx.updateProgress({ message: 'Observer may fail' });
-      return 'done';
-    };
-    const ctx = makeCtx({ 'progress-observer-failure': handler });
-    const unsubscribe = ctx.bus.on(WorkflowSubjects.execution.progress, () => {
-      throw new Error('subscriber exploded');
-    });
-    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
-
-    try {
-      const outcome = await executeCodeStepNode(
-        createTestCall(),
-        node,
-        ctx,
-        emptyExpressionCtx,
-        'frame-observer-failure',
-      );
-
-      expect(outcome.status).toBe('completed');
-    } finally {
-      consoleError.mockRestore();
-      unsubscribe();
-    }
-  });
-
-  it('does not fail the code step when a progress subscriber throws a ValidationError', async () => {
-    const node: WorkflowCodeStepNode = {
-      id: 'progress-validation-observer-failure',
-      type: 'code-step',
-    };
-    const handler: CodeStepHandler = async (ctx) => {
-      await ctx.updateProgress({ message: 'Observer validation may fail' });
-      return 'done';
-    };
-    const ctx = makeCtx({ 'progress-validation-observer-failure': handler });
-    const unsubscribe = ctx.bus.on(WorkflowSubjects.execution.progress, () => {
-      const parsed = z.object({ value: z.string() }).safeParse({ value: 1 });
-      if (!parsed.success) {
-        throw new ValidationError('subscriber.validation', parsed.error);
+    const hostBus = makeBusWithFrames();
+    const ctx = makeCtx({ [node.id]: handler }, undefined, hostBus);
+    const { subjects } = hostBus.registerNamespace(StepRequestTestNamespace);
+    const principal = { kind: 'makaio.user', id: 'progress-user' };
+    const observed: unknown[] = [];
+    const cleanupProgress = ctx.bus.on(WorkflowSubjects.execution.progress, (event) => {
+      observed.push(event.payload);
+      if (scenario === 'observer-failure') throw new Error('Synthetic observer failure');
+      if (scenario === 'observer-validation-failure') {
+        const parsed = z.string().safeParse(1);
+        if (!parsed.success) throw new ValidationError('subscriber.validation', parsed.error);
       }
     });
-    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const cleanupRequest = ctx.bus.on(subjects.progress, async (request) => {
+      expect(request.call.principal).toEqual(principal);
+      await ctx.bus.emit(request.call, WorkflowSubjects.execution.progress, request.payload);
+      request.setResult({ accepted: true });
+    });
 
     try {
-      const outcome = await executeCodeStepNode(
-        createTestCall(),
-        node,
-        ctx,
-        emptyExpressionCtx,
-        'frame-validation-observer-failure',
+      const outcome = await executeCodeStepNode(createTestCall({ principal }), node, ctx, emptyExpressionCtx);
+      const expected = {
+        success: { ok: true, response: { accepted: true } },
+        invalid: { ok: false, code: 'request-rejected' },
+        'observer-failure': { ok: false, code: 'request-failed' },
+        'observer-validation-failure': { ok: false },
+      }[scenario];
+      expect(outcome).toMatchObject({ status: 'completed', output: expected });
+      expect(observed).toEqual(
+        scenario === 'invalid'
+          ? []
+          : [
+              {
+                executionId: 'exec-test',
+                workflowId: 'workflow-test',
+                frameId: 'frame-progress',
+                nodeId: 'progress-step',
+                progress: { message: 'Review draft ready', kind: 'checkpoint', metadata: { percent: 50 } },
+                emittedAt: expect.any(Number),
+              },
+            ],
       );
-
-      expect(outcome.status).toBe('completed');
     } finally {
-      consoleError.mockRestore();
-      unsubscribe();
+      cleanupRequest();
+      cleanupProgress();
     }
   });
 
@@ -1193,32 +1145,22 @@ describe('code step and agent step execution', () => {
     }
   });
 
-  it('passes the bus into code step contexts', async () => {
-    const bus = makeBus();
-    let receivedBus: unknown;
-
-    const node: WorkflowCodeStepNode = {
-      id: 'capture-bus',
-      type: 'code-step',
-    };
-    const handler: CodeStepHandler = (ctx) => {
-      receivedBus = ctx.bus;
-      return { ok: true };
-    };
-    const ctx = new RuntimeContext(
-      'exec-bus-context',
-      'workflow-bus-context',
-      makeDefinition('workflow-bus-context'),
-      makeExecution('workflow-bus-context'),
-      new Map([['capture-bus', handler]]),
-      bus,
-      new AbortController().signal,
-    );
-
+  it('refuses unregistered subjects and registered events as requests', async () => {
+    const node: WorkflowCodeStepNode = { id: 'unknown-request', type: 'code-step' };
+    const handler: CodeStepHandler = async (step) => ({
+      unknown: await step.request({ subject: 'unregistered.request', payload: {} }),
+      event: await step.request({ subject: 'workflow.execution.progress', payload: {} }),
+    });
+    const ctx = makeCtx({ [node.id]: handler });
     const outcome = await executeCodeStepNode(createTestCall(), node, ctx, emptyExpressionCtx);
 
-    expect(outcome.status).toBe('completed');
-    expect(receivedBus).toBe(bus);
+    expect(outcome).toMatchObject({
+      status: 'completed',
+      output: {
+        unknown: { ok: false, code: 'request-not-granted' },
+        event: { ok: false, code: 'request-not-granted' },
+      },
+    });
   });
 
   it('propagates handler errors as failed outcomes', async () => {
@@ -1256,79 +1198,163 @@ describe('code step and agent step execution', () => {
     expect(outcome.status).toBe('cancelled');
   });
 
-  it('passes the abort signal to the handler', async () => {
-    const node: WorkflowCodeStepNode = {
-      id: 'check-signal',
-      type: 'code-step',
+  it('cancels a running local handler and ignores its late result', async () => {
+    const node: WorkflowCodeStepNode = { id: 'running', type: 'code-step' };
+    const controller = new AbortController();
+    const started = Promise.withResolvers<AbortSignal>();
+    const release = Promise.withResolvers<JsonValue>();
+    const handler: CodeStepHandler = async (step) => {
+      await step.launchProcess({ program: process.execPath, args: [], cwd: '..', stdin: 'none' });
+      started.resolve(step.signal);
+      return release.promise;
     };
+    const ctx = makeCtx({ [node.id]: handler }, controller.signal);
+    const previousRemovals = vi.mocked(fsPromises.rm).mock.calls.length;
+    let status: string | undefined;
+    const outcome = executeCodeStepNode(createTestCall(), node, ctx, emptyExpressionCtx).then((value) => {
+      status = value.status;
+    });
 
-    let capturedSignal: AbortSignal | undefined;
-    const handler: CodeStepHandler = (ctx) => {
-      capturedSignal = ctx.signal;
-      return null;
-    };
-
-    const abortCtrl = new AbortController();
-    const ctx = makeCtx({ 'check-signal': handler }, abortCtrl.signal);
-    await executeCodeStepNode(createTestCall(), node, ctx, emptyExpressionCtx);
-
-    expect(capturedSignal).toBe(abortCtrl.signal);
+    const signal = await started.promise;
+    controller.abort();
+    try {
+      expect(signal).toBe(controller.signal);
+      await expect.poll(() => status).toBe('cancelled');
+      const removals = vi.mocked(fsPromises.rm).mock.calls.slice(previousRemovals);
+      expect(removals).toEqual([[expect.stringContaining('makaio-local-step-'), { recursive: true, force: true }]]);
+      await expect(fsPromises.access(removals[0][0])).rejects.toMatchObject({ code: 'ENOENT' });
+    } finally {
+      release.resolve('late result');
+      await outcome;
+    }
   });
 
-  it('passes platform context and environment from the runtime context to the handler', async () => {
-    const node: WorkflowCodeStepNode = {
-      id: 'platform-context',
-      type: 'code-step',
-    };
+  it('passes only portable data and scoped operations to the local handler', async () => {
+    const node: WorkflowCodeStepNode = { id: 'restricted-context', type: 'code-step' };
+    const handler: CodeStepHandler = (step) => Object.keys(step).sort();
+    const ctx = makeCtx({ [node.id]: handler });
+    const outcome = await executeCodeStepNode(createTestCall(), node, ctx, {
+      ...emptyExpressionCtx,
+      item: 'review',
+      index: 0,
+      previous: null,
+    });
 
-    let receivedContext:
-      | Pick<Parameters<CodeStepHandler>[0], 'repoPath' | 'makaioHome' | 'os' | 'arch' | 'worktree' | 'env'>
-      | undefined;
-    const handler: CodeStepHandler = (ctx) => {
-      receivedContext = {
-        repoPath: ctx.repoPath,
-        makaioHome: ctx.makaioHome,
-        os: ctx.os,
-        arch: ctx.arch,
-        worktree: ctx.worktree,
-        env: ctx.env,
-      };
+    expect(outcome).toEqual({
+      status: 'completed',
+      output: [
+        'config',
+        'executionId',
+        'index',
+        'inputs',
+        'item',
+        'launchProcess',
+        'previous',
+        'previousSteps',
+        'request',
+        'signal',
+        'workflowId',
+      ],
+    });
+  });
+
+  it.each([
+    { cwd: '..', program: process.execPath, code: 'cwd-outside-workspace' },
+    { cwd: '.', program: './missing-code-step-program', code: 'command-not-found' },
+  ])('returns $code before supplying a process handle', async ({ cwd, program, code }) => {
+    const node: WorkflowCodeStepNode = { id: 'refused-process', type: 'code-step' };
+    const handler: CodeStepHandler = async (step) => {
+      const decision = await step.launchProcess({ program, args: [], cwd, stdin: 'none' });
+      return decision.ok ? { ok: true } : decision;
+    };
+    const outcome = await executeCodeStepNode(
+      createTestCall(),
+      node,
+      makeCtx({ [node.id]: handler }),
+      emptyExpressionCtx,
+    );
+    expect(outcome).toEqual({
+      status: 'completed',
+      output: { ok: false, code: process.platform === 'win32' ? 'unsupported-site' : code },
+    });
+  });
+
+  it('reports a fixed failure when the local step workspace cannot be cleaned up', async () => {
+    const { rm: originalRemove } = await vi.importActual<typeof fsPromises>('node:fs/promises');
+    const directories: Parameters<typeof originalRemove>[0][] = [];
+    const remove = vi.spyOn(fsPromises, 'rm').mockImplementationOnce(async (path) => {
+      directories.push(path);
+      throw new Error('private cleanup detail');
+    });
+    const node: WorkflowCodeStepNode = { id: 'cleanup-process', type: 'code-step' };
+    const handler: CodeStepHandler = async (step) => {
+      await step.launchProcess({ program: process.execPath, args: [], cwd: '..', stdin: 'none' });
       return null;
     };
+    try {
+      await expect(
+        executeCodeStepNode(createTestCall(), node, makeCtx({ [node.id]: handler }), emptyExpressionCtx),
+      ).resolves.toEqual({ status: 'failed', error: 'makaio.step-process-cleanup-failed' });
+    } finally {
+      remove.mockRestore();
+      await Promise.all(directories.map((path) => originalRemove(path, { recursive: true, force: true })));
+    }
+  });
 
-    const bus = makeBus();
+  it('uses the caller-local launch configuration for child environment and timeout', async () => {
+    const node: WorkflowCodeStepNode = { id: 'configured-process', type: 'code-step' };
+    const handler: CodeStepHandler = async (step) => {
+      const started = await step.launchProcess({
+        program: process.execPath,
+        args: ['-e', 'process.stdout.write(process.env.STEP_TEST_SETTING ?? "missing"); setTimeout(() => {}, 500)'],
+        cwd: '.',
+        stdin: 'none',
+      });
+      if (!started.ok) return started;
+      const reader = started.handle.stdout?.getReader();
+      const chunk = await reader?.read();
+      const result = await started.handle.result;
+      return { value: new TextDecoder().decode(chunk?.value), status: result.status };
+    };
+    const original = makeCtx({ [node.id]: handler });
     const ctx = new RuntimeContext(
-      'exec-platform',
-      'workflow-platform',
-      makeDefinition('workflow-platform'),
-      makeExecution('workflow-platform'),
-      new Map([['platform-context', handler]]),
-      bus,
-      new AbortController().signal,
+      original.executionId,
+      original.workflowId,
+      original.definition,
+      original.execution,
+      original.runtimeHandlers,
+      original.bus,
+      original.signal,
       undefined,
       undefined,
-      {
-        context: {
-          repoPath: '/repo/runtime',
-          makaioHome: '/home/runtime/.makaio',
-          os: 'linux',
-          arch: 'arm64',
-          worktree: '/repo/runtime/worktree',
-        },
-        env: { WORKFLOW_ENV: 'present' },
-      },
+      { context: original.platformContext, env: { STEP_TEST_SETTING: 'configured' } },
+      { stepTimeoutMs: 200 },
     );
+    const result = await executeCodeStepNode(createTestCall(), node, ctx, emptyExpressionCtx);
+    expect(result).toEqual({ status: 'completed', output: { value: 'configured', status: 'timed-out' } });
+  });
 
-    await executeCodeStepNode(createTestCall(), node, ctx, emptyExpressionCtx);
+  it('launches a real local child and exposes only the portable handle', async () => {
+    const node: WorkflowCodeStepNode = { id: 'local-process', type: 'code-step' };
+    const handler: CodeStepHandler = async (step) => {
+      const started = await step.launchProcess({
+        program: process.execPath,
+        args: ['-e', 'process.stdout.write("pipe-proof")'],
+        cwd: '.',
+        stdin: 'none',
+      });
+      if (!started.ok) return started;
+      const result = await started.handle.result;
+      expect(started.handle).not.toHaveProperty('pid');
+      expect(started.handle).not.toHaveProperty('signal');
+      expect(started.handle).not.toHaveProperty('cwd');
+      expect(started.handle).not.toHaveProperty('path');
+      return { status: result.status, exitCode: result.exitCode ?? null };
+    };
+    const ctx = makeCtx({ [node.id]: handler });
+    const outcome = await executeCodeStepNode(createTestCall(), node, ctx, emptyExpressionCtx);
 
-    expect(receivedContext).toEqual({
-      repoPath: '/repo/runtime',
-      makaioHome: '/home/runtime/.makaio',
-      os: 'linux',
-      arch: 'arm64',
-      worktree: '/repo/runtime/worktree',
-      env: { WORKFLOW_ENV: 'present' },
-    });
+    expect(outcome).toEqual({ status: 'completed', output: { status: 'completed', exitCode: 0 } });
   });
 });
 
@@ -2600,34 +2626,17 @@ describe('executeParallelNode (fail-fast mode)', () => {
     const fastFailId = 'ff-sibling__fast-fail__step';
     const slowId = 'ff-sibling__slow__step';
 
+    const requestStarted = Promise.withResolvers<void>();
+    const releaseRequest = Promise.withResolvers<void>();
     const handlers: Record<string, CodeStepHandler> = {
-      [fastFailId]: () => {
+      [fastFailId]: async () => {
+        await requestStarted.promise;
         cancelTracker.push('fail-started');
         throw new Error('fast fail');
       },
-      [slowId]: async (ctx) => {
-        cancelTracker.push('slow-started');
-        // Poll the signal — in real code this would be an awaitable.
-        await new Promise<void>((resolve, reject) => {
-          if (ctx.signal.aborted) {
-            cancelTracker.push('slow-cancelled-before-wait');
-            resolve();
-            return;
-          }
-          const id = setTimeout(() => {
-            cancelTracker.push('slow-completed');
-            resolve();
-          }, 2_000);
-          ctx.signal.addEventListener(
-            'abort',
-            () => {
-              clearTimeout(id);
-              cancelTracker.push('slow-aborted');
-              reject(new Error('aborted'));
-            },
-            { once: true },
-          );
-        });
+      [slowId]: async (step) => {
+        const result = await step.request({ subject: 'runtime-step-test.pending', payload: {} });
+        cancelTracker.push(result.ok ? 'slow-completed' : 'slow-aborted');
         return 'slow result';
       },
     };
@@ -2649,29 +2658,38 @@ describe('executeParallelNode (fail-fast mode)', () => {
       },
     };
 
-    const ctx = makeCtx(handlers);
+    const hostBus = makeBusWithFrames();
+    const ctx = makeCtx(handlers, undefined, hostBus);
+    const { subjects } = hostBus.registerNamespace(StepRequestTestNamespace);
+    const cleanup = ctx.bus.on(subjects.pending, async (request) => {
+      requestStarted.resolve();
+      await releaseRequest.promise;
+      request.setResult({ completed: true });
+    });
     const parallelFrame = ctx.createFrame(createTestCall(), {
       nodeId: 'ff-sibling',
       nodeType: 'parallel',
       path: [],
     });
 
-    const outcome = await executeParallelNode(
-      createTestCall(),
-      node,
-      ctx,
-      emptyExpressionCtx,
-      executeSequence,
-      parallelFrame.frameId,
-      parallelFrame.path,
-      'fail-fast',
-    );
+    try {
+      const outcome = await executeParallelNode(
+        createTestCall(),
+        node,
+        ctx,
+        emptyExpressionCtx,
+        executeSequence,
+        parallelFrame.frameId,
+        parallelFrame.path,
+        'fail-fast',
+      );
 
-    expect(outcome.status).toBe('failed');
-    // The slow branch was either cancelled before it started, or was
-    // aborted mid-execution — but it never completed normally.
-    expect(cancelTracker).not.toContain('slow-completed');
-    expect(cancelTracker).toContain('fail-started');
+      expect(outcome.status).toBe('failed');
+      expect(cancelTracker).toEqual(['fail-started', 'slow-aborted']);
+    } finally {
+      releaseRequest.resolve();
+      cleanup();
+    }
   });
 });
 
@@ -2683,8 +2701,7 @@ describe('executeSequence with serialized parallel mode', () => {
       [failingId]: () => {
         throw new Error('serialized branch failed');
       },
-      [skippedId]: async (ctx) => {
-        if (ctx.signal.aborted) return 'cancelled before work';
+      [skippedId]: async () => {
         await new Promise((resolve) => setTimeout(resolve, 50));
         return 'should not decide the parallel outcome';
       },
@@ -2719,8 +2736,8 @@ describe('executeSequence with serialized parallel mode', () => {
 // Code step handler state context tests
 // ─────────────────────────────────────────────────────────────
 
-describe('code step handler state context', () => {
-  it('provides ctx.state when workflow declares a state contract', async () => {
+describe('workflow state requests', () => {
+  it('reads and patches declared workflow state through scoped requests', async () => {
     const bus = makeBus();
     let currentState = { tier: 'T1', selectedReviewers: [] as string[] };
     let sequence = 0;
@@ -2764,18 +2781,25 @@ describe('code step handler state context', () => {
 
     const handlers: Record<string, CodeStepHandler> = {
       'test-state-step': async (ctx) => {
-        // Verify state context exists
-        expect(ctx.state).toBeDefined();
+        const fetched = await ctx.request({ subject: 'workflow.state.get', payload: { executionId: ctx.executionId } });
+        if (!fetched.ok) throw new Error(fetched.code);
+        const snapshot = WorkflowSchemas['state.get'].response.parse(fetched.response);
+        capturedState = snapshot.value;
 
-        // Read state
-        capturedState = await ctx.state!.get();
-
-        // Update state
-        capturedAfterUpdate = await ctx.state!.update((draft: unknown) => {
-          const d = draft as { tier: string; selectedReviewers: string[] };
-          d.tier = 'T2';
-          d.selectedReviewers.push('spec-compliance-reviewer');
+        const patched = await ctx.request({
+          subject: 'workflow.state.patch',
+          payload: {
+            executionId: ctx.executionId,
+            expectedSequence: snapshot.sequence,
+            patch: [
+              { op: 'add', path: '/selectedReviewers/0', value: 'spec-compliance-reviewer' },
+              { op: 'replace', path: '/tier', value: 'T2' },
+            ],
+            nextValue: { tier: 'T2', selectedReviewers: ['spec-compliance-reviewer'] },
+          },
         });
+        if (!patched.ok) throw new Error(patched.code);
+        capturedAfterUpdate = WorkflowSchemas['state.patch'].response.parse(patched.response).value;
 
         return { ok: true };
       },
@@ -2818,12 +2842,12 @@ describe('code step handler state context', () => {
     }
   });
 
-  it('does not provide ctx.state when workflow has no state contract', async () => {
-    let capturedState: unknown = 'sentinel';
+  it('keeps state off the handler context', async () => {
+    let exposesState: boolean | undefined;
 
     const handlers: Record<string, CodeStepHandler> = {
       'no-state-step': async (ctx) => {
-        capturedState = ctx.state;
+        exposesState = 'state' in ctx;
         return { ok: true };
       },
     };
@@ -2835,222 +2859,6 @@ describe('code step handler state context', () => {
     };
 
     await executeCodeStepNode(createTestCall(), node, runtimeCtx, emptyExpressionCtx);
-    expect(capturedState).toBeUndefined();
-  });
-
-  it('supports multiple sequential state updates with sequence tracking', async () => {
-    const bus = makeBus();
-    let currentState: Record<string, unknown> = { count: 0 };
-    let sequence = 0;
-
-    const cleanupGet = bus.on(WorkflowSubjects.state.get, (requestCtx) => {
-      requestCtx.setResult({
-        executionId: 'exec-seq-test',
-        sequence,
-        value: structuredClone(currentState),
-      });
-    });
-
-    const cleanupPatch = bus.on(WorkflowSubjects.state.patch, (requestCtx) => {
-      // Verify expectedSequence is passed for concurrency control
-      expect(requestCtx.payload.expectedSequence).toBe(sequence);
-      sequence++;
-      currentState = requestCtx.payload.nextValue as Record<string, unknown>;
-      requestCtx.setResult({
-        executionId: 'exec-seq-test',
-        sequence,
-        value: structuredClone(currentState),
-      });
-    });
-
-    const definition = makeDefinition('workflow-seq-test');
-    definition.state = {
-      schema: { type: 'object' },
-      initial: { count: 0 },
-    };
-
-    let finalState: unknown;
-
-    const handlers: Record<string, CodeStepHandler> = {
-      'seq-step': async (ctx) => {
-        await ctx.state!.update((draft: unknown) => {
-          (draft as Record<string, number>)['count'] = 1;
-        });
-        finalState = await ctx.state!.update((draft: unknown) => {
-          (draft as Record<string, number>)['count'] = 2;
-        });
-        return { ok: true };
-      },
-    };
-
-    const runtimeCtx = new RuntimeContext(
-      'exec-seq-test',
-      'workflow-seq-test',
-      definition,
-      makeExecution('workflow-seq-test'),
-      new Map(Object.entries(handlers)),
-      bus,
-      new AbortController().signal,
-    );
-
-    const node: WorkflowCodeStepNode = {
-      id: 'seq-step',
-      type: 'code-step',
-    };
-
-    try {
-      const outcome = await executeCodeStepNode(createTestCall(), node, runtimeCtx, emptyExpressionCtx);
-
-      expect(outcome.status).toBe('completed');
-      expect(finalState).toEqual({ count: 2 });
-      expect(sequence).toBe(2);
-    } finally {
-      cleanupGet();
-      cleanupPatch();
-    }
-  });
-
-  it('sends meaningful JSON Patch operations and awaits async state mutators', async () => {
-    const bus = makeBus();
-    const initialState = {
-      flag: true,
-      list: ['first', 'second'],
-      'nested/key~tag': 'before',
-      removeList: ['keep', 'drop'],
-      tier: 'T1',
-    };
-    let currentState = structuredClone(initialState);
-    let sequence = 0;
-    const receivedPatches: unknown[] = [];
-
-    const cleanupGet = bus.on(WorkflowSubjects.state.get, (requestCtx) => {
-      requestCtx.setResult({
-        executionId: 'exec-patch-test',
-        sequence,
-        value: structuredClone(currentState),
-      });
-    });
-
-    const cleanupPatch = bus.on(WorkflowSubjects.state.patch, (requestCtx) => {
-      expect(currentState).toEqual(initialState);
-      receivedPatches.push(requestCtx.payload.patch);
-      sequence++;
-      currentState = requestCtx.payload.nextValue as typeof currentState;
-      requestCtx.setResult({
-        executionId: 'exec-patch-test',
-        sequence,
-        value: structuredClone(currentState),
-      });
-    });
-
-    const state = createWorkflowStateContext(createTestCall(), 'exec-patch-test', bus);
-
-    try {
-      const updated = await state.update(async (draft) => {
-        await Promise.resolve();
-        const mutable = draft as {
-          count?: number;
-          flag?: boolean;
-          list: string[];
-          'nested/key~tag': string;
-          removeList: string[];
-          tier: string;
-        };
-        mutable.count = 1;
-        delete mutable.flag;
-        mutable.list[0] = 'updated-first';
-        mutable.list.push('third');
-        mutable['nested/key~tag'] = 'after';
-        mutable.removeList.pop();
-        mutable.tier = 'T2';
-      });
-
-      expect(updated).toEqual({
-        count: 1,
-        list: ['updated-first', 'second', 'third'],
-        'nested/key~tag': 'after',
-        removeList: ['keep'],
-        tier: 'T2',
-      });
-      expect(receivedPatches).toEqual([
-        [
-          { op: 'add', path: '/count', value: 1 },
-          { op: 'remove', path: '/flag' },
-          { op: 'replace', path: '/list/0', value: 'updated-first' },
-          { op: 'add', path: '/list/2', value: 'third' },
-          { op: 'replace', path: '/nested~1key~0tag', value: 'after' },
-          { op: 'remove', path: '/removeList/1' },
-          { op: 'replace', path: '/tier', value: 'T2' },
-        ],
-      ]);
-    } finally {
-      cleanupGet();
-      cleanupPatch();
-    }
-  });
-
-  it('supports replacing primitive workflow state values from state mutators', async () => {
-    const bus = makeBus();
-    let currentState: JsonValue = 0;
-    let sequence = 0;
-    const receivedPatches: unknown[] = [];
-
-    const cleanupGet = bus.on(WorkflowSubjects.state.get, (requestCtx) => {
-      requestCtx.setResult({
-        executionId: 'exec-primitive-state-test',
-        sequence,
-        value: currentState,
-      });
-    });
-
-    const cleanupPatch = bus.on(WorkflowSubjects.state.patch, (requestCtx) => {
-      receivedPatches.push(requestCtx.payload.patch);
-      sequence++;
-      currentState = requestCtx.payload.nextValue as JsonValue;
-      requestCtx.setResult({
-        executionId: 'exec-primitive-state-test',
-        sequence,
-        value: currentState,
-      });
-    });
-
-    const state = createWorkflowStateContext(createTestCall(), 'exec-primitive-state-test', bus);
-
-    try {
-      const updated = await state.update(() => 1);
-
-      expect(updated).toBe(1);
-      expect(currentState).toBe(1);
-      expect(receivedPatches).toEqual([[{ op: 'replace', path: '', value: 1 }]]);
-    } finally {
-      cleanupGet();
-      cleanupPatch();
-    }
-  });
-
-  it('forwards sequence conflicts from the state patch RPC', async () => {
-    const bus = makeBus();
-    const cleanupGet = bus.on(WorkflowSubjects.state.get, (requestCtx) => {
-      requestCtx.setResult({
-        executionId: 'exec-conflict-test',
-        sequence: 0,
-        value: { count: 0 },
-      });
-    });
-    const cleanupPatch = bus.on(WorkflowSubjects.state.patch, () => {
-      throw new Error('state sequence conflict: expected 0, got 1');
-    });
-    const state = createWorkflowStateContext(createTestCall(), 'exec-conflict-test', bus);
-
-    try {
-      await expect(
-        state.update((draft) => {
-          (draft as { count: number }).count = 1;
-        }),
-      ).rejects.toThrow('state sequence conflict: expected 0, got 1');
-    } finally {
-      cleanupGet();
-      cleanupPatch();
-    }
+    expect(exposesState).toBe(false);
   });
 });

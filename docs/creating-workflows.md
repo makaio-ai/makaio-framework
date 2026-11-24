@@ -152,9 +152,7 @@ workflow
 
 ### `.artifact(options)`
 
-Binds a primary artifact to the workflow. The artifact is loaded before the first step
-runs and available as `ctx.artifact` throughout execution. Handlers may update it via
-`ctx.artifact.updateArtifact()` and `ctx.artifact.updateStatus()`.
+Binds a primary artifact to the workflow before execution. Pass any artifact reference a Code Step needs in its inputs. The step reads or revises that reference through a registered request.
 
 ```typescript
 workflow.artifact({
@@ -167,7 +165,7 @@ workflow.artifact({
 
 ### `.codeStep(id, handler, options?)`
 
-Appends a sequential work step. The handler receives a `CodeStepContext` and must return a
+Appends a sequential work step. The handler receives a `StepContext` and must return a
 JSON-serializable value. The return value is available as `ctx.previousSteps[id]` in
 subsequent steps.
 
@@ -316,9 +314,8 @@ introspection without running the workflow.
 ## Real-World Example: Review Workflow
 
 This example shows a review workflow with three parallel steps (spec, quality, test
-coverage), an `apply-findings` step that writes agent output back to the workflow Artifact,
-an `iterateChain` that processes each finding through a multi-step sub-pipeline,
-and a final step that records the review verdict.
+coverage), an `iterateChain` that processes each finding through a multi-step
+sub-pipeline, and a final step that returns the review verdict.
 
 ```typescript
 // .makaio/workflows/review.ts
@@ -375,16 +372,8 @@ async function aggregateFindingsHandler(ctx) {
 }
 
 async function applyFindingsHandler(ctx) {
-  // Write agent output back to the bound Artifact
-  const finding = ctx.item as ReviewFinding;
-  await ctx.artifact?.updateArtifact((current) => {
-    const findings = Array.isArray(current.findings) ? current.findings : [];
-    return {
-      ...current,
-      findings: [...findings, { ...finding, appliedAt: Date.now() }],
-    };
-  });
-  return { id: finding.id, applied: true };
+  const finding = ReviewFindingSchema.parse(ctx.item);
+  return { id: finding.id, finding };
 }
 
 async function finalizeReviewHandler(ctx) {
@@ -392,7 +381,6 @@ async function finalizeReviewHandler(ctx) {
     | { hasBlockers: boolean }
     | undefined;
   const verdict = review?.hasBlockers === false ? 'approved' : 'blocked';
-  await ctx.artifact?.updateStatus(verdict);
   return {
     verdict,
     findingsApplied: ctx.previousSteps['apply-findings']?.output?.length ?? 0,
@@ -426,7 +414,8 @@ const reviewWorkflow = defineWorkflow('review', {
     }),
     codeStep('test-coverage', async (ctx) => {
       // Automated coverage check — no agent needed
-      const coverage = await checkTestCoverage(String(ctx.inputs.branch));
+      const { branch } = ReviewInputSchema.parse(ctx.inputs);
+      const coverage = await checkTestCoverage(branch);
       return { findings: coverage.violations };
     }),
   ])
@@ -434,7 +423,7 @@ const reviewWorkflow = defineWorkflow('review', {
   // Aggregate parallel results into a flat findings list
   .codeStep('aggregate-findings', aggregateFindingsHandler)
 
-  // Write each finding to the Artifact via a multi-step sub-chain
+  // Enrich and collect each finding via a multi-step sub-chain
   .iterateChain('apply-findings', [
     agentStep('enrich-finding', 'code-reviewer', {
       prompt: 'Enrich this finding with a suggested fix: {{ item.description }}',
@@ -444,7 +433,7 @@ const reviewWorkflow = defineWorkflow('review', {
     collection: 'output.findings',
   })
 
-  // Record the verdict on the Artifact
+  // Return the verdict
   .codeStep('finalize', finalizeReviewHandler);
 
 export default reviewWorkflow;
@@ -562,12 +551,11 @@ BusEventWorkflowTrigger({
 })
 ```
 
-The trigger payload type is inferred from the subject's Zod schema — `ctx.trigger` is fully
-typed in step handlers.
+Trigger matching uses the subject's payload schema. Supply values that steps must consume through workflow inputs.
 
 ### Cron Trigger
 
-Fires on a schedule. `ctx.trigger.scheduledFor` carries the occurrence that fired.
+Fires on a schedule. The trigger occurrence is available to the workflow trigger binding.
 
 ```typescript
 import { CronWorkflowTrigger } from '@makaio/contracts';
@@ -650,120 +638,34 @@ carries either one is rejected with an error that names `when`; the replacement 
 
 ## Step Context
 
-Every step handler receives a `StepContext`:
+Every Code Step receives the same data and capability interface on the local runner and in a worker.
+
+- Run data contains `workflowId`, `executionId`, `inputs`, `config`, and `previousSteps`.
+- Iterations can supply `item`, `index`, and `previous`.
+- Use `signal` to stop work when the runtime requests cancellation. The local runner stops waiting for a pending handler on cancellation and closes its managed process scope.
+- `request({ subject, payload })` returns a typed success or refusal. The local runner validates locally registered requests and forwards them under the caller's authority. File handlers on the standard host-connected local worker can use host-only subjects and receive JSON responses without subject-schema validation in the thread. An isolated step process can refuse requests.
+- `launchProcess({ program, args, cwd, stdin })` returns a typed refusal or a portable handle with process completion and available pipes. The runtime supplies the environment and execution bounds. Relative paths resolve from the verified workspace when the runner materialized one.
+
+## Example: Run a managed process
 
 ```typescript
-interface StepContext {
-  readonly workflowId: string;
-  readonly executionId: string;
-  readonly signal: AbortSignal;
+import { defineWorkflow } from '@makaio/contracts';
 
-  readonly trigger: TTrigger;
-  readonly inputs: Record<string, unknown>;
-  readonly env: Record<string, string>;
-  readonly repoPath: string;
-  readonly makaioHome: string;
-  readonly os: 'darwin' | 'linux' | 'win32';
-  readonly arch: string;
-  readonly worktree?: string;
+export default defineWorkflow('git-status')
+  .codeStep('status', async (ctx) => {
+    const started = await ctx.launchProcess({
+      program: 'git',
+      args: ['status', '--short'],
+      cwd: '.',
+      stdin: 'none',
+    });
+    if (!started.ok) throw new Error(started.code);
 
-  // Earlier node outputs keyed by node ID
-  readonly previousSteps: TPreviousSteps;
-
-  // Set inside `.iterate()` / `.iterateChain()`
-  readonly item?: unknown;
-  readonly index?: number;
-  readonly previous?: JsonValue;
-
-  // Present when `.artifact()` is declared and initialized
-  readonly artifact?: ArtifactContext<TArtifactData>;
-}
-```
-
----
-
-## Real-World Example: Worktree Bootstrap
-
-This workflow copies `.env` files from the main worktree into secondary worktrees when a
-checkout event arrives. It fires on `git.checkout`: creating a new worktree checks out its
-branch, so the trigger payload's `repoPath` is the new worktree path.
-
-```typescript
-// .makaio/personal/workflows/worktree-bootstrap.ts
-import { defineWorkflow, BusEventWorkflowTrigger } from '@makaio/contracts';
-import { GitSubjects } from '@makaio/services-core/git/namespace';
-import { launch } from '@makaio/framework/node/subprocess';
-import { access, copyFile } from 'node:fs/promises';
-import { join } from 'node:path';
-
-const workflow = defineWorkflow('worktree-bootstrap', {
-  name: 'Copy gitignored files to new worktrees',
-  triggers: [BusEventWorkflowTrigger({ subject: GitSubjects.checkout })],
-});
-
-workflow.codeStep('resolve-worktrees', async (ctx) => {
-  const { repoPath } = ctx.trigger as { repoPath: string };
-  // One bounded command: no shell, a run-time limit and a limit on the captured output.
-  const { result } = launch({
-    command: 'git',
-    args: ['worktree', 'list', '--porcelain'],
-    cwd: repoPath,
-    envMode: 'merge',
-    timeoutMs: 10_000,
-    output: { kind: 'capture', limitBytes: 1024 * 1024 },
-  });
-  const listed = await result;
-  if (listed.status !== 'completed' || listed.output === undefined) {
-    throw new Error(`git worktree list did not complete (${listed.status})`);
-  }
-  const worktrees = listed.output.stdout
-    .split('\n\n')
-    .map((block) => block.match(/^worktree (.+)$/m)?.[1])
-    .filter((p): p is string => p !== undefined);
-
-  const mainWorktree = worktrees[0];
-  if (!mainWorktree || mainWorktree === repoPath) {
-    return { mainWorktree: mainWorktree ?? repoPath, targetWorktree: repoPath, isNewWorktree: false };
-  }
-  return { mainWorktree, targetWorktree: repoPath, isNewWorktree: true };
-});
-
-workflow.codeStep('copy-files', async (ctx) => {
-  const resolved = ctx.previousSteps['resolve-worktrees'];
-  if (resolved.status !== 'completed') return { copied: [], skipped: 'resolve step was skipped' };
-
-  const { mainWorktree, targetWorktree, isNewWorktree } = resolved.output as {
-    mainWorktree: string;
-    targetWorktree: string;
-    isNewWorktree: boolean;
-  };
-  if (!isNewWorktree) return { copied: [], skipped: 'not a secondary worktree' };
-
-  const filesToCopy = ['.env', '.env.local'];
-  const copied: string[] = [];
-  for (const file of filesToCopy) {
-    const src = join(mainWorktree, file);
-    const dst = join(targetWorktree, file);
-    try {
-      await access(src);
-      await copyFile(src, dst);
-      copied.push(file);
-    } catch {
-      // Source does not exist — skip silently
-    }
-  }
-  return { copied };
-});
-
-export default workflow;
-```
-
-**Prerequisites:** Install native git hooks so checkout events reach the bus:
-
-```bash
-makaio git-hooks install
-makaio git-hooks status
-# -> { "covered": true, "coveredOperations": ["commit", "checkout"] }
+    const result = await started.handle.result;
+    if (result.status !== 'completed') throw new Error(result.status);
+    return { exitCode: result.exitCode ?? null };
+  })
+  .build();
 ```
 
 ---
@@ -847,7 +749,7 @@ progress.
 |---------|------|
 | `defineWorkflow`, standalone factories, trigger helpers | `framework/core/contracts/src/workflow/authoring.ts` |
 | Builder interface, `GateOptions`, `IterateOptions`, `ParallelOptions` | `framework/core/contracts/src/workflow/authoring-builder.ts` |
-| `CodeStepContext`, `ArtifactContext`, `WorkflowContext` | `framework/core/contracts/src/workflow/authoring-context.ts` |
+| `StepContext` | `framework/core/contracts/src/workflow/authoring-context.ts` |
 | `defineWorkflowBundle` | `framework/core/contracts/src/workflow/bundle.ts` |
 | `defineTransitionRule`, `TransitionEventType` | `framework/core/contracts/src/workflow/transition.ts` |
 | WorkLog projection schemas | `framework/core/contracts/src/workflow/worklog.ts` |

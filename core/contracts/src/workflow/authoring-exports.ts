@@ -15,19 +15,11 @@ export {
   payloadField,
 } from './authoring-triggers.js';
 export type {
-  ArtifactContext,
-  ArtifactPatch,
-  ArtifactUpdateOperation,
-  ArtifactUpdater,
-  CodeStepContext,
   CodeStepHandler,
   IterateHandler,
   PreviousStepOutput,
   StepContext,
-  WorkflowContext,
-  WorkflowContextBase,
   WorkflowProgressUpdate,
-  WorkflowStateContext,
 } from './authoring-context.js';
 export type {
   AgentStepOptions,

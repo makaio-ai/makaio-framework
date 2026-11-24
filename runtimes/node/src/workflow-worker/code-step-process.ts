@@ -1,6 +1,12 @@
 import { isDeepStrictEqual } from 'node:util';
 import { snapshotJsonBoundary } from '@makaio/contracts/shared';
-import { StepRunResultSchema, StepTelemetrySchema, type StepRunResult } from '@makaio/contracts';
+import {
+  CODE_STEP_INVALID_REQUEST,
+  CODE_STEP_REQUEST_REJECTED,
+  StepRunResultSchema,
+  StepTelemetrySchema,
+  type StepRunResult,
+} from '@makaio/contracts';
 import {
   createJsonRpcClient,
   type Launcher,
@@ -10,6 +16,14 @@ import {
 } from '@makaio/subprocess';
 import { z } from 'zod';
 import { bindCodeStepResultChannel } from './code-step-result-channel.js';
+import {
+  CheckoutCodeStepFailureSchema,
+  STEP_METHOD_NOT_SUPPORTED,
+  StepProcessLaunchRefusalSchema,
+  StepProcessLaunchRequestSchema,
+  StepRequestCallRequestSchema,
+  type CheckoutCodeStepInput,
+} from './step-interface-schemas.js';
 
 const OUTPUT_LIMIT_BYTES = 1024 * 1024;
 
@@ -28,6 +42,12 @@ type ResultFailure = 'no-output' | 'invalid-output' | 'conflicting-output' | 'pr
 /** A code step invocation resolved by the worker, under the policy of this step owner. */
 export interface LocalCodeStepInvocation extends Omit<OwnerLaunchOptions, 'owner' | 'output' | 'stdin'> {
   readonly owner: Extract<ProcessOwner, { kind: 'step' }>;
+}
+
+/** Input and observer for the internal checkout process channel. */
+export interface CheckoutStepExchange {
+  readonly input: CheckoutCodeStepInput;
+  readonly onRequestRefused: (subject: string, reason: 'request-not-granted') => void;
 }
 
 /** The accepted child result or the reason the process did not supply it. */
@@ -67,9 +87,15 @@ class StepResultReceiver {
  * @param process - Final process facts, excluding raw output.
  * @param receiver - Submission seen during the invocation.
  * @param validFraming - Whether the step sent a complete framed transcript.
+ * @param checkout - Whether the process used the checked checkout protocol.
  * @returns Final code step outcome.
  */
-function outcome(process: ProcessFacts, receiver: StepResultReceiver, validFraming: boolean): CodeStepProcessResult {
+function outcome(
+  process: ProcessFacts,
+  receiver: StepResultReceiver,
+  validFraming: boolean,
+  checkout: boolean,
+): CodeStepProcessResult {
   if (process.status === 'cancelled' || process.status === 'timed-out') {
     return { kind: process.status, process };
   }
@@ -83,10 +109,17 @@ function outcome(process: ProcessFacts, receiver: StepResultReceiver, validFrami
     return { kind: 'process-failed', reason: 'process-exit', process };
   }
   if (receiver.result === undefined) return { kind: 'process-failed', reason: 'no-output', process };
-  const { error: _error, ...result } = receiver.result;
+  const { error, ...result } = receiver.result;
+  const diagnostic = checkout ? CheckoutCodeStepFailureSchema.safeParse(error).data : undefined;
   return {
     kind: 'reported',
-    result: result.status === 'failed' ? { ...result, error: 'Code step reported a failure' } : result,
+    result:
+      result.status === 'failed'
+        ? {
+            ...result,
+            error: diagnostic ?? 'Code step reported a failure',
+          }
+        : result,
     process,
   };
 }
@@ -105,6 +138,21 @@ export async function runLocalCodeStep(
   launcher: Launcher,
   invocation: LocalCodeStepInvocation,
 ): Promise<CodeStepProcessResult> {
+  return runCodeStepProcess(launcher, invocation);
+}
+
+/**
+ * Run the shared process channel after checkout validation has succeeded.
+ * @param launcher - Step execution site.
+ * @param invocation - Trusted launch options.
+ * @param exchange - Data assigned by the checked checkout starter, if any.
+ * @returns Terminal process result.
+ */
+export async function runCodeStepProcess(
+  launcher: Launcher,
+  invocation: LocalCodeStepInvocation,
+  exchange?: CheckoutStepExchange,
+): Promise<CodeStepProcessResult> {
   const stop = new AbortController();
   const signal = invocation.signal === undefined ? stop.signal : AbortSignal.any([invocation.signal, stop.signal]);
   const child = launcher.launch({
@@ -119,7 +167,28 @@ export async function runLocalCodeStep(
     stdin === undefined || stdout === undefined
       ? undefined
       : bindCodeStepResultChannel({ result: child.result, stdin, stdout }, stop, OUTPUT_LIMIT_BYTES);
-  if (channel !== undefined) createJsonRpcClient(channel).onServerRequest(receiver.accept);
+  if (channel !== undefined) {
+    createJsonRpcClient(channel).onServerRequest(async (request) => {
+      if (exchange !== undefined && typeof request === 'object' && request !== null && 'method' in request) {
+        if (request.method === 'request.call') {
+          const call = StepRequestCallRequestSchema.safeParse(request);
+          if (!call.success) return { ok: false, code: CODE_STEP_REQUEST_REJECTED };
+          exchange.onRequestRefused(call.data.params.subject, 'request-not-granted');
+          return { ok: false, code: 'request-not-granted' };
+        }
+        if (request.method === 'process.launch') {
+          const launch = StepProcessLaunchRequestSchema.safeParse(request);
+          return StepProcessLaunchRefusalSchema.parse({
+            ok: false,
+            code: launch.success ? 'site-unreachable' : CODE_STEP_INVALID_REQUEST,
+          });
+        }
+        if (request.method !== 'output.submit') return { ok: false, code: STEP_METHOD_NOT_SUPPORTED };
+      }
+      return receiver.accept(request);
+    });
+    if (exchange !== undefined) channel.send(exchange.input);
+  }
   const { output: _output, ...process } = await child.result;
   await channel?.ended;
   const internalFailure = receiver.failure ?? (channel?.rejectedFraming ? 'invalid-output' : undefined);
@@ -132,5 +201,5 @@ export async function runLocalCodeStep(
   ) {
     return { kind: 'process-failed', reason: internalFailure, process };
   }
-  return outcome(process, receiver, channel?.validFraming ?? false);
+  return outcome(process, receiver, channel?.validFraming ?? false, exchange !== undefined);
 }

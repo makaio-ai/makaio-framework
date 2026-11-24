@@ -184,7 +184,7 @@ describe('WorkLog projection service', () => {
     expect(stats.totalDurationMs).toBe(500);
   });
 
-  it('records artifact writes with node and artifact metadata resolved from current contracts', async () => {
+  it('does not turn retired workflow artifact events into WorkLog rows', async () => {
     const artifact: ArtifactRevision = {
       kind: 'implementation-plan',
       id: 'artifact-1',
@@ -220,18 +220,7 @@ describe('WorkLog projection service', () => {
       });
 
       const writes = await dbContext.db.select().from(worklogArtifactWrites);
-      expect(writes).toHaveLength(1);
-      expect(writes[0]).toMatchObject({
-        executionId: 'exec-worklog',
-        frameId: 'frame-plan',
-        nodeId: 'plan',
-        artifact: {
-          kind: 'implementation-plan',
-          schemaVersion: 2,
-          scope: { level: 'project', ids: { projectId: 'project-1' } },
-        },
-        revision: 'rev-1',
-      });
+      expect(writes).toEqual([]);
     } finally {
       cleanupResolve();
     }

@@ -1,5 +1,4 @@
 /* eslint max-lines: ["error", { "max": 445, "skipBlankLines": true, "skipComments": true }], max-lines-per-function: ["error", { "max": 100, "skipBlankLines": true, "skipComments": true }] */
-import * as os from 'node:os';
 import type { IMakaioBus } from '@makaio/bus-core';
 import type { CallContext } from '@makaio/core';
 import {
@@ -18,7 +17,7 @@ import { WorkflowStorageSubjects } from './storage/namespace.js';
 import { DEFAULT_EXECUTOR_CONFIG, type ActiveExecution, type ActiveRunnerStep } from './types.js';
 import { WorkflowSubjects } from './namespace.js';
 import { cancelExecution } from './workflow-execution-finalizer.js';
-import { RuntimeContext } from './runtime/runtime-context.js';
+import { resolveEphemeralPlatformFields, RuntimeContext } from './runtime/runtime-context.js';
 import { executeSequence } from './runtime/primitive-runtime.js';
 import { resolveWorkflowArtifactBinding } from './artifact-context/artifact-binding.js';
 import { assertLoopCheckHandlersPresent } from './runtime/loop-check-handlers.js';
@@ -64,6 +63,8 @@ interface WorkflowOrchestratorParams {
   readonly bus: IMakaioBus;
   /** Cancellation signal for cooperative abort. */
   readonly signal: AbortSignal;
+  /** Machine-local workspace root supplied by the trusted execution entry point. */
+  readonly workspaceRoot?: string;
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -271,6 +272,7 @@ async function buildPreRuntimeTerminalExecution(
  * @param runtimeLoopChecks - Loop check handler map for convergence checks.
  * @param bus - Worker-local bus.
  * @param signal - Cancellation signal.
+ * @param workspaceRoot - Machine-local workspace root, when supplied by the entry point.
  * @param zodSchemas - Optional file-loaded workflow schemas for artifact validation.
  * @returns Terminal status and optional error message.
  */
@@ -284,6 +286,7 @@ async function runRuntimeSequence(
   runtimeLoopChecks: ReadonlyMap<string, LoopCheckHandler>,
   bus: IMakaioBus,
   signal: AbortSignal,
+  workspaceRoot: string | undefined,
   zodSchemas?: WorkflowZodSchemas,
 ): Promise<RuntimeSequenceResult> {
   const artifactBinding = await resolveWorkflowArtifactBinding({
@@ -305,15 +308,10 @@ async function runRuntimeSequence(
     undefined,
     artifactBinding,
     {
-      context: {
-        repoPath: process.cwd(),
-        makaioHome: process.env['MAKAIO_HOME'] ?? `${os.homedir()}/.makaio`,
-        os: process.platform === 'win32' ? 'win32' : process.platform === 'darwin' ? 'darwin' : 'linux',
-        arch: process.arch,
-      },
+      context: resolveEphemeralPlatformFields(workspaceRoot),
       env: config.env,
     },
-    { runtimeLoopChecks },
+    { runtimeLoopChecks, stepTimeoutMs: config.stepTimeoutMs },
   );
   const expressionCtx = runtimeCtx.buildExpressionContext();
   const outcome = await executeSequence(call, definition.root, runtimeCtx, expressionCtx);
@@ -501,6 +499,7 @@ export async function runWorkflowOrchestrator(params: WorkflowOrchestratorParams
         runtimeLoopChecks,
         bus,
         signal,
+        params.workspaceRoot,
         loaded.zodSchemas,
       );
     }

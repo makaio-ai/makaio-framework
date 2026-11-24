@@ -132,6 +132,7 @@ export type {
 } from './types/transports.js';
 
 export { MakaioBus, createBusInstance } from './bus.js';
+export { resolveRegisteredRequestSubject } from './bus-instance.js';
 export { waitForSubscriptionPropagation } from './methods/on.js';
 export type { ScopedBus } from './bus.js';
 export type {

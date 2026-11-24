@@ -33,7 +33,7 @@ import {
 } from './finalization.js';
 
 /**
- * Structured progress signal emitted by a code step handler via `ctx.updateProgress()`.
+ * Structured data for an ephemeral workflow progress notification.
  *
  * Progress updates are ephemeral — useful for real-time monitoring and
  * observer-specific projections and materializations, but not
@@ -408,10 +408,10 @@ export const WorkflowSchemas = {
   }),
 
   /**
-   * Ephemeral progress signal emitted by a code step handler via `ctx.updateProgress()`.
+   * Ephemeral workflow progress notification.
    *
-   * Progress events are not persisted as WorkLog entries. Observers and
-   * materialization providers consume them for real-time projections.
+   * The event contract is retained for observers. The Code Step authoring
+   * context exposes only request and process-launch capabilities.
    */
   'execution.progress': z.object({
     /** Execution that emitted the progress signal. */
@@ -560,10 +560,8 @@ export const WorkflowSchemas = {
   // ─────────────────────────────────────────────────────────────
 
   /**
-   * Emitted when a workflow frame produces an artifact update.
-   *
-   * Enables "show me all artifact writes produced by this execution" queries
-   * without scanning the artifact store.
+   * Frame-scoped artifact update notification. Explicit Code Step artifact
+   * requests update the artifact without publishing this workflow event.
    */
   'artifact.updated': z.object({
     /** Execution that triggered the artifact update. */

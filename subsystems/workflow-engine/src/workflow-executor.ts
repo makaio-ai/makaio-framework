@@ -574,7 +574,7 @@ export class WorkflowExecutor extends BaseService {
           undefined,
           artifactBinding,
           { context: this.resolveEphemeralPlatformFields(), env: active.runContext.env },
-          { runtimeLoopChecks: active.runtimeLoopChecks },
+          { runtimeLoopChecks: active.runtimeLoopChecks, stepTimeoutMs: this.config.stepTimeoutMs },
         );
         assertLoopCheckHandlersPresent(active.workflow, active.runtimeLoopChecks);
         const expressionCtx = runtimeCtx.buildExpressionContext();

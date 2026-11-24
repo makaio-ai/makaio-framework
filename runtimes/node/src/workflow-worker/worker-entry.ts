@@ -18,6 +18,7 @@ import {
 } from './runtime/worker-boot.js';
 import { loadWorkerRuntimeContributions } from './runtime/worker-contributions.js';
 import { resolveAwaitTriggerConfig } from './await-trigger.js';
+import { bindFileStepRequests } from './file-step-requests.js';
 
 // ─────────────────────────────────────────────────────────────
 // Module overview
@@ -51,6 +52,8 @@ import { resolveAwaitTriggerConfig } from './await-trigger.js';
 export interface WorkflowWorkerRunParamsBase {
   /** Raw workflow worker configuration (will be validated by Zod schema). */
   readonly config: unknown;
+  /** Verified workspace root supplied by the host's materializer. */
+  readonly workspaceRoot?: string;
   /** Contribution manifest declaring which extension packages to load. */
   readonly manifest: WorkerContributionManifest;
   /** Verified worker-local entrypoints in manifest order. */
@@ -186,12 +189,19 @@ export async function runWorkflowInWorker(
 
     // Step 7: Run orchestrator
     // ORIGIN: The thread starts the run itself; the requester's call does not cross the thread boundary.
+    const call = handle.bus.own('root');
+    const fileHostRoute =
+      connector === connectUnboundWorker &&
+      !!config.busUrl &&
+      config.source.kind === 'path' &&
+      config.terminalAuthority !== 'authority';
     return await runWorkflowOrchestrator({
-      call: handle.bus.own('root'),
+      call,
       config: effectiveConfig,
-      loaded,
+      loaded: fileHostRoute ? bindFileStepRequests(loaded, handle.bus, call) : loaded,
       bus: handle.bus,
       signal: abortController.signal,
+      workspaceRoot: params.workspaceRoot,
     });
   } finally {
     signal.removeEventListener('abort', abortFromParent);

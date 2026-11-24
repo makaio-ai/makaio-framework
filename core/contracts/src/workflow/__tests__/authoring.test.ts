@@ -24,6 +24,20 @@ import { defineWorkflowBundle } from '../bundle.js';
 import { defineAutomationTrigger } from '../../automation-trigger/definition.js';
 import { payloadField } from '../authoring-triggers.js';
 import type { ExtractTriggerPayload } from '../authoring-triggers.js';
+import type { StepContext } from '../authoring-context.js';
+import type {
+  CodeStepLaunchInput,
+  CodeStepLaunchResult,
+  CodeStepRequestInput,
+  CodeStepRequestResult,
+} from '../code-step-context.js';
+
+// @ts-expect-error Artifact writes use registered requests instead of an authoring context.
+type _LegacyArtifactContext = import('../../index.js').ArtifactContext;
+// @ts-expect-error State reads and writes use registered requests instead of an authoring context.
+type _LegacyStateContext = import('../../index.js').WorkflowStateContext<unknown>;
+// @ts-expect-error Code Step handlers receive StepContext instead of the host context.
+type _LegacyWorkflowContext = import('../../index.js').WorkflowContext;
 
 const GitNamespace = createBusNamespace('git', {
   checkout: z.object({
@@ -318,17 +332,21 @@ describe('defineWorkflow', () => {
     expect(() => workflow.addNode(agentStep('step-a', 'reviewer'))).toThrow('Duplicate step ID: step-a');
   });
 
-  it('recovers trigger payload typing when a trigger is added after defineWorkflow', () => {
-    const workflow = defineWorkflow('late-trigger-flow').addTrigger(
-      BusEventWorkflowTrigger({ subject: GitNamespace.subjects.checkout }),
-    );
+  it('preserves typed trigger metadata when a trigger is added after defineWorkflow', () => {
+    const trigger = BusEventWorkflowTrigger({ subject: GitNamespace.subjects.checkout });
+    const workflow = defineWorkflow('late-trigger-flow').addTrigger(trigger);
 
-    workflow.codeStep('uses-trigger', (ctx) => {
-      const trigger = ctx.trigger as { worktreePath: string };
-      return { worktreePath: trigger.worktreePath };
+    expectTypeOf<ExtractTriggerPayload<typeof trigger>>().toEqualTypeOf<{
+      isNewWorktree: boolean;
+      mainWorktree: string;
+      worktreePath: string;
+    }>();
+    workflow.codeStep('reads-workflow-identity', (ctx) => {
+      expectTypeOf(ctx).not.toHaveProperty('trigger');
+      return { workflowId: ctx.workflowId };
     });
 
-    expect(workflow.definition.triggers).toHaveLength(1);
+    expect(workflow.definition.triggers).toEqual([trigger]);
   });
 
   it('accepts parallel nodes via addNode', () => {
@@ -457,7 +475,7 @@ describe('fluent builder — artifact binding', () => {
   });
 });
 
-describe('fluent builder — state typing', () => {
+describe('fluent builder — state declarations', () => {
   interface ReviewState {
     tier: 'T0' | 'T1' | 'T2' | 'T3';
     selectedReviewers: string[];
@@ -473,64 +491,73 @@ describe('fluent builder — state typing', () => {
     required: ['tier', 'selectedReviewers'],
   } as const;
 
-  it('types workflow state in code step handlers after state declaration', () => {
+  it('stores a typed workflow state declaration while keeping step data independent', () => {
     const workflow = defineWorkflow('typed-state-flow')
       .state<ReviewState>({
         schema: ReviewStateSchema,
         initial: { tier: 'T1', selectedReviewers: [] },
       })
-      .codeStep('select-reviewer', async (ctx) => {
-        expectTypeOf(ctx.state.get()).toEqualTypeOf<Promise<ReviewState>>();
-        const current = await ctx.state.get();
-        expectTypeOf(current.tier).toEqualTypeOf<ReviewState['tier']>();
-        expectTypeOf(current.selectedReviewers).toEqualTypeOf<string[]>();
-
-        const updated = await ctx.state.update((draft) => {
-          expectTypeOf(draft).toEqualTypeOf<ReviewState>();
-          draft.selectedReviewers.push('correctness-reviewer');
-          // @ts-expect-error ReviewState.selectedReviewers only accepts strings.
-          draft.selectedReviewers.push(42);
-        });
-
-        expectTypeOf(ctx.state.update((draft) => void draft)).toEqualTypeOf<Promise<ReviewState>>();
-        expectTypeOf(
-          ctx.state.update(() => ({ tier: 'T2', selectedReviewers: ['correctness-reviewer'] })),
-        ).toEqualTypeOf<Promise<ReviewState>>();
-        expectTypeOf(updated).toEqualTypeOf<ReviewState>();
-        return { reviewerCount: updated.selectedReviewers.length };
+      .codeStep('select-reviewer', (ctx) => {
+        expectTypeOf(ctx).toEqualTypeOf<StepContext>();
+        expectTypeOf(ctx).not.toHaveProperty('state');
+        return { workflowId: ctx.workflowId };
       });
 
-    expect(workflow.definition.state?.initial).toEqual({ tier: 'T1', selectedReviewers: [] });
+    expectTypeOf<Parameters<typeof workflow.state<ReviewState>>[0]['initial']>().toEqualTypeOf<
+      ReviewState | undefined
+    >();
+    expect(workflow.definition.state).toEqual({
+      schema: ReviewStateSchema,
+      initial: { tier: 'T1', selectedReviewers: [] },
+    });
   });
 
-  it('preserves state typing when a trigger is added after state declaration', () => {
+  it('preserves the state declaration when a trigger is added', () => {
+    const trigger = BusEventWorkflowTrigger({ subject: GitNamespace.subjects.checkout });
     const workflow = defineWorkflow('state-then-trigger-flow')
       .state<ReviewState>({
         schema: ReviewStateSchema,
         initial: { tier: 'T2', selectedReviewers: [] },
       })
-      .addTrigger(BusEventWorkflowTrigger({ subject: GitNamespace.subjects.checkout }));
+      .addTrigger(trigger);
 
-    workflow.codeStep('uses-trigger-and-state', async (ctx) => {
-      expectTypeOf(ctx.state.get()).toEqualTypeOf<Promise<ReviewState>>();
-      expectTypeOf(ctx.trigger.worktreePath).toEqualTypeOf<string>();
-      return { tier: (await ctx.state.get()).tier, worktreePath: ctx.trigger.worktreePath };
+    expect(workflow.definition.state).toEqual({
+      schema: ReviewStateSchema,
+      initial: { tier: 'T2', selectedReviewers: [] },
     });
-
-    expect(workflow.definition.triggers).toHaveLength(1);
-  });
-
-  it('keeps no-state workflow handlers ergonomic', () => {
-    const workflow = defineWorkflow('no-state-flow').codeStep('do-work', (ctx) => {
-      expectTypeOf(ctx.state).toEqualTypeOf<undefined>();
-      return { workflowId: ctx.workflowId };
-    });
-
-    expect(workflow.runtimeHandlers.has('do-work')).toBe(true);
+    expect(workflow.definition.triggers).toEqual([trigger]);
   });
 });
 
 describe('fluent builder — code step nodes', () => {
+  it('uses the same restricted context for fluent, standalone, and iterate handlers', () => {
+    const workflow = defineWorkflow('no-state-flow').codeStep('do-work', (ctx) => {
+      expectTypeOf<keyof typeof ctx>().toEqualTypeOf<
+        | 'executionId'
+        | 'workflowId'
+        | 'inputs'
+        | 'config'
+        | 'previousSteps'
+        | 'item'
+        | 'index'
+        | 'previous'
+        | 'signal'
+        | 'request'
+        | 'launchProcess'
+      >();
+      expectTypeOf(ctx.signal).toEqualTypeOf<AbortSignal>();
+      expectTypeOf(ctx.request).toEqualTypeOf<(input: CodeStepRequestInput) => Promise<CodeStepRequestResult>>();
+      expectTypeOf(ctx.launchProcess).toEqualTypeOf<(input: CodeStepLaunchInput) => Promise<CodeStepLaunchResult>>();
+      return { workflowId: ctx.workflowId };
+    });
+
+    type Handler = Parameters<typeof workflow.codeStep>[1];
+    expectTypeOf<Parameters<typeof codeStep>[1]>().toEqualTypeOf<Handler>();
+    expectTypeOf<Parameters<typeof workflow.iterate>[1]>().toEqualTypeOf<Handler>();
+    expectTypeOf<Parameters<typeof iterate>[1]>().toEqualTypeOf<Handler>();
+    expect(workflow.runtimeHandlers.has('do-work')).toBe(true);
+  });
+
   it('appends a code-step node to the root sequence', () => {
     const handler = () => ({ done: true }) as const;
     const workflow = defineWorkflow('code-step-flow').codeStep('do-work', handler);

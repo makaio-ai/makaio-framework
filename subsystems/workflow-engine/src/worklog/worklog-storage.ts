@@ -14,7 +14,6 @@ import type {
   SelectWorklogSummary,
   InsertWorklogFrameEntry,
   SelectWorklogFrameEntry,
-  InsertWorklogArtifactWrite,
 } from '../storage/schema.js';
 import { workflowEngineSchema } from '../storage/schema.variants.js';
 
@@ -328,49 +327,6 @@ export async function getWorklogFrameEntry(db: MakaioDatabase, frameId: string):
 }
 
 // ─────────────────────────────────────────────────────────────
-// Artifact write operations
-// ─────────────────────────────────────────────────────────────
-
-/**
- * Insert a WorkLog artifact write event row.
- *
- * Each `artifact.updated` event produces one row. No conflict handling needed
- * because each write gets a unique composite key.
- * @param db - Drizzle database instance.
- * @param write - Artifact write event values to insert.
- */
-export async function insertWorklogArtifactWrite(db: MakaioDatabase, write: InsertWorklogArtifactWrite): Promise<void> {
-  const { worklogArtifactWrites } = resolveSchema(db, workflowEngineSchema);
-  await db.insert(worklogArtifactWrites).values(write).onConflictDoUpdate({
-    target: worklogArtifactWrites.id,
-    set: write,
-  });
-}
-
-/**
- * Build a stable surrogate key for an artifact write row.
- *
- * The key is composed of the execution ID, frame ID, artifact kind, artifact
- * ID, and a human-readable timestamp so that re-delivering the same event is
- * idempotent and multiple writes from the same frame are distinguishable.
- * @param executionId - Execution identifier.
- * @param frameId - Frame identifier.
- * @param artifactKind - Artifact kind string.
- * @param artifactId - Stable artifact identity within its kind.
- * @param writtenAt - Epoch milliseconds when the write was recorded.
- * @returns A stable string key suitable for use as a primary key.
- */
-export function buildArtifactWriteId(
-  executionId: string,
-  frameId: string,
-  artifactKind: string,
-  artifactId: string,
-  writtenAt: number,
-): string {
-  return `${executionId}:${frameId}:${artifactKind}:${artifactId}:${writtenAt}`;
-}
-
-// ─────────────────────────────────────────────────────────────
 // Token aggregation helpers
 // ─────────────────────────────────────────────────────────────
 
@@ -608,7 +564,6 @@ export type {
   InsertWorklogSummary,
   InsertWorklogFrameEntry,
   SelectWorklogFrameEntry,
-  InsertWorklogArtifactWrite,
   WorkflowArtifactBinding,
   JsonValue,
 };
