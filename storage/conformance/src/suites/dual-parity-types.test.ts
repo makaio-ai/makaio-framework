@@ -514,6 +514,9 @@ const STRUCTURAL_ONLY_DUAL_TABLES: ReadonlySet<string> = new Set([
   'journal_position_counter',
   'journal_reader_cursors',
   'journal_edge_cursors',
+  // Scope binding uses plain text; dispatch uses a string run ID and package-internal JSON payloads.
+  'worker_allocation_scope_binding',
+  'worker_dispatch',
 ]);
 
 /**
