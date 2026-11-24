@@ -13,8 +13,8 @@ import type { ReaderName, SubjectPattern } from './identifiers.js';
  *   `tx` and the new state persist together. It may only do database work of
  *   the host, never a request on the bus. When `commit` returns
  *   `{ state: 'failed' }`, processing of the entry ends as failed and nothing
- *   written through `tx` persists. When `commit` throws, the outcome counts as
- *   `retry`.
+ *   written through `tx` persists. When `commit` throws or uses up the remaining
+ *   claim time, the transaction rolls back and the outcome counts as `retry`.
  * - `retry`: the entry could not be processed now, or is put back. `notBefore`
  *   is an ISO date-time before which the entry is not handed out again.
  * - `failed`: processing ended for good. The entry stays failed until an
@@ -26,9 +26,14 @@ export type ReaderOutcome =
       /**
        * Work to do together with advancing the reader's state.
        * @param tx - The host transaction in which the reader's state advances.
+       * @param signal - Aborts when the claim expires. The host rolls back the
+       * transaction and withdraws its authority even if the callback keeps running.
        * @returns Nothing on success, or `{ state: 'failed' }` with a reason to end the entry as failed.
        */
-      readonly commit?: (tx: HostTransaction) => Promise<void | { readonly state: 'failed'; readonly reason: string }>;
+      readonly commit?: (
+        tx: HostTransaction,
+        signal: AbortSignal,
+      ) => Promise<void | { readonly state: 'failed'; readonly reason: string }>;
     }
   | { readonly state: 'retry'; readonly reason: string; readonly notBefore?: string }
   | { readonly state: 'failed'; readonly reason: string };
@@ -36,6 +41,22 @@ export type ReaderOutcome =
 /**
  * A reader as an extension contributes it: processes the journal entries that
  * match its subjects, with a reading state of its own per entry.
+ *
+ * If a rights source denies access to an entry, it is marked done with
+ * `access-denied` for this reader and is never delivered to it again.
+ * When a rights source is unavailable or resolution fails, the reader retries
+ * with backoff and records the reason in its reading state.
+ *
+ * Each reader processes entries in order within an `orderKey` among entries
+ * selected by its current subject patterns. An entry whose handler keeps
+ * throwing is retried without an attempt limit and blocks later selected
+ * entries on that key until it succeeds or the reader reports `failed`.
+ * Other keys and readers can continue. Operators can inspect retries through
+ * `makaio:journal.reader-states` and requeue entries already marked `failed`
+ * through `makaio:journal.reprocess`.
+ *
+ * Without a rights answer source for subscriptions, every entry is readable
+ * by every reader by default.
  */
 export interface ReaderContribution {
   /** Name of the reader, owned by the contributing extension. */
@@ -60,6 +81,11 @@ export interface ReaderContribution {
    * Processes one entry. It runs outside any host transaction; what must
    * persist together with the reading state is returned as `commit` of the
    * `done` outcome.
+   *
+   * The host may call `handle` more than once for the same entry after a retry
+   * or claim expiry. An abandoned attempt can keep running in the background
+   * and overlap a later attempt. Effects outside `commit` have at-least-once
+   * semantics and must tolerate duplicate execution.
    * @param call - Context of the call. The caller is the reader's extension; principal and attesting party are those of the entry.
    * @param entry - The entry to process.
    * @param options - Handling options: `deadline` is the ISO date-time by which the handling should be finished.
@@ -79,7 +105,7 @@ export const ReaderEntryStateSchema = z
     position: PositionSchema,
     /** Whether the entry is still to be read, was processed, or ended as failed. */
     state: z.enum(['open', 'done', 'failed']),
-    /** Why the entry is not done, when the last attempt gave a reason. */
+    /** Reason recorded for the last attempt, if any. */
     reason: z.string().optional(),
     /** How often handling of the entry was retried. */
     retries: z.number().int().nonnegative(),

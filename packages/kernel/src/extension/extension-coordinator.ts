@@ -148,6 +148,8 @@ export class ExtensionCoordinator<THostContext extends KernelHostContext = Kerne
   private loaded = false;
   private started = false;
   private readonly rights: CoordinatorRights;
+  /** Resolve rights and report denials for services composed inside this host. */
+  public readonly hostRights: CoordinatorRights['hostRights'];
   private shutdownRequested = false;
   private shutdownPromise: Promise<void> | undefined;
   /** FIFO lane for lifecycle transitions that mutate extension entries. */
@@ -192,6 +194,7 @@ export class ExtensionCoordinator<THostContext extends KernelHostContext = Kerne
     const [options = {}] = args;
     this.bus = bus;
     this.rights = typeof options.rights === 'object' ? options.rights : createCoordinatorRights(bus, options.rights);
+    this.hostRights = this.rights.hostRights;
     this.surface = options.surface ?? 'headless';
     this.db = options.db;
     this.runInStartScope = options.runInStartScope ?? ((_name, start) => start());
