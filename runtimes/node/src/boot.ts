@@ -242,6 +242,8 @@ export async function bootMakaioRuntimeCore(
   // core already resolves. Every host reaches this function, so none of them
   // carries a loader of its own and none of them can drift from the others.
   const operatorConfig = options.operatorConfig ?? (await loadExtensionOperatorConfig({ makaioHome }));
+  let reportOperatorConfig: (() => void) | undefined = () =>
+    warnOnUnappliedExtensionOperatorConfig(operatorConfig, undefined);
 
   // Framework-owned enablement store — the single source of truth for which
   // extensions have been explicitly disabled. Read once before coordinator
@@ -589,6 +591,15 @@ export async function bootMakaioRuntimeCore(
       frameworkPackageNames,
     });
 
+    reportOperatorConfig = () =>
+      warnOnUnappliedExtensionOperatorConfig(
+        operatorConfig,
+        coordinator.list().map((extension) => ({
+          ...extension,
+          configSchema: coordinator.getExtension(extension.name)?.configSchema,
+        })),
+      );
+
     // Framework-level packages load unconditionally — they provide core
     // infrastructure (e.g. preferences storage) that the shell and framework
     // layer depend on regardless of whether a host descriptor is present.
@@ -737,13 +748,8 @@ export async function bootMakaioRuntimeCore(
       ),
       loadedPackageNames,
     );
-    // The coordinator applies surface and environment filtering of its own, so
-    // the set it retained — not the set handed to it — is what decides whether
-    // an operator file will ever be read. Diagnosing before the call would count
-    // a file for an interactive-only extension as consumed during a headless
-    // boot and then drop it silently.
+    // Diagnose unaddressable names only for packages retained on this surface.
     const retainedPackages = coordinator.load(packagesToLoad, configDefaults);
-    warnOnUnappliedExtensionOperatorConfig(operatorConfig, retainedPackages);
     warnOnUnaddressableExtensionOperatorConfigNames(retainedPackages);
 
     // -----------------------------------------------------------------------
@@ -828,6 +834,9 @@ export async function bootMakaioRuntimeCore(
     // dynamically as extensions activate/deactivate, so no imperative mount loop
     // is needed here.
     await coordinator.startAll({ signal: options.signal });
+    const reportStartedConfig = reportOperatorConfig;
+    reportOperatorConfig = undefined;
+    reportStartedConfig();
     checkpoint();
     // ORIGIN: Startup announces that the extension start phase is complete.
     await bus.emit(bus.own('start'), KernelSubjects.phase.servicesReady, { machineId });
@@ -915,6 +924,7 @@ export async function bootMakaioRuntimeCore(
       stopBudgetMs: shutdownSequence.budgetMs,
     };
   } catch (err) {
+    reportOperatorConfig?.();
     // A cancellation reaches here as the signal's reason, or as an aggregate of the
     // cleanup failures it set off (see `cancellationRejection`).
     const startFailures = readCancellation(err, options.signal);

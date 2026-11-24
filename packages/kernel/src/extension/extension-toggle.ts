@@ -11,11 +11,11 @@ import {
   buildExtensionContext,
   checkExtensionNameAddressable,
   type ExtensionContextHost,
+  reopenExtensionContext,
   resolveExtensionEntryConfig,
 } from './extension-context-builder.js';
 import { createAndInitService, releaseService } from './extension-shutdown-runner.js';
-import { claimManifestNamespaces, releaseEntryNamespaces } from './extension-start-runner.js';
-import { reopenExtensionNamespaces } from './namespace-capability.js';
+import { claimManifestNamespaces, closeEntryRegistration } from './extension-start-runner.js';
 import { transitionPackageEntry } from './state-transition.js';
 import { runContributionProcessors } from './contribution-processor-runner.js';
 import { registerPackageTrayMenuEntry, unregisterPackageTrayMenuEntry } from './tray-menu-entry-bridge.js';
@@ -474,7 +474,7 @@ const RESTARTABLE_STATES: ReadonlyArray<ExtensionEntry['state']> = ['stopped', '
 /**
  * Marks a re-enable attempt as failed: records the reason on the entry, logs
  * it, and transitions the entry to `'failed'`. A retained service keeps its
- * namespaces until shutdown because its handlers can still be running.
+ * namespaces until shutdown because the service can still be running.
  * @param call - Call responsible for the lifecycle transition.
  * @param host - Coordinator surface providing the bus for the transition.
  * @param entry - Mutable runtime entry for the extension.
@@ -489,7 +489,7 @@ function failReEnable(
   name: string,
   message: string,
 ): 'rejected' {
-  if (entry.pendingService === undefined) releaseEntryNamespaces(entry);
+  closeEntryRegistration(entry);
   entry.error = message;
   console.error(`[ExtensionCoordinator] Cannot re-enable "${name}":`, message);
   transitionPackageEntry(call, host.bus, entry, 'failed');
@@ -592,7 +592,7 @@ async function enableExtension(
 
   entry.enabled = true;
   entry.error = undefined;
-  reopenExtensionNamespaces(entry.identity);
+  reopenExtensionContext(entry.identity);
   transitionPackageEntry(call, host.bus, entry, 'initializing');
 
   // Config resolution fails only when an operator-supplied layer cannot be
@@ -689,7 +689,7 @@ async function reinitializeService(
   } catch (err) {
     await cleanupFailedEnable(name, storageCleanup, entry);
     if (err instanceof ServiceSkipError && !entry.pkg.critical) {
-      if (entry.pendingService === undefined) releaseEntryNamespaces(entry);
+      closeEntryRegistration(entry);
       entry.error = err.reason;
       transitionPackageEntry(call, host.bus, entry, 'skipped');
       return false;
@@ -818,7 +818,7 @@ async function disableExtension(
     entry.error = `Extension "${name}" disabled with ${teardownFailures.length} teardown failure(s): ${detail}`;
   }
 
-  if (entry.pendingService === undefined) releaseEntryNamespaces(entry);
+  closeEntryRegistration(entry);
   transitionPackageEntry(call, host.bus, entry, 'stopped');
 
   entry.warnings = [];

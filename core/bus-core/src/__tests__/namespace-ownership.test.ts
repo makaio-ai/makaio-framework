@@ -171,7 +171,7 @@ describe('namespace ownership', () => {
       expect(bus.getSchema(definition.subjects.call)).toBeUndefined();
       expect(registry.listRegisteredSubjects().filter((entry) => entry.namespace === domain)).toEqual([]);
       expect(registry.isRequestSubject(fullSubject)).toBe(false);
-      expect(registry.isCollectorOnlySubject(`${domain}.collector`)).toBe(false);
+      expect(registry.isCollectorOnlySubject(`${domain}.collector`)).toBe(true);
       expect({
         local: registry.isLocalSubject(`${domain}.local`),
         hostLocalRequest: registry.isHostLocalRequestSubject(`${domain}.hostRequest`),
@@ -180,6 +180,42 @@ describe('namespace ownership', () => {
       await expect(bus.request(call, alternate.subjects.call, { input: 123 })).resolves.toEqual(result);
     } finally {
       unsubscribe();
+    }
+  });
+
+  it('delivers collector-only events locally after release without relaying them', async () => {
+    const source = new MockTransport('source');
+    const peer = new MockTransport('peer');
+    const bus = createBusInstance({ transports: [source, peer] });
+    const domain = 'example:collector';
+    const original = createBusNamespace(domain, { event: collectorOnlySubject(EventSchema) });
+    const replacement = createBusNamespace(domain, { event: EventSchema });
+    const lease = leaseNamespace(bus, original, FirstHolder);
+    const observer = vi.fn();
+    const unsubscribe = bus.on(original.subjects.event, observer);
+    const message = {
+      type: 'event' as const,
+      namespace: domain,
+      subject: 'event',
+      payload: { id: 'remote' },
+      messageId: 'after-release',
+    };
+
+    try {
+      lease.release();
+      await source.simulateReceive(message);
+
+      expect(observer).toHaveBeenCalledTimes(1);
+      expect(peer.messages).toHaveLength(0);
+
+      leaseNamespace(bus, replacement, SecondHolder);
+      await source.simulateReceive({ ...message, messageId: 'after-reclaim' });
+
+      expect(observer).toHaveBeenCalledTimes(2);
+      expect(peer.messages).toEqual([expect.objectContaining({ type: 'event', messageId: 'after-reclaim' })]);
+    } finally {
+      unsubscribe();
+      bus.disconnect();
     }
   });
 

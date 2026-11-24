@@ -1,4 +1,5 @@
 import * as methods from './methods/index.js';
+import { bindSubscriptionLifetime, subscribeCarrierCallback } from './subscription-lifetime.js';
 import { createScopedBus } from './scoped-bus.js';
 import { createFilteredBus } from './filtered-bus.js';
 import { own as ownContextOf } from './call-context/carrier.js';
@@ -10,7 +11,14 @@ import { createBroadcastSend, createSendSurface } from './send-surface.js';
 import type { NamespaceLease } from '@makaio/contracts/extension';
 import type { TypedNamespace } from './registries/namespace-registry.js';
 import type { IHostMakaioBus, IMakaioBus, MakaioBusContext } from './types/bus.js';
-import type { BusNamespaceDefinition, PartyRef, PayloadFilter, SubjectDefinition, SubjectSchema } from '@makaio/core';
+import type {
+  BusNamespaceDefinition,
+  HandlerForSubjectDefinition,
+  PartyRef,
+  PayloadFilter,
+  SubjectDefinition,
+  SubjectSchema,
+} from '@makaio/core';
 
 /**
  * Register on behalf of a carrier, recording the lease for a bulk call's rollback when requested.
@@ -86,20 +94,23 @@ function resetAllHandlers(context: MakaioBusContext): void {
  * does not derive or check call contexts itself: it passes its carrier and the `call` of
  * the caller on to the entries in `methods/`.
  * @param context - Shared bus context.
- * @param carrier - The party this instance acts as.
+ * @param party - The party this instance acts as.
  * @param transportMethods - Transport lifecycle methods of the context (shared by every instance of it).
  * @param namespace - Namespace scope of the instance, if any.
  * @param registerNamespace - Registration on behalf of the carrier, when supplied.
+ * @param subscriptionLifetime - Optional lifetime for registrations through this carrier.
  * @returns The bus instance.
  */
 export function buildBusInstance<Namespace extends string | unknown = undefined>(
   context: MakaioBusContext,
-  carrier: PartyRef,
+  party: PartyRef,
   transportMethods: BusTransportMethods,
   namespace?: Namespace,
   registerNamespace?: CarrierNamespaceRegistration,
+  subscriptionLifetime?: AbortSignal,
 ): IHostMakaioBus<Namespace> {
   // The namespace domain as a string, for validation; any other domain (`unknown`) is unscoped.
+  const carrier = bindSubscriptionLifetime(party, subscriptionLifetime);
   const scope = typeof namespace === 'string' ? namespace : undefined;
   const sendSurface = createSendSurface(context, carrier, scope);
   const register: CarrierNamespaceRegistration =
@@ -116,7 +127,9 @@ export function buildBusInstance<Namespace extends string | unknown = undefined>
     },
     once: (subject: SubjectDefinition, handler: unknown) => {
       validateMessage('once', subject, scope);
-      return methods.once(context, carrier, subject, handler as never);
+      return typeof handler === 'function'
+        ? methods.once(context, carrier, subject, handler as HandlerForSubjectDefinition<SubjectDefinition>)
+        : methods.once(context, carrier, subject, handler as methods.OnceOptions<SubjectDefinition> | undefined);
     },
     emit: sendSurface.emit as IMakaioBus<Namespace>['emit'],
     request: sendSurface.request as IMakaioBus<Namespace>['request'],
@@ -143,21 +156,14 @@ export function buildBusInstance<Namespace extends string | unknown = undefined>
         throw new Error(`Subject namespace ${subject.$meta.namespace} does not match scoped bus namespace ${scope}`);
       return extendSubjectImpl(context, subject, extensions);
     },
-    observeMessages: (observer) => {
-      context.messageObservers.add(observer);
-      return () => {
-        context.messageObservers.delete(observer);
-      };
-    },
+    observeMessages: (observer) =>
+      subscribeCarrierCallback(carrier, context.messageObservers, observer, context.debugLog),
     // Debugging/testing utilities
     __onAny: (handler) => {
       if (process.env.NODE_ENV === 'production') {
         return () => {}; // Noop in production
       }
-      context.anyHandlers.add(handler);
-      return () => {
-        context.anyHandlers.delete(handler);
-      };
+      return subscribeCarrierCallback(carrier, context.anyHandlers, handler, context.debugLog);
     },
     __resetHandlers: process.env.NODE_ENV === 'test' ? () => resetAllHandlers(context) : undefined,
   } as IHostMakaioBus<Namespace>;
@@ -192,6 +198,7 @@ export function buildBusInstance<Namespace extends string | unknown = undefined>
  * @param host - Bus instance whose context is shared.
  * @param carrier - The party the new instance acts as.
  * @param registerNamespace - Carrier registration policy. Omitting it preserves host registration for trusted callers.
+ * @param subscriptionLifetime - Optional lifetime for registrations through this carrier.
  * @returns A bus instance bound to `carrier` with the namespace of `host`.
  * @throws BusError When `host` was not built by `buildBusInstance`.
  */
@@ -199,9 +206,10 @@ export function createCarrierBus<Namespace extends string | unknown = unknown>(
   host: IMakaioBus<Namespace>,
   carrier: PartyRef,
   registerNamespace?: CarrierNamespaceRegistration,
+  subscriptionLifetime?: AbortSignal,
 ): IMakaioBus<Namespace> {
   const { context, transportMethods } = recordOf(host);
-  return buildBusInstance(context, carrier, transportMethods, host.namespace, registerNamespace);
+  return buildBusInstance(context, carrier, transportMethods, host.namespace, registerNamespace, subscriptionLifetime);
 }
 
 /**

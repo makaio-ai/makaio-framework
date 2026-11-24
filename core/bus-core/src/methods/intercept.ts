@@ -2,6 +2,7 @@ import type { MakaioBusContext, InterceptorEntry, InterceptOptions } from '../ty
 import type { InterceptorContext, InterceptorHandler } from '../types/interceptor.js';
 import { getFullSubjectForSubjectDefinition } from '../utils/subject-transformation.js';
 import { matchesFilter } from '../utils/payload-filter.js';
+import { ignoredSubscription, subscriptionSignal, trackSubscription } from '../subscription-lifetime.js';
 import { insertSorted } from '../utils/insert-sorted.js';
 import type { PartyRef, SubjectDefinition } from '@makaio/core';
 
@@ -27,6 +28,8 @@ export function intercept<T extends SubjectDefinition>(
   options?: InterceptOptions,
 ): () => void {
   const fullSubjectKey = getFullSubjectForSubjectDefinition(subjectDefinition);
+  const signal = subscriptionSignal(owner, fullSubjectKey, context.debugLog);
+  if (signal === false) return ignoredSubscription;
   const priority = options?.priority ?? 0;
 
   // Ensure the entry array exists for this subject
@@ -54,10 +57,10 @@ export function intercept<T extends SubjectDefinition>(
   insertSorted(entries, entry);
 
   // Return unsubscribe function that removes this specific handler
-  return () => {
+  return trackSubscription(() => {
     const currentEntries = context.interceptorHandlers.get(fullSubjectKey);
     if (currentEntries) {
-      const index = currentEntries.findIndex((e) => e.handler === effectiveHandler);
+      const index = currentEntries.indexOf(entry);
       if (index !== -1) {
         currentEntries.splice(index, 1);
       }
@@ -66,5 +69,5 @@ export function intercept<T extends SubjectDefinition>(
         context.interceptorHandlers.delete(fullSubjectKey);
       }
     }
-  };
+  }, signal);
 }

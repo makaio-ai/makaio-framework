@@ -10,10 +10,12 @@ import {
   buildExtensionContext,
   checkExtensionNameAddressable,
   type ExtensionContextHost,
+  releaseExtensionCarrierSubscriptions,
+  reopenExtensionContext,
   resolveExtensionEntryConfig,
 } from './extension-context-builder.js';
 import { createAndInitService, releaseService } from './extension-shutdown-runner.js';
-import { releaseExtensionNamespaces, reopenExtensionNamespaces } from './namespace-capability.js';
+import { releaseExtensionNamespaces } from './namespace-capability.js';
 import { registerPackageTrayMenuEntry } from './tray-menu-entry-bridge.js';
 import { transitionPackageEntry } from './state-transition.js';
 import type { ContributionProcessor, ExtensionEntry } from './types.js';
@@ -46,7 +48,7 @@ export function claimManifestNamespaces(bus: IMakaioBus, entry: ExtensionEntry):
 }
 
 /**
- * Release the manifest and runtime claims after service teardown or at final shutdown.
+ * Release the manifest and runtime claims after carrier teardown.
  * @param entry - Extension entry whose namespaces are released.
  */
 export function releaseEntryNamespaces(entry: ExtensionEntry): void {
@@ -56,6 +58,15 @@ export function releaseEntryNamespaces(entry: ExtensionEntry): void {
     manifestClaims.delete(entry);
   }
   releaseExtensionNamespaces(entry.identity);
+}
+
+/**
+ * End carrier subscriptions now, retaining namespace claims for pending service teardown.
+ * @param entry - Extension entry whose lifecycle has ended.
+ */
+export function closeEntryRegistration(entry: ExtensionEntry): void {
+  releaseExtensionCarrierSubscriptions(entry.identity);
+  if (entry.pendingService === undefined) releaseEntryNamespaces(entry);
 }
 
 /** Coordinator state required to start one extension entry. */
@@ -95,6 +106,7 @@ export async function startExtensionEntry(
   // ORIGIN: The coordinator starts an entry as the host.
   const call = host.bus.own('start');
   if (!entry.enabled) {
+    closeEntryRegistration(entry);
     transitionPackageEntry(call, host.bus, entry, 'skipped');
     host.bootProgress.skipped(entry.pkg, 'disabled');
     return;
@@ -113,7 +125,11 @@ export async function startExtensionEntry(
     return depEntry?.state !== 'active';
   });
   if (inactiveDeps.length > 0) {
-    const message = `Required dependencies not active: ${inactiveDeps.map((d) => d.name).join(', ')}`;
+    const details = inactiveDeps.map(({ name: dependency }) => {
+      const error = host.entries.get(dependency)?.error;
+      return error ? `${dependency} (${error})` : dependency;
+    });
+    const message = `Required dependencies not active: ${details.join(', ')}`;
     failEntry(call, host, name, entry, message);
     if (entry.pkg.critical) throw new Error(`Critical package "${name}" failed: ${message}`);
     return;
@@ -142,7 +158,7 @@ export async function startExtensionEntry(
   }
 
   host.bootProgress.starting(entry.pkg);
-  reopenExtensionNamespaces(entry.identity);
+  reopenExtensionContext(entry.identity);
   entry.error = undefined;
   transitionPackageEntry(call, host.bus, entry, 'initializing');
   // Config resolution fails only when an operator-supplied layer cannot be
@@ -271,7 +287,7 @@ function handleServiceSkipError(
     throw new Error(`Critical package "${name}" failed: ${message}`, { cause: err });
   }
 
-  if (entry.pendingService === undefined) releaseEntryNamespaces(entry);
+  closeEntryRegistration(entry);
   entry.error = err.reason;
   console.info(`[ExtensionCoordinator] Package "${name}" skipped: ${err.reason}`);
   transitionPackageEntry(call, host.bus, entry, 'skipped');
@@ -348,7 +364,7 @@ function failEntry(
   entry: ExtensionEntry,
   message: string,
 ): void {
-  if (entry.pendingService === undefined) releaseEntryNamespaces(entry);
+  closeEntryRegistration(entry);
   entry.error = message;
   console.error(`[ExtensionCoordinator] Package "${name}" failed:`, message);
   transitionPackageEntry(call, host.bus, entry, 'failed');

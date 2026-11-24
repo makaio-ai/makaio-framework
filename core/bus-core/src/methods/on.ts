@@ -4,6 +4,7 @@ import { matchesFilter } from '../utils/payload-filter.js';
 import { insertSorted } from '../utils/insert-sorted.js';
 import { pushAdvertisedSubjectsToPeers } from '../registries/advertised-state.js';
 import { warnIfUnregistered } from '../utils/warn-unregistered.js';
+import { ignoredSubscription, subscriptionSignal, trackSubscription } from '../subscription-lifetime.js';
 import {
   type EventHandler,
   type HandlerForSubjectDefinition,
@@ -120,6 +121,8 @@ export function on<T extends SubjectDefinition>(
 ): () => void {
   const subject = subjectDefinition.subject;
   const fullSubjectKey = getFullSubjectForSubjectDefinition(subjectDefinition);
+  const signal = subscriptionSignal(owner, fullSubjectKey, context.debugLog);
+  if (signal === false) return ignoredSubscription;
   const isRequest = subjectDefinition.$meta.isRequest;
   const isWildcard = subject.includes(WildcardSubjectKey) || subject.includes(':');
   const isAmbiguousWildcard = isWildcard && !isRequest;
@@ -128,15 +131,17 @@ export function on<T extends SubjectDefinition>(
     warnIfUnregistered(context, subjectDefinition, fullSubjectKey);
   }
 
+  const callback = signal ? handler.bind(undefined) : handler;
+
   // Wrap handler with filter if provided
   const effectiveHandler: EventHandler<unknown> | RequestHandler<unknown, unknown> = options?.filter
     ? (ctx: { payload: unknown }) => {
         if (!matchesFilter(ctx.payload, options.filter!)) {
           return; // Filter didn't match, skip handler
         }
-        return (handler as (ctx: unknown) => void | Promise<void>)(ctx);
+        return (callback as (ctx: unknown) => void | Promise<void>)(ctx);
       }
-    : (handler as EventHandler<unknown> | RequestHandler<unknown, unknown>);
+    : (callback as EventHandler<unknown> | RequestHandler<unknown, unknown>);
 
   // Determine which handler maps to register in
   // - Ambiguous wildcards: both event and request maps (can match either type)
@@ -207,5 +212,5 @@ export function on<T extends SubjectDefinition>(
   // The public type remains () => void — only once.ts reads the internal symbol.
   unsubscribe[onPropagationPromiseSymbol] = propagated;
 
-  return unsubscribe;
+  return trackSubscription(unsubscribe, signal);
 }

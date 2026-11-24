@@ -2,7 +2,7 @@ import * as fs from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import * as path from 'node:path';
 import { z } from 'zod';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 import { MakaioBus, NoHandlerError, type IMakaioBus } from '@makaio/bus-core';
 import {
   ArtifactSubjects,
@@ -16,7 +16,7 @@ import {
 } from '@makaio/contracts';
 import type { AdapterFile, ProviderConfigFile } from '@makaio/contracts/config';
 import { ClientSubjects } from '@makaio/contracts/client';
-import type { IConfigStorage } from '@makaio/core';
+import { createBusNamespace, type IConfigStorage } from '@makaio/core';
 import type { KernelMakaioExtension, TransportProvider } from '@makaio/kernel';
 import { ExtensionSubjects, KernelSubjects } from '@makaio/kernel';
 import type { PersistedMachineIdentity } from '@makaio/machine-identity';
@@ -768,10 +768,14 @@ export default {
 
   it('rolls back coordinator handlers when host coordinator setup throws', async () => {
     const transport = new FakeTransportProvider();
+    const filePath = await writeOperatorConfigFile(tempHome, 'never-installed.json', '{}');
+    const warning = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    onTestFinished(() => warning.mockRestore());
 
     await expect(
       bootMakaioRuntimeCore(transport, 0, '127.0.0.1', {
         discovery: new ExplicitDescriptorDiscovery([]),
+        makaioHome: tempHome,
         frameworkVersion: '3.0.0',
         hostCapabilities: ['node'],
         configureCoordinator: () => {
@@ -781,6 +785,7 @@ export default {
     ).rejects.toThrow('coordinator setup failed');
 
     expect(transport.disconnectCount).toBe(1);
+    expect(warning.mock.calls.filter(([message]) => String(message).includes(filePath))).toHaveLength(1);
     await expect(MakaioBus.request(ExtensionSubjects.list, {})).rejects.toBeInstanceOf(NoHandlerError);
   });
 
@@ -905,6 +910,12 @@ export default {
   });
 
   it('fails before default identity fallback creates keys when LAN resolver is missing', async () => {
+    const configFiles = await Promise.all([
+      writeOperatorConfigFile(tempHome, 'early-one.json', '{}'),
+      writeOperatorConfigFile(tempHome, 'early-two.json', '{}'),
+    ]);
+    const warning = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    onTestFinished(() => warning.mockRestore());
     const dispatchingAuth = new DispatchingAuth({});
     const transport = new FakeTransportProvider() as FakeTransportProvider & {
       dispatchingAuth: DispatchingAuth;
@@ -924,6 +935,14 @@ export default {
     expect(transport.connectedWith).toBeUndefined();
     expect(transport.disconnectCount).toBe(0);
     await expect(fs.stat(path.join(tempHome, 'keys'))).rejects.toMatchObject({ code: 'ENOENT' });
+    for (const file of configFiles) {
+      const messages = warning.mock.calls
+        .map(([message]) => String(message))
+        .filter((message) => message.includes(file));
+      expect(messages).toEqual([
+        expect.stringContaining('boot aborted before extension setup; configuration was not applied'),
+      ]);
+    }
   });
 
   it('uses injected machine identity as the runtime machineId when config provider is defaulted', async () => {
@@ -1085,6 +1104,12 @@ export default {
       },
     };
     const filePath = await writeOperatorConfigFile(tempHome, 'operator-config-broken.json', '{ "port": }');
+    const warning = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    onTestFinished(() => {
+      warning.mockRestore();
+      error.mockRestore();
+    });
 
     runtime = await bootMakaioRuntimeCore(new FakeTransportProvider(), 0, '127.0.0.1', {
       makaioHome: tempHome,
@@ -1098,26 +1123,62 @@ export default {
 
     expect(failed?.state).toBe('failed');
     expect(failed?.error).toContain(filePath);
+    const configReports = [...warning.mock.calls, ...error.mock.calls].filter((args) =>
+      args.some((arg) => typeof arg === 'string' && arg.includes(filePath)),
+    );
+    expect(configReports).toHaveLength(1);
     expect(extensions.filter((entry) => entry.state === 'active').map((entry) => entry.name)).toEqual(
       expect.arrayContaining([...EXPECTED_FRAMEWORK_BOOT_PACKAGE_NAMES]),
     );
   });
 
-  it('warns once for an operator config file naming an extension that is not loaded', async () => {
+  it.each([
+    false,
+    true,
+  ])('warns once for an unloaded extension when critical startup fails: %s', async (criticalFails) => {
     const filePath = await writeOperatorConfigFile(tempHome, 'never-installed.json', JSON.stringify({ port: 1 }));
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const critical: KernelMakaioExtension = {
+      name: 'broken-critical',
+      displayName: 'Broken Critical',
+      version: '1.0.0',
+      critical: true,
+      /** Fail before startup completes. */
+      create() {
+        throw new Error('critical startup failed');
+      },
+    };
+    const later = {
+      name: 'after-critical',
+      displayName: 'After Critical',
+      version: '1.0.0',
+      configSchema: z.object({ port: z.number() }),
+      dependencies: [{ type: 'extension', name: critical.name, version: '1.0.0' }],
+    } satisfies KernelMakaioExtension;
+    const laterConfig = criticalFails
+      ? await writeOperatorConfigFile(tempHome, 'after-critical.json', JSON.stringify({ port: 2 }))
+      : undefined;
 
     try {
-      runtime = await bootMakaioRuntimeCore(new FakeTransportProvider(), 0, '127.0.0.1', {
+      const boot = bootMakaioRuntimeCore(new FakeTransportProvider(), 0, '127.0.0.1', {
         makaioHome: tempHome,
-        discovery: new ExplicitDescriptorDiscovery([]),
+        discovery: new ExplicitDescriptorDiscovery(
+          criticalFails ? [critical, later].map((pkg) => preloadedDescriptorFixture(tempHome, pkg)) : [],
+        ),
         frameworkVersion: '3.0.0',
         hostCapabilities: ['node'],
       });
+      if (criticalFails) await expect(boot).rejects.toThrow('critical startup failed');
+      else runtime = await boot;
 
       expect(warnSpy.mock.calls.map((call) => String(call[0])).filter((message) => message.includes(filePath))).toEqual(
         [`[boot] Operator config ${filePath} names extension "never-installed", which is not loaded; it has no effect`],
       );
+      if (laterConfig) {
+        expect(
+          warnSpy.mock.calls.map((call) => String(call[0])).filter((message) => message.includes(laterConfig)),
+        ).toEqual([expect.stringContaining('startup did not reach it')]);
+      }
     } finally {
       warnSpy.mockRestore();
     }
@@ -1149,6 +1210,38 @@ export default {
           `[boot] Operator config ${filePath} names extension "operator-config-schemaless", which declares no config schema; it has no effect`,
         ],
       );
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it('warns that an extension with operator config failed to start when its namespace is already owned', async () => {
+    const pkg: KernelMakaioExtension = {
+      name: 'operator-config-conflict',
+      displayName: 'Operator Config Conflict',
+      version: '1.0.0',
+      configSchema: z.object({ port: z.number() }),
+      namespaces: [createBusNamespace('makaio:operator-config-conflict', { ping: z.object({}) })],
+    };
+    const filePath = await writeOperatorConfigFile(tempHome, `${pkg.name}.json`, JSON.stringify({ port: 1 }));
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+    try {
+      runtime = await bootMakaioRuntimeCore(new FakeTransportProvider(), 0, '127.0.0.1', {
+        makaioHome: tempHome,
+        discovery: new ExplicitDescriptorDiscovery([preloadedDescriptorFixture(tempHome, pkg)]),
+        frameworkVersion: '3.0.0',
+        hostCapabilities: ['node'],
+      });
+
+      const configWarnings = warnSpy.mock.calls
+        .map((call) => String(call[0]))
+        .filter((message) => message.includes(filePath));
+      expect(configWarnings).toEqual([
+        expect.stringContaining(
+          `names extension "${pkg.name}", which failed to start: namespace-already-owned: [MakaioBus] Namespace 'makaio:operator-config-conflict' is already owned by the host`,
+        ),
+      ]);
     } finally {
       warnSpy.mockRestore();
     }

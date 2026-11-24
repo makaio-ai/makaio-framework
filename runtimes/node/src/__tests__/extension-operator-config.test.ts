@@ -607,6 +607,17 @@ describe('warnOnUnappliedExtensionOperatorConfig', () => {
     expect(String(warnSpy.mock.calls[0]?.[0])).toContain('names extension "gateway", which is not loaded');
   });
 
+  it.each(['failed', 'skipped'] as const)('reports the %s state and recorded error for a loaded extension', (state) => {
+    const consumer = { name: 'gateway', configSchema: {}, state, error: 'dependency\nunavailable' };
+    const diagnosis = state === 'failed' ? 'failed to start' : 'was skipped';
+
+    warnOnUnappliedExtensionOperatorConfig(snapshotWithConfigFor('gateway'), [consumer]);
+
+    expect(warnSpy).toHaveBeenCalledExactlyOnceWith(
+      `[boot] Operator config /home/config/extensions/gateway.json names extension "gateway", which ${diagnosis}: dependency unavailable`,
+    );
+  });
+
   it('reports an entry for a loaded extension that declares no config schema', () => {
     warnOnUnappliedExtensionOperatorConfig(snapshotWithConfigFor('gateway'), [{ name: 'gateway' }]);
 

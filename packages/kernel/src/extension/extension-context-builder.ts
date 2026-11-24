@@ -15,7 +15,7 @@ import {
   type ExtensionConfigResolutionMode,
   resolveConfigOutcome,
 } from './resolve-config.js';
-import { namespaceCapabilityFor, namespaceRegistrationFor } from './namespace-capability.js';
+import { namespaceCapabilityFor, namespaceRegistrationFor, reopenExtensionNamespaces } from './namespace-capability.js';
 import type { ExtensionContextBase, ExtensionEntry, KernelExtensionContext } from './types.js';
 
 /**
@@ -214,6 +214,28 @@ function extensionCarrierOf(identity: ExtensionIdentity): PartyRef {
   return { kind: MAKAIO_EXTENSION_PARTY_KIND, id: identity.extensionName };
 }
 
+const carrierLifetimes = new WeakMap<ExtensionIdentity, AbortController>();
+
+/**
+ * Remove registrations made through all carrier buses of this entry.
+ * @param identity - Trusted identity of the entry being released.
+ */
+export function releaseExtensionCarrierSubscriptions(identity: ExtensionIdentity): void {
+  const lifetime = carrierLifetimes.get(identity) ?? new AbortController();
+  carrierLifetimes.set(identity, lifetime);
+  lifetime.abort();
+}
+
+/**
+ * Open a new registration generation when the coordinator begins activation.
+ * Previously issued carrier buses keep their ended signal.
+ * @param identity - Trusted identity of the entry being activated.
+ */
+export function reopenExtensionContext(identity: ExtensionIdentity): void {
+  reopenExtensionNamespaces(identity);
+  if (carrierLifetimes.get(identity)?.signal.aborted) carrierLifetimes.delete(identity);
+}
+
 /**
  * Create the carrier bus of an extension.
  *
@@ -225,7 +247,14 @@ function extensionCarrierOf(identity: ExtensionIdentity): PartyRef {
  * @returns Bus instance bound to the extension's carrier.
  */
 export function createExtensionCarrierBus(hostBus: IMakaioBus, identity: ExtensionIdentity): IMakaioBus {
-  return createCarrierBus(hostBus, extensionCarrierOf(identity), namespaceRegistrationFor(hostBus, identity));
+  const lifetime = carrierLifetimes.get(identity) ?? new AbortController();
+  carrierLifetimes.set(identity, lifetime);
+  return createCarrierBus(
+    hostBus,
+    extensionCarrierOf(identity),
+    namespaceRegistrationFor(hostBus, identity),
+    lifetime.signal,
+  );
 }
 
 /**

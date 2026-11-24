@@ -307,7 +307,7 @@ function holderLabel(holder: NamespaceHolder): string {
 }
 
 type SubjectInspections = ReadonlyMap<string, SubjectSchemaInspection<BaseSubjectSchema>>;
-type LocalityMarks = Pick<SubjectRoutingMetadata, 'local' | 'hostLocalRequest'>;
+type LocalityMarks = Pick<SubjectRoutingMetadata, 'local' | 'collectorOnly' | 'hostLocalRequest'>;
 
 type RegisteredNamespace<Namespace = unknown> = {
   namespace: Namespace;
@@ -459,8 +459,8 @@ export class NamespaceRegistry {
   private release(domain: string, registration: RegisteredNamespace): void {
     if (this.namespaces.get(domain) !== registration) return;
     const locality = new Map<string, LocalityMarks>();
-    for (const [subject, { local, hostLocalRequest }] of registration.routing) {
-      if (local || hostLocalRequest) locality.set(subject, { local, hostLocalRequest });
+    for (const [subject, { local, collectorOnly, hostLocalRequest }] of registration.routing) {
+      if (local || collectorOnly || hostLocalRequest) locality.set(subject, { local, collectorOnly, hostLocalRequest });
       const fullSubject = `${domain}.${subject}`;
       const remaining = this.registeredSubjects.get(fullSubject)?.filter((entry) => entry.namespace !== domain);
       if (remaining?.length) this.registeredSubjects.set(fullSubject, remaining);
@@ -589,7 +589,7 @@ export class NamespaceRegistry {
    * @returns True if the subject was wrapped with `collectorOnlySubject()`
    */
   public isCollectorOnlySubject(subject: string): boolean {
-    return this.registeredSubjects.get(subject)?.some((entry) => entry.collectorOnly) ?? false;
+    return this.hasLocalityMark(subject, 'collectorOnly');
   }
   /**
    * Check if a subject was registered as a host-local request subject.

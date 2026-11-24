@@ -1,5 +1,6 @@
 import type { MakaioBusContext } from '../types/index.js';
 import { getFullSubjectForSubjectDefinition } from '../utils/subject-transformation.js';
+import { subscriptionSignal } from '../subscription-lifetime.js';
 import { getOnPropagationPromise, on } from './on.js';
 import type {
   HandlerForSubjectDefinition,
@@ -215,12 +216,14 @@ export function once<T extends SubjectDefinition>(
 
   // Promise version - if third param is options or undefined
   const options = handlerOrOptions as OnceOptions<T> | undefined;
+  const subject = getFullSubjectForSubjectDefinition(subjectDefinition);
+  const signal = subscriptionSignal(owner, subject, context.debugLog, options?.signal);
+  if (signal === false) return Promise.reject(new OnceAbortError());
 
   return new Promise<ContextForSubjectDefinition<T>>((resolve, reject) => {
     let unsubscribe: (() => void) | null = null;
     let timer: NodeJS.Timeout | null = null;
     let abortHandler: (() => void) | null = null;
-    const signal = options?.signal;
 
     const cleanup = () => {
       if (timer) {
@@ -276,7 +279,7 @@ export function once<T extends SubjectDefinition>(
       if (options?.timeoutMs && unsubscribe !== null) {
         timer = setTimeout(() => {
           cleanup();
-          reject(new OnceTimeoutError(getFullSubjectForSubjectDefinition(subjectDefinition), options.timeoutMs!));
+          reject(new OnceTimeoutError(subject, options.timeoutMs!));
         }, options.timeoutMs);
       }
     };

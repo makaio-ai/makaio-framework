@@ -61,7 +61,8 @@ export { callFromReceive } from './call-context/wire.js';
  * Bus instances bound to a carrier.
  *
  * - `createCarrierBus` derives a bus for another carrier that shares context and
- *   transport state with its host bus.
+ *   transport state with its host bus. The kernel can give its subscriptions an
+ *   abort signal to remove them before releasing the carrier's namespace claims.
  * - `busContextOf` and `busCarrierOf` read the context and the carrier of a bus; they
  *   replace the former public `getContext()` and throw for objects that are not buses
  *   built by the kernel.
