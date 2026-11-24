@@ -14,6 +14,7 @@ import {
   startExtensionEntry,
 } from '../extension/extension-start-runner.js';
 import { OpenContributionIndex } from '../extension/open-contribution-index.js';
+import { RuleSourceRegistry } from '../extension/rule-source-registry.js';
 import type { ExtensionContextBase, ExtensionEntry, KernelMakaioExtension } from '../extension/types.js';
 import { createRightsHub } from '../rights/rights-hub.js';
 import { ServiceSkipError } from '../service-skip-error.js';
@@ -460,6 +461,7 @@ it.each([
       hasActiveExtension: () => false,
       openContributionReaderFor: (name: string) => contributions.readerFor(name),
       rights: createRightsHub({ bus }),
+      rules: new RuleSourceRegistry(),
       getExtensionService: () => undefined,
     },
   };

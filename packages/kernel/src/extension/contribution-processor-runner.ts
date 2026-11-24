@@ -1,5 +1,6 @@
 import {
   buildExtensionContext,
+  extensionGenerationSignal,
   type ExtensionContextHost,
   resolveExtensionEntryConfig,
 } from './extension-context-builder.js';
@@ -16,7 +17,8 @@ import type { ContributionProcessor, ExtensionEntry, KernelHostContext } from '.
  * can stage static manifest contributions. A failure rolls back processors
  * that started staging or completed activation, once each in reverse order.
  *
- * For `'stopped'` actions, every processor that implements
+ * For `'stopped'` actions, the rule source is released before withdrawing other
+ * contributions. Every processor that implements
  * {@link ContributionProcessor.processStopped} is called regardless of its filter,
  * because teardown must be symmetric — if an extension passed the filter at
  * activation time that state is now gone, and a processor that registered
@@ -45,6 +47,7 @@ export async function runContributionProcessors<THostContext extends KernelHostC
     return [];
   }
 
+  contextHost.rules.release(extensionGenerationSignal(entry.identity));
   return runStoppedProcessors(processors, name, contextHost.rights);
 }
 
@@ -66,6 +69,8 @@ async function activateContributions<THostContext extends KernelHostContext>(
   initialize?: () => Promise<void>,
 ): Promise<void> {
   const rollback = new Set<ContributionProcessor<THostContext>>();
+  const generation = extensionGenerationSignal(entry.identity);
+  let sourceLease: { release(): void } | undefined;
 
   try {
     for (const processor of processors) {
@@ -84,10 +89,14 @@ async function activateContributions<THostContext extends KernelHostContext>(
       rollback.delete(processor);
       rollback.add(processor);
     }
+    if (entry.pkg.ruleSource) {
+      sourceLease = contextHost.rules.register(name, entry.pkg.ruleSource, generation);
+    }
     if (contextHost.rights.activate(name, entry.pkg)) {
       console.warn(`[ExtensionCoordinator] Rights contributions from "${name}" require a host process.`);
     }
   } catch (err) {
+    sourceLease?.release();
     const failures = await runStoppedProcessors([...rollback], name, contextHost.rights);
     for (const failure of failures) {
       console.error(`[ExtensionCoordinator] Contribution processor rollback error for "${name}":`, failure);

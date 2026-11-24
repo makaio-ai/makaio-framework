@@ -1,13 +1,15 @@
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import { createBusInstance } from '@makaio/bus-core';
-import { createReactionRuleRef, defineReaction } from '@makaio/contracts';
+import { defineReaction } from '@makaio/contracts';
 import type { ReactionExecutionContext } from '@makaio/contracts';
+import type { CallContext } from '@makaio/core';
 import { ExtensionCoordinator } from '@makaio/kernel';
 import type { ExtensionContextBase, KernelMakaioExtension } from '@makaio/kernel';
 import { ReactionRegistryToken, reactionRegistryPackage } from '../packages.js';
 import type { ReactionRegistry } from '../reaction-registry.js';
 import { createReactionContributionProcessor } from '../reaction-contribution-processor.js';
+import { makeTestCause, makeTestInvocationInput } from './reaction-test-fixtures.js';
 import { useJournalHostFixture } from '@makaio/storage-conformance';
 
 const { constructContext } = useJournalHostFixture();
@@ -28,6 +30,8 @@ const TEST_PKG_CTX_BASE: ExtensionContextBase = {
 
 /** Everything one handler run observed, captured for assertions. */
 interface ObservedInvocation {
+  /** Call context the handler received. */
+  readonly call: CallContext;
   /** Schema-validated parameters the handler received. */
   readonly parameters: Readonly<{ channel: string; message: string }>;
   /** Frozen execution envelope the handler received. */
@@ -81,8 +85,10 @@ async function bootHarness(): Promise<Harness> {
             kind: KIND,
             description: 'Notifies the owning user about a host-selected event.',
             parameterSchema: z.object({ channel: z.string(), message: z.string() }),
-            handler: async (parameters, context) => {
-              observed.push({ parameters, context });
+            keyed: false,
+            handler: async (call, parameters, context) => {
+              observed.push({ call, parameters, context });
+              return { state: 'accepted' };
             },
           }),
         ];
@@ -101,7 +107,7 @@ async function bootHarness(): Promise<Harness> {
   coordinator.load([reactionRegistryPackage, demoNotifier]);
   await coordinator.startAll();
 
-  const registry = coordinator.getExtensionService(ReactionRegistryToken);
+  const registry = coordinator.getExtensionService<ReactionRegistry>(ReactionRegistryToken.name);
   if (!registry) {
     throw new Error('ReactionRegistry service did not start');
   }
@@ -117,24 +123,21 @@ async function bootHarness(): Promise<Harness> {
 describe('Reaction extension acceptance (real coordinator lifecycle)', () => {
   it('invokes a Reaction contributed by a non-product extension with the host-supplied envelope', async () => {
     const harness = await bootHarness();
-    const ruleRef = createReactionRuleRef({ ruleId: 'rule-42' });
-    const eventPayload = { issueNumber: 7 };
-    const hostContext = { hostId: 'host-1' };
+    const bus = createBusInstance();
+    const cause = makeTestCause({ ruleId: 'rule-42' });
 
     const outcome = await harness.registry.invoke(
       KIND,
       { channel: 'owner', message: 'build finished' },
-      { eventKind: 'demo.event', eventPayload, hostContext, ruleRef, correlationId: 'corr-1' },
+      makeTestInvocationInput(bus, { key: 'rule-42:occasion-7', cause, correlationId: 'corr-1' }),
     );
 
-    expect(outcome).toEqual({ success: true });
+    expect(outcome).toEqual({ state: 'accepted' });
     expect(harness.observed).toHaveLength(1);
     const invocation = harness.observed[0]!;
     expect(invocation.parameters).toEqual({ channel: 'owner', message: 'build finished' });
-    expect(invocation.context.eventKind).toBe('demo.event');
-    expect(invocation.context.eventPayload).toBe(eventPayload);
-    expect(invocation.context.hostContext).toBe(hostContext);
-    expect(invocation.context.ruleRef).toBe(ruleRef);
+    expect(invocation.context.key).toBe('rule-42:occasion-7');
+    expect(invocation.context.cause).toBe(cause);
     expect(invocation.context.correlationId).toBe('corr-1');
 
     await harness.coordinator.shutdown();
@@ -142,17 +145,19 @@ describe('Reaction extension acceptance (real coordinator lifecycle)', () => {
 
   it('stops resolving the kind after the extension is disabled through the coordinator', async () => {
     const harness = await bootHarness();
+    const bus = createBusInstance();
 
     await harness.coordinator.applyExtensionTransition('demo-notifier', false);
 
     const outcome = await harness.registry.invoke(
       KIND,
       { channel: 'owner', message: 'late dispatch' },
-      { eventKind: 'demo.event', eventPayload: {}, hostContext: {} },
+      makeTestInvocationInput(bus),
     );
     expect(outcome).toEqual({
-      success: false,
-      error: { code: 'unknown-reaction', message: `Reaction kind '${KIND}' is not registered` },
+      state: 'failed',
+      code: 'unknown-reaction',
+      reason: `Reaction kind '${KIND}' is not registered`,
     });
     expect(harness.observed).toHaveLength(0);
 
@@ -161,23 +166,20 @@ describe('Reaction extension acceptance (real coordinator lifecycle)', () => {
 
   it('restores an active contributor exactly once when the registry is re-enabled', async () => {
     const harness = await bootHarness();
+    const bus = createBusInstance();
 
     await harness.coordinator.applyExtensionTransition(ReactionRegistryToken.name, false);
     await harness.coordinator.applyExtensionTransition(ReactionRegistryToken.name, true);
 
-    const restoredRegistry = harness.coordinator.getExtensionService(ReactionRegistryToken);
+    const restoredRegistry = harness.coordinator.getExtensionService<ReactionRegistry>(ReactionRegistryToken.name);
     if (!restoredRegistry) {
       throw new Error('ReactionRegistry service did not restart');
     }
     expect(harness.reactionFactoryCalls()).toBe(2);
     expect(restoredRegistry.listDescriptors().map((descriptor) => descriptor.kind)).toEqual([KIND]);
     await expect(
-      restoredRegistry.invoke(
-        KIND,
-        { channel: 'owner', message: 're-enabled' },
-        { eventKind: 'demo.event', eventPayload: {}, hostContext: {} },
-      ),
-    ).resolves.toEqual({ success: true });
+      restoredRegistry.invoke(KIND, { channel: 'owner', message: 're-enabled' }, makeTestInvocationInput(bus)),
+    ).resolves.toEqual({ state: 'accepted' });
     expect(harness.observed).toHaveLength(1);
 
     await harness.coordinator.shutdown();
@@ -204,8 +206,10 @@ describe('Reaction extension acceptance (real coordinator lifecycle)', () => {
               kind: KIND,
               description: 'Notifies the owning user about a host-selected event.',
               parameterSchema: z.object({ channel: z.string(), message: z.string() }),
+              keyed: false,
               handler: async () => {
                 handlerCalls += 1;
+                return { state: 'accepted' };
               },
             }),
           ];
@@ -236,19 +240,21 @@ describe('Reaction extension acceptance (real coordinator lifecycle)', () => {
     await expect(reenabling).resolves.toBe('applied');
     await expect(disabling).resolves.toBe('applied');
 
-    const registry = coordinator.getExtensionService(ReactionRegistryToken);
+    const registry = coordinator.getExtensionService<ReactionRegistry>(ReactionRegistryToken.name);
     if (!registry) {
       throw new Error('ReactionRegistry service did not restart');
     }
+    const bus = createBusInstance();
     await expect(
       registry.invoke(
         KIND,
         { channel: 'owner', message: 'must not reach stopped contributor' },
-        { eventKind: 'demo.event', eventPayload: {}, hostContext: {} },
+        makeTestInvocationInput(bus),
       ),
     ).resolves.toEqual({
-      success: false,
-      error: { code: 'unknown-reaction', message: `Reaction kind '${KIND}' is not registered` },
+      state: 'failed',
+      code: 'unknown-reaction',
+      reason: `Reaction kind '${KIND}' is not registered`,
     });
     expect(handlerCalls).toBe(0);
 
@@ -257,6 +263,7 @@ describe('Reaction extension acceptance (real coordinator lifecycle)', () => {
 
   it('hands the handler a per-invocation signal distinct from the extension shutdown signal', async () => {
     const harness = await bootHarness();
+    const bus = createBusInstance();
     const shutdownSignal = harness.extensionSignal();
     expect(shutdownSignal).toBeInstanceOf(AbortSignal);
 
@@ -265,10 +272,10 @@ describe('Reaction extension acceptance (real coordinator lifecycle)', () => {
     const outcome = await harness.registry.invoke(
       KIND,
       { channel: 'owner', message: 'signal check' },
-      { eventKind: 'demo.event', eventPayload: {}, hostContext: {}, hostSignal: shutdownSignal },
+      makeTestInvocationInput(bus, { hostSignal: shutdownSignal }),
     );
 
-    expect(outcome).toEqual({ success: true });
+    expect(outcome).toEqual({ state: 'accepted' });
     const invocationSignal = harness.observed[0]!.context.signal;
     expect(invocationSignal).toBeInstanceOf(AbortSignal);
     expect(invocationSignal).not.toBe(shutdownSignal);

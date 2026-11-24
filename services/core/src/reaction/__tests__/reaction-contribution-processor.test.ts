@@ -7,6 +7,7 @@ import type { KernelExtensionContext, KernelMakaioExtension } from '@makaio/kern
 import { ReactionRegistryToken, reactionRegistryPackage } from '../packages.js';
 import { ReactionRegistry } from '../reaction-registry.js';
 import { createReactionContributionProcessor } from '../reaction-contribution-processor.js';
+import { makeTestInvocationInput } from './reaction-test-fixtures.js';
 import { useJournalHostFixture } from '@makaio/storage-conformance';
 
 const { makeContext: makeStubNodeExtensionContext } = useJournalHostFixture();
@@ -39,12 +40,13 @@ function makeContext(registry?: ReactionRegistry): KernelExtensionContext {
 function makeReaction(
   extensionName: string,
   reactionName: string,
-  handler: ReactionDefinition['handler'] = async () => {},
+  handler: ReactionDefinition['handler'] = async () => ({ state: 'accepted' }),
 ): ReactionDefinition {
   return defineReaction({
     kind: `${extensionName}.${reactionName}`,
     description: `Test Reaction ${reactionName} used by contribution processor tests.`,
     parameterSchema: z.object({ message: z.string() }),
+    keyed: false,
     handler,
   });
 }
@@ -68,11 +70,7 @@ function makePackage(
 }
 
 /** Host-supplied invocation input reused across dispatch assertions. */
-const invocationInput = {
-  eventKind: 'test.event',
-  eventPayload: { value: 1 },
-  hostContext: { hostId: 'host-1' },
-} as const;
+const invocationInput = makeTestInvocationInput(createBusInstance());
 
 /** No-op active-extension iterator for tests that do not exercise replay. */
 const forEachNoActiveExtension = (): void => {};
@@ -90,7 +88,7 @@ describe('createReactionContributionProcessor', () => {
     );
 
     const outcome = await registry.invoke('alpha.notify', { message: 'hi' }, invocationInput);
-    expect(outcome).toEqual({ success: true });
+    expect(outcome).toEqual({ state: 'accepted' });
     expect(registry.listDescriptors().map((descriptor) => descriptor.kind)).toEqual(['alpha.notify']);
 
     await registry.destroy();
@@ -129,7 +127,7 @@ describe('createReactionContributionProcessor', () => {
     );
 
     const outcome = await registry.invoke('alpha.async-notify', { message: 'hi' }, invocationInput);
-    expect(outcome).toEqual({ success: true });
+    expect(outcome).toEqual({ state: 'accepted' });
 
     await registry.destroy();
   });
@@ -149,7 +147,7 @@ describe('createReactionContributionProcessor', () => {
 
     expect(createReactions).toHaveBeenCalledTimes(1);
     await expect(registry.invoke('alpha.async-replay', { message: 'hi' }, invocationInput)).resolves.toEqual({
-      success: true,
+      state: 'accepted',
     });
 
     await registry.destroy();
@@ -233,7 +231,7 @@ describe('createReactionContributionProcessor', () => {
     await processor.processStopped?.('never-activated');
 
     const outcome = await registry.invoke('alpha.notify', { message: 'hi' }, invocationInput);
-    expect(outcome.success).toBe(false);
+    expect(outcome.state).toBe('failed');
     expect(registry.listDescriptors()).toEqual([]);
 
     await registry.destroy();
@@ -243,8 +241,8 @@ describe('createReactionContributionProcessor', () => {
     const registry = new ReactionRegistry(createBusInstance());
     await registry.init();
     const processor = createReactionContributionProcessor({ forEachActiveExtension: forEachNoActiveExtension });
-    const firstHandler = vi.fn(async () => {});
-    const replacementHandler = vi.fn(async () => {});
+    const firstHandler = vi.fn(async () => ({ state: 'accepted' as const }));
+    const replacementHandler = vi.fn(async () => ({ state: 'accepted' as const }));
     const firstPackage = makePackage('alpha', () => [makeReaction('alpha', 'notify', firstHandler)]);
     const replacementPackage = makePackage('alpha', () => [makeReaction('alpha', 'log', replacementHandler)]);
 
@@ -252,9 +250,11 @@ describe('createReactionContributionProcessor', () => {
     await processor.processActivated('alpha', replacementPackage, makeContext(registry));
 
     await expect(registry.invoke('alpha.notify', { message: 'hi' }, invocationInput)).resolves.toMatchObject({
-      success: false,
+      state: 'failed',
     });
-    await expect(registry.invoke('alpha.log', { message: 'hi' }, invocationInput)).resolves.toEqual({ success: true });
+    await expect(registry.invoke('alpha.log', { message: 'hi' }, invocationInput)).resolves.toEqual({
+      state: 'accepted',
+    });
     expect(firstHandler).not.toHaveBeenCalled();
     expect(replacementHandler).toHaveBeenCalledTimes(1);
     expect(registry.listDescriptors().map((descriptor) => descriptor.kind)).toEqual(['alpha.log']);
@@ -294,7 +294,7 @@ describe('createReactionContributionProcessor', () => {
     const registry = new ReactionRegistry(createBusInstance());
     await registry.init();
     const processor = createReactionContributionProcessor({ forEachActiveExtension: forEachNoActiveExtension });
-    const priorHandler = vi.fn(async () => {});
+    const priorHandler = vi.fn(async () => ({ state: 'accepted' as const }));
 
     await processor.processActivated(
       'alpha',
@@ -310,7 +310,7 @@ describe('createReactionContributionProcessor', () => {
     ).rejects.toThrow("must be namespaced by extension 'alpha.'");
 
     await expect(registry.invoke('alpha.notify', { message: 'hi' }, invocationInput)).resolves.toEqual({
-      success: true,
+      state: 'accepted',
     });
     expect(priorHandler).toHaveBeenCalledTimes(1);
     await processor.processStopped?.('alpha');

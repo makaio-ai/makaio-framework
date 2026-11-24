@@ -1,53 +1,53 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
-import { createBusInstance } from '@makaio/bus-core';
-import {
-  createReactionRuleRef,
-  defineReaction,
-  type ReactionDefinition,
-  type ReactionExecutionContext,
-} from '@makaio/contracts';
+import { createBusInstance, type IMakaioBus } from '@makaio/bus-core';
+import { defineReaction, type ReactionDefinition, type ReactionExecutionContext } from '@makaio/contracts';
+import type { CallContext } from '@makaio/core';
 import { ReactionRegistry, type ReactionInvocationInput } from '../reaction-registry.js';
+import { ACCEPTED_OUTCOME, makeTestCause, makeTestInvocationInput } from './reaction-test-fixtures.js';
 
-/**
- * Builds a minimal invocation input for tests.
- * @param overrides - Fields to override on the default input.
- * @returns Host-supplied invocation input.
- */
-function makeInput(overrides: Partial<ReactionInvocationInput> = {}): ReactionInvocationInput {
-  return {
-    eventKind: 'test.event',
-    eventPayload: { value: 1 },
-    hostContext: { host: 'test' },
-    ...overrides,
-  };
-}
+const makeCause = makeTestCause;
+const makeInput = makeTestInvocationInput;
+const cancellationCases = [
+  { keyed: true, disposition: { state: 'retry' } },
+  { keyed: false, disposition: { state: 'failed', code: 'outcome-unknown' } },
+];
 
 /**
  * Defines a simple notify Reaction for the given extension.
  * @param extensionName - Owning extension name used as the kind prefix.
- * @param onInvoke - Optional callback observing validated parameters and context.
+ * @param onInvoke - Optional callback observing the call, validated parameters, and context.
+ * @param keyed - Whether the handler is idempotent per key.
  * @returns A Reaction definition with a `{ message: string }` parameter schema.
  */
 function makeNotifyReaction(
   extensionName: string,
-  onInvoke?: (parameters: Readonly<{ message: string }>, context: ReactionExecutionContext) => Promise<void> | void,
+  onInvoke?: (
+    call: CallContext,
+    parameters: Readonly<{ message: string }>,
+    context: ReactionExecutionContext,
+  ) => Promise<void> | void,
+  keyed = false,
 ): ReactionDefinition {
   return defineReaction({
     kind: `${extensionName}.notify`,
     description: 'Notifies someone.',
     parameterSchema: z.object({ message: z.string() }),
-    handler: async (parameters, context) => {
-      await onInvoke?.(parameters, context);
+    keyed,
+    handler: async (call, parameters, context) => {
+      await onInvoke?.(call, parameters, context);
+      return { state: 'accepted' };
     },
   });
 }
 
 describe('ReactionRegistry', () => {
+  let bus: IMakaioBus;
   let registry: ReactionRegistry;
 
   beforeEach(async () => {
-    registry = new ReactionRegistry(createBusInstance());
+    bus = createBusInstance();
+    registry = new ReactionRegistry(bus);
     vi.spyOn(console, 'error').mockImplementation(() => undefined);
     await registry.init();
   });
@@ -63,7 +63,8 @@ describe('ReactionRegistry', () => {
         kind: 'other.notify',
         description: 'Wrong namespace.',
         parameterSchema: z.object({}),
-        handler: async () => {},
+        keyed: false,
+        handler: async () => ({ state: 'accepted' }),
       });
       expect(() => registry.register('alpha', [foreign])).toThrow(
         "Reaction 'other.notify' must be namespaced by extension 'alpha.'",
@@ -76,7 +77,8 @@ describe('ReactionRegistry', () => {
         kind: 'alpha.',
         description: 'Has no local Reaction name.',
         parameterSchema: z.object({}),
-        handler: async () => {},
+        keyed: false,
+        handler: async () => ({ state: 'accepted' }),
       });
 
       expect(() => registry.register('alpha', [barePrefix])).toThrow(
@@ -89,14 +91,14 @@ describe('ReactionRegistry', () => {
       const first = makeNotifyReaction('alpha');
       const duplicate = makeNotifyReaction('alpha');
       expect(() => registry.register('alpha', [first, duplicate])).toThrow(
-        "Reaction kind collision: 'alpha.notify' appears twice in batch from 'alpha'",
+        "Reaction name collision: 'alpha.notify' appears twice in batch from 'alpha'",
       );
       expect(registry.listDescriptors()).toEqual([]);
     });
 
     it('atomically replaces an owner batch and removes it for an empty batch', async () => {
-      const originalHandler = vi.fn(async () => {});
-      const replacementHandler = vi.fn(async () => {});
+      const originalHandler = vi.fn(async () => undefined);
+      const replacementHandler = vi.fn(async () => ACCEPTED_OUTCOME);
       registry.register('alpha', [makeNotifyReaction('alpha', originalHandler)]);
 
       registry.register('alpha', [
@@ -104,14 +106,15 @@ describe('ReactionRegistry', () => {
           kind: 'alpha.log',
           description: 'Replacement Reaction.',
           parameterSchema: z.object({}),
+          keyed: false,
           handler: replacementHandler,
         }),
       ]);
 
-      await expect(registry.invoke('alpha.notify', { message: 'hi' }, makeInput())).resolves.toMatchObject({
-        success: false,
+      await expect(registry.invoke('alpha.notify', { message: 'hi' }, makeInput(bus))).resolves.toMatchObject({
+        state: 'failed',
       });
-      await expect(registry.invoke('alpha.log', {}, makeInput())).resolves.toEqual({ success: true });
+      await expect(registry.invoke('alpha.log', {}, makeInput(bus))).resolves.toEqual(ACCEPTED_OUTCOME);
       expect(originalHandler).not.toHaveBeenCalled();
       expect(replacementHandler).toHaveBeenCalledTimes(1);
 
@@ -120,14 +123,14 @@ describe('ReactionRegistry', () => {
     });
 
     it('keeps the registered executable snapshot stable when a contributed definition is mutated later', async () => {
-      const originalHandler = vi.fn(async () => {});
+      const originalHandler = vi.fn(async () => undefined);
       const original = makeNotifyReaction('alpha', originalHandler);
       registry.register('alpha', [original]);
 
       // Runtime definitions are extension-owned executable values. Registry
       // entries must retain every value captured at registration, even if a
       // misbehaving contributor later mutates its original object.
-      const mutatedHandler = vi.fn(async () => {});
+      const mutatedHandler = vi.fn(async () => ACCEPTED_OUTCOME);
       const mutated = original as {
         kind: string;
         parameterSchema: ReactionDefinition['parameterSchema'];
@@ -145,14 +148,16 @@ describe('ReactionRegistry', () => {
           .map((descriptor) => descriptor.kind)
           .sort(),
       ).toEqual(['alpha.notify', 'gamma.notify']);
-      await expect(registry.invoke('alpha.notify', { message: 'hi' }, makeInput())).resolves.toEqual({ success: true });
-      await expect(registry.invoke('alpha.notify', { replacement: 1 }, makeInput())).resolves.toMatchObject({
-        success: false,
+      await expect(registry.invoke('alpha.notify', { message: 'hi' }, makeInput(bus))).resolves.toEqual({
+        state: 'accepted',
+      });
+      await expect(registry.invoke('alpha.notify', { replacement: 1 }, makeInput(bus))).resolves.toMatchObject({
+        state: 'failed',
       });
       expect(originalHandler).toHaveBeenCalledTimes(1);
       expect(mutatedHandler).not.toHaveBeenCalled();
-      await expect(registry.invoke('beta.mutated', { message: 'hi' }, makeInput())).resolves.toMatchObject({
-        success: false,
+      await expect(registry.invoke('beta.mutated', { message: 'hi' }, makeInput(bus))).resolves.toMatchObject({
+        state: 'failed',
       });
       expect(() =>
         registry.register('beta', [
@@ -160,7 +165,8 @@ describe('ReactionRegistry', () => {
             kind: 'beta.mutated',
             description: 'Confirms the mutated live kind is not indexed.',
             parameterSchema: z.object({}),
-            handler: async () => {},
+            keyed: false,
+            handler: async () => ({ state: 'accepted' }),
           }),
         ]),
       ).not.toThrow();
@@ -174,13 +180,16 @@ describe('ReactionRegistry', () => {
         kind: 'alpha.team.notify',
         description: 'Collides with alpha.team.',
         parameterSchema: z.object({}),
-        handler: async () => {},
+        keyed: false,
+        handler: async () => ({ state: 'accepted' }),
       });
       expect(() => registry.register('alpha', [collidingReaction])).toThrow(
-        "Reaction kind collision: 'alpha.team.notify' is already registered",
+        "Reaction name collision: 'alpha.team.notify' is already registered",
       );
 
-      await expect(registry.invoke('alpha.notify', { message: 'hi' }, makeInput())).resolves.toEqual({ success: true });
+      await expect(registry.invoke('alpha.notify', { message: 'hi' }, makeInput(bus))).resolves.toEqual({
+        state: 'accepted',
+      });
       expect(
         registry
           .listDescriptors()
@@ -190,13 +199,14 @@ describe('ReactionRegistry', () => {
     });
 
     it('preserves prior descriptors and handlers when replacement descriptors throw or are invalid', async () => {
-      const originalHandler = vi.fn(async () => {});
+      const originalHandler = vi.fn(async () => undefined);
       registry.register('alpha', [makeNotifyReaction('alpha', originalHandler)]);
       const throwingDescriptor = {
         kind: 'alpha.throwing-descriptor',
         description: 'Throws while producing discovery metadata.',
         parameterSchema: z.object({}),
-        handler: async () => {},
+        keyed: false,
+        handler: async () => ({ state: 'accepted' as const }),
         toDescriptor: (): never => {
           throw new Error('descriptor exploded');
         },
@@ -205,7 +215,8 @@ describe('ReactionRegistry', () => {
         kind: 'alpha.invalid-descriptor',
         description: 'Returns invalid discovery metadata.',
         parameterSchema: z.object({}),
-        handler: async () => {},
+        keyed: false,
+        handler: async () => ({ state: 'accepted' as const }),
         toDescriptor: () => ({
           kind: 'alpha.invalid-descriptor',
           description: '',
@@ -217,7 +228,9 @@ describe('ReactionRegistry', () => {
       expect(() => registry.register('alpha', [invalidDescriptor])).toThrow();
 
       expect(registry.listDescriptors().map((descriptor) => descriptor.kind)).toEqual(['alpha.notify']);
-      await expect(registry.invoke('alpha.notify', { message: 'hi' }, makeInput())).resolves.toEqual({ success: true });
+      await expect(registry.invoke('alpha.notify', { message: 'hi' }, makeInput(bus))).resolves.toEqual({
+        state: 'accepted',
+      });
       expect(originalHandler).toHaveBeenCalledTimes(1);
     });
   });
@@ -231,8 +244,8 @@ describe('ReactionRegistry', () => {
       registry.deregister('alpha');
 
       expect(registry.listDescriptors().map((descriptor) => descriptor.kind)).toEqual(['beta.notify']);
-      const outcome = await registry.invoke('alpha.notify', { message: 'x' }, makeInput());
-      expect(outcome.success).toBe(false);
+      const outcome = await registry.invoke('alpha.notify', { message: 'x' }, makeInput(bus));
+      expect(outcome.state).toBe('failed');
     });
 
     it('lets an in-flight invocation complete after its extension deregisters mid-flight', async () => {
@@ -251,61 +264,63 @@ describe('ReactionRegistry', () => {
         }),
       ]);
 
-      const inFlight = registry.invoke('alpha.notify', { message: 'hi' }, makeInput());
+      const inFlight = registry.invoke('alpha.notify', { message: 'hi' }, makeInput(bus));
       await handlerEntered;
       registry.deregister('alpha');
       releaseHandler?.();
 
-      await expect(inFlight).resolves.toEqual({ success: true });
-      await expect(registry.invoke('alpha.notify', { message: 'hi' }, makeInput())).resolves.toEqual({
-        success: false,
-        error: { code: 'unknown-reaction', message: "Reaction kind 'alpha.notify' is not registered" },
+      await expect(inFlight).resolves.toEqual({ state: 'accepted' });
+      await expect(registry.invoke('alpha.notify', { message: 'hi' }, makeInput(bus))).resolves.toEqual({
+        state: 'failed',
+        code: 'unknown-reaction',
+        reason: "Reaction kind 'alpha.notify' is not registered",
       });
     });
   });
 
   describe('invoke', () => {
     it('runs equivalent dispatches independently without deduplication', async () => {
-      const handler = vi.fn(async () => {});
+      const handler = vi.fn(async () => undefined);
       registry.register('alpha', [makeNotifyReaction('alpha', handler)]);
 
       const [first, second] = await Promise.all([
-        registry.invoke('alpha.notify', { message: 'hi' }, makeInput()),
-        registry.invoke('alpha.notify', { message: 'hi' }, makeInput()),
+        registry.invoke('alpha.notify', { message: 'hi' }, makeInput(bus)),
+        registry.invoke('alpha.notify', { message: 'hi' }, makeInput(bus)),
       ]);
 
-      expect(first).toEqual({ success: true });
-      expect(second).toEqual({ success: true });
+      expect(first).toEqual({ state: 'accepted' });
+      expect(second).toEqual({ state: 'accepted' });
       expect(handler).toHaveBeenCalledTimes(2);
     });
 
     it('returns a failure outcome for an unknown kind without throwing', async () => {
-      const outcome = await registry.invoke('ghost.notify', {}, makeInput({ correlationId: 'corr-1' }));
+      const outcome = await registry.invoke('ghost.notify', {}, makeInput(bus, { correlationId: 'corr-1' }));
 
       expect(outcome).toEqual({
-        success: false,
-        error: { code: 'unknown-reaction', message: "Reaction kind 'ghost.notify' is not registered" },
+        state: 'failed',
+        code: 'unknown-reaction',
+        reason: "Reaction kind 'ghost.notify' is not registered",
       });
       expect(console.error).toHaveBeenCalledWith(expect.stringContaining("Reaction 'ghost.notify' invocation '"));
       expect(console.error).toHaveBeenCalledWith(expect.stringContaining('(correlationId: corr-1)'));
     });
 
     it('validates parameters before handler entry and fails without invoking it', async () => {
-      const handler = vi.fn(async () => {});
+      const handler = vi.fn(async () => undefined);
       registry.register('alpha', [makeNotifyReaction('alpha', handler)]);
 
-      const outcome = await registry.invoke('alpha.notify', { message: 42 }, makeInput());
+      const outcome = await registry.invoke('alpha.notify', { message: 42 }, makeInput(bus));
 
-      expect(outcome.success).toBe(false);
-      if (!outcome.success) {
-        expect(outcome.error.code).toBe('invalid-parameters');
-        expect(outcome.error.message).toContain("Invalid parameters for Reaction 'alpha.notify'");
+      expect(outcome.state).toBe('failed');
+      if (outcome.state === 'failed') {
+        expect(outcome.code).toBe('invalid-parameters');
+        expect(outcome.reason).toContain("Invalid parameters for Reaction 'alpha.notify'");
       }
       expect(handler).not.toHaveBeenCalled();
     });
 
     it('normalizes a throwing Zod transform to a failure outcome without entering the handler', async () => {
-      const handler = vi.fn(async () => {});
+      const handler = vi.fn(async () => ACCEPTED_OUTCOME);
       registry.register('alpha', [
         defineReaction({
           kind: 'alpha.explosive',
@@ -313,23 +328,24 @@ describe('ReactionRegistry', () => {
           parameterSchema: z.object({ message: z.string() }).transform((): { message: string } => {
             throw new Error('transform exploded');
           }),
+          keyed: false,
           handler,
         }),
       ]);
 
-      const outcome = await registry.invoke('alpha.explosive', { message: 'hi' }, makeInput());
+      const outcome = await registry.invoke('alpha.explosive', { message: 'hi' }, makeInput(bus));
 
-      expect(outcome.success).toBe(false);
-      if (!outcome.success) {
-        expect(outcome.error.code).toBe('invalid-parameters');
-        expect(outcome.error.message).toContain("Parameter validation for Reaction 'alpha.explosive' threw");
-        expect(outcome.error.message).toContain('transform exploded');
+      expect(outcome.state).toBe('failed');
+      if (outcome.state === 'failed') {
+        expect(outcome.code).toBe('invalid-parameters');
+        expect(outcome.reason).toContain("Parameter validation for Reaction 'alpha.explosive' threw");
+        expect(outcome.reason).toContain('transform exploded');
       }
       expect(handler).not.toHaveBeenCalled();
     });
 
     it('normalizes an async refinement rejection to a validation failure without rejecting', async () => {
-      const handler = vi.fn(async () => {});
+      const handler = vi.fn(async () => ACCEPTED_OUTCOME);
       registry.register('alpha', [
         defineReaction({
           kind: 'alpha.async-refined',
@@ -337,17 +353,18 @@ describe('ReactionRegistry', () => {
           parameterSchema: z
             .object({ message: z.string() })
             .refine(async () => false, { message: 'refinement said no' }),
+          keyed: false,
           handler,
         }),
       ]);
 
-      const outcome = await registry.invoke('alpha.async-refined', { message: 'hi' }, makeInput());
+      const outcome = await registry.invoke('alpha.async-refined', { message: 'hi' }, makeInput(bus));
 
-      expect(outcome.success).toBe(false);
-      if (!outcome.success) {
-        expect(outcome.error.code).toBe('invalid-parameters');
-        expect(outcome.error.message).toContain("Invalid parameters for Reaction 'alpha.async-refined'");
-        expect(outcome.error.message).toContain('refinement said no');
+      expect(outcome.state).toBe('failed');
+      if (outcome.state === 'failed') {
+        expect(outcome.code).toBe('invalid-parameters');
+        expect(outcome.reason).toContain("Invalid parameters for Reaction 'alpha.async-refined'");
+        expect(outcome.reason).toContain('refinement said no');
       }
       expect(handler).not.toHaveBeenCalled();
     });
@@ -358,9 +375,9 @@ describe('ReactionRegistry', () => {
       });
       registry.register('alpha', [makeNotifyReaction('alpha', handler)]);
 
-      const outcome = await registry.invoke('alpha.notify', { message: 'hi' }, makeInput());
+      const outcome = await registry.invoke('alpha.notify', { message: 'hi' }, makeInput(bus));
 
-      expect(outcome).toEqual({ success: false, error: { code: 'handler-failed', message: 'boom' } });
+      expect(outcome).toEqual({ state: 'failed', code: 'handler-failed', reason: 'boom' });
       expect(handler).toHaveBeenCalledTimes(1);
     });
 
@@ -371,41 +388,29 @@ describe('ReactionRegistry', () => {
         }),
       ]);
 
-      const outcome = await registry.invoke('alpha.notify', { message: 'hi' }, makeInput());
+      const outcome = await registry.invoke('alpha.notify', { message: 'hi' }, makeInput(bus));
 
-      expect(outcome).toEqual({ success: false, error: { code: 'handler-failed', message: 'string failure' } });
+      expect(outcome).toEqual({ state: 'failed', code: 'handler-failed', reason: 'string failure' });
     });
 
-    it('never enters the handler when the host signal is already aborted', async () => {
-      const handler = vi.fn(async () => {});
-      registry.register('alpha', [makeNotifyReaction('alpha', handler)]);
+    it.each(cancellationCases)('never enters the handler for a pre-cancelled dispatch (keyed: $keyed)', async ({
+      keyed,
+      disposition,
+    }) => {
+      const handler = vi.fn(async () => undefined);
+      registry.register('alpha', [makeNotifyReaction('alpha', handler, keyed)]);
 
-      const outcome = await registry.invoke(
-        'alpha.notify',
-        { message: 'hi' },
-        makeInput({ hostSignal: AbortSignal.abort() }),
-      );
-
-      expect(outcome).toEqual({
-        success: false,
-        error: { code: 'cancelled', message: "Reaction 'alpha.notify' host signal already aborted" },
+      await expect(
+        registry.invoke('alpha.notify', { message: 'hi' }, makeInput(bus, { hostSignal: AbortSignal.abort() })),
+      ).resolves.toEqual({
+        ...disposition,
+        reason: "Reaction 'alpha.notify' host signal already aborted",
       });
-      expect(handler).not.toHaveBeenCalled();
-    });
-
-    it('never enters the handler when the deadline already passed', async () => {
-      const handler = vi.fn(async () => {});
-      registry.register('alpha', [makeNotifyReaction('alpha', handler)]);
-
-      const outcome = await registry.invoke(
-        'alpha.notify',
-        { message: 'hi' },
-        makeInput({ deadlineEpochMs: Date.now() - 1 }),
-      );
-
-      expect(outcome).toEqual({
-        success: false,
-        error: { code: 'cancelled', message: "Reaction 'alpha.notify' deadline already passed" },
+      await expect(
+        registry.invoke('alpha.notify', { message: 'hi' }, makeInput(bus, { deadlineEpochMs: Date.now() - 1 })),
+      ).resolves.toEqual({
+        ...disposition,
+        reason: "Reaction 'alpha.notify' deadline already passed",
       });
       expect(handler).not.toHaveBeenCalled();
     });
@@ -420,7 +425,7 @@ describe('ReactionRegistry', () => {
       const validationStarted = new Promise<void>((resolve) => {
         markValidationStarted = resolve;
       });
-      const handler = vi.fn(async () => {});
+      const handler = vi.fn(async () => ACCEPTED_OUTCOME);
       registry.register('alpha', [
         defineReaction({
           kind: 'alpha.async-host-abort',
@@ -433,6 +438,7 @@ describe('ReactionRegistry', () => {
             },
             { message: 'validation rejected after host abort' },
           ),
+          keyed: false,
           handler,
         }),
       ]);
@@ -440,18 +446,16 @@ describe('ReactionRegistry', () => {
       const invocation = registry.invoke(
         'alpha.async-host-abort',
         { message: 'hi' },
-        makeInput({ hostSignal: hostController.signal }),
+        makeInput(bus, { hostSignal: hostController.signal }),
       );
       await validationStarted;
       hostController.abort(new Error('host shutdown'));
       releaseValidation?.();
 
       await expect(invocation).resolves.toEqual({
-        success: false,
-        error: {
-          code: 'cancelled',
-          message: "Reaction 'alpha.async-host-abort' cancelled before handler entry: host shutdown",
-        },
+        state: 'failed',
+        code: 'outcome-unknown',
+        reason: "Reaction 'alpha.async-host-abort' cancelled before handler entry: host shutdown",
       });
       expect(handler).not.toHaveBeenCalled();
     });
@@ -467,7 +471,7 @@ describe('ReactionRegistry', () => {
         const validationStarted = new Promise<void>((resolve) => {
           markValidationStarted = resolve;
         });
-        const handler = vi.fn(async () => {});
+        const handler = vi.fn(async () => ACCEPTED_OUTCOME);
         registry.register('alpha', [
           defineReaction({
             kind: 'alpha.async-deadline',
@@ -480,22 +484,25 @@ describe('ReactionRegistry', () => {
               },
               { message: 'validation rejected after deadline' },
             ),
+            keyed: false,
             handler,
           }),
         ]);
 
         const deadlineEpochMs = Date.now() + 1_000;
-        const invocation = registry.invoke('alpha.async-deadline', { message: 'hi' }, makeInput({ deadlineEpochMs }));
+        const invocation = registry.invoke(
+          'alpha.async-deadline',
+          { message: 'hi' },
+          makeInput(bus, { deadlineEpochMs }),
+        );
         await validationStarted;
         await vi.advanceTimersByTimeAsync(1_000);
         releaseValidation?.();
 
         await expect(invocation).resolves.toEqual({
-          success: false,
-          error: {
-            code: 'cancelled',
-            message: `Reaction 'alpha.async-deadline' cancelled before handler entry: Reaction invocation deadline reached (deadlineEpochMs: ${deadlineEpochMs})`,
-          },
+          state: 'failed',
+          code: 'outcome-unknown',
+          reason: `Reaction 'alpha.async-deadline' cancelled before handler entry: Reaction invocation deadline reached (deadlineEpochMs: ${deadlineEpochMs})`,
         });
         expect(handler).not.toHaveBeenCalled();
         expect(vi.getTimerCount()).toBe(0);
@@ -508,7 +515,7 @@ describe('ReactionRegistry', () => {
       vi.useFakeTimers({ now: 0 });
       try {
         const deadlineEpochMs = 1_000;
-        const handler = vi.fn(async () => {});
+        const handler = vi.fn(async () => ACCEPTED_OUTCOME);
         registry.register('alpha', [
           defineReaction({
             kind: 'alpha.sync-deadline',
@@ -518,18 +525,17 @@ describe('ReactionRegistry', () => {
               // deadline callback, which reproduces event-loop starvation.
               vi.setSystemTime(deadlineEpochMs);
             }),
+            keyed: false,
             handler,
           }),
         ]);
 
         await expect(
-          registry.invoke('alpha.sync-deadline', { message: 'hi' }, makeInput({ deadlineEpochMs })),
+          registry.invoke('alpha.sync-deadline', { message: 'hi' }, makeInput(bus, { deadlineEpochMs })),
         ).resolves.toEqual({
-          success: false,
-          error: {
-            code: 'cancelled',
-            message: `Reaction 'alpha.sync-deadline' cancelled before handler entry: Reaction invocation deadline reached (deadlineEpochMs: ${deadlineEpochMs})`,
-          },
+          state: 'failed',
+          code: 'outcome-unknown',
+          reason: `Reaction 'alpha.sync-deadline' cancelled before handler entry: Reaction invocation deadline reached (deadlineEpochMs: ${deadlineEpochMs})`,
         });
         expect(handler).not.toHaveBeenCalled();
         expect(vi.getTimerCount()).toBe(0);
@@ -542,7 +548,7 @@ describe('ReactionRegistry', () => {
       vi.useFakeTimers({ now: 0 });
       try {
         const deadlineEpochMs = 1_000;
-        const handler = vi.fn(async () => {});
+        const handler = vi.fn(async () => ACCEPTED_OUTCOME);
         registry.register('alpha', [
           defineReaction({
             kind: 'alpha.sync-invalid-deadline',
@@ -554,18 +560,17 @@ describe('ReactionRegistry', () => {
               },
               { message: 'validation rejected after deadline' },
             ),
+            keyed: false,
             handler,
           }),
         ]);
 
         await expect(
-          registry.invoke('alpha.sync-invalid-deadline', { message: 'hi' }, makeInput({ deadlineEpochMs })),
+          registry.invoke('alpha.sync-invalid-deadline', { message: 'hi' }, makeInput(bus, { deadlineEpochMs })),
         ).resolves.toEqual({
-          success: false,
-          error: {
-            code: 'cancelled',
-            message: `Reaction 'alpha.sync-invalid-deadline' cancelled before handler entry: Reaction invocation deadline reached (deadlineEpochMs: ${deadlineEpochMs})`,
-          },
+          state: 'failed',
+          code: 'outcome-unknown',
+          reason: `Reaction 'alpha.sync-invalid-deadline' cancelled before handler entry: Reaction invocation deadline reached (deadlineEpochMs: ${deadlineEpochMs})`,
         });
         expect(handler).not.toHaveBeenCalled();
         expect(vi.getTimerCount()).toBe(0);
@@ -574,39 +579,44 @@ describe('ReactionRegistry', () => {
       }
     });
 
-    it('aborts the per-invocation signal when the deadline is reached mid-flight', async () => {
+    it.each(cancellationCases)('aborts the per-invocation signal at a mid-flight deadline (keyed: $keyed)', async ({
+      keyed,
+      disposition,
+    }) => {
       vi.useFakeTimers();
       try {
         let observedAbort = false;
         registry.register('alpha', [
-          makeNotifyReaction('alpha', async (_parameters, context) => {
-            await new Promise<void>((resolve) => {
-              context.signal.addEventListener(
-                'abort',
-                () => {
-                  observedAbort = true;
-                  resolve();
-                },
-                { once: true },
-              );
-            });
-            throw context.signal.reason;
-          }),
+          makeNotifyReaction(
+            'alpha',
+            async (_call, _parameters, context) => {
+              await new Promise<void>((resolve) => {
+                context.signal.addEventListener(
+                  'abort',
+                  () => {
+                    observedAbort = true;
+                    resolve();
+                  },
+                  { once: true },
+                );
+              });
+              throw context.signal.reason;
+            },
+            keyed,
+          ),
         ]);
 
         const inFlight = registry.invoke(
           'alpha.notify',
           { message: 'hi' },
-          makeInput({ deadlineEpochMs: Date.now() + 1_000 }),
+          makeInput(bus, { deadlineEpochMs: Date.now() + 1_000 }),
         );
         await vi.advanceTimersByTimeAsync(1_000);
-        const outcome = await inFlight;
-
+        await expect(inFlight).resolves.toEqual({
+          ...disposition,
+          reason: expect.stringContaining('Reaction invocation deadline reached'),
+        });
         expect(observedAbort).toBe(true);
-        expect(outcome.success).toBe(false);
-        if (!outcome.success) {
-          expect(outcome.error.message).toContain('Reaction invocation deadline reached');
-        }
         // Settled invocations must leave no timers or listeners behind.
         expect(vi.getTimerCount()).toBe(0);
       } finally {
@@ -619,7 +629,7 @@ describe('ReactionRegistry', () => {
       vi.useFakeTimers();
       try {
         registry.register('alpha', [
-          makeNotifyReaction('alpha', async (_parameters, context) => {
+          makeNotifyReaction('alpha', async (_call, _parameters, context) => {
             await new Promise<void>((resolve) => {
               context.signal.addEventListener('abort', () => resolve(), { once: true });
             });
@@ -630,7 +640,7 @@ describe('ReactionRegistry', () => {
         const inFlight = registry.invoke(
           'alpha.notify',
           { message: 'hi' },
-          makeInput({ deadlineEpochMs: Date.now() + timerCapMs + 5_000 }),
+          makeInput(bus, { deadlineEpochMs: Date.now() + timerCapMs + 5_000 }),
         );
         // At the cap the timer must wake up, re-check, and reschedule — NOT abort.
         await vi.advanceTimersByTimeAsync(timerCapMs);
@@ -638,9 +648,9 @@ describe('ReactionRegistry', () => {
         await vi.advanceTimersByTimeAsync(5_000);
         const outcome = await inFlight;
 
-        expect(outcome.success).toBe(false);
-        if (!outcome.success) {
-          expect(outcome.error.message).toContain('Reaction invocation deadline reached');
+        expect(outcome.state).toBe('failed');
+        if (outcome.state === 'failed') {
+          expect(outcome.reason).toContain('Reaction invocation deadline reached');
         }
         expect(vi.getTimerCount()).toBe(0);
       } finally {
@@ -651,12 +661,12 @@ describe('ReactionRegistry', () => {
     it('treats a non-finite deadline as no deadline', async () => {
       vi.useFakeTimers();
       try {
-        const handler = vi.fn(async () => {});
+        const handler = vi.fn(async () => undefined);
         registry.register('alpha', [makeNotifyReaction('alpha', handler)]);
 
         for (const deadlineEpochMs of [Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY]) {
-          const outcome = await registry.invoke('alpha.notify', { message: 'hi' }, makeInput({ deadlineEpochMs }));
-          expect(outcome).toEqual({ success: true });
+          const outcome = await registry.invoke('alpha.notify', { message: 'hi' }, makeInput(bus, { deadlineEpochMs }));
+          expect(outcome).toEqual({ state: 'accepted' });
         }
         expect(handler).toHaveBeenCalledTimes(3);
         expect(vi.getTimerCount()).toBe(0);
@@ -669,13 +679,13 @@ describe('ReactionRegistry', () => {
       const hostController = new AbortController();
       const seenSignals: AbortSignal[] = [];
       registry.register('alpha', [
-        makeNotifyReaction('alpha', (_parameters, context) => {
+        makeNotifyReaction('alpha', (_call, _parameters, context) => {
           seenSignals.push(context.signal);
         }),
       ]);
 
-      await registry.invoke('alpha.notify', { message: 'a' }, makeInput({ hostSignal: hostController.signal }));
-      await registry.invoke('alpha.notify', { message: 'b' }, makeInput({ hostSignal: hostController.signal }));
+      await registry.invoke('alpha.notify', { message: 'a' }, makeInput(bus, { hostSignal: hostController.signal }));
+      await registry.invoke('alpha.notify', { message: 'b' }, makeInput(bus, { hostSignal: hostController.signal }));
 
       expect(seenSignals).toHaveLength(2);
       expect(seenSignals[0]).not.toBe(hostController.signal);
@@ -683,24 +693,28 @@ describe('ReactionRegistry', () => {
       expect(seenSignals[0]).not.toBe(seenSignals[1]);
     });
 
-    it('propagates a mid-flight host abort into the per-invocation signal', async () => {
+    it.each(cancellationCases)('propagates a mid-flight host abort (keyed: $keyed)', async ({ keyed, disposition }) => {
       const hostController = new AbortController();
       registry.register('alpha', [
-        makeNotifyReaction('alpha', async (_parameters, context) => {
-          hostController.abort(new Error('host shutdown'));
-          if (context.signal.aborted) {
-            throw context.signal.reason;
-          }
-        }),
+        makeNotifyReaction(
+          'alpha',
+          async (_call, _parameters, context) => {
+            hostController.abort(new Error('host shutdown'));
+            if (context.signal.aborted) {
+              throw context.signal.reason;
+            }
+          },
+          keyed,
+        ),
       ]);
 
       const outcome = await registry.invoke(
         'alpha.notify',
         { message: 'hi' },
-        makeInput({ hostSignal: hostController.signal }),
+        makeInput(bus, { hostSignal: hostController.signal }),
       );
 
-      expect(outcome).toEqual({ success: false, error: { code: 'handler-failed', message: 'host shutdown' } });
+      expect(outcome).toEqual({ ...disposition, reason: 'host shutdown' });
     });
 
     it('keeps concurrent invocation IDs and cancellation isolated', async () => {
@@ -716,7 +730,8 @@ describe('ReactionRegistry', () => {
           kind: 'alpha.race',
           description: 'Waits or reacts to cancellation per parameters.',
           parameterSchema: z.object({ wait: z.boolean() }),
-          handler: async (parameters, context) => {
+          keyed: false,
+          handler: async (_call, parameters, context) => {
             contexts.set(parameters.wait, context);
             if (!parameters.wait) {
               await new Promise<void>((resolve) => {
@@ -725,6 +740,7 @@ describe('ReactionRegistry', () => {
               throw context.signal.reason;
             }
             await secondDone;
+            return { state: 'accepted' };
           },
         }),
       ]);
@@ -732,20 +748,21 @@ describe('ReactionRegistry', () => {
       const cancelled = registry.invoke(
         'alpha.race',
         { wait: false },
-        makeInput({ hostSignal: firstController.signal }),
+        makeInput(bus, { hostSignal: firstController.signal }),
       );
       const succeeding = registry.invoke(
         'alpha.race',
         { wait: true },
-        makeInput({ hostSignal: secondController.signal }),
+        makeInput(bus, { hostSignal: secondController.signal }),
       );
 
       await vi.waitFor(() => expect(contexts).toHaveLength(2));
       firstController.abort(new Error('first cancelled'));
 
       await expect(cancelled).resolves.toEqual({
-        success: false,
-        error: { code: 'handler-failed', message: 'first cancelled' },
+        state: 'failed',
+        code: 'outcome-unknown',
+        reason: 'first cancelled',
       });
       const firstContext = contexts.get(false);
       const secondContext = contexts.get(true);
@@ -753,7 +770,7 @@ describe('ReactionRegistry', () => {
       expect(firstContext?.signal).not.toBe(secondContext?.signal);
       expect(secondContext?.signal.aborted).toBe(false);
       releaseSecond?.();
-      await expect(succeeding).resolves.toEqual({ success: true });
+      await expect(succeeding).resolves.toEqual({ state: 'accepted' });
     });
 
     it('removes the host abort listener after the invocation settles', async () => {
@@ -763,8 +780,8 @@ describe('ReactionRegistry', () => {
       registry.register('alpha', [makeNotifyReaction('alpha')]);
 
       await expect(
-        registry.invoke('alpha.notify', { message: 'hi' }, makeInput({ hostSignal: hostController.signal })),
-      ).resolves.toEqual({ success: true });
+        registry.invoke('alpha.notify', { message: 'hi' }, makeInput(bus, { hostSignal: hostController.signal })),
+      ).resolves.toEqual({ state: 'accepted' });
 
       expect(addListener).toHaveBeenCalledTimes(1);
       expect(removeListener).toHaveBeenCalledTimes(1);
@@ -772,13 +789,11 @@ describe('ReactionRegistry', () => {
     });
 
     it('freezes the invocation envelope while retaining host-owned references', async () => {
-      const ruleRef = createReactionRuleRef({ ruleId: 'rule-7' });
-      const eventPayload = { changed: true };
-      const hostContext = { workspace: '/tmp/ws' };
+      const cause = makeCause({ ruleId: 'rule-7' });
       const deadlineEpochMs = Date.now() + 60_000;
       let seen: ReactionExecutionContext | undefined;
       registry.register('alpha', [
-        makeNotifyReaction('alpha', (_parameters, context) => {
+        makeNotifyReaction('alpha', (_call, _parameters, context) => {
           seen = context;
         }),
       ]);
@@ -786,25 +801,21 @@ describe('ReactionRegistry', () => {
       const outcome = await registry.invoke(
         'alpha.notify',
         { message: 'hi' },
-        makeInput({
-          eventKind: 'fs.changed',
-          eventPayload,
-          hostContext,
-          ruleRef,
+        makeInput(bus, {
+          key: 'rule-7:occasion-9',
+          cause,
           correlationId: 'corr-9',
           deadlineEpochMs,
         }),
       );
 
-      expect(outcome).toEqual({ success: true });
+      expect(outcome).toEqual({ state: 'accepted' });
       expect(seen).toBeDefined();
       expect(Object.isFrozen(seen)).toBe(true);
-      expect(seen?.eventKind).toBe('fs.changed');
+      expect(seen?.key).toBe('rule-7:occasion-9');
       // Host-owned values are passed through verbatim; the runtime does not
       // deep-clone or freeze them for the handler.
-      expect(seen?.eventPayload).toBe(eventPayload);
-      expect(seen?.hostContext).toBe(hostContext);
-      expect(seen?.ruleRef).toBe(ruleRef);
+      expect(seen?.cause).toBe(cause);
       expect(seen?.correlationId).toBe('corr-9');
       expect(seen?.deadlineEpochMs).toBe(deadlineEpochMs);
       expect(typeof seen?.invocationId).toBe('string');
@@ -831,48 +842,43 @@ describe('ReactionRegistry', () => {
             await validationGate;
             return true;
           }),
-          handler: async (_parameters, context) => {
+          keyed: false,
+          handler: async (_call, _parameters, context) => {
             seen = context;
             throw new Error('handler failed after validation');
           },
         }),
       ]);
 
-      const originalPayload = { version: 'original' };
-      const originalHostContext = { workspace: '/original' };
-      const originalRuleRef = createReactionRuleRef({ ruleId: 'original-rule' });
+      const originalCause = makeCause({ ruleId: 'original-rule' });
       const originalDeadlineEpochMs = Date.now() + 60_000;
       const input = {
-        eventKind: 'original.event',
-        eventPayload: originalPayload,
-        hostContext: originalHostContext,
-        ruleRef: originalRuleRef,
+        call: bus.own('observer'),
+        key: 'original-key',
+        cause: originalCause,
         correlationId: 'original-correlation',
         deadlineEpochMs: originalDeadlineEpochMs,
       } satisfies ReactionInvocationInput;
 
       const invocation = registry.invoke('alpha.async-envelope', { message: 'hi' }, input);
       await validationStarted;
-      input.eventKind = 'mutated.event';
-      input.eventPayload = { version: 'mutated' };
-      input.hostContext = { workspace: '/mutated' };
-      input.ruleRef = createReactionRuleRef({ ruleId: 'mutated-rule' });
+      input.key = 'mutated-key';
+      input.cause = makeCause({ ruleId: 'mutated-rule' });
       input.correlationId = 'mutated-correlation';
       input.deadlineEpochMs = Date.now() + 120_000;
       releaseValidation?.();
 
       await expect(invocation).resolves.toEqual({
-        success: false,
-        error: { code: 'handler-failed', message: 'handler failed after validation' },
+        state: 'failed',
+        code: 'handler-failed',
+        reason: 'handler failed after validation',
       });
       expect(seen).toMatchObject({
-        eventKind: 'original.event',
+        key: 'original-key',
         correlationId: 'original-correlation',
         deadlineEpochMs: originalDeadlineEpochMs,
       });
-      expect(seen?.eventPayload).toBe(originalPayload);
-      expect(seen?.hostContext).toBe(originalHostContext);
-      expect(seen?.ruleRef).toBe(originalRuleRef);
+      expect(seen?.cause).toBe(originalCause);
       expect(console.error).toHaveBeenCalledWith(
         expect.stringContaining('(correlationId: original-correlation)'),
         expect.any(Error),
@@ -906,7 +912,7 @@ describe('ReactionRegistry', () => {
     });
 
     it('describes a transformed schema while invoking its handler with transformed parameters', async () => {
-      const handler = vi.fn(async () => {});
+      const handler = vi.fn(async () => ACCEPTED_OUTCOME);
       registry.register('alpha', [
         defineReaction({
           kind: 'alpha.normalize',
@@ -914,15 +920,20 @@ describe('ReactionRegistry', () => {
           parameterSchema: z.object({ message: z.string() }).transform(({ message }) => ({
             message: message.trim().toUpperCase(),
           })),
+          keyed: false,
           handler,
         }),
       ]);
 
       expect(registry.listDescriptors()).toHaveLength(1);
-      await expect(registry.invoke('alpha.normalize', { message: ' hello ' }, makeInput())).resolves.toEqual({
-        success: true,
+      await expect(registry.invoke('alpha.normalize', { message: ' hello ' }, makeInput(bus))).resolves.toEqual({
+        state: 'accepted',
       });
-      expect(handler).toHaveBeenCalledWith({ message: 'HELLO' }, expect.objectContaining({ eventKind: 'test.event' }));
+      expect(handler).toHaveBeenCalledWith(
+        expect.anything(),
+        { message: 'HELLO' },
+        expect.objectContaining({ key: 'rule-1:occasion-1' }),
+      );
     });
 
     it('returns detached descriptor snapshots', () => {
@@ -947,7 +958,8 @@ describe('ReactionRegistry', () => {
           kind: 'alpha.custom',
           description: 'Custom descriptor.',
           parameterSchema: z.object({}),
-          handler: async () => {},
+          keyed: false,
+          handler: async () => ({ state: 'accepted' }),
           toDescriptor,
         },
       ]);

@@ -3,12 +3,14 @@ import type { IMakaioBus } from '@makaio/bus-core';
 import { listOwners, ownerOf, type NamespaceHolder } from '@makaio/bus-core/kernel-api';
 import type { ExtensionOperatorConfigSource, ExtensionService, ExtensionToken, TrayManifest } from '@makaio/contracts';
 import type { ExtensionWarningAction } from '@makaio/contracts/extension';
+import type { RuleSourceContribution } from '@makaio/contracts/rules';
+import { RuleSourceRegistry } from './rule-source-registry.js';
 import { createOpenContributionProcessor, OpenContributionIndex } from './open-contribution-index.js';
 import { BootProgressObserver } from './boot-progress-observer.js';
 import { registerWarningActionHandler } from './warning-action-dispatcher.js';
 import { createCoordinatorRights, type CoordinatorRights } from '../rights/coordinator-rights.js';
 import { registerCoordinatorRpcHandlers } from './coordinator-rpc-handlers.js';
-import { emitWarnings, emitWarningsForEntry } from './health-warning-emitter.js';
+import { emitWarningsForEntry } from './health-warning-emitter.js';
 import { entryToExtensionInfo } from './extension-info.js';
 import { createExtensionIdentity } from './extension-identity-builder.js';
 import {
@@ -52,7 +54,7 @@ import {
 import type { ExtensionConfigResolution } from './resolve-config.js';
 import { closeEnabledExtensionEntries } from './extension-entry-closure.js';
 import { runExtensionMigrations, type ExtensionMigrationRunner } from './extension-migration-runner.js';
-import { runExtensionHealthCheck, type ExtensionHealthHost } from './extension-health-runner.js';
+import { runExtensionHealthCheck } from './extension-health-runner.js';
 import {
   collectBootExtensionSurfaces,
   extensionsWithHttp,
@@ -65,6 +67,7 @@ import {
   type ExtensionShutdownHost,
 } from './extension-shutdown-runner.js';
 import { closeEntryRegistration, releaseEntryNamespaces, startExtensionEntry } from './extension-start-runner.js';
+import { reportStartupDiagnostics } from './startup-diagnostics.js';
 
 /** Live namespace holder queries for the coordinator's bus. */
 interface NamespaceOwners {
@@ -150,6 +153,7 @@ export class ExtensionCoordinator<THostContext extends KernelHostContext = Kerne
   private readonly rights: CoordinatorRights;
   /** Resolve rights and report denials for services composed inside this host. */
   public readonly hostRights: CoordinatorRights['hostRights'];
+  private readonly rules = new RuleSourceRegistry();
   private shutdownRequested = false;
   private shutdownPromise: Promise<void> | undefined;
   /** FIFO lane for lifecycle transitions that mutate extension entries. */
@@ -218,6 +222,17 @@ export class ExtensionCoordinator<THostContext extends KernelHostContext = Kerne
   // ---------------------------------------------------------------------------
   // Public accessors
   // ---------------------------------------------------------------------------
+
+  /**
+   * Resolves the source declared by the active contributing extension.
+   * @returns The current rule source, if one has been registered.
+   */
+  public readonly getRuleSource = (): RuleSourceContribution | undefined => this.rules.get();
+
+  /** @returns Host-side authorization for the built-in rule contributions. */
+  public get ruleRights(): CoordinatorRights['ruleRights'] {
+    return this.rights.ruleRights;
+  }
 
   /**
    * Tray manifest entries collected from packages during {@link load}.
@@ -497,24 +512,12 @@ export class ExtensionCoordinator<THostContext extends KernelHostContext = Kerne
         await this.runInStartScope(name, () => startExtensionEntry(startHost, name, entry));
       }
 
-      const healthHost = this.createExtensionHealthHost();
-      await Promise.all(
-        this.loadOrder.map((name) => {
-          const entry = this.entries.get(name);
-          return entry?.state === 'active' ? runExtensionHealthCheck(healthHost, name) : undefined;
-        }),
-      );
-
-      await emitWarnings(call, { bus: this.bus, entries: this.entries, warningActionMap: this.warningActionMap });
-
-      // Health warnings belong to an extension entry; an unclaimed kind has no owner entry to attach to.
-      const activeNames = [...this.entries].filter(([, entry]) => entry.state === 'active').map(([name]) => name);
-      for (const kind of this.openContributionIndex.unclaimedKinds(activeNames)) {
-        console.warn(
-          '[ExtensionCoordinator] Open contribution kind "%s" has entries but no active extension owns it',
-          kind,
-        );
-      }
+      await reportStartupDiagnostics(call, {
+        bus: this.bus,
+        entries: this.entries,
+        warningActionMap: this.warningActionMap,
+        openContributions: this.openContributionIndex,
+      });
     } finally {
       bootProgress.complete();
     }
@@ -916,7 +919,7 @@ export class ExtensionCoordinator<THostContext extends KernelHostContext = Kerne
       persistEnabled: this.persistEnabled,
       runInStartScope: this.runInStartScope,
       contributionProcessors: this.contributionProcessors,
-      runHealthCheck: (n: string) => runExtensionHealthCheck(this.createExtensionHealthHost(), n),
+      runHealthCheck: (name) => runExtensionHealthCheck({ bus: this.bus, entries: this.entries }, name),
       emitWarningsForEntry: (call, name, entry) =>
         emitWarningsForEntry(call, { bus: this.bus, warningActionMap: this.warningActionMap }, name, entry),
     };
@@ -972,23 +975,16 @@ export class ExtensionCoordinator<THostContext extends KernelHostContext = Kerne
       bus: this.bus,
       extensionContextBase: this.extensionContextBase,
       rights: this.rights,
+      rules: this.rules,
       loadConfig: this.loadConfig,
       operatorConfig: this.operatorConfig,
       signal: this.shutdownController.signal,
       hasActiveExtension: (name) => this.entries.get(name)?.state === 'active',
       openContributionReaderFor: (name: string) => this.openContributionIndex.readerFor(name),
-      getExtensionService: <T>(name: string): T | undefined => this.getExtensionService<T>(name),
-    };
-  }
-
-  /**
-   * Create the helper host for extension health checks.
-   * @returns Coordinator state required by the health runner.
-   */
-  private createExtensionHealthHost(): ExtensionHealthHost {
-    return {
-      bus: this.bus,
-      entries: this.entries,
+      getExtensionService: <T>(name: string): T | undefined => {
+        const service = this.getExtensionService(name);
+        return (service?.extensionServiceView ?? service) as T | undefined;
+      },
     };
   }
 }

@@ -1,4 +1,5 @@
 import path from 'node:path';
+import type { RuleSourceRegistry } from './rule-source-registry.js';
 import type { RightsHub } from '../rights/rights-hub.js';
 import type { IMakaioBus } from '@makaio/bus-core';
 import { createCarrierBus } from '@makaio/bus-core/kernel-api';
@@ -42,6 +43,8 @@ export interface ExtensionContextHost<THostContext extends KernelHostContext = K
    * from it, never this one. Must be a bus built by the bus core.
    */
   readonly bus: IMakaioBus;
+  /** Rule source lifecycle of the coordinator. */
+  readonly rules: RuleSourceRegistry;
   /** Rights binding and activation lifecycle for this coordinator. */
   readonly rights: Pick<RightsHub, 'capabilityFor' | 'beginActivation' | 'activate' | 'deactivate'>;
   /**
@@ -86,9 +89,9 @@ export interface ExtensionContextHost<THostContext extends KernelHostContext = K
    */
   readonly openContributionReaderFor: (name: string) => OpenContributionReader;
   /**
-   * Retrieve an active extension service by name.
+   * Retrieve an active service's extension-facing API by name.
    * @param name - Extension name.
-   * @returns Active service instance, or `undefined` when unavailable.
+   * @returns Extension-facing API, or `undefined` when unavailable.
    */
   getExtensionService<T>(name: string): T | undefined;
 }
@@ -230,6 +233,17 @@ function extensionCarrierOf(identity: ExtensionIdentity): PartyRef {
 const carrierLifetimes = new WeakMap<ExtensionIdentity, AbortController>();
 
 /**
+ * Gets the generation signal shared by capabilities of this activation.
+ * @param identity - Trusted entry identity.
+ * @returns The signal for the current activation.
+ */
+export function extensionGenerationSignal(identity: ExtensionIdentity): AbortSignal {
+  const lifetime = carrierLifetimes.get(identity) ?? new AbortController();
+  carrierLifetimes.set(identity, lifetime);
+  return lifetime.signal;
+}
+
+/**
  * Remove registrations made through all carrier buses of this entry.
  * @param identity - Trusted identity of the entry being released.
  */
@@ -260,13 +274,11 @@ export function reopenExtensionContext(identity: ExtensionIdentity): void {
  * @returns Bus instance bound to the extension's carrier.
  */
 export function createExtensionCarrierBus(hostBus: IMakaioBus, identity: ExtensionIdentity): IMakaioBus {
-  const lifetime = carrierLifetimes.get(identity) ?? new AbortController();
-  carrierLifetimes.set(identity, lifetime);
   return createCarrierBus(
     hostBus,
     extensionCarrierOf(identity),
     namespaceRegistrationFor(hostBus, identity),
-    lifetime.signal,
+    extensionGenerationSignal(identity),
   );
 }
 
@@ -337,6 +349,7 @@ export function buildExtensionContext<THostContext extends KernelHostContext>(
     ...base,
     bus,
     rights: host.rights.capabilityFor(extensionName, carrier),
+    rules: host.rules.capabilityFor(extensionName, extensionGenerationSignal(entry.identity)),
     namespaces: namespaceCapabilityFor(host.bus, entry.identity),
     ...(credentials !== undefined ? { credentials } : {}),
     identity: entry.identity,

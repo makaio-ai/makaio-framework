@@ -35,6 +35,13 @@ import type {
   ExtensionTransitionRulesContribution,
 } from '../workflow/transition.js';
 import type { RightContribution, RightsSourceContribution } from '../rights/right.js';
+import type {
+  GroupStrategyContribution,
+  LookupContribution,
+  RuleBlockContribution,
+  RuleSourceContribution,
+  TriggerContribution,
+} from '../rules/index.js';
 
 /**
  * Awaited contribution processor registered with the runtime coordinator.
@@ -574,6 +581,61 @@ export interface MakaioExtension<THostContext extends ExtensionContext = NodeExt
    * representation for Builder discovery.
    */
   readonly automationTriggers?: ExtensionAutomationTriggersContribution<THostContext>;
+
+  // ---------------------------------------------------------------------------
+  // Rules contribution surfaces
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Trigger contributions declared by this extension.
+   *
+   * Purely declarative: a trigger is only a projection (it translates a
+   * journal entry or a message into facts) and carries no active part, so
+   * these entries need no factory or runtime context. Every `kind` must be
+   * owned by the extension as `localContributionName` defines it (prefix
+   * `'<extensionName>.'` and a non-empty rest); the trigger registry enforces
+   * this at contribution time.
+   */
+  readonly triggers?: readonly TriggerContribution[];
+
+  /**
+   * Lookup contributions declared by this extension.
+   *
+   * Purely declarative. Every `kind` must be owned by the extension as
+   * `localContributionName` defines it (prefix `'<extensionName>.'` and a
+   * non-empty rest); the lookup registry enforces this at contribution time.
+   */
+  readonly lookups?: readonly LookupContribution[];
+
+  /**
+   * Group-strategy contributions declared by this extension.
+   *
+   * Purely declarative. Every `strategy` must be owned by the extension as
+   * `localContributionName` defines it (prefix `'<extensionName>.'` and a
+   * non-empty rest); the group-strategy registry enforces this at
+   * contribution time.
+   */
+  readonly groupStrategies?: readonly GroupStrategyContribution[];
+
+  /**
+   * This extension's own rule block, at most one, always read under the
+   * extension's own key on `ReactionRule.extensions`.
+   *
+   * There is no `extension` field on {@link RuleBlockContribution} itself:
+   * the kernel knows the contributing extension from the key the block is
+   * registered under.
+   */
+  readonly ruleBlock?: RuleBlockContribution;
+
+  /**
+   * The host's rule source: which rules apply to an occasion, which groups
+   * and exclusions are in effect, and which triggers the rule set in effect
+   * declares.
+   *
+   * At most one per installation — a second extension registering one while
+   * another's is still active is rejected visibly.
+   */
+  readonly ruleSource?: RuleSourceContribution;
 
   // ---------------------------------------------------------------------------
   // Transition Pipeline contribution surfaces

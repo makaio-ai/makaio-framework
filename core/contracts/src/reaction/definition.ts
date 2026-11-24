@@ -1,7 +1,13 @@
 import { z } from 'zod';
+import type { CallContext } from '@makaio/core';
+import type { RuleCheckContext } from '../rules/check-context.js';
+import type { RuleFinding } from '../rules/finding.js';
+import type { ReactionKind } from '../rules/identifiers.js';
+import type { ParamTree } from '../rules/param-tree.js';
+import type { JsonValue } from '../shared/json-value.js';
 import { zodSchemaToJsonRecord } from '../shared/zod-json-schema.js';
 import { ReactionDescriptorSchema } from './schemas.js';
-import type { ReactionDescriptor } from './schemas.js';
+import type { ReactionDescriptor, ReactionOutcome } from './schemas.js';
 import type { ReactionExecutionContext } from './execution.js';
 
 /**
@@ -11,14 +17,17 @@ import type { ReactionExecutionContext } from './execution.js';
  * `parameterSchema` by the dispatching runtime, together with the frozen
  * {@link ReactionExecutionContext} envelope for this invocation.
  * @typeParam TParams - Validated parameter shape for this Reaction.
+ * @param call - Context of the call: caller `makaio.rules`, principal and
+ *   attesting party of the occasion.
  * @param parameters - Schema-validated, read-only invocation parameters.
  * @param context - Frozen execution envelope for this invocation.
- * @returns Resolves when the Reaction's side-effects are complete.
+ * @returns The outcome of the invocation.
  */
-export type ReactionHandler<TParams extends Record<string, unknown> = Record<string, unknown>> = (
+export type ReactionHandler<TParams extends Record<string, JsonValue> = Record<string, JsonValue>> = (
+  call: CallContext,
   parameters: Readonly<TParams>,
   context: ReactionExecutionContext,
-) => Promise<void>;
+) => Promise<ReactionOutcome>;
 
 /**
  * Executable Reaction contributed by an extension.
@@ -26,10 +35,10 @@ export type ReactionHandler<TParams extends Record<string, unknown> = Record<str
  * This is the type-erased shape stored on contribution surfaces and consumed
  * by the Reaction registry; typed authoring happens through
  * {@link defineReaction}, which erases the parameter type after wiring the
- * live schema and handler together. The live `parameterSchema` and `handler`
- * are function-carrying runtime values and must never be treated as
- * serializable descriptor data — `toDescriptor()` produces the only
- * serializable representation.
+ * live schema and handler together. The live `parameterSchema`, `resultSchema`
+ * and `handler` are function-carrying runtime values and must never be
+ * treated as serializable descriptor data — `toDescriptor()` produces the
+ * only serializable representation.
  */
 export interface ReactionDefinition {
   /**
@@ -39,7 +48,7 @@ export interface ReactionDefinition {
    * contributing extension) is enforced by the Reaction registry at
    * contribution time.
    */
-  readonly kind: string;
+  readonly kind: ReactionKind;
   /** Human-readable description of what this Reaction does when invoked. */
   readonly description: string;
   /**
@@ -48,7 +57,22 @@ export interface ReactionDefinition {
    * The dispatching runtime validates raw parameters against this schema
    * before invoking {@link handler}.
    */
-  readonly parameterSchema: z.ZodType<Record<string, unknown>>;
+  readonly parameterSchema: z.ZodType<Record<string, JsonValue>>;
+  /** Live Zod schema of the result carried by an `'accepted'` outcome, when the Reaction declares one. */
+  readonly resultSchema?: z.ZodType<JsonValue>;
+  /**
+   * Whether this Reaction acts at most once per key: the evaluation retries
+   * it even after an unclear outcome, and a repeated call with the same key
+   * is idempotent and stays without a second effect.
+   */
+  readonly keyed: boolean;
+  /**
+   * The Reaction's own check, run while rules are validated subject to the host's check deadline.
+   * @param params - The rule's parameter tree for this Reaction.
+   * @param ctx - Check context for the rule set being validated.
+   * @returns Findings of the Reaction's own check.
+   */
+  validate?(params: ParamTree, ctx: RuleCheckContext): RuleFinding[] | Promise<RuleFinding[]>;
   /**
    * Trusted executable handler for this Reaction.
    *
@@ -70,16 +94,22 @@ export interface ReactionDefinition {
  * Options for {@link defineReaction}.
  * @typeParam TParams - Parameter shape validated by `parameterSchema`.
  */
-export interface DefineReactionOptions<TParams extends Record<string, unknown>> {
+export interface DefineReactionOptions<TParams extends Record<string, JsonValue>> {
   /**
    * Canonical Reaction kind: `<extension-name>.<reaction-name>`.
    * The Reaction registry enforces the extension-name prefix at contribution time.
    */
-  readonly kind: string;
+  readonly kind: ReactionKind;
   /** Human-readable description of what this Reaction does when invoked. */
   readonly description: string;
   /** Live Zod schema for the Reaction's invocation parameters. */
   readonly parameterSchema: z.ZodType<TParams>;
+  /** Live Zod schema of the result carried by an `'accepted'` outcome, when this Reaction declares one. */
+  readonly resultSchema?: z.ZodType<JsonValue>;
+  /** Whether this Reaction acts at most once per key. */
+  readonly keyed: boolean;
+  /** The Reaction's own check, run while rules are validated subject to the host's check deadline. */
+  readonly validate?: ReactionDefinition['validate'];
   /** Typed handler receiving already-validated read-only parameters. */
   readonly handler: ReactionHandler<TParams>;
 }
@@ -107,18 +137,20 @@ export interface DefineReactionOptions<TParams extends Record<string, unknown>> 
  *   kind: 'my-extension.notify-owner',
  *   description: 'Notifies the owning user about a host-selected event.',
  *   parameterSchema: z.object({ channel: z.string(), message: z.string() }),
- *   handler: async (parameters, context) => {
+ *   keyed: false,
+ *   handler: async (call, parameters, context) => {
  *     await sendNotification(parameters.channel, parameters.message, {
  *       signal: context.signal,
  *     });
+ *     return { state: 'accepted' };
  *   },
  * });
  * ```
  */
-export function defineReaction<TParams extends Record<string, unknown>>(
+export function defineReaction<TParams extends Record<string, JsonValue>>(
   options: DefineReactionOptions<TParams>,
 ): ReactionDefinition {
-  const { kind, description, parameterSchema, handler } = options;
+  const { kind, description, parameterSchema, resultSchema, keyed, validate, handler } = options;
   // Eagerly derive and validate the cached descriptor so successful
   // definitions always remain discoverable. Discovery callers receive clones
   // and cannot mutate this cached value.
@@ -131,6 +163,9 @@ export function defineReaction<TParams extends Record<string, unknown>>(
     kind,
     description,
     parameterSchema,
+    resultSchema,
+    keyed,
+    validate,
     // Invariant: the dispatching runtime validates parameters with
     // `parameterSchema` before invoking this handler, so erasing the authored
     // parameter type is safe and adds no per-invocation wrapper frame.

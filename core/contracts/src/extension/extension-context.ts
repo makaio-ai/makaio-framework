@@ -5,6 +5,7 @@ import type { HostDatabase } from '../host-database/host-database.js';
 import type { JournalCapability } from '../journal/capability.js';
 import type { ExtensionToken } from './extension-token.js';
 import type { ExtensionIdentity } from './extension-lifecycle.js';
+import type { RulesCapability } from '../rules/capability.js';
 import type { OpenContributionReader } from './open-contributions.js';
 
 /** Error code for a namespace claim rejected because a different holder owns the domain. */
@@ -115,7 +116,7 @@ export interface ExtensionContext<TBus extends MakaioBusLike = MakaioBusLike> {
   /**
    * Retrieve a service exposed by another active extension.
    * @param token - Extension-owned token identifying the desired service.
-   * @returns The active service instance, or `undefined` when unavailable.
+   * @returns The service's extension-facing API, or `undefined` when unavailable.
    */
   getService<T>(token: ExtensionToken<T>): T | undefined;
   /**
@@ -196,6 +197,14 @@ export interface NodeExtensionContextFields {
   readonly credentials?: CredentialResolver;
   /** Rights capability bound to this extension by its coordinator. */
   readonly rights: RightsCapability;
+  /**
+   * Capability of rules, bound to this extension by the kernel: checking
+   * rule definitions before a rule set takes effect, and reading the current
+   * triggers of the kinds this extension owns, with change notification.
+   *
+   * Available only in the host process, never over the bus.
+   */
+  readonly rules: RulesCapability;
 }
 
 /** Context supplied by a full Node host. */

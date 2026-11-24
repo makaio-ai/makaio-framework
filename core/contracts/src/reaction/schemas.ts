@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { JsonSchemaRecordSchema } from '../shared/json-value.js';
+import { JsonSchemaRecordSchema, JsonValueSchema } from '../shared/json-value.js';
 
 /**
  * Serializable descriptor advertising a contributed Reaction.
@@ -38,37 +38,68 @@ export const ReactionDescriptorSchema = z.object({
 /** Serializable descriptor advertising a contributed Reaction. */
 export type ReactionDescriptor = z.infer<typeof ReactionDescriptorSchema>;
 
-/**
- * Serializable normalized outcome of a single Reaction invocation.
- *
- * A handler that resolves normally maps to `{ success: true }`; a handler
- * that throws maps to `{ success: false }` with a stable failure code and a
- * plain error message. Consumers can branch on the code while preserving the
- * message for diagnostics and existing user-facing reporting.
- * Cancellation is cooperative: a handler that resolves despite an abort
- * still yields `{ success: true }` — only dispatches that are already
- * aborted or already past their deadline before handler entry are
- * guaranteed failure outcomes. The outcome intentionally carries no retry,
- * ordering, or durability semantics — every host dispatch is an independent
- * invocation.
- */
-export const ReactionOutcomeSchema = z.discriminatedUnion('success', [
-  z.object({
-    /** The handler completed without throwing. */
-    success: z.literal(true),
-  }),
-  z.object({
-    /** The handler threw, or the dispatch was rejected before handler entry. */
-    success: z.literal(false),
-    /** Normalized failure details. */
-    error: z.object({
-      /** Stable machine-readable classification of the invocation failure. */
-      code: z.enum(['unknown-reaction', 'invalid-parameters', 'cancelled', 'handler-failed']),
-      /** Human-readable failure message extracted from the thrown value. */
-      message: z.string(),
-    }),
-  }),
+/** Framework-defined Reaction failure codes. Contributed outcomes may use additional codes. */
+export const FrameworkReactionFailureCodeSchema = z.enum([
+  'unknown-reaction',
+  'invalid-parameters',
+  'cancelled',
+  'handler-failed',
+  'outcome-unknown',
 ]);
 
-/** Serializable normalized outcome of a single Reaction invocation. */
+/** Machine-readable failure code defined by the framework. */
+export type FrameworkReactionFailureCode = z.infer<typeof FrameworkReactionFailureCodeSchema>;
+
+/**
+ * Outcome of a single Reaction invocation. There is one `ReactionOutcome`, a
+ * discriminator over `state`; the evaluation decides from it whether a part
+ * is done, retried, or failed for good.
+ *
+ * - `'accepted'` — the reaction ran; `result` carries its result, when it declares one.
+ * - `'rejected'` — the reaction refused on business grounds, for good; `code` and `reason` say why.
+ * - `'failed'` — the part is terminal; `code` and `reason` say why.
+ * - `'retry'` — a transient condition; the part stays pending and is retried later.
+ *
+ * If the dispatch is cancelled or misses its deadline without a handler
+ * outcome, a keyed Reaction yields `'retry'`. Evaluation may dispatch it
+ * again after restart with the same key. An unkeyed Reaction instead yields
+ * `'failed'` with code `'outcome-unknown'` and is never retried automatically.
+ * Codes on contributed outcomes are extensible strings.
+ */
+export const ReactionOutcomeSchema = z.discriminatedUnion('state', [
+  z
+    .object({
+      state: z.literal('accepted'),
+      /** Result of the reaction, when it declares a `resultSchema`. */
+      result: JsonValueSchema.optional(),
+    })
+    .strict(),
+  z
+    .object({
+      state: z.literal('rejected'),
+      /** Stable machine-readable classification of the refusal. */
+      code: z.string(),
+      /** Human-readable reason for the refusal. */
+      reason: z.string(),
+    })
+    .strict(),
+  z
+    .object({
+      state: z.literal('failed'),
+      /** Stable machine-readable classification of the failure. */
+      code: z.string(),
+      /** Human-readable reason for the failure. */
+      reason: z.string(),
+    })
+    .strict(),
+  z
+    .object({
+      state: z.literal('retry'),
+      /** Human-readable reason the invocation is retried. */
+      reason: z.string(),
+    })
+    .strict(),
+]);
+
+/** Outcome of a single Reaction invocation. */
 export type ReactionOutcome = z.infer<typeof ReactionOutcomeSchema>;

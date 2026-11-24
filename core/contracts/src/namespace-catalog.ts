@@ -35,6 +35,7 @@ import { VCSEventsNamespace } from './capabilities/vcs/events.js';
 import { VCSPRNamespace } from './capabilities/vcs-pr/namespace.js';
 import { VisionNamespace } from './capabilities/vision/namespace.js';
 import { VoiceNamespace } from './capabilities/voice/namespace.js';
+import { RulesNamespace } from './rules/namespace.js';
 import { WorkflowBlocksNamespace } from './workflow-blocks/namespace.js';
 import { WorkerNamespace } from './worker/namespace.js';
 
@@ -84,6 +85,7 @@ export const FrameworkContractNamespaces: readonly RegistrableBusNamespaceDefini
   PlatformNamespace,
   ReviewNamespace,
   RightsNamespace,
+  RulesNamespace,
   SessionNamespace,
   SkillNamespace,
   SubagentNamespace,

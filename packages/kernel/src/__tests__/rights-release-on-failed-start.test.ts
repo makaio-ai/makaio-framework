@@ -7,6 +7,7 @@ import { createExtensionIdentity } from '../extension/extension-identity-builder
 import type { ExtensionContextHost } from '../extension/extension-context-builder.js';
 import { startExtensionEntry, type ExtensionStartHost } from '../extension/extension-start-runner.js';
 import { OpenContributionIndex } from '../extension/open-contribution-index.js';
+import { RuleSourceRegistry } from '../extension/rule-source-registry.js';
 import type { ExtensionEntry, KernelMakaioExtension } from '../extension/types.js';
 import { createRightsHub } from '../rights/rights-hub.js';
 import { TEST_EXTENSION_CONTEXT_BASE } from './extension-context-base-fixture.js';
@@ -60,6 +61,7 @@ describe('rights release after a start fails past the rights commit (point 5)', 
       hasActiveExtension: () => false,
       openContributionReaderFor: (name) => openContributionIndex.readerFor(name),
       rights: hub,
+      rules: new RuleSourceRegistry(),
       getExtensionService: () => undefined,
     };
     const bootProgress = new ThrowingReadyBootProgressObserver(bus, 1);

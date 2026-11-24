@@ -8,6 +8,7 @@ import { createExtensionIdentity } from '../extension/extension-identity-builder
 import type { ExtensionContextHost } from '../extension/extension-context-builder.js';
 import { startExtensionEntry, type ExtensionStartHost } from '../extension/extension-start-runner.js';
 import { OpenContributionIndex } from '../extension/open-contribution-index.js';
+import { RuleSourceRegistry } from '../extension/rule-source-registry.js';
 import type { ExtensionEntry, KernelMakaioExtension } from '../extension/types.js';
 import { ServiceSkipError } from '../service-skip-error.js';
 import { createRightsHub } from '../rights/rights-hub.js';
@@ -65,6 +66,7 @@ describe('rights release on a skipped start (scope extension point 12)', () => {
       hasActiveExtension: () => false,
       openContributionReaderFor: (name) => openContributionIndex.readerFor(name),
       rights: hub,
+      rules: new RuleSourceRegistry(),
       getExtensionService: () => undefined,
     };
     const bootProgress = new BootProgressObserver(bus, 1);

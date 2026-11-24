@@ -11,11 +11,11 @@ next: false
 
 | Metric | Count |
 |--------|-------|
-| Namespaces | 108 |
-| Subjects | 964 (361 events, 603 RPCs) |
-| framework | 103 |
+| Namespaces | 109 |
+| Subjects | 970 (362 events, 608 RPCs) |
+| framework | 104 |
 | extension | 5 |
-| kind: bus | 78 |
+| kind: bus | 79 |
 | kind: adapter | 7 |
 | kind: client | 2 |
 | kind: extension | 3 |
@@ -72,6 +72,7 @@ next: false
 | [`makaio:job-runs`](./makaio-job-runs.md) | bus | 1 | 0E / 1R |
 | [`makaio:journal`](./makaio-journal.md) | bus | 5 | 0E / 5R |
 | [`makaio:rights`](./makaio-rights.md) | bus | 3 | 1E / 2R |
+| [`makaio:rules`](./makaio-rules.md) | bus | 6 | 1E / 5R |
 | [`makaio:subjects`](./makaio-subjects.md) | bus | 1 | 0E / 1R |
 | [`materialization`](./materialization.md) | bus | 6 | 3E / 3R |
 | [`mcp`](./mcp.md) | bus | 9 | 6E / 3R |

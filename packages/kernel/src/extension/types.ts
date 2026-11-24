@@ -86,6 +86,7 @@ export type ExtensionContextBase<THostContext extends KernelHostContext = Kernel
   | 'namespaces'
   | 'credentials'
   | 'rights'
+  | 'rules'
 > & {
   /**
    * Factory for the per-extension credential resolver.

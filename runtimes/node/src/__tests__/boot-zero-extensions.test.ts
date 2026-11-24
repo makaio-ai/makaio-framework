@@ -28,6 +28,7 @@ import {
   ArtifactLifecycleHookRegistryToken,
   frameworkCorePackages,
   ModelRegistryToken,
+  type ReactionRegistry,
   ReactionRegistryToken,
   SessionOrchestratorToken,
 } from '@makaio/services-core';
@@ -628,8 +629,10 @@ export default [bootPackage, targetPackage];
             kind: 'reaction-fixture.record-message',
             description: 'Records a message supplied by the reaction invocation test.',
             parameterSchema: z.object({ message: z.string() }),
-            handler: async (parameters) => {
+            keyed: false,
+            handler: async (_call, parameters) => {
               receivedMessage = parameters.message;
+              return { state: 'accepted' };
             },
           }),
         ],
@@ -654,16 +657,36 @@ export default [bootPackage, targetPackage];
       hostCapabilities: ['node'],
     });
 
-    const registry = runtime.coordinator.getExtensionService(ReactionRegistryToken);
+    const registry = runtime.coordinator.getExtensionService<ReactionRegistry>(ReactionRegistryToken.name);
     expect(registry).toBeDefined();
 
     await expect(
       registry!.invoke(
         'reaction-fixture.record-message',
         { message: 'reaction invoked' },
-        { eventKind: 'test.reaction', eventPayload: {}, hostContext: {} },
+        {
+          call: createTestCall(),
+          key: 'test-invocation',
+          cause: {
+            ruleId: 'test-rule',
+            evaluationId: 'test-evaluation',
+            ruleSet: { id: 'test-set', digest: 'test-digest' },
+            rule: {
+              id: 'test-rule',
+              description: 'Test rule',
+              on: { kind: 'test.trigger' },
+              reaction: { kind: 'reaction-fixture.record-message' },
+            },
+            event: {
+              cause: { message: { receivedAt: new Date(0).toISOString() } },
+              subject: 'test.reaction',
+              origin: { caller: createTestCall().caller, principal: createTestCall().principal },
+              facts: {},
+            },
+          },
+        },
       ),
-    ).resolves.toEqual({ success: true });
+    ).resolves.toEqual({ state: 'accepted' });
     expect(receivedMessage).toBe('reaction invoked');
   });
 
