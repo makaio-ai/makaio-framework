@@ -112,7 +112,9 @@ async function verifyRegisteredDefinition(kind: 'path' | 'source'): Promise<void
     await executor.init();
     const { executionId } = await bus.request(call, WorkflowSubjects.start, { workflowId: workflow.id });
     const expectOutput = async (id: string, answer: number): Promise<void> => {
-      const result = run.mock.results.find((_result, index) => run.mock.calls[index]?.[1].executionId === id);
+      const index = run.mock.calls.findIndex(([, config]) => config.executionId === id);
+      expect(run.mock.calls[index]?.[1].cancelSubject).toBe(`workflow.${id}.cancel`);
+      const result = run.mock.results[index];
       expect(file).not.toHaveBeenCalled();
       expect(result).toBeDefined();
       await expect(result?.value).resolves.toMatchObject({
@@ -128,6 +130,7 @@ async function verifyRegisteredDefinition(kind: 'path' | 'source'): Promise<void
       await writeFile(join(root, filename), source.replace('answer: 42', 'answer: 43'));
       const current = await bus.request(call, WorkflowSubjects.rerun, { executionId, mode: 'current' });
       await expectOutput(current.executionId, 43);
+      expect(new Set([executionId, snapshot.executionId, current.executionId]).size).toBe(3);
       await bus.request(call, WorkflowSubjects.rerun, { executionId, mode: 'snapshot' });
       await expect(run.mock.results.at(-1)?.value).rejects.toThrow('Workspace root digest mismatch');
       expect(file).not.toHaveBeenCalled();

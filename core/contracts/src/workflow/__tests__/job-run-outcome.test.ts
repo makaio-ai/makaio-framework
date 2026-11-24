@@ -1,6 +1,7 @@
 import type { CallContext, ExtensionName } from '@makaio/core';
 import { describe, expect, expectTypeOf, it } from 'vitest';
 import type { HostTransaction } from '../../host-database/index.js';
+import { WorkerSchemas } from '../../worker/schemas.js';
 import {
   CoreOutcomeRefusalCodeSchema,
   JobRunOutcomeNamespace,
@@ -23,6 +24,14 @@ describe('job run result contract', () => {
     expect(OutcomeSubmitRequestSchema.safeParse({ result, jobRunId: 'run' }).success).toBe(false);
     expect(OutcomeSubmitRequestSchema.safeParse({ result: { ...result, output: null } }).success).toBe(false);
     expect(OutcomeSubmitRequestSchema.safeParse({ result: { ...result, jobRunId: 'run' } }).success).toBe(false);
+  });
+
+  it('rejects a worker outcome whose result belongs to another execution', () => {
+    const schema = WorkerSchemas['control.outcome.submit'].request;
+    const envelope = { executionId: result.executionId, result };
+    expect(schema.parse(envelope)).toEqual(envelope);
+    expect(schema.safeParse({ ...envelope, executionId: 'another-run' }).success).toBe(false);
+    expect(schema.safeParse({ ...envelope, jobRunId: result.executionId }).success).toBe(false);
   });
 
   it.each(['accepted', 'duplicate'] as const)('carries the stored answer in the %s branch', (decision) => {

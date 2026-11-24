@@ -239,7 +239,7 @@ describe('workflow public record subjects', () => {
     expect(links).toEqual([link]);
   });
 
-  it('returns execution frames through the public listFrames subject', async () => {
+  it('correlates public frame events and listFrames with the started execution', async () => {
     if (!setup) {
       throw new Error('Workflow executor test setup did not initialize.');
     }
@@ -263,23 +263,37 @@ describe('workflow public record subjects', () => {
     });
     await MakaioBus.request(WorkflowSubjects.setDefinition, { workflow });
 
-    // Wait for the in-process run to finish so the runtime frame store has
-    // flushed its persistence tasks before the public read.
-    const failedPromise = new Promise<string>((resolve) => {
-      const unsubscribe = MakaioBus.on(WorkflowSubjects.execution.failed, (ctx) => {
-        unsubscribe();
-        resolve(ctx.payload.executionId);
-      });
+    const startedFrames: { executionId: string; frameId: string }[] = [];
+    const failedFrames: { executionId: string; frameId: string }[] = [];
+    const terminal = Promise.withResolvers<string>();
+    const offStarted = MakaioBus.on(WorkflowSubjects.frame.started, ({ payload: { executionId, frameId } }) => {
+      startedFrames.push({ executionId, frameId });
     });
+    const offFailed = MakaioBus.on(WorkflowSubjects.frame.failed, ({ payload: { executionId, frameId } }) => {
+      failedFrames.push({ executionId, frameId });
+    });
+    const offTerminal = MakaioBus.on(WorkflowSubjects.execution.failed, ({ payload }) => {
+      terminal.resolve(payload.executionId);
+    });
+    try {
+      const { executionId } = await MakaioBus.request(WorkflowSubjects.start, { workflowId: workflow.id });
+      await expect(terminal.promise).resolves.toBe(executionId);
+      const { frames } = await MakaioBus.request(WorkflowSubjects.listFrames, { executionId });
 
-    const { executionId } = await MakaioBus.request(WorkflowSubjects.start, { workflowId: workflow.id });
-    await expect(failedPromise).resolves.toBe(executionId);
-
-    const { frames } = await MakaioBus.request(WorkflowSubjects.listFrames, { executionId });
-
-    expect(frames.length).toBeGreaterThan(0);
-    expect(frames[0]?.frameId).toBeDefined();
-    expect(frames.every((frame) => frame.path.length > 0)).toBe(true);
+      const frameId = frames[0]?.frameId;
+      expect(frames).toEqual([
+        expect.objectContaining({ nodeId: 'frame-producing-code-step', status: 'failed', path: [frameId] }),
+      ]);
+      expect(startedFrames).toEqual([{ executionId, frameId }]);
+      expect(failedFrames).toEqual(startedFrames);
+      await expect(
+        MakaioBus.request(WorkflowSubjects.listFrames, { executionId: 'unrelated-execution' }),
+      ).resolves.toEqual({ frames: [] });
+    } finally {
+      offTerminal();
+      offFailed();
+      offStarted();
+    }
   });
 
   it('returns primitive runtime frame spans through the public listSpans subject', async () => {
