@@ -1,13 +1,7 @@
 import { Console } from 'node:console';
 import { once } from 'node:events';
 import { createInterface } from 'node:readline';
-import {
-  JsonValueSchema,
-  WorkflowError,
-  WorkflowErrorCode,
-  type StepContext,
-  type StepRunResult,
-} from '@makaio/contracts';
+import { JsonValueSchema, WorkflowError, WorkflowErrorCode, type StepContext } from '@makaio/contracts';
 import { createJsonRpcClient, type JsonlChannel, type TransportEnd } from '@makaio/subprocess';
 import { abortableWait } from '@makaio/utils';
 import { loadWorkflowFromCheckout } from './checkout-workflow-reader.js';
@@ -17,6 +11,7 @@ import {
   StepProcessLaunchRefusalSchema,
   StepRequestCallResultSchema,
   type CheckoutCodeStepInput,
+  type StepProcessResult,
 } from './step-interface-schemas.js';
 
 /**
@@ -30,9 +25,9 @@ async function executeStep(
   invocation: CheckoutCodeStepInput,
   rpc: ReturnType<typeof createJsonRpcClient>,
   signal: AbortSignal,
-): Promise<StepRunResult> {
+): Promise<StepProcessResult> {
   const started = performance.now();
-  const failed = (error: string): StepRunResult => ({
+  const failed = (error: string): StepProcessResult => ({
     status: 'failed',
     error,
     telemetry: { duration: performance.now() - started },
@@ -61,6 +56,7 @@ async function executeStep(
 
 // Reserve the launcher's stdout pipe for RPC before evaluating checkout code.
 // Ordinary Node stdout writes share the bounded diagnostic pipe with console output.
+// Direct writes to fd 1 still reach the RPC decoder and malformed frames fail as invalid output.
 const writeProtocol = process.stdout.write.bind(process.stdout);
 process.stdout.write = process.stderr.write.bind(process.stderr);
 Object.defineProperty(globalThis, 'console', {

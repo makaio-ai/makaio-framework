@@ -82,7 +82,11 @@ export async function loadWorkflowFromCheckout(source: CheckoutWorkflowSource): 
     const path = await resolveWorkflowPath(source);
     workflows = await loadWorkflowModules({ kind: 'path', path });
   } catch (error) {
-    if (error instanceof WorkflowError && error.code === WorkflowErrorCode.SOURCE_MISMATCH) throw error;
+    if (
+      error instanceof WorkflowError &&
+      (error.code === WorkflowErrorCode.SOURCE_MISMATCH || error.code === WorkflowErrorCode.LOOP_CHECK_MULTIPLE)
+    )
+      throw error;
     throw new WorkflowError(WorkflowErrorCode.NOT_EXECUTABLE, 'Could not load the workflow from the bound checkout');
   }
   const [match, duplicate] = workflows.filter(({ definition }) => definition.id === source.workflowId);

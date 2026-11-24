@@ -25,7 +25,7 @@ export {
   WorkflowIterateNodeSchema,
   WorkflowListQuerySchema,
   WorkflowLoopNodeSchema,
-  LoopCheckOutcomeSchema,
+  LoopCheckOutputSchema,
   WorkflowNodeBaseSchema,
   WorkflowNodeSchema,
   WorkflowNodeTypeSchema,
@@ -75,7 +75,7 @@ export type {
   WorkflowIterateNode,
   WorkflowListQuery,
   WorkflowLoopNode,
-  LoopCheckOutcome,
+  LoopCheckOutput,
   WorkflowNode,
   WorkflowNodeBase,
   WorkflowNodeType,
@@ -101,6 +101,7 @@ export {
   TokenUsageSchema,
   StepTelemetrySchema,
   StepRunConfigSchema,
+  StepRunErrorCodeSchema,
   StepRunResultSchema,
 } from './step-runner.js';
 export type {
@@ -115,6 +116,7 @@ export type {
   TokenUsage,
   StepTelemetry,
   StepRunConfig,
+  StepRunErrorCode,
   StepRunResult,
   IStepRunner,
 } from './step-runner.js';
@@ -267,7 +269,6 @@ export type {
   ExtractTriggerPayload,
   IterateHandler,
   IterateOptions,
-  LoopCheckRegistration,
   LoopOptions,
   NodeOptions,
   ParallelMode,
@@ -300,7 +301,6 @@ export type {
   TransitionRuleDefinition,
 } from './transition.js';
 export { validateNoNestedLoops } from './loop.js';
-export type { LoopCheckContext, LoopCheckHandler } from './loop.js';
 export { JobRunIdSchema, StepIdSchema } from './identifiers.js';
 export type { JobRunId, StepId } from './identifiers.js';
 export { JobRunLifecycleStateSchema } from './job-run-lifecycle.js';

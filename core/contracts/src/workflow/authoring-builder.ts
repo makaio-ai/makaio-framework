@@ -12,7 +12,7 @@ import type { WorkflowFinalizerId } from './finalization.js';
 import type { CompletionMode } from '../subagent/schemas.js';
 import type { CodeStepHandler, IterateHandler, StepContext } from './authoring-context.js';
 import type { WorkflowTriggerDef } from './authoring-triggers.js';
-import type { LoopCheckHandler } from './loop.js';
+import type { StepId } from './identifiers.js';
 
 // ─────────────────────────────────────────────────────────────
 // Node Options and Configuration Types
@@ -98,39 +98,14 @@ export interface ParallelOptions {
 // Loop Options (builder-level)
 // ─────────────────────────────────────────────────────────────
 
-/**
- * Associates a check handler name with its runtime function.
- *
- * The `handler` string is serialized into the definition; the `evaluate`
- * function is stored in `runtimeLoopChecks` and never persisted.
- */
-export interface LoopCheckRegistration {
-  /** Registered check handler name resolved at runtime. */
-  readonly handler: string;
-  /** Runtime check function stored in `runtimeLoopChecks`. */
-  readonly evaluate: LoopCheckHandler;
-}
-
-/**
- * Options for loop nodes created via the fluent builder or standalone factory.
- *
- * Extends {@link NodeOptions} with a round limit and a check handler registration.
- */
+/** Options for loop nodes created via the fluent builder or standalone factory. */
 export interface LoopOptions extends NodeOptions {
   /** Maximum number of rounds to run if the check has yet to pass. */
   readonly maxRounds: number;
   /** How to finish after all rounds are exhausted. Defaults to failing the loop. */
   readonly onExhausted?: WorkflowLoopNode['onExhausted'];
-  /** Check registration and optional input and configuration. */
-  readonly check: LoopCheckRegistration & {
-    /**
-     * Optional expression resolving to the check handler's input value.
-     * Typically a frame output reference like `'frames.aggregate.output'`.
-     */
-    readonly input?: string;
-    /** Optional static configuration forwarded to the check handler. */
-    readonly config?: JsonValue;
-  };
+  /** ID of a code or agent step in the loop body whose output supplies `done`. */
+  readonly check: StepId;
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -236,11 +211,6 @@ export interface BuiltWorkflow {
    * Empty while the v1 authoring surface exposes only static topology.
    */
   readonly runtimeFactories: ReadonlyMap<string, () => WorkflowNode[]>;
-  /**
-   * Loop check handler functions keyed by handler name.
-   * Populated by `.loop()` calls and standalone `loop()` factories.
-   */
-  readonly runtimeLoopChecks: ReadonlyMap<string, LoopCheckHandler>;
   /** Zod schemas extracted from the builder for runtime validation. */
   readonly zodSchemas: WorkflowZodSchemas;
   /** Optional authoring-time source metadata for diagnostics. */
@@ -394,13 +364,9 @@ export interface WorkflowBuilder<TTrigger = never, TState extends JsonValue | un
   /**
    * Appends a loop node to the root sequence with a convergence check.
    *
-   * The check runs after each round. A passing check completes the loop.
-   * A throwing check fails the loop. Exhaustion fails by default or completes
-   * when `onExhausted` is set to `'complete'`. Code step handlers from standalone
-   * `codeStep()` factories in the body are automatically collected into `runtimeHandlers`.
-   *
-   * V1 does not support nested loops; the builder validates this constraint
-   * at authoring time.
+   * The check names a body step whose output includes a boolean `done`.
+   * Code step handlers in the body are collected into `runtimeHandlers`.
+   * The builder rejects nested loops and validates the check step reference.
    * @param id - Unique loop node identifier
    * @param bodyNodes - Ordered list of nodes forming the loop body
    * @param options - Loop configuration including maxRounds and the check

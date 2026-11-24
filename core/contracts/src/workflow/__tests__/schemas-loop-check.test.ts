@@ -1,13 +1,13 @@
 import { describe, expect, it } from 'vitest';
-import { LoopCheckOutcomeSchema, WorkflowDefinitionSchema, WorkflowLoopNodeSchema } from '../schemas.js';
+import { LoopCheckOutputSchema, WorkflowDefinitionSchema, WorkflowLoopNodeSchema } from '../schemas.js';
 
 const loopWithoutCheck = {
   id: 'rounds',
   type: 'loop',
   maxRounds: 2,
-  body: { id: 'body', type: 'sequence', nodes: [] },
+  body: { id: 'body', type: 'sequence', nodes: [{ id: 'review', type: 'code-step' }] },
 };
-const check = { handler: 'review' };
+const check = 'review';
 
 describe('workflow loop check', () => {
   it('requires a check', () => {
@@ -33,7 +33,7 @@ describe('workflow loop check', () => {
   });
 
   it('rejects escalation on a check', () => {
-    const legacyCheck = { ...check, escalation: { prompt: 'Review' } }; // legacy-input
+    const legacyCheck = { handler: check, escalation: { prompt: 'Review' } }; // legacy-input
     expect(WorkflowLoopNodeSchema.safeParse({ ...loopWithoutCheck, check: legacyCheck }).success).toBe(false);
   });
 
@@ -46,8 +46,30 @@ describe('workflow loop check', () => {
     );
   });
 
-  it('accepts only pass and loop outcomes', () => {
-    expect(LoopCheckOutcomeSchema.options.map((variant) => variant.shape.kind.value)).toEqual(['pass', 'loop']);
-    expect(LoopCheckOutcomeSchema.safeParse({ kind: 'escalate' }).success).toBe(false); // legacy-input
+  it('requires the check to name a step within the loop body', () => {
+    const result = WorkflowLoopNodeSchema.safeParse({ ...loopWithoutCheck, check: 'outside' });
+    expect(result.error?.issues).toContainEqual(expect.objectContaining({ path: ['check'] }));
+    expect(WorkflowLoopNodeSchema.safeParse({ ...loopWithoutCheck, check: { handler: 'review' } }).success).toBe(false);
+  });
+
+  it.each(['iterate', 'iterate-chain'])('rejects a convergence step inside %s', (type) => {
+    const body = {
+      id: 'body',
+      type: 'sequence',
+      nodes: [{ id: 'items', type, collection: 'inputs.items', body: loopWithoutCheck.body }],
+    };
+    const result = WorkflowLoopNodeSchema.safeParse({ ...loopWithoutCheck, body, check });
+    expect(result.error?.issues).toContainEqual(
+      expect.objectContaining({
+        path: ['check'],
+        params: { code: 'WORKFLOW_LOOP_CHECK_MULTIPLE' },
+      }),
+    );
+  });
+
+  it('requires a boolean done result', () => {
+    expect(LoopCheckOutputSchema.parse({ done: false })).toEqual({ done: false });
+    expect(LoopCheckOutputSchema.parse({ done: true })).toEqual({ done: true });
+    expect(LoopCheckOutputSchema.safeParse({ kind: 'pass' }).success).toBe(false);
   });
 });

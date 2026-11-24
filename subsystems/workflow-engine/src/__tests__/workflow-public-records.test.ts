@@ -86,7 +86,7 @@ describe('workflow public record subjects', () => {
     const { execution } = await MakaioBus.request(WorkflowSubjects.getExecution, { executionId });
 
     expect(execution?.status).toBe('failed');
-    expect(execution?.error).toContain('missing-handler');
+    expect(execution?.error).toBe('handlerUnavailable');
     expect(execution?.completedAt).toEqual(expect.any(Number));
   });
 

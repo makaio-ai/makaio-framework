@@ -4,10 +4,11 @@ import type {
   IWorkflowRunner,
   WorkerContributionManifest,
   WorkflowRunnerCompletion,
+  WorkflowRunResult,
   WorkflowWorkerConfig,
 } from '@makaio/contracts';
 import { WorkflowWorkerConfigSchema } from '@makaio/contracts';
-import { runWorkflowOrchestrator } from '@makaio/subsystem-workflow-engine/workflow-orchestrator';
+import { runCallerLocalWorkflowOrchestrator } from '@makaio/subsystem-workflow-engine/workflow-orchestrator';
 import { loadWorkflowFromConfig } from './workflow-loader.js';
 import { resolveAwaitTriggerConfig } from './await-trigger.js';
 
@@ -27,6 +28,21 @@ export interface InProcessWorkflowRunnerOptions {
    * fabric as all other framework services.
    */
   readonly bus: IMakaioBus;
+  /** Verified local workspace, when the caller materialized the workflow. */
+  readonly workspaceRoot?: string;
+}
+
+/**
+ * Resolve the trigger and run a loaded caller-local workflow.
+ * @param params - Already loaded workflow and caller-local execution context.
+ * @returns The terminal workflow result.
+ */
+export async function runLoadedWorkflowLocally(
+  params: Parameters<typeof runCallerLocalWorkflowOrchestrator>[0],
+): Promise<WorkflowRunResult> {
+  const { config, loaded, bus, signal } = params;
+  const effectiveConfig = await resolveAwaitTriggerConfig(config, loaded, bus, signal);
+  return runCallerLocalWorkflowOrchestrator({ ...params, config: effectiveConfig });
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -49,13 +65,13 @@ export interface InProcessWorkflowRunnerOptions {
  * resources of its own, so `dispose()` is intentionally omitted.
  */
 export class InProcessWorkflowRunner implements IWorkflowRunner {
-  readonly #bus: IMakaioBus;
+  readonly #options: InProcessWorkflowRunnerOptions;
 
   /**
    * @param options - Options including the caller-owned bus instance.
    */
   public constructor(options: InProcessWorkflowRunnerOptions) {
-    this.#bus = options.bus;
+    this.#options = options;
   }
 
   /**
@@ -78,15 +94,14 @@ export class InProcessWorkflowRunner implements IWorkflowRunner {
     config: WorkflowWorkerConfig,
     signal: AbortSignal,
     _manifest?: WorkerContributionManifest,
-  ): Promise<WorkflowRunnerCompletion> {
+  ): Promise<Extract<WorkflowRunnerCompletion, { state: 'uncommitted' }>> {
     const parsedConfig = WorkflowWorkerConfigSchema.parse(config);
     const loaded = await loadWorkflowFromConfig(parsedConfig);
-    const effectiveConfig = await resolveAwaitTriggerConfig(parsedConfig, loaded, this.#bus, signal);
-    const result = await runWorkflowOrchestrator({
+    const result = await runLoadedWorkflowLocally({
+      ...this.#options,
       call,
-      config: effectiveConfig,
+      config: parsedConfig,
       loaded,
-      bus: this.#bus,
       signal,
     });
     return { state: 'uncommitted', result };

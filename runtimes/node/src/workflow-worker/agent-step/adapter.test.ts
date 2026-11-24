@@ -1,18 +1,35 @@
 import { createServer, request as requestHttp } from 'node:http';
 import { MakaioBus } from '@makaio/bus-core';
 import { describe, expect, it } from 'vitest';
-import { openLocalModelAddress, type ModelMediationOutcome, type WorkerModelPort } from './model-mediator.js';
-import { AgentStepCapabilitiesSchema, type ModelFailureCode } from './protocol.js';
+import { closeHttpServer, listenOnLoopback } from '../../__tests__/http-test-helpers.js';
+import { createHttpWorkerModelPort } from './http-model-port.js';
+import {
+  openLocalModelAddress,
+  type ModelCredentialSource,
+  type ModelMediationOutcome,
+  type WorkerModelPort,
+} from './model-mediator.js';
+import { AgentStepCapabilitiesSchema, MODEL_MESSAGE_LIMIT_BYTES, type ModelFailureCode } from './protocol.js';
 import { createTextAgentStepAdapter } from './text-adapter.js';
 
 const adapter = createTextAgentStepAdapter('text-model', 'worker-instance');
 const step = {
-  request: { adapterId: 'text-model', role: 'member', model: 'stub', initialMessage: 'check the change' },
+  request: {
+    adapterId: 'text-model',
+    role: 'member',
+    model: 'stub',
+    initialMessage: 'check the change',
+    responseSchema: { schema: { type: 'object', required: ['approved'] } },
+  },
   auth: { kind: 'none' },
 };
 
 const exampleAddress = 'http://127.0.0.1:1/model/00000000-0000-0000-0000-000000000000';
 const reviewBody = JSON.stringify({ model: 'stub', prompt: 'review' });
+const target = 'model-upstream';
+const credentialSource: ModelCredentialSource = {
+  request: async () => ({ kind: 'issued', credential: 'synthetic-authorization' }),
+};
 
 /** Hold the upstream model open until its invocation signal aborts. */
 function createPendingModel() {
@@ -38,54 +55,145 @@ function createPendingModel() {
 }
 
 describe('isolated text agent adapter', () => {
-  it('declares an address need and completes through the worker-owned model port', async () => {
+  it('completes a structured turn through a named upstream and the same credential source after refresh', async () => {
     const call = MakaioBus.own('root');
     const signal = new AbortController().signal;
-    const credential = 'synthetic-upstream-authorization';
-    const outcomes: ModelMediationOutcome[] = [];
+    const resolvedReasons: string[] = [];
+    const upstreamCalls: Array<{ authorization: string | undefined; body: string }> = [];
+    const server = createServer(async (request, response) => {
+      const chunks: Buffer[] = [];
+      for await (const chunk of request) {
+        if (Buffer.isBuffer(chunk)) chunks.push(chunk);
+      }
+      const authorization = request.headers.authorization;
+      upstreamCalls.push({ authorization, body: Buffer.concat(chunks).toString() });
+      const code = authorization === 'Bearer renewed-token' ? 200 : 401;
+      response.writeHead(code, { 'content-type': 'application/json' });
+      response.end(JSON.stringify({ text: '{"approved":true}', irrelevant: 'renewed-token' }));
+    });
+    await new Promise<void>((resolve, reject) => {
+      server.once('error', reject);
+      server.listen(0, '127.0.0.1', resolve);
+    });
+    const address = server.address();
+    if (address === null || typeof address === 'string') throw new Error('Local test address unavailable');
+    const model = createHttpWorkerModelPort('stub', {
+      name: target,
+      url: new URL(`http://127.0.0.1:${address.port}/model`),
+    });
     const lease = await openLocalModelAddress({
       call,
-      model: {
-        modelId: 'stub',
-        complete: async ({ call: received, request: input, credential: authorization }) => {
+      model,
+      credentialSource: {
+        request: async (received, input) => {
           expect(received).toBe(call);
-          expect(authorization).toBe(credential);
-          expect(input).toEqual({ model: 'stub', prompt: 'check the change' });
-          const reply = { text: 'done', providerMetadata: authorization };
-          return { kind: 'completed', reply };
+          expect(input).toMatchObject({ purpose: 'model.use', target });
+          resolvedReasons.push(input.reason);
+          return { kind: 'issued', credential: input.reason === 'refresh' ? 'renewed-token' : 'expired-token' };
         },
       },
-      credential,
+      target,
       signal,
       requestTimeoutMs: 2000,
-      onOutcome: (outcome) => {
-        outcomes.push(outcome);
-        throw new Error('Diagnostic sink failed');
-      },
     });
     try {
-      expect(AgentStepCapabilitiesSchema.parse(adapter.capabilities).environment).toEqual([
-        { name: 'MAKAIO_MODEL_ADDRESS', source: 'makaio.model-address' },
-      ]);
-      expect(lease.address.includes(credential)).toBe(false);
+      const capabilities = AgentStepCapabilitiesSchema.parse(adapter.capabilities);
+      expect(capabilities.capabilities).toContain('structuredOutput');
+      expect(capabilities.environment).toEqual([{ name: 'MAKAIO_MODEL_ADDRESS', source: 'makaio.model-address' }]);
       const execution = adapter.start({ ...step, modelAddress: lease.address }, signal);
-      expect(execution.start).toMatchObject({
-        success: true,
-        adapterId: 'text-model',
-        ownerInstanceId: 'worker-instance',
-      });
-      await expect(execution.turn).resolves.toEqual({ kind: 'completed', result: { text: 'done' } });
-      const response = await fetch(lease.address, {
-        method: 'POST',
-        body: JSON.stringify({ model: 'stub', prompt: 'check the change' }),
-      });
-      expect(response.status).toBe(200);
-      const body = await response.text();
-      expect(body).not.toContain(credential);
-      expect(JSON.parse(body)).toEqual({ text: 'done' });
-      expect(outcomes).toEqual([{ kind: 'completed' }, { kind: 'completed' }]);
+      expect(execution.start).toMatchObject({ success: true, adapterId: 'text-model' });
+      await expect(execution.turn).resolves.toEqual({ kind: 'completed', result: { output: { approved: true } } });
+      expect(resolvedReasons).toEqual(['initial', 'refresh']);
+      expect(upstreamCalls.map(({ authorization }) => authorization)).toEqual([
+        'Bearer expired-token',
+        'Bearer renewed-token',
+      ]);
+      expect(upstreamCalls[0]?.body).toContain('check the change');
+      expect(upstreamCalls[0]?.body).toContain('approved');
+      expect(upstreamCalls[1]?.body).toBe(upstreamCalls[0]?.body);
     } finally {
       await lease.close();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+
+  it('runs a large structured turn within the existing model message budget', async () => {
+    const signal = new AbortController().signal;
+    const output = { approved: true, explanation: 'é'.repeat(20_000) };
+    const lease = await openLocalModelAddress({
+      call: MakaioBus.own('root'),
+      model: {
+        modelId: 'stub',
+        complete: async ({ request }) => {
+          expect(request.prompt).toContain('policy 💡');
+          expect(request.prompt).toContain('schema 💡');
+          return { kind: 'completed', reply: { text: JSON.stringify(output) } };
+        },
+      },
+      credentialSource,
+      target,
+      signal,
+      requestTimeoutMs: 2000,
+    });
+    try {
+      const request = {
+        ...step.request,
+        initialMessage: 'policy 💡'.repeat(3_000),
+        responseSchema: { schema: { type: 'object', description: 'schema 💡'.repeat(2_000) } },
+      };
+      const execution = adapter.start({ ...step, request, modelAddress: lease.address }, signal);
+      await expect(execution.turn).resolves.toEqual({ kind: 'completed', result: { output } });
+    } finally {
+      await lease.close();
+    }
+  });
+
+  it('refuses a model turn without the credential purpose before making an upstream request', async () => {
+    const signal = new AbortController().signal;
+    const lease = await openLocalModelAddress({
+      call: MakaioBus.own('root'),
+      model: createHttpWorkerModelPort('stub', { name: target, url: new URL('http://127.0.0.1:1') }),
+      credentialSource: { request: async () => ({ kind: 'purpose-not-granted' }) },
+      target,
+      signal,
+      requestTimeoutMs: 2000,
+    });
+    try {
+      const execution = adapter.start({ ...step, modelAddress: lease.address }, signal);
+      await expect(execution.turn).resolves.toEqual({ kind: 'failed', reason: 'environmentMissing' });
+    } finally {
+      await lease.close();
+    }
+  });
+
+  it.each([
+    'streamed',
+    'announced',
+  ] as const)('rejects an oversized reply (%s) without waiting for its end', async (kind) => {
+    const server = createServer((_request, response) => {
+      response.setHeader('content-type', 'application/json');
+      if (kind === 'announced') {
+        response.setHeader('content-length', MODEL_MESSAGE_LIMIT_BYTES + 1);
+      }
+      response.write(kind === 'announced' ? ' ' : ' '.repeat(MODEL_MESSAGE_LIMIT_BYTES + 1));
+    });
+    const port = await listenOnLoopback(server);
+    const signal = new AbortController().signal;
+    const lease = await openLocalModelAddress({
+      call: MakaioBus.own('root'),
+      model: createHttpWorkerModelPort('stub', { name: target, url: new URL(`http://127.0.0.1:${port}`) }),
+      credentialSource,
+      target,
+      signal,
+      requestTimeoutMs: 2000,
+    });
+    try {
+      const execution = adapter.start({ ...step, modelAddress: lease.address }, signal);
+      await expect(execution.turn).resolves.toEqual({ kind: 'failed', reason: 'reply-invalid' });
+    } finally {
+      await lease.close();
+      server.closeAllConnections();
+      await closeHttpServer(server);
     }
   });
 
@@ -100,7 +208,8 @@ describe('isolated text agent adapter', () => {
           throw new Error('Unexpected model request');
         },
       },
-      credential: 'synthetic-authorization',
+      credentialSource,
+      target,
       signal,
       requestTimeoutMs: 2000,
       onOutcome: (outcome) => outcomes.push(outcome),
@@ -113,7 +222,7 @@ describe('isolated text agent adapter', () => {
       await expect(oversized.json()).resolves.toEqual({ code: 'request-too-large' });
       for (const [body, code] of [
         ['{', 'request-invalid'],
-        [JSON.stringify({ model: 'stub', prompt: 'x'.repeat(16_385) }), 'request-too-large'],
+        [JSON.stringify({ model: 'stub', prompt: 'é'.repeat(MODEL_MESSAGE_LIMIT_BYTES / 2) }), 'request-too-large'],
         [JSON.stringify({ model: 'other', prompt: 'review' }), 'model-not-in-session'],
         [JSON.stringify({ model: 'stub', prompt: 'review', stream: true }), 'streaming-unsupported'],
       ]) {
@@ -135,6 +244,10 @@ describe('isolated text agent adapter', () => {
 
   it.each([
     ['missing model address', step],
+    [
+      'missing response schema',
+      { ...step, request: { ...step.request, responseSchema: undefined }, modelAddress: exampleAddress },
+    ],
     ['credential delivery', { ...step, modelAddress: exampleAddress, auth: { kind: 'env' } }],
     [
       'different worker',
@@ -196,7 +309,8 @@ describe('isolated text agent adapter', () => {
           return { kind: 'completed', reply };
         },
       },
-      credential,
+      credentialSource,
+      target,
       signal,
       requestTimeoutMs: 2000,
     });
@@ -227,7 +341,8 @@ describe('isolated text agent adapter', () => {
     const lease = await openLocalModelAddress({
       call: MakaioBus.own('root'),
       signal: new AbortController().signal,
-      credential: 'synthetic-authorization',
+      credentialSource,
+      target,
       requestTimeoutMs: 500,
       model: { modelId: 'stub', complete: () => uncooperative.promise },
       onOutcome: (outcome) => outcomes.push(outcome),
@@ -249,7 +364,8 @@ describe('isolated text agent adapter', () => {
     const lease = await openLocalModelAddress({
       call: MakaioBus.own('root'),
       model,
-      credential: 'synthetic-authorization',
+      credentialSource,
+      target,
       signal: new AbortController().signal,
       requestTimeoutMs: 60_000,
       onOutcome: (outcome) => outcomes.push(outcome),
@@ -277,7 +393,8 @@ describe('isolated text agent adapter', () => {
     const lease = await openLocalModelAddress({
       call: MakaioBus.own('root'),
       model,
-      credential: 'synthetic-authorization',
+      credentialSource,
+      target,
       signal: worker.signal,
       requestTimeoutMs: 60_000,
       onOutcome: (outcome) => outcomes.push(outcome),
@@ -308,7 +425,8 @@ describe('isolated text agent adapter', () => {
           throw new Error('Unexpected model request');
         },
       },
-      credential: 'synthetic-authorization',
+      credentialSource,
+      target,
       signal: new AbortController().signal,
       requestTimeoutMs: 2000,
       onOutcome: (outcome) => {
@@ -337,9 +455,12 @@ describe('isolated text agent adapter', () => {
     }
   });
 
-  it('reports a malformed HTTP 200 body as reply-invalid', async () => {
+  it.each([
+    ['{', 'reply-invalid'],
+    [JSON.stringify({ text: 'sensitive upstream prose' }), 'output-invalid'],
+  ])('rejects malformed model reply %s', async (body, reason) => {
     const server = createServer((_request, response) => {
-      response.writeHead(200, { 'content-type': 'application/json' }).end('{');
+      response.writeHead(200, { 'content-type': 'application/json' }).end(body);
     });
     try {
       await new Promise<void>((resolve, reject) => {
@@ -351,7 +472,7 @@ describe('isolated text agent adapter', () => {
       const modelAddress = exampleAddress.replace(':1/', `:${address.port}/`);
       const execution = adapter.start({ ...step, modelAddress }, new AbortController().signal);
       expect(execution.start.success).toBe(true);
-      await expect(execution.turn).resolves.toEqual({ kind: 'failed', reason: 'reply-invalid' });
+      await expect(execution.turn).resolves.toEqual({ kind: 'failed', reason });
     } finally {
       await new Promise<void>((resolve) => server.close(() => resolve()));
     }

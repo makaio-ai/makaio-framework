@@ -26,6 +26,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { sql, type SQL } from 'drizzle-orm';
 import { createBusInstance } from '@makaio/bus-core';
 import {
+  isDefinitionInvalidError,
   WorkflowDefinitionSchema,
   WorkflowNamespace,
   WorkflowRunResultSchema,
@@ -1168,7 +1169,8 @@ describeStorageConformance('waiting-removal data migration', (config) => {
         );
         expect(String(row?.['loop']).match(/"onExhausted":"complete"/g)).toHaveLength(1);
       }
-      expect(parses(definitionDocument('def-convertible', definitions.get('def-convertible')))).toBe(true);
+      // This historical migration preserves the old handler name. It cannot infer the convergence step ID.
+      expect(parses(definitionDocument('def-convertible', definitions.get('def-convertible')))).toBe(false);
       for (const [id, root] of definitionRows.slice(1)) {
         expect(definitions.get(id), id).toEqual(root);
         if (dialect === 'sqlite') {
@@ -1185,9 +1187,13 @@ describeStorageConformance('waiting-removal data migration', (config) => {
     it('a converted loop with `maxRounds: 0` ' + 'is rewritten and THEN rejected by the schema', async () => {
       const { definitions } = afterData();
       expect(definitions.get('def-convertible-bad-maxrounds')).toEqual(trees.badMaxRoundsConverted);
-      expect(
-        parses(definitionDocument('def-convertible-bad-maxrounds', definitions.get('def-convertible-bad-maxrounds'))),
-      ).toBe(false);
+      const document = definitionDocument(
+        'def-convertible-bad-maxrounds',
+        definitions.get('def-convertible-bad-maxrounds'),
+      );
+      expect(WorkflowDefinitionSchema.safeParse(document).error?.issues).toContainEqual(
+        expect.objectContaining({ path: ['root', 'nodes', 0, 'maxRounds'] }),
+      );
     });
 
     it('migrates executable snapshots without changing other workloads', async () => {
@@ -1211,7 +1217,7 @@ describeStorageConformance('waiting-removal data migration', (config) => {
         expect(parses(snapshots.get(id)), id).toBe(false);
       }
       expect(snapshots.get('snap-plain')).toEqual(definitionDocument('wf', trees.plain));
-      expect(parses(snapshots.get('snap-convertible'))).toBe(true);
+      expect(parses(snapshots.get('snap-convertible'))).toBe(false);
       for (const id of ['snap-gate', 'snap-escalation', 'snap-both']) {
         expect(parses(snapshots.get(id)), id).toBe(false);
       }
@@ -1232,7 +1238,7 @@ describeStorageConformance('waiting-removal data migration', (config) => {
       ] as const) {
         expect(snapshotOf(instructions.get(attempt)), attempt).toEqual(snapshot);
       }
-      expect(parses(snapshotOf(instructions.get('attempt-snap-convertible')))).toBe(true);
+      expect(parses(snapshotOf(instructions.get('attempt-snap-convertible')))).toBe(false);
       expect(snapshotOf(instructions.get('attempt-snap-plain'))).toEqual(definitionDocument('wf', trees.plain));
       const executions = await rowsBy(getCtx(), 'workflow_executions', 'id');
       expect(executions.get('snap-convertible')).toMatchObject({ status: 'running', error: null });
@@ -1256,7 +1262,7 @@ describeStorageConformance('waiting-removal data migration', (config) => {
         const nulSnapshot = snapshotOf(instructions.get('attempt-nul-convertible'));
         if (dialect === 'sqlite') {
           expect(nulSnapshot).toEqual(definitionDocument('wf', trees.nulConfigConverted));
-          expect(parses(nulSnapshot)).toBe(true);
+          expect(parses(nulSnapshot)).toBe(false);
         } else {
           expect(nulSnapshot).toEqual(definitionDocument('wf', trees.nulConfig));
           expect(parses(nulSnapshot)).toBe(false);
@@ -1332,7 +1338,7 @@ describeStorageConformance('waiting-removal data migration', (config) => {
           expect(snapshotOf(instructions.get(`attempt-probe-${suffix}`))).toEqual(
             definitionDocument('wf', expectedTree),
           );
-          expect(parses(snapshotOf(instructions.get(`attempt-probe-${suffix}`)))).toBe(!retained);
+          expect(parses(snapshotOf(instructions.get(`attempt-probe-${suffix}`)))).toBe(false);
           expect(outcomes.get(`attempt-paused-${suffix}`)).toEqual(
             retained
               ? {
@@ -1477,17 +1483,20 @@ describeStorageConformance('waiting-removal data migration', (config) => {
         });
       });
 
-      it('lists the readable definitions and rejects every unconvertible one with a reason', async () => {
+      it('lists the readable definition and rejects historical loop handlers with a reason', async () => {
         const { workflows, rejected } = await bus.request(WorkflowStorageSubjects.list, {});
-        expect(workflows.map((workflow) => workflow.id).sort()).toEqual(['def-convertible', 'def-plain']);
-        expect(workflows.find((workflow) => workflow.id === 'def-convertible')).not.toHaveProperty('canvasLayout');
+        expect(workflows.map((workflow) => workflow.id)).toEqual(['def-plain']);
         const storedLayout = (
           await rows(getCtx(), sql`SELECT canvas_layout FROM workflow_definitions WHERE id = 'def-convertible'`)
         )[0]?.['canvas_layout'];
         expect(parseJson(storedLayout)).toEqual({ a: { x: 1 } });
-        expect(rejected.map((entry) => entry.id).sort()).toEqual([...rejectedIds].sort());
+        expect(rejected.map((entry) => entry.id).sort()).toEqual(['def-convertible', ...rejectedIds].sort());
         for (const entry of rejected) expect(entry.reason, entry.id).not.toBe('');
         expect(rejected.find((entry) => entry.id === 'def-unknown-node-key')?.reason).toContain('label');
+        expect(rejected.find((entry) => entry.id === 'def-convertible')?.reason).toContain('check');
+        await expect(bus.request(WorkflowStorageSubjects.get, { id: 'def-convertible' })).rejects.toSatisfy(
+          isDefinitionInvalidError,
+        );
       });
 
       it('settles an external execution whose gate registration binding was cleared, without a frame', async () => {

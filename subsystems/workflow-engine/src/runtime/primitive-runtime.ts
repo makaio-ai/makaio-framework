@@ -126,7 +126,7 @@ async function executeSequenceChild(
       return { updatedCtx: localCtx, outcome: { status: 'cancelled' } };
     }
     case 'failed': {
-      await failFrame(call, frame, ctx, outcome.error);
+      await failFrame(call, frame, ctx, outcome.error, outcome.detail);
       return { updatedCtx: localCtx, outcome: { status: 'failed', error: outcome.error } };
     }
   }

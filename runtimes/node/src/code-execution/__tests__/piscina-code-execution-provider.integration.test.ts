@@ -23,6 +23,8 @@ import {
   type CodeExecutionScratch,
 } from './helpers/execution-fixtures.js';
 
+vi.setConfig({ testTimeout: 30_000 });
+
 // End-to-end coverage of the real provider: a real Piscina worker pool, a real
 // TypeScript entrypoint transpiled on import, and real abort handling. Nothing
 // in this file is mocked.

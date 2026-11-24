@@ -19,6 +19,8 @@ import { WorkflowDelegateResultFinalizerIdSchema, WorkflowFinalizerIdSchema } fr
 import { ConditionSchema } from '../shared/condition.js';
 import type { Condition } from '../shared/condition.js';
 import { WorkerRequirementsSchema } from '../capabilities/worker/index.js';
+import { StepIdSchema } from './identifiers.js';
+import { validateLoopCheckStep, validateNoNestedLoops } from './loop.js';
 
 // ─────────────────────────────────────────────────────────────
 // Workflow Automation Trigger Binding
@@ -491,18 +493,10 @@ export type WorkflowIterateChainNode = z.infer<typeof WorkflowIterateChainNodeSc
 // Loop Check Outcome
 // ─────────────────────────────────────────────────────────────
 
-/**
- * Outcome a loop check handler returns after each round.
- *
- * - `pass` — the loop completes and execution continues downstream
- * - `loop` — the body runs again unless the round limit has been reached, in which case the loop fails
- */
-export const LoopCheckOutcomeSchema = z.discriminatedUnion('kind', [
-  z.object({ kind: z.literal('pass') }).strict(),
-  z.object({ kind: z.literal('loop') }).strict(),
-]);
+/** Output of the executable step that decides whether a loop has converged. */
+export const LoopCheckOutputSchema = z.strictObject({ done: z.boolean() });
 
-export type LoopCheckOutcome = z.infer<typeof LoopCheckOutcomeSchema>;
+export type LoopCheckOutput = z.infer<typeof LoopCheckOutputSchema>;
 
 // ─────────────────────────────────────────────────────────────
 // Loop Node
@@ -525,17 +519,20 @@ export const WorkflowLoopNodeSchema = WorkflowNodeBaseSchema.extend({
   onExhausted: z.enum(['fail', 'complete']).optional(),
   /** The sequence node executed on each round. */
   body: z.lazy((): z.ZodType<WorkflowSequenceNode> => WorkflowSequenceNodeSchema),
-  /** Check evaluated after each round. */
-  check: z
-    .object({
-      /** Registered check handler name resolved at runtime. */
-      handler: z.string().min(1),
-      /** Optional expression resolving to the check handler's input, e.g. `'frames.aggregate.output'`. */
-      input: z.string().min(1).optional(),
-      /** Optional static configuration forwarded to the check handler. */
-      config: JsonValueSchema.optional(),
-    })
-    .strict(),
+  /** Step in the body whose output carries the convergence flag. */
+  check: StepIdSchema,
+}).superRefine((loop, ctx) => {
+  const nestedLoop = validateNoNestedLoops(loop);
+  if (nestedLoop !== undefined) ctx.addIssue({ code: 'custom', message: nestedLoop, path: ['body'] });
+  const invalidCheck = validateLoopCheckStep(loop);
+  if (invalidCheck !== undefined) {
+    ctx.addIssue({
+      code: 'custom',
+      message: invalidCheck.message,
+      path: ['check'],
+      ...(invalidCheck.code !== undefined && { params: { code: invalidCheck.code } }),
+    });
+  }
 });
 
 export type WorkflowLoopNode = z.infer<typeof WorkflowLoopNodeSchema>;

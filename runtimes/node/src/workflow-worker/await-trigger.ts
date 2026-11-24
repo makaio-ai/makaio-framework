@@ -168,14 +168,14 @@ async function awaitFirstTriggerEvent(
  * returned unchanged — which is also what happens when none of the declared
  * bindings can be activated inside a worker.
  * @param config - Validated workflow worker configuration.
- * @param loaded - Loaded workflow definition and runtime step map.
+ * @param loaded - Resolved workflow definition.
  * @param bus - Worker bus used by bus-backed trigger sources.
  * @param signal - Abort signal for cooperative cancellation.
  * @returns Original config or a copy with the matched trigger payload.
  */
 export async function resolveAwaitTriggerConfig(
   config: WorkflowWorkerConfig,
-  loaded: RuntimeLoadedWorkflow,
+  loaded: Pick<RuntimeLoadedWorkflow, 'definition'>,
   bus: IMakaioBus,
   signal: AbortSignal,
 ): Promise<WorkflowWorkerConfig> {

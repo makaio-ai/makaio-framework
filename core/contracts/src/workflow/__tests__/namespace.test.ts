@@ -597,7 +597,13 @@ describe('WorkflowDefinitionSchema', () => {
     { id: 'parallel', type: 'parallel', branches: { first: emptySequence } },
     { id: 'iterate', type: 'iterate', collection: 'inputs.items', body: emptySequence },
     { id: 'chain', type: 'iterate-chain', collection: 'inputs.items', body: emptySequence },
-    { id: 'loop', type: 'loop', maxRounds: 2, body: emptySequence, check: { handler: 'converged' } },
+    {
+      id: 'loop',
+      type: 'loop',
+      maxRounds: 2,
+      body: { ...emptySequence, nodes: [{ id: 'converged', type: 'code-step' }] },
+      check: 'converged',
+    },
     { id: 'code', type: 'code-step' },
     { id: 'agent', type: 'agent-step', role: 'reviewer', prompt: 'Review changes' },
   ])('rejects an unknown key on a nested $type node', (node) => {

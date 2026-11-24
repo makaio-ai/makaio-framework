@@ -54,8 +54,6 @@ function createTaskFixture(kind: 'file' | 'definition') {
     execution: createWorkflowExecution({ id: identity.executionId, workflowId: identity.workflowId }),
     workflow,
     runContext,
-    runtimeHandlers: new Map(),
-    runtimeLoopChecks: new Map(),
   });
   const start = () => {
     const common = {

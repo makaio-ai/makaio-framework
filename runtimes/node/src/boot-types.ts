@@ -82,7 +82,11 @@ export type WorkflowRunnerBootOptions =
       readonly manifest?: WorkerContributionManifest;
       /** Host-owned resolver for portable local-directory workspace IDs. */
       readonly resolveWorkspaceRoot?: WorkspaceRootResolver;
-      /** Explicit worker entry path. Overrides workerEntryMode resolution. */
+      /**
+       * Absolute path to a host-selected Piscina entry module. Its default
+       * export can be bound with `createPiscinaWorker` to compose the bus and
+       * model authority inside the thread. Overrides workerEntryMode resolution.
+       */
       readonly workerEntry?: string;
       /** Source/dist worker entry mode used when workerEntry is omitted. */
       readonly workerEntryMode?: WorkflowWorkerEntryMode;

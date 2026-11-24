@@ -10,7 +10,7 @@ import {
 } from '@makaio/contracts';
 import { WorkflowNamespace, WorkflowSubjects } from '../namespace.js';
 import { WorkflowStorageSubjects } from '../storage/namespace.js';
-import { runWorkflowOrchestrator } from '../workflow-orchestrator.js';
+import { runCallerLocalWorkflowOrchestrator } from '../workflow-orchestrator.js';
 import {
   setupWorkflowExecutorTest,
   teardownWorkflowExecutorTest,
@@ -337,7 +337,7 @@ describe('workflow public state subjects', () => {
     };
     const workflowRunner: IWorkflowRunner = {
       async run(call, config, signal): Promise<WorkflowRunnerCompletion> {
-        const result = await runWorkflowOrchestrator({
+        const result = await runCallerLocalWorkflowOrchestrator({
           call,
           config,
           loaded: {
@@ -427,7 +427,7 @@ describe('workflow public state subjects', () => {
     };
     const workflowRunner: IWorkflowRunner = {
       async run(call, config, signal): Promise<WorkflowRunnerCompletion> {
-        const result = await runWorkflowOrchestrator({
+        const result = await runCallerLocalWorkflowOrchestrator({
           call,
           config,
           loaded: {

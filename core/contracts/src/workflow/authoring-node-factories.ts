@@ -1,3 +1,4 @@
+import { WorkflowError } from './errors.js';
 import type {
   WorkflowAgentStepNode,
   WorkflowCodeStepNode,
@@ -9,8 +10,7 @@ import type {
   WorkflowSequenceNode,
 } from './schemas.js';
 import type { CodeStepHandler, IterateHandler } from './authoring-context.js';
-import type { LoopCheckHandler } from './loop.js';
-import { validateNoNestedLoops } from './loop.js';
+import { validateLoopCheckStep, validateNoNestedLoops } from './loop.js';
 import type { AgentStepOptions, IterateOptions, LoopOptions, NodeOptions } from './authoring-builder.js';
 
 // ─────────────────────────────────────────────────────────────
@@ -29,18 +29,6 @@ import type { AgentStepOptions, IterateOptions, LoopOptions, NodeOptions } from 
  */
 export const standaloneHandlers = new WeakMap<object, CodeStepHandler>();
 
-/**
- * Module-scoped WeakMap that associates standalone-factory loop nodes with
- * their check handler functions.
- *
- * When `loop()` is called with a check registration, the loop node object is
- * used as a key and the check function is stored here. Builder methods
- * (`addNode()`) read this map when incorporating nodes so check handlers are
- * automatically registered in `runtimeLoopChecks` without exposing functions
- * in the serializable node shape.
- */
-export const standaloneLoopChecks = new WeakMap<object, LoopCheckHandler>();
-
 // ─────────────────────────────────────────────────────────────
 // Standalone Handler Extraction
 // ─────────────────────────────────────────────────────────────
@@ -48,42 +36,28 @@ export const standaloneLoopChecks = new WeakMap<object, LoopCheckHandler>();
 /**
  * Walks `node` and its descendants, extracting any handlers registered in
  * `standaloneHandlers` and writing them into `handlers`.
- *
- * When `loopChecks` is provided, loop check handlers from `standaloneLoopChecks`
- * are also extracted into the map in the same recursive pass.
  * @param node - The node to inspect
  * @param handlers - The code step handler map to populate
- * @param loopChecks - Optional loop check handler map to populate
  */
-export function extractStandaloneHandlers(
-  node: WorkflowNode,
-  handlers: Map<string, CodeStepHandler>,
-  loopChecks?: Map<string, LoopCheckHandler>,
-): void {
+export function extractStandaloneHandlers(node: WorkflowNode, handlers: Map<string, CodeStepHandler>): void {
   const handler = standaloneHandlers.get(node);
   if (handler !== undefined) {
     handlers.set(node.id, handler);
   }
   if (node.type === 'sequence') {
     for (const child of (node as WorkflowSequenceNode).nodes) {
-      extractStandaloneHandlers(child, handlers, loopChecks);
+      extractStandaloneHandlers(child, handlers);
     }
   } else if (node.type === 'parallel') {
     for (const branch of Object.values((node as WorkflowParallelNode).branches)) {
-      extractStandaloneHandlers(branch, handlers, loopChecks);
+      extractStandaloneHandlers(branch, handlers);
     }
   } else if (node.type === 'iterate') {
-    extractStandaloneHandlers((node as WorkflowIterateNode).body, handlers, loopChecks);
+    extractStandaloneHandlers((node as WorkflowIterateNode).body, handlers);
   } else if (node.type === 'iterate-chain') {
-    extractStandaloneHandlers((node as WorkflowIterateChainNode).body, handlers, loopChecks);
+    extractStandaloneHandlers((node as WorkflowIterateChainNode).body, handlers);
   } else if (node.type === 'loop') {
-    if (loopChecks !== undefined) {
-      const checkHandler = standaloneLoopChecks.get(node);
-      if (checkHandler !== undefined) {
-        loopChecks.set((node as WorkflowLoopNode).check.handler, checkHandler);
-      }
-    }
-    extractStandaloneHandlers((node as WorkflowLoopNode).body, handlers, loopChecks);
+    extractStandaloneHandlers((node as WorkflowLoopNode).body, handlers);
   }
 }
 
@@ -191,14 +165,8 @@ export function iterateChain(id: string, chain: WorkflowNode[], options: Iterate
 /**
  * Creates a loop node for use as a standalone node passed to `addNode()`.
  *
- * The check function is stored in the module-scoped
- * `standaloneLoopChecks` WeakMap keyed on the returned node object. Builder
- * methods (`addNode()`) read this map when incorporating the node so the
- * check handler is automatically registered in `runtimeLoopChecks` without
- * embedding functions in the serializable node shape.
- *
- * Body node handlers registered via standalone `codeStep()` factories are
- * also collected through the existing `standaloneHandlers` mechanism.
+ * The check names a body step. The builder collects the body's code step
+ * handlers when adding this node.
  * @param id - Unique loop node identifier
  * @param bodyNodes - Ordered list of nodes forming the loop body
  * @param options - Loop configuration including maxRounds and the check
@@ -211,31 +179,16 @@ export function loop(id: string, bodyNodes: WorkflowNode[], options: LoopOptions
     maxRounds: options.maxRounds,
     ...(options.onExhausted !== undefined && { onExhausted: options.onExhausted }),
     body: { id: `${id}__body`, type: 'sequence', nodes: bodyNodes },
-    check: buildSerializableLoopCheck(options),
+    check: options.check,
     ...(options.when !== undefined && { when: options.when }),
     ...(options.skip !== undefined && { skip: options.skip }),
   };
-  const nestedError = validateNoNestedLoops(node);
-  if (nestedError !== undefined) {
-    throw new Error(nestedError);
+  const nestedLoop = validateNoNestedLoops(node);
+  if (nestedLoop !== undefined) throw new Error(nestedLoop);
+  const validationError = validateLoopCheckStep(node);
+  if (validationError !== undefined) {
+    if (validationError.code !== undefined) throw new WorkflowError(validationError.code, validationError.message);
+    throw new Error(validationError.message);
   }
-  standaloneLoopChecks.set(node, options.check.evaluate);
   return node;
-}
-
-/**
- * Builds the serializable check descriptor from {@link LoopOptions}.
- * @param options - Loop options containing the check registration
- * @returns The check descriptor included in the loop definition
- */
-export function buildSerializableLoopCheck(options: LoopOptions): WorkflowLoopNode['check'] {
-  return {
-    handler: options.check.handler,
-    ...(options.check.input !== undefined && {
-      input: options.check.input,
-    }),
-    ...(options.check.config !== undefined && {
-      config: options.check.config,
-    }),
-  };
 }

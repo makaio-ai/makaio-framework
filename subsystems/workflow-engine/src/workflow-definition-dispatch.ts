@@ -1,7 +1,6 @@
 import type { IWorkflowRunner } from '@makaio/contracts';
 import type { CallContext } from '@makaio/core';
-import type { StartExecutionDeps } from './workflow-execution-start.js';
-import type { WorkflowRunnerSelectionInput } from './workflow-runner-selector.js';
+import type { ResolvedDefinitionStartOptions, StartExecutionDeps } from './workflow-execution-start.js';
 import { buildExecutionTask, type DefinitionRunnerTaskParams } from './workflow-runner-tasks.js';
 
 /** Selected execution mechanism, retained from initial persistence through launch. */
@@ -14,15 +13,21 @@ export interface DefinitionExecutionDispatch {
  * Select execution ownership and its runner together before persisting a run.
  * @param call - Context of the request starting the definition.
  * @param deps - Shared executor state and callbacks.
- * @param input - Execution identity and declared requirements.
+ * @param executionId - Generated execution identity.
+ * @param options - Resolved workflow and any host-owned file replay selection.
  * @returns The exact runner instance that will launch this execution.
  */
 export function selectDefinitionExecutionDispatch(
   call: CallContext,
-  deps: Pick<StartExecutionDeps, 'workflowRunner' | 'workflowRunnerSelector'>,
-  input: WorkflowRunnerSelectionInput,
+  deps: Pick<StartExecutionDeps, 'workflowRunner' | 'workflowRunnerSelector' | 'callerLocalFileRunner'>,
+  executionId: string,
+  options: Pick<ResolvedDefinitionStartOptions, 'workflow' | 'hostFileReplay'>,
 ): DefinitionExecutionDispatch {
-  return { runner: deps.workflowRunnerSelector?.(call, input) ?? deps.workflowRunner };
+  const fileRunner = options.hostFileReplay ? deps.callerLocalFileRunner : undefined;
+  const requirements = options.workflow.requirements;
+  return {
+    runner: fileRunner ?? deps.workflowRunnerSelector?.(call, { executionId, requirements }) ?? deps.workflowRunner,
+  };
 }
 
 /**

@@ -410,8 +410,8 @@ export const WorkflowSchemas = {
   /**
    * Ephemeral workflow progress notification.
    *
-   * The event contract is retained for observers. The Code Step authoring
-   * context exposes only request and process-launch capabilities.
+   * This event contract is retained for observers. The built-in workflow
+   * runtime does not publish it.
    */
   'execution.progress': z.object({
     /** Execution that emitted the progress signal. */
@@ -424,7 +424,7 @@ export const WorkflowSchemas = {
     nodeId: z.string().min(1),
     /** The structured progress payload. */
     progress: WorkflowProgressUpdateSchema,
-    /** Epoch milliseconds when the signal was emitted by the runtime. */
+    /** Epoch milliseconds when the signal was emitted. */
     emittedAt: z.number().int().nonnegative(),
   }),
 
@@ -560,7 +560,9 @@ export const WorkflowSchemas = {
   // ─────────────────────────────────────────────────────────────
 
   /**
-   * Frame-scoped artifact update notification. Explicit Code Step artifact
+   * Frame-scoped artifact update notification.
+   *
+   * This event contract is retained for observers. Explicit Code Step artifact
    * requests update the artifact without publishing this workflow event.
    */
   'artifact.updated': z.object({

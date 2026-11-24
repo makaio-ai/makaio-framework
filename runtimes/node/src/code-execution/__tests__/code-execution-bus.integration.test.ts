@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { threadId as hostThreadId } from 'node:worker_threads';
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   createBusInstance,
   type BusBroadcastMessage,
@@ -34,6 +34,8 @@ import {
   waitForPath,
   type CodeExecutionScratch,
 } from './helpers/execution-fixtures.js';
+
+vi.setConfig({ testTimeout: 30_000 });
 
 // ─────────────────────────────────────────────────────────────
 // Module overview

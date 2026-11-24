@@ -1,7 +1,5 @@
 import type { CallContext } from '@makaio/core';
 import type {
-  CodeStepHandler,
-  LoopCheckHandler,
   StepRunnerBusAuth,
   StepRunnerPlatformDefaults,
   WorkerMaterializationSpec,
@@ -104,8 +102,7 @@ export const DEFAULT_EXECUTOR_CONFIG: ExecutorConfig = {
 /**
  * Active execution state tracked by the executor.
  *
- * Holds the live execution record, the workflow definition, and the code
- * step handler map for handler-bearing executions (e.g. inline builds, runFile).
+ * Holds the live execution record and workflow definition.
  */
 export interface ActiveExecution {
   /** The execution state. */
@@ -114,12 +111,4 @@ export interface ActiveExecution {
   workflow: WorkflowDefinition;
   /** Durable run-context snapshot used to populate runtime code step context. */
   runContext: WorkflowRunContext;
-  /**
-   * Code step handler functions keyed by node ID.
-   * Populated at execution start for handler-bearing executions
-   * (e.g. inline builds, runFile). Empty for definition-backed executions.
-   */
-  runtimeHandlers: Map<string, CodeStepHandler>;
-  /** Loop check handler functions keyed by handler name. */
-  runtimeLoopChecks: Map<string, LoopCheckHandler>;
 }

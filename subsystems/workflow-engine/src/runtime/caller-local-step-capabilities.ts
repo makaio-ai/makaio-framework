@@ -121,9 +121,12 @@ export function bindCallerLocalStepCapabilities(options: {
       if (site === undefined) return;
       const opened = await site;
       if (opened === undefined) return;
-      const evidence = await opened.launcher.closeOwner(owner);
-      if (evidence.kind !== 'quiescent') throw new Error('Local step process closure could not be confirmed');
-      await rm(opened.home, { recursive: true, force: true });
+      try {
+        const evidence = await opened.launcher.closeOwner(owner);
+        if (evidence.kind !== 'quiescent') throw new Error('Local step process closure could not be confirmed');
+      } finally {
+        await rm(opened.home, { recursive: true, force: true });
+      }
     },
   };
 }

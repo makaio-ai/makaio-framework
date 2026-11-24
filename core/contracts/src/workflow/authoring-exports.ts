@@ -27,7 +27,6 @@ export type {
   BuiltWorkflow,
   DefineWorkflowOptions,
   IterateOptions,
-  LoopCheckRegistration,
   LoopOptions,
   NodeOptions,
   ParallelMode,
@@ -36,5 +35,4 @@ export type {
   WorkflowStateAuthoringDefinition,
   WorkflowZodSchemas,
 } from './authoring-builder.js';
-export type { LoopCheckHandler } from './loop.js';
 export { agentStep, codeStep, iterate, iterateChain, loop } from './authoring-node-factories.js';

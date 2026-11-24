@@ -1,6 +1,5 @@
 import type {
   CodeStepHandler,
-  LoopCheckHandler,
   WorkerContributionManifest,
   WorkerRuntimeContext,
   WorkflowDefinition,
@@ -23,11 +22,6 @@ export interface RuntimeLoadedWorkflow {
    * Used by the orchestrator to dispatch `code-step`-type nodes.
    */
   readonly runtimeHandlers: ReadonlyMap<string, CodeStepHandler>;
-  /**
-   * Loop check handler functions keyed by handler name.
-   * Used by the orchestrator to evaluate loop convergence.
-   */
-  readonly runtimeLoopChecks?: ReadonlyMap<string, LoopCheckHandler>;
 }
 
 /**

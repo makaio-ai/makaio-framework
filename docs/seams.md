@@ -16,7 +16,7 @@ Extension points and future enhancement opportunities across the codebase.
 | Seam | Current Socket | Next Plug |
 |---|---|---|
 | Workflow crash recovery | Persisted `ForEachExpansionSnapshot` and `rebuildSchedulerGraph()` reconstruct generated nodes and item/index context. | Boot scanner that loads running executions, rebuilds active execution state, and either resumes or terminalizes safely. |
-| StepRunner isolation | `IStepRunner` executes runner-owned `agent | shell` steps. Node runtime can compose in-process, Piscina, child-process, or Docker runners. | Remote runners with lifecycle/resource ownership beyond the Node host. |
+| StepRunner isolation | `IStepRunner` executes runner-owned `code-step` and `agent-step` nodes. Node runtime can compose in-process, Piscina, child-process, or Docker runners. | Remote runners with lifecycle/resource ownership beyond the Node host. |
 | Runtime step blocks | Workflow steps are contract-defined built-ins plus an injected runner seam. | Extension-contributed runtime step types with schemas, runner dispatch, and validation. |
 | Context pull/push | Expression context uses workflow inputs, trigger payloads, step results, and for-each item/index overlays. | Declarative context resolution before steps and structured output publication after steps. |
 | Agent-step telemetry | Worker telemetry collection maps token usage and tool-call counts into workflow step spans. | Provider-specific cost/pricing attribution for workflow agent spans. |

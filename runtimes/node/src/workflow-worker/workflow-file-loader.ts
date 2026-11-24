@@ -46,6 +46,12 @@ function normalizeWorkflowDefaultExport(value: unknown): RuntimeLoadedWorkflow {
   // persisted pipeline-primitive definition contract.
   const definitionResult = WorkflowDefinitionSchema.safeParse(obj['definition']);
   if (!definitionResult.success) {
+    const repeatedCheck = definitionResult.error.issues.find(
+      (issue) => issue.code === 'custom' && issue.params?.['code'] === WorkflowErrorCode.LOOP_CHECK_MULTIPLE,
+    );
+    if (repeatedCheck !== undefined) {
+      throw new WorkflowError(WorkflowErrorCode.LOOP_CHECK_MULTIPLE, repeatedCheck.message);
+    }
     throw new WorkflowError(
       WorkflowErrorCode.NOT_EXECUTABLE,
       `Invalid workflow module default export: 'definition' must satisfy WorkflowDefinitionSchema. ` +
@@ -66,21 +72,10 @@ function normalizeWorkflowDefaultExport(value: unknown): RuntimeLoadedWorkflow {
     zodSchemas = exportedSchemas;
   }
 
-  const runtimeLoopChecksExport = obj['runtimeLoopChecks'];
-  if (runtimeLoopChecksExport !== undefined && !(runtimeLoopChecksExport instanceof Map)) {
-    throw new WorkflowError(
-      WorkflowErrorCode.NOT_EXECUTABLE,
-      `Invalid workflow module default export: 'runtimeLoopChecks' must be a Map instance when provided.`,
-    );
-  }
-
   return {
     definition: definitionResult.data as RuntimeLoadedWorkflow['definition'],
     runtimeHandlers: obj['runtimeHandlers'] as RuntimeLoadedWorkflow['runtimeHandlers'],
     ...(zodSchemas !== undefined ? { zodSchemas } : {}),
-    ...(runtimeLoopChecksExport !== undefined
-      ? { runtimeLoopChecks: runtimeLoopChecksExport as RuntimeLoadedWorkflow['runtimeLoopChecks'] }
-      : {}),
   };
 }
 
@@ -112,18 +107,20 @@ function isWorkflowZodSchemas(value: unknown): value is WorkflowZodSchemas {
  * Sanitizes `filename` using `basename()` to prevent path traversal attacks.
  * @param filename - Virtual filename hint (used for the temp file basename).
  * @param source - ESM source code to write.
+ * @param parent - Directory that owns the temporary source.
  * @returns Object containing the `tempDir` and the absolute `tempPath` of the written file.
  * @throws When `filename` resolves to an empty or invalid basename.
  */
-async function writeWorkflowSourceToTempFile(
+export async function writeWorkflowSourceToTempFile(
   filename: string,
   source: string,
+  parent = tmpdir(),
 ): Promise<{ tempDir: string; tempPath: string }> {
   const sanitized = basename(filename);
   if (!sanitized || sanitized === '.' || sanitized === '..') {
     throw new Error(`Invalid workflow source filename: ${filename}`);
   }
-  const tempDir = join(tmpdir(), `makaio-wf-${randomBytes(6).toString('hex')}`);
+  const tempDir = join(parent, `makaio-wf-${randomBytes(6).toString('hex')}`);
   await mkdir(tempDir, { recursive: true });
   const tempBasename = sanitized.endsWith('.mjs') ? sanitized : `${sanitized}.mjs`;
   const tempPath = join(tempDir, tempBasename);

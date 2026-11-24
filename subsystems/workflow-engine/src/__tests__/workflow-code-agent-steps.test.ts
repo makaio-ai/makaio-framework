@@ -21,7 +21,6 @@ interface WorkflowScenario {
   calls: string[];
   items: unknown[];
   chainItems: unknown[];
-  checkedRounds: number[];
 }
 
 /** Build a workflow exercising every execution container with the two step forms. */
@@ -29,7 +28,6 @@ function createScenario(): WorkflowScenario {
   const calls: string[] = [];
   const items: unknown[] = [];
   const chainItems: unknown[] = [];
-  const checkedRounds: number[] = [];
   const workflow = defineWorkflow('code-agent-primitives')
     .codeStep('prepare', () => {
       calls.push('prepare');
@@ -74,30 +72,11 @@ function createScenario(): WorkflowScenario {
       ],
       { collection: "previousSteps['prepare'].output.items" },
     )
-    .loop(
-      'converge',
-      [
-        codeStep('loop-body', () => {
-          calls.push('loop-body');
-          return 'checked';
-        }),
-      ],
-      {
-        maxRounds: 3,
-        check: {
-          handler: 'check-convergence',
-          evaluate: (_input, _config, ctx) => {
-            checkedRounds.push(ctx.round);
-            return { kind: ctx.round === 2 ? 'pass' : 'loop' };
-          },
-        },
-      },
-    )
     .codeStep('finish', () => {
       calls.push('finish');
       return 'finished';
     });
-  return { workflow, calls, items, chainItems, checkedRounds };
+  return { workflow, calls, items, chainItems };
 }
 
 /**
@@ -117,7 +96,6 @@ function assertFrames(
     ['items__item', 'code-step', 2, 'completed'],
     ['chain-first', 'code-step', 2, 'completed'],
     ['chain-second', 'code-step', 2, 'completed'],
-    ['loop-body', 'code-step', 2, 'completed'],
     ['finish', 'code-step', 1, 'completed'],
   ] as const) {
     const frames = runtime.getFramesByNodeId(nodeId);
@@ -131,13 +109,12 @@ function assertFrames(
     ['branches', 'parallel'],
     ['items', 'iterate'],
     ['chain', 'iterate-chain'],
-    ['converge', 'loop'],
   ] as const) {
     const frames = runtime.getFramesByNodeId(nodeId);
     expect(frames.length, nodeId).toBeGreaterThan(0);
     for (const frame of frames) expect(frame).toMatchObject({ nodeType, status: 'completed' });
   }
-  const allowedTypes = ['code-step', 'agent-step', 'sequence', 'parallel', 'iterate', 'iterate-chain', 'loop'];
+  const allowedTypes = ['code-step', 'agent-step', 'sequence', 'parallel', 'iterate', 'iterate-chain'];
   for (const frame of persisted.values()) {
     expect(allowedTypes).toContain(frame.nodeType);
     expect(['completed', 'skipped']).toContain(frame.status);
@@ -145,7 +122,7 @@ function assertFrames(
 }
 
 describe('workflow code and agent steps across execution primitives', () => {
-  it('completes a sequence with code and agent steps, conditional parallel branches, iterations and a checked loop', async () => {
+  it('completes a sequence with code and agent steps, conditional parallel branches and iterations', async () => {
     const scenario = createScenario();
     const bus = createBusInstance();
     bus.registerNamespace(WorkflowNamespace);
@@ -172,7 +149,13 @@ describe('workflow code and agent steps across execution primitives', () => {
       }),
     ];
     const execution = createWorkflowExecution({ workflowId: scenario.workflow.id });
-    const runtime = createRuntimeContext(scenario.workflow, execution, bus, new AbortController().signal);
+    const runtime = createRuntimeContext(
+      scenario.workflow,
+      execution,
+      bus,
+      new AbortController().signal,
+      createTestCall(),
+    );
 
     try {
       const outcome = await executeSequence(
@@ -193,14 +176,11 @@ describe('workflow code and agent steps across execution primitives', () => {
         'chain-second',
         'chain-first',
         'chain-second',
-        'loop-body',
-        'loop-body',
         'finish',
       ]);
       expect(scenario.items).toHaveLength(2);
       expect(scenario.items).toEqual(expect.arrayContaining(['alpha', 'beta']));
       expect(scenario.chainItems).toEqual(['alpha', { item: 'alpha' }, 'beta', { item: 'beta' }]);
-      expect(scenario.checkedRounds).toEqual([1, 2]);
 
       assertFrames(runtime, persisted);
       expect(runtime.getFramesByNodeId('review')[0]?.output).toBe('reviewed');

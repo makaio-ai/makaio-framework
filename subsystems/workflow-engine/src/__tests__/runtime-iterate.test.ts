@@ -12,9 +12,9 @@ import {
   type WorkflowIterateNode,
   type WorkflowSequenceNode,
 } from '@makaio/contracts';
-import { registerInMemoryFrameStore } from './shared.js';
+import { createLocalTestRuntimeContext, registerInMemoryFrameStore } from './shared.js';
 import { createTestCall } from '@makaio/test-utils';
-import { RuntimeContext, type RuntimeExecutionOptions } from '../runtime/runtime-context.js';
+import type { RuntimeContext } from '../runtime/runtime-context.js';
 import { executeIterateNode, type IterateOutput } from '../runtime/iterate-node.js';
 import { executeIterateChainNode, type IterateChainOutput } from '../runtime/iterate-chain-node.js';
 import { executeSequence } from '../runtime/primitive-runtime.js';
@@ -66,15 +66,13 @@ function makeBus(): ReturnType<typeof createBusInstance> {
  * Create a fresh RuntimeContext with an isolated bus.
  * @param handlers - Code step handlers keyed by node ID.
  * @param signal - Optional abort signal.
- * @param options - Optional runtime execution options.
  */
 function makeCtx(
   handlers: Record<string, CodeStepHandler>,
   signal: AbortSignal = new AbortController().signal,
-  options: RuntimeExecutionOptions = {},
 ): RuntimeContext {
   const bus = makeBus();
-  return new RuntimeContext(
+  return createLocalTestRuntimeContext(
     'exec-test',
     'workflow-test',
     makeDefinition('workflow-test'),
@@ -85,7 +83,6 @@ function makeCtx(
     undefined,
     undefined,
     undefined,
-    options,
   );
 }
 
@@ -399,7 +396,7 @@ describe('executeIterateNode', () => {
     if (outcome.status === 'completed') {
       const output = outcome.output as IterateOutput;
       expect(output.items[0]).toMatchObject({ status: 'fulfilled', value: 'ok-good' });
-      expect(output.items[1]).toMatchObject({ status: 'rejected', reason: expect.stringContaining('Bad item') });
+      expect(output.items[1]).toMatchObject({ status: 'rejected', reason: 'stepExecutionFailed' });
       expect(output.items[2]).toMatchObject({ status: 'fulfilled', value: 'ok-good2' });
     }
   });
@@ -678,7 +675,7 @@ describe('executeIterateChainNode', () => {
     // Chain fails on the first failed item.
     expect(outcome.status).toBe('failed');
     if (outcome.status === 'failed') {
-      expect(outcome.error).toContain('Item failed');
+      expect(outcome.error).toBe('stepExecutionFailed');
     }
     // Item 'c' must not have been executed after the failure.
     expect(executed).not.toContain('c');
@@ -926,7 +923,7 @@ describe('iterate and iterate-chain via full dispatch (executeSequence)', () => 
       scope: { type: 'global' },
     };
 
-    const ctx = new RuntimeContext(
+    const ctx = createLocalTestRuntimeContext(
       'exec-test',
       'test-wf',
       definition,
@@ -977,7 +974,7 @@ describe('iterate and iterate-chain via full dispatch (executeSequence)', () => 
       scope: { type: 'global' },
     };
 
-    const ctx = new RuntimeContext(
+    const ctx = createLocalTestRuntimeContext(
       'exec-chain',
       'test-chain-wf',
       definition,

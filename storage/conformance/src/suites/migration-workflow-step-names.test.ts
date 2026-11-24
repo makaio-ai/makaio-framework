@@ -513,11 +513,11 @@ describeStorageConformance('workflow step-name data migration', (config) => {
       );
       expect(attemptsAfter.get('attempt-foreign')).toBe(attempts[2][1]);
 
-      // The rewritten 'wf-definition' tree WOULD parse once its permanent delegate-agent node is removed:
-      // a structural sanity check, not a storage assertion (the stripped shape is never written).
-      const parses = (id: string, root: unknown): boolean =>
-        WorkflowDefinitionSchema.safeParse(definitionDocument(id, root)).success;
-      expect(parses('wf-definition', stripLegacyAgent(byId.get('wf-definition')))).toBe(true);
+      // Without the rejected agent, the historical loop handler is still visible as a definition issue.
+      const parsed = WorkflowDefinitionSchema.safeParse(
+        definitionDocument('wf-definition', stripLegacyAgent(byId.get('wf-definition'))),
+      );
+      expect(parsed.error?.issues).toContainEqual(expect.objectContaining({ path: ['root', 'nodes', 6, 'check'] }));
 
       // Visible rejection through REAL storage loading, not `safeParse`: a rejected row stays listed as
       // `rejected` and keeps its stored column, a readable row is listed and gettable. `not.toContain` is
@@ -616,7 +616,7 @@ describeStorageConformance('workflow step-name data migration', (config) => {
 });
 
 /**
- * Remove the `delegate-agent` node, which the schema rejects by design, so the remainder can be parsed.
+ * Remove the legacy agent node to isolate the current schema's rejection of the historical loop handler.
  * @param root - Migrated root JSON.
  * @returns Root JSON without the legacy agent node.
  */

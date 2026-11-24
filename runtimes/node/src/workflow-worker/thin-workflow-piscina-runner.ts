@@ -11,7 +11,7 @@ import { materializeWorkerTask, type MaterializedWorkerTask } from './worker-tas
 
 /** Materialized workflow dispatched to the core worker entrypoint. */
 interface ThinWorkflowPiscinaTask extends MaterializedWorkerTask {
-  readonly kind: 'unbound';
+  readonly kind: 'unbound' | 'caller-local-file';
   readonly manifest: WorkerContributionManifest;
 }
 
@@ -28,6 +28,14 @@ interface ThinWorkflowPiscinaTask extends MaterializedWorkerTask {
 export class ThinWorkflowPiscinaRunner implements IWorkflowRunner {
   private readonly manifest: WorkerContributionManifest;
   private pool: PiscinaPoolRunner<ThinWorkflowPiscinaTask, WorkflowRunResult> | undefined;
+
+  /** Unbound orchestration requires a serialized definition to keep source evaluation out of the worker thread. */
+  public readonly requiresDefinitionSnapshot = true;
+
+  /** Explicit file starts and replays share this runner's pool and worker connection. */
+  public readonly callerLocalFileRunner: IWorkflowRunner = {
+    run: (_call, config, signal, manifest) => this.runInPool('caller-local-file', config, signal, manifest),
+  };
 
   /**
    * @param options - Piscina runner configuration including worker entry path
@@ -56,10 +64,27 @@ export class ThinWorkflowPiscinaRunner implements IWorkflowRunner {
     signal: AbortSignal,
     manifest?: WorkerContributionManifest,
   ): Promise<WorkflowRunnerCompletion> {
+    return this.runInPool('unbound', config, signal, manifest);
+  }
+
+  /**
+   * Materialize the source and invoke the same pool for either host-selected task type.
+   * @param kind - Trusted dispatch choice made by the host's runner.
+   * @param config - Portable workflow configuration.
+   * @param signal - Signal for materialization and task execution.
+   * @param manifest - Optional contribution override.
+   * @returns Uncommitted workflow completion.
+   */
+  private async runInPool(
+    kind: ThinWorkflowPiscinaTask['kind'],
+    config: WorkflowWorkerConfig,
+    signal: AbortSignal,
+    manifest?: WorkerContributionManifest,
+  ): Promise<WorkflowRunnerCompletion> {
     this.pool ??= new PiscinaPoolRunner(this.options);
     const resolvedManifest = manifest ?? this.manifest;
     const task = await materializeWorkerTask(this.options, config, resolvedManifest, signal);
-    const result = await this.pool.run({ ...task, kind: 'unbound', manifest: resolvedManifest }, signal);
+    const result = await this.pool.run({ ...task, kind, manifest: resolvedManifest }, signal);
     return { state: 'uncommitted', result };
   }
 

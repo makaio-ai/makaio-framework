@@ -1,6 +1,4 @@
-import type { JsonValue } from '../shared/json-value.js';
 import type {
-  LoopCheckOutcome,
   WorkflowIterateChainNode,
   WorkflowIterateNode,
   WorkflowLoopNode,
@@ -9,31 +7,43 @@ import type {
   WorkflowSequenceNode,
 } from './schemas.js';
 
-// ─────────────────────────────────────────────────────────────
-// Loop Check Context
-// ─────────────────────────────────────────────────────────────
-
-/** Context passed to a loop check handler. */
-export interface LoopCheckContext {
-  /** Execution ID of the running workflow. */
-  readonly executionId: string;
-  /** Node ID of the loop node being evaluated. */
-  readonly nodeId: string;
-  /** Current round number (1-based). */
-  readonly round: number;
-  /** Maximum rounds configured on the loop node. */
-  readonly maxRounds: number;
-}
+import { WorkflowErrorCode } from './errors.js';
+import { walkWorkflowDefinition } from './walk.js';
 
 /**
- * Check handler for loop convergence. It is registered at runtime and the
- * definition stores its name. Throwing fails the loop node.
- * @param input - Value resolved from `check.input`, or `null`.
- * @param config - Value of `check.config`, or `null`.
- * @param ctx - Round and execution metadata.
- * @returns The check outcome for this round.
+ * Check that the convergence step belongs to the body and produces step output.
+ * @param loop - Loop definition and its referenced step.
+ * @returns An explanation when the reference does not identify an executable step in the body.
  */
-export type LoopCheckHandler = (input: JsonValue, config: JsonValue, ctx: LoopCheckContext) => LoopCheckOutcome;
+export function validateLoopCheckStep(
+  loop: WorkflowLoopNode,
+): { message: string; code?: WorkflowErrorCode } | undefined {
+  let matches = 0;
+  let iteratorDepth = 0;
+  let repeated = false;
+  const isIterator = (node: WorkflowNode): boolean => node.type === 'iterate' || node.type === 'iterate-chain';
+  walkWorkflowDefinition(loop.body, {
+    enter(node) {
+      if (isIterator(node)) iteratorDepth++;
+      if ((node.type === 'code-step' || node.type === 'agent-step') && node.id === loop.check) {
+        matches++;
+        repeated ||= iteratorDepth > 0;
+      }
+    },
+    leave(node) {
+      if (isIterator(node)) iteratorDepth--;
+    },
+  });
+  // Each round consumes one output. Iterators can execute the same check multiple times.
+  if (repeated || matches > 1) {
+    return {
+      message: `Loop check '${loop.check}' must execute at most once per round`,
+      code: WorkflowErrorCode.LOOP_CHECK_MULTIPLE,
+    };
+  }
+  if (matches === 0) return { message: `Loop check '${loop.check}' must reference a step in its body` };
+  return undefined;
+}
 
 // ─────────────────────────────────────────────────────────────
 // Nested Loop Validation

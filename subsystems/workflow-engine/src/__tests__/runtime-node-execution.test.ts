@@ -25,15 +25,16 @@ import {
   type WorkflowSequenceNode,
 } from '@makaio/contracts';
 import { createTestCall } from '@makaio/test-utils';
+import { agentStepFailureCases } from '../../../../core/contracts/src/workflow/__tests__/agent-step-runner-cases.js';
 import { RuntimeContext } from '../runtime/runtime-context.js';
-import { executeCodeStepNode } from '../runtime/code-step-node.js';
-import { executeAgentStepNode } from '../runtime/delegate-node.js';
+import { createCallerLocalStepRunner } from '../runtime/caller-local-step-runner.js';
+import { dispatchStep } from '../runtime/step-dispatch.js';
 import { elapsedDelegateDuration } from '../runtime/role-subagent-node.js';
 import { executeParallelNode, type ParallelOutput } from '../runtime/parallel-node.js';
 import { executeSequence } from '../runtime/primitive-runtime.js';
 import { WorkflowStorageNamespace, WorkflowStorageSubjects } from '../storage/namespace.js';
-import { runWorkflowOrchestrator } from '../workflow-orchestrator.js';
-import { registerInMemoryFrameStore } from './shared.js';
+import { runCallerLocalWorkflowOrchestrator } from '../workflow-orchestrator.js';
+import { createLocalTestRuntimeContext, registerInMemoryFrameStore } from './shared.js';
 
 vi.mock('node:fs/promises', async (importOriginal) => {
   const actual = await importOriginal<typeof fsPromises>();
@@ -98,11 +99,13 @@ function makeBusWithFrames(): ReturnType<typeof makeBus> {
  * @param handlers - Code step handlers keyed by node ID.
  * @param signal - Optional abort signal.
  * @param bus - Optional bus for tests that manage storage handlers directly.
+ * @param call - Authority to bind to the local runner.
  */
 function makeCtx(
   handlers: Record<string, CodeStepHandler>,
   signal: AbortSignal = new AbortController().signal,
   bus?: ReturnType<typeof makeBus>,
+  call = createTestCall(),
 ): RuntimeContext {
   const runtimeBus = bus ?? makeBusWithFrames();
   return new RuntimeContext(
@@ -110,7 +113,7 @@ function makeCtx(
     'workflow-test',
     makeDefinition('workflow-test'),
     makeExecution('workflow-test'),
-    new Map(Object.entries(handlers)),
+    createCallerLocalStepRunner(call, new Map(Object.entries(handlers))),
     runtimeBus,
     signal,
   );
@@ -183,7 +186,7 @@ describe('code step and agent step execution', () => {
     };
 
     const ctx = makeCtx({ greet: handler });
-    const outcome = await executeCodeStepNode(createTestCall(), node, ctx, emptyExpressionCtx);
+    const outcome = await dispatchStep(node, ctx, emptyExpressionCtx);
 
     expect(outcome.status).toBe('completed');
     if (outcome.status === 'completed') {
@@ -204,7 +207,7 @@ describe('code step and agent step execution', () => {
     };
 
     const bus = makeBus();
-    const ctx = new RuntimeContext(
+    const ctx = createLocalTestRuntimeContext(
       'exec-1',
       'workflow-1',
       makeDefinition('workflow-1'),
@@ -218,7 +221,7 @@ describe('code step and agent step execution', () => {
       new AbortController().signal,
     );
 
-    await executeCodeStepNode(createTestCall(), node, ctx, emptyExpressionCtx);
+    await dispatchStep(node, ctx, emptyExpressionCtx);
 
     expect(received[0]).toEqual({ inputs: { key: 'value' }, config: { mode: 'strict' } });
   });
@@ -247,7 +250,7 @@ describe('code step and agent step execution', () => {
     };
 
     const ctx = makeCtx({ consumer: handler });
-    await executeCodeStepNode(createTestCall(), node, ctx, expressionCtx);
+    await dispatchStep(node, ctx, expressionCtx);
 
     expect(receivedPreviousSteps).toMatchObject({
       'prior-step': { status: 'completed', output: { result: 42 } },
@@ -280,10 +283,10 @@ describe('code step and agent step execution', () => {
           emittedAt: Date.now(),
         },
       });
-    const hostBus = makeBusWithFrames();
-    const ctx = makeCtx({ [node.id]: handler }, undefined, hostBus);
-    const { subjects } = hostBus.registerNamespace(StepRequestTestNamespace);
     const principal = { kind: 'makaio.user', id: 'progress-user' };
+    const hostBus = makeBusWithFrames();
+    const ctx = makeCtx({ [node.id]: handler }, undefined, hostBus, createTestCall({ principal }));
+    const { subjects } = hostBus.registerNamespace(StepRequestTestNamespace);
     const observed: unknown[] = [];
     const cleanupProgress = ctx.bus.on(WorkflowSubjects.execution.progress, (event) => {
       observed.push(event.payload);
@@ -300,7 +303,7 @@ describe('code step and agent step execution', () => {
     });
 
     try {
-      const outcome = await executeCodeStepNode(createTestCall({ principal }), node, ctx, emptyExpressionCtx);
+      const outcome = await dispatchStep(node, ctx, emptyExpressionCtx);
       const expected = {
         success: { ok: true, response: { accepted: true } },
         invalid: { ok: false, code: 'request-rejected' },
@@ -346,9 +349,10 @@ describe('code step and agent step execution', () => {
     const unsubscribeSpawn = ctx.bus.on(SubagentSubjects.spawn, spawn);
 
     try {
-      await expect(executeCodeStepNode(createTestCall(), node, ctx, emptyExpressionCtx)).resolves.toEqual({
+      await expect(dispatchStep(node, ctx, emptyExpressionCtx)).resolves.toEqual({
         status: 'failed',
-        error: "No handler registered for code step 'no-handler'",
+        error: 'handlerUnavailable',
+        detail: "No handler registered for code step 'no-handler'",
       });
       expect(resolveRole).not.toHaveBeenCalled();
       expect(spawn).not.toHaveBeenCalled();
@@ -383,7 +387,7 @@ describe('code step and agent step execution', () => {
 
     try {
       await expect(
-        executeAgentStepNode(createTestCall(), node, ctx, {
+        dispatchStep(node, ctx, {
           ...emptyExpressionCtx,
           inputs: { details: value },
         }),
@@ -417,7 +421,7 @@ describe('code step and agent step execution', () => {
     const unsubscribeAwait = ctx.bus.on(SubagentSubjects.await, awaitSubagent);
 
     try {
-      const outcome = await executeAgentStepNode(createTestCall(), node, ctx, emptyExpressionCtx);
+      const outcome = await dispatchStep(node, ctx, emptyExpressionCtx);
       expect(outcome.status).toBe('failed');
       if (outcome.status === 'failed') {
         expect(outcome.error).toContain(
@@ -433,13 +437,17 @@ describe('code step and agent step execution', () => {
     }
   });
 
-  it('runs agent steps through the subagent seam when no handler is registered', async () => {
+  it.each([
+    { schemaType: 'object', text: '{"status":"review complete"}', output: { status: 'review complete' } },
+    { schemaType: 'string', text: '"review complete"', output: 'review complete' },
+    { schemaType: 'string', text: 'review complete', output: 'review complete' },
+  ])('runs agent steps through the subagent seam with $schemaType output ($text)', async (scenario) => {
     const node: WorkflowAgentStepNode = {
       id: 'role-step',
       type: 'agent-step',
       prompt: 'Review {{ input.title }}',
       role: 'reviewer',
-      outputSchema: { type: 'object' },
+      outputSchema: { type: scenario.schemaType },
       timeoutMs: 1_000,
     };
     const ctx = makeCtx({});
@@ -459,16 +467,16 @@ describe('code step and agent step execution', () => {
     });
     const unsubscribeAwait = ctx.bus.on(SubagentSubjects.await, (requestCtx) => {
       expect(requestCtx.payload).toEqual({ subagentId: 'subagent-role-step', timeoutMs: 1_000 });
-      requestCtx.setResult({ status: 'completed', result: 'review complete' });
+      requestCtx.setResult({ status: 'completed', result: scenario.text });
     });
 
     try {
-      const outcome = await executeAgentStepNode(createTestCall(), node, ctx, {
+      const outcome = await dispatchStep(node, ctx, {
         ...emptyExpressionCtx,
         inputs: { title: 'the implementation' },
       });
 
-      expect(outcome).toEqual({ status: 'completed', output: 'review complete' });
+      expect(outcome).toEqual({ status: 'completed', output: scenario.output });
       expect(spawned).toHaveLength(1);
       const spawnPayload = spawned[0] as {
         parentSessionId: string;
@@ -485,7 +493,7 @@ describe('code step and agent step execution', () => {
         model: 'sonnet',
         harnessId: 'review-harness',
         contextMode: 'fresh',
-        responseSchema: { schema: { type: 'object' } },
+        responseSchema: { schema: { type: scenario.schemaType } },
       });
     } finally {
       unsubscribeRole();
@@ -503,12 +511,37 @@ describe('code step and agent step execution', () => {
     };
     const ctx = makeCtx({});
 
-    const outcome = await executeAgentStepNode(createTestCall(), node, ctx, emptyExpressionCtx);
+    const outcome = await dispatchStep(node, ctx, emptyExpressionCtx);
 
     expect(outcome.status).toBe('failed');
     if (outcome.status === 'failed') {
-      expect(outcome.error).toContain("Role 'unknown-role' could not be resolved");
+      expect(outcome.error).toBe('unknownRole');
     }
+  });
+
+  it.each(agentStepFailureCases)('reports $error at the caller-local runner boundary', async ({ scenario, error }) => {
+    const ctx = makeCtx({});
+    const deadline = scenario === 'deadline';
+    if (deadline) {
+      ctx.bus.on(WorkflowSubjects.resolveRole, (request) => request.setResult({ adapterName: 'test-adapter' }));
+      ctx.bus.on(SubagentSubjects.spawn, (request) => request.setResult({ subagentId: 'review', status: 'spawning' }));
+      ctx.bus.on(SubagentSubjects.await, (request) => request.setResult({ status: 'timeout' }));
+      ctx.bus.on(SubagentSubjects.kill, (request) => request.setResult({ killed: true }));
+    }
+    const detail = deadline ? 'subagent timeout' : "Role 'reviewer' could not be resolved";
+    await expect(
+      ctx.stepRunner.run(
+        {
+          stepType: 'agent-step',
+          stepId: 'review',
+          stepDefinition: { type: 'agent-step', id: 'review', role: 'reviewer', prompt: 'Review' },
+          resolvedPrompt: 'Review',
+          data: { executionId: 'exec-test', workflowId: 'workflow-test', inputs: {}, config: {}, previousSteps: {} },
+          platformDefaults: { cwd: '.' },
+        },
+        ctx.signal,
+      ),
+    ).resolves.toMatchObject({ status: 'failed', error, detail: expect.stringContaining(detail) });
   });
 
   it('fails agent steps when subagent runtime is unavailable', async () => {
@@ -524,11 +557,11 @@ describe('code step and agent step execution', () => {
     });
 
     try {
-      const outcome = await executeAgentStepNode(createTestCall(), node, ctx, emptyExpressionCtx);
+      const outcome = await dispatchStep(node, ctx, emptyExpressionCtx);
 
       expect(outcome.status).toBe('failed');
       if (outcome.status === 'failed') {
-        expect(outcome.error).toContain('Subagent runtime is not available');
+        expect(outcome.error).toBe('stepExecutionFailed');
       }
     } finally {
       unsubscribeRole();
@@ -551,11 +584,11 @@ describe('code step and agent step execution', () => {
     });
 
     try {
-      const outcome = await executeAgentStepNode(createTestCall(), node, ctx, emptyExpressionCtx);
+      const outcome = await dispatchStep(node, ctx, emptyExpressionCtx);
 
       expect(outcome.status).toBe('failed');
       if (outcome.status === 'failed') {
-        expect(outcome.error).toContain("Subagent runtime cannot await agent step 'missing-await'");
+        expect(outcome.error).toBe('stepExecutionFailed');
       }
     } finally {
       unsubscribeRole();
@@ -567,7 +600,11 @@ describe('code step and agent step execution', () => {
     {
       awaitStatus: 'failed' as const,
       awaitError: 'review failed',
-      expected: { status: 'failed' as const, error: "Agent step 'subagent-failed' subagent failed: review failed" },
+      expected: {
+        status: 'failed' as const,
+        error: 'stepExecutionFailed',
+        detail: "Agent step 'subagent-failed' subagent failed: review failed",
+      },
     },
     {
       awaitStatus: 'cancelled' as const,
@@ -596,9 +633,7 @@ describe('code step and agent step execution', () => {
     });
 
     try {
-      await expect(executeAgentStepNode(createTestCall(), node, ctx, emptyExpressionCtx)).resolves.toEqual(
-        scenario.expected,
-      );
+      await expect(dispatchStep(node, ctx, emptyExpressionCtx)).resolves.toEqual(scenario.expected);
     } finally {
       unsubscribeRole();
       unsubscribeSpawn();
@@ -642,7 +677,7 @@ describe('code step and agent step execution', () => {
     });
 
     try {
-      const outcomePromise = executeAgentStepNode(createTestCall(), node, ctx, emptyExpressionCtx);
+      const outcomePromise = dispatchStep(node, ctx, emptyExpressionCtx);
       await awaitEntered;
       controller.abort();
 
@@ -696,7 +731,7 @@ describe('code step and agent step execution', () => {
     });
 
     try {
-      const outcomePromise = executeAgentStepNode(createTestCall(), node, ctx, emptyExpressionCtx);
+      const outcomePromise = dispatchStep(node, ctx, emptyExpressionCtx);
       await awaitEntered;
       controller.abort();
 
@@ -741,8 +776,7 @@ describe('code step and agent step execution', () => {
     });
 
     try {
-      const outcome = await executeAgentStepNode(
-        createTestCall(),
+      const outcome = await dispatchStep(
         {
           type: 'agent-step',
           id: 'abandoned-role-step',
@@ -787,8 +821,7 @@ describe('code step and agent step execution', () => {
 
     try {
       await expect(
-        executeAgentStepNode(
-          createTestCall(),
+        dispatchStep(
           {
             type: 'agent-step',
             id: 'await-failed-role-step',
@@ -841,8 +874,7 @@ describe('code step and agent step execution', () => {
     });
 
     try {
-      const outcome = await executeAgentStepNode(
-        createTestCall(),
+      const outcome = await dispatchStep(
         {
           type: 'agent-step',
           id: 'analyze',
@@ -901,8 +933,7 @@ describe('code step and agent step execution', () => {
     });
 
     try {
-      const outcome = await executeAgentStepNode(
-        createTestCall(),
+      const outcome = await dispatchStep(
         {
           type: 'agent-step',
           id: 'delayed-link',
@@ -946,8 +977,7 @@ describe('code step and agent step execution', () => {
       requestCtx.setResult({ status: 'completed', result: 'done after timeout' });
     });
 
-    const outcomePromise = executeAgentStepNode(
-      createTestCall(),
+    const outcomePromise = dispatchStep(
       {
         type: 'agent-step',
         id: 'timeout-link',
@@ -981,8 +1011,8 @@ describe('code step and agent step execution', () => {
 
   it('passes the workflow abort signal to frame session status polling', async () => {
     const controller = new AbortController();
-    const ctx = makeCtx({}, controller.signal);
     const call = createTestCall();
+    const ctx = makeCtx({}, controller.signal, undefined, call);
     const requestOptionalSpy = vi.spyOn(ctx.bus, 'requestOptional');
     const cleanupRole = ctx.bus.on(WorkflowSubjects.resolveRole, (requestCtx) => {
       requestCtx.setResult({ adapterName: 'test-adapter' });
@@ -1002,8 +1032,7 @@ describe('code step and agent step execution', () => {
 
     try {
       await expect(
-        executeAgentStepNode(
-          call,
+        dispatchStep(
           {
             type: 'agent-step',
             id: 'signal-link',
@@ -1032,8 +1061,8 @@ describe('code step and agent step execution', () => {
   });
 
   it('issues the subagent await request without the bus envelope timeout', async () => {
-    const ctx = makeCtx({});
     const call = createTestCall();
+    const ctx = makeCtx({}, undefined, undefined, call);
     const requestOptionalSpy = vi.spyOn(ctx.bus, 'requestOptional');
     const cleanupRole = ctx.bus.on(WorkflowSubjects.resolveRole, (requestCtx) => {
       requestCtx.setResult({ adapterName: 'test-adapter' });
@@ -1047,8 +1076,7 @@ describe('code step and agent step execution', () => {
 
     try {
       await expect(
-        executeAgentStepNode(
-          call,
+        dispatchStep(
           {
             type: 'agent-step',
             id: 'await-options',
@@ -1105,8 +1133,7 @@ describe('code step and agent step execution', () => {
       requestCtx.setResult({ killed: true });
     });
 
-    const outcomePromise = executeAgentStepNode(
-      createTestCall(),
+    const outcomePromise = dispatchStep(
       {
         type: 'agent-step',
         id: 'abort-delay-link',
@@ -1152,7 +1179,7 @@ describe('code step and agent step execution', () => {
       event: await step.request({ subject: 'workflow.execution.progress', payload: {} }),
     });
     const ctx = makeCtx({ [node.id]: handler });
-    const outcome = await executeCodeStepNode(createTestCall(), node, ctx, emptyExpressionCtx);
+    const outcome = await dispatchStep(node, ctx, emptyExpressionCtx);
 
     expect(outcome).toMatchObject({
       status: 'completed',
@@ -1163,7 +1190,17 @@ describe('code step and agent step execution', () => {
     });
   });
 
-  it('propagates handler errors as failed outcomes', async () => {
+  it('validates caller-local handler output against the declared step schema', async () => {
+    const node: WorkflowCodeStepNode = { id: 'typed-output', type: 'code-step', outputSchema: { type: 'boolean' } };
+    const ctx = makeCtx({ [node.id]: () => 'not a boolean' });
+
+    await expect(dispatchStep(node, ctx, emptyExpressionCtx)).resolves.toEqual({
+      status: 'failed',
+      error: 'invalidOutput',
+    });
+  });
+
+  it('propagates the stable handler failure code to the runtime', async () => {
     const node: WorkflowCodeStepNode = {
       id: 'broken',
       type: 'code-step',
@@ -1174,11 +1211,11 @@ describe('code step and agent step execution', () => {
     };
 
     const ctx = makeCtx({ broken: handler });
-    const outcome = await executeCodeStepNode(createTestCall(), node, ctx, emptyExpressionCtx);
+    const outcome = await dispatchStep(node, ctx, emptyExpressionCtx);
 
     expect(outcome.status).toBe('failed');
     if (outcome.status === 'failed') {
-      expect(outcome.error).toBe('Handler exploded');
+      expect(outcome.error).toBe('stepExecutionFailed');
     }
   });
 
@@ -1193,7 +1230,7 @@ describe('code step and agent step execution', () => {
     abortCtrl.abort();
 
     const ctx = makeCtx({ slow: handler }, abortCtrl.signal);
-    const outcome = await executeCodeStepNode(createTestCall(), node, ctx, emptyExpressionCtx);
+    const outcome = await dispatchStep(node, ctx, emptyExpressionCtx);
 
     expect(outcome.status).toBe('cancelled');
   });
@@ -1211,7 +1248,7 @@ describe('code step and agent step execution', () => {
     const ctx = makeCtx({ [node.id]: handler }, controller.signal);
     const previousRemovals = vi.mocked(fsPromises.rm).mock.calls.length;
     let status: string | undefined;
-    const outcome = executeCodeStepNode(createTestCall(), node, ctx, emptyExpressionCtx).then((value) => {
+    const outcome = dispatchStep(node, ctx, emptyExpressionCtx).then((value) => {
       status = value.status;
     });
 
@@ -1233,7 +1270,7 @@ describe('code step and agent step execution', () => {
     const node: WorkflowCodeStepNode = { id: 'restricted-context', type: 'code-step' };
     const handler: CodeStepHandler = (step) => Object.keys(step).sort();
     const ctx = makeCtx({ [node.id]: handler });
-    const outcome = await executeCodeStepNode(createTestCall(), node, ctx, {
+    const outcome = await dispatchStep(node, ctx, {
       ...emptyExpressionCtx,
       item: 'review',
       index: 0,
@@ -1267,12 +1304,7 @@ describe('code step and agent step execution', () => {
       const decision = await step.launchProcess({ program, args: [], cwd, stdin: 'none' });
       return decision.ok ? { ok: true } : decision;
     };
-    const outcome = await executeCodeStepNode(
-      createTestCall(),
-      node,
-      makeCtx({ [node.id]: handler }),
-      emptyExpressionCtx,
-    );
+    const outcome = await dispatchStep(node, makeCtx({ [node.id]: handler }), emptyExpressionCtx);
     expect(outcome).toEqual({
       status: 'completed',
       output: { ok: false, code: process.platform === 'win32' ? 'unsupported-site' : code },
@@ -1292,13 +1324,34 @@ describe('code step and agent step execution', () => {
       return null;
     };
     try {
-      await expect(
-        executeCodeStepNode(createTestCall(), node, makeCtx({ [node.id]: handler }), emptyExpressionCtx),
-      ).resolves.toEqual({ status: 'failed', error: 'makaio.step-process-cleanup-failed' });
+      await expect(dispatchStep(node, makeCtx({ [node.id]: handler }), emptyExpressionCtx)).resolves.toEqual({
+        status: 'failed',
+        error: 'stepProcessCleanupFailed',
+      });
     } finally {
       remove.mockRestore();
       await Promise.all(directories.map((path) => originalRemove(path, { recursive: true, force: true })));
     }
+  });
+
+  it('preserves cleanup-like handler text as an ordinary handler failure', async () => {
+    const ctx = makeCtx({
+      code: () => {
+        throw new Error('stepProcessCleanupFailed');
+      },
+    });
+    await expect(
+      ctx.stepRunner.run(
+        {
+          stepType: 'code-step',
+          stepId: 'code',
+          stepDefinition: { type: 'code-step', id: 'code' },
+          data: { executionId: 'exec-test', workflowId: 'workflow-test', inputs: {}, config: {}, previousSteps: {} },
+          platformDefaults: { cwd: '.' },
+        },
+        ctx.signal,
+      ),
+    ).resolves.toMatchObject({ status: 'failed', error: 'stepExecutionFailed', detail: 'stepProcessCleanupFailed' });
   });
 
   it('uses the caller-local launch configuration for child environment and timeout', async () => {
@@ -1322,15 +1375,14 @@ describe('code step and agent step execution', () => {
       original.workflowId,
       original.definition,
       original.execution,
-      original.runtimeHandlers,
+      createCallerLocalStepRunner(createTestCall(), new Map([[node.id, handler]])),
       original.bus,
       original.signal,
       undefined,
       undefined,
-      { context: original.platformContext, env: { STEP_TEST_SETTING: 'configured' } },
-      { stepTimeoutMs: 200 },
+      { context: original.platformContext, env: { STEP_TEST_SETTING: 'configured' }, stepTimeoutMs: 200 },
     );
-    const result = await executeCodeStepNode(createTestCall(), node, ctx, emptyExpressionCtx);
+    const result = await dispatchStep(node, ctx, emptyExpressionCtx);
     expect(result).toEqual({ status: 'completed', output: { value: 'configured', status: 'timed-out' } });
   });
 
@@ -1352,7 +1404,7 @@ describe('code step and agent step execution', () => {
       return { status: result.status, exitCode: result.exitCode ?? null };
     };
     const ctx = makeCtx({ [node.id]: handler });
-    const outcome = await executeCodeStepNode(createTestCall(), node, ctx, emptyExpressionCtx);
+    const outcome = await dispatchStep(node, ctx, emptyExpressionCtx);
 
     expect(outcome).toEqual({ status: 'completed', output: { status: 'completed', exitCode: 0 } });
   });
@@ -1401,7 +1453,7 @@ describe('executeAgentStepNode', () => {
     hostBus.registerNamespace(resultFinalizer.namespace);
     const unsubscribeFinalizer = ctx.bus.on(resultFinalizer.subjects.finalize, (requestCtx) => {
       finalizedResults.push(requestCtx.payload);
-      requestCtx.setResult({ output: requestCtx.payload.rawResult as JsonValue });
+      requestCtx.setResult({ output: { approved: true } });
     });
 
     const unsubscribeRole = ctx.bus.on(WorkflowSubjects.resolveRole, (requestCtx) => {
@@ -1485,8 +1537,7 @@ describe('executeAgentStepNode', () => {
     });
 
     try {
-      const outcome = await executeAgentStepNode(
-        createTestCall(),
+      const outcome = await dispatchStep(
         node,
         ctx,
         {
@@ -1496,7 +1547,7 @@ describe('executeAgentStepNode', () => {
         'frame-review-delegate',
       );
 
-      expect(outcome).toEqual({ status: 'completed', output: '{"approved":true}' });
+      expect(outcome).toEqual({ status: 'completed', output: { approved: true } });
       expect(spawned).toEqual([
         expect.objectContaining({
           parentSessionId: 'exec-test',
@@ -1521,6 +1572,7 @@ describe('executeAgentStepNode', () => {
         expect.objectContaining({
           frameId: 'frame-review-delegate',
           nodeId: 'review-delegate',
+          rawResult: '{"approved":true}',
           economics: {
             durationMs: expect.any(Number),
             inputTokens: 100,
@@ -1581,8 +1633,7 @@ describe('executeAgentStepNode', () => {
     });
 
     try {
-      const outcome = await executeAgentStepNode(
-        createTestCall(),
+      const outcome = await dispatchStep(
         node,
         ctx,
         {
@@ -1594,7 +1645,8 @@ describe('executeAgentStepNode', () => {
 
       expect(outcome).toEqual({
         status: 'failed',
-        error: "Subagent runtime is not available for agent step 'review-delegate-unavailable'",
+        error: 'stepExecutionFailed',
+        detail: "Subagent runtime is not available for agent step 'review-delegate-unavailable'",
       });
       expect(closedSessions).toEqual([]);
     } finally {
@@ -1649,8 +1701,7 @@ describe('executeAgentStepNode', () => {
     });
 
     try {
-      const outcome = await executeAgentStepNode(
-        createTestCall(),
+      const outcome = await dispatchStep(
         node,
         ctx,
         {
@@ -1660,7 +1711,7 @@ describe('executeAgentStepNode', () => {
         'frame-review-delegate-tool',
       );
 
-      expect(outcome).toEqual({ status: 'completed', output: '{"approved":true}' });
+      expect(outcome).toEqual({ status: 'completed', output: { approved: true } });
       expect(sentMessages).toEqual([]);
       expect(spawned).toEqual([
         expect.objectContaining({
@@ -1701,11 +1752,11 @@ describe('executeAgentStepNode', () => {
     };
     const ctx = makeCtx({});
 
-    const outcome = await executeAgentStepNode(createTestCall(), node, ctx, emptyExpressionCtx);
+    const outcome = await dispatchStep(node, ctx, emptyExpressionCtx);
 
     expect(outcome.status).toBe('failed');
     if (outcome.status === 'failed') {
-      expect(outcome.error).toContain("Role 'unknown-reviewer' could not be resolved");
+      expect(outcome.error).toBe('unknownRole');
     }
   });
 
@@ -1772,9 +1823,7 @@ describe('executeAgentStepNode', () => {
     });
 
     try {
-      await expect(
-        executeAgentStepNode(createTestCall(), node, ctx, emptyExpressionCtx, 'frame-read'),
-      ).resolves.toEqual({
+      await expect(dispatchStep(node, ctx, emptyExpressionCtx, 'frame-read')).resolves.toEqual({
         status: 'completed',
         output: { artifact: { id: 'artifact-1' }, summary: 'model summary' },
       });
@@ -1812,9 +1861,7 @@ describe('executeAgentStepNode', () => {
     });
 
     try {
-      await expect(executeAgentStepNode(createTestCall(), node, ctx, emptyExpressionCtx, 'frame-read')).rejects.toThrow(
-        'authority unavailable',
-      );
+      await expect(dispatchStep(node, ctx, emptyExpressionCtx, 'frame-read')).rejects.toThrow('authority unavailable');
     } finally {
       unsubscribeRole();
       unsubscribeSpawn();
@@ -1855,7 +1902,7 @@ describe('executeAgentStepNode', () => {
     });
 
     try {
-      const outcome = executeAgentStepNode(createTestCall(), node, ctx, emptyExpressionCtx, 'frame-read');
+      const outcome = dispatchStep(node, ctx, emptyExpressionCtx, 'frame-read');
       await finalizerStarted;
       controller.abort();
       await expect(outcome).resolves.toEqual({ status: 'cancelled' });
@@ -1936,7 +1983,7 @@ describe('executeAgentStepNode', () => {
     });
 
     try {
-      const outcome = executeAgentStepNode(createTestCall(), node, ctx, emptyExpressionCtx, 'frame-review');
+      const outcome = dispatchStep(node, ctx, emptyExpressionCtx, 'frame-review');
       await finalizerStarted;
       controller.abort();
       await expect(outcome).resolves.toEqual({ status: 'cancelled' });
@@ -1979,7 +2026,7 @@ describe('runtime frame persistence', () => {
     const executionId = 'exec-frame-storage-failure';
 
     try {
-      const result = await runWorkflowOrchestrator({
+      const result = await runCallerLocalWorkflowOrchestrator({
         call,
         config: {
           executionId,
@@ -2390,7 +2437,7 @@ describe('executeParallelNode (all-settled mode)', () => {
       expect(output.branches.passing).toMatchObject({ status: 'fulfilled', value: 'ok' });
       expect(output.branches.failing).toMatchObject({
         status: 'rejected',
-        reason: expect.stringContaining('Branch error'),
+        reason: 'stepExecutionFailed',
       });
     }
   });
@@ -2611,7 +2658,7 @@ describe('executeParallelNode (fail-fast mode)', () => {
 
     expect(outcome.status).toBe('failed');
     if (outcome.status === 'failed') {
-      expect(outcome.error).toContain('Branch failed!');
+      expect(outcome.error).toBe('stepExecutionFailed');
     }
 
     // The passing branch may have started (concurrent launch), but the
@@ -2728,7 +2775,7 @@ describe('executeSequence with serialized parallel mode', () => {
 
     const outcome = await executeSequence(createTestCall(), root, ctx, emptyExpressionCtx);
 
-    expect(outcome).toEqual({ status: 'failed', error: 'serialized branch failed' });
+    expect(outcome).toEqual({ status: 'failed', error: 'stepExecutionFailed' });
   });
 });
 
@@ -2805,7 +2852,7 @@ describe('workflow state requests', () => {
       },
     };
 
-    const runtimeCtx = new RuntimeContext(
+    const runtimeCtx = createLocalTestRuntimeContext(
       'exec-state-test',
       'workflow-state-test',
       definition,
@@ -2821,7 +2868,7 @@ describe('workflow state requests', () => {
     };
 
     try {
-      const outcome = await executeCodeStepNode(createTestCall(), node, runtimeCtx, emptyExpressionCtx);
+      const outcome = await dispatchStep(node, runtimeCtx, emptyExpressionCtx);
 
       expect(outcome.status).toBe('completed');
       expect(capturedState).toEqual({
@@ -2858,7 +2905,7 @@ describe('workflow state requests', () => {
       type: 'code-step',
     };
 
-    await executeCodeStepNode(createTestCall(), node, runtimeCtx, emptyExpressionCtx);
+    await dispatchStep(node, runtimeCtx, emptyExpressionCtx);
     expect(exposesState).toBe(false);
   });
 });

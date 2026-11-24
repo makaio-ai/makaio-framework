@@ -16,6 +16,7 @@ export default defineConfig({
     'workflow-execution-bus-access': './src/workflow-execution-bus-access.ts',
     'workflow-worker/index': './src/workflow-worker/index.ts',
     'workflow-worker/checkout-code-step-entry': './src/workflow-worker/checkout-code-step-entry.ts',
+    'workflow-worker/agent-step/agent-step-entry': './src/workflow-worker/agent-step/agent-step-entry.ts',
     'workflow-worker/worker-entry': './src/workflow-worker/worker-entry.ts',
     'code-execution/index': './src/code-execution/index.ts',
     'code-execution/worker-entry': './src/code-execution/worker-entry.ts',

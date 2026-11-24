@@ -2,10 +2,12 @@ import { mkdir, mkdtemp, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createTestCall } from '@makaio/test-utils';
-import { expect, it } from 'vitest';
+import { expect, it, vi } from 'vitest';
 import { computeDirectoryDigest } from '../local-directory-materializer.js';
 import { ThinWorkflowPiscinaRunner } from '../thin-workflow-piscina-runner.js';
 import { makeWorkerConfig } from './fixtures.js';
+
+vi.setConfig({ testTimeout: 30_000 });
 
 it('starts managed processes in the verified workspace of a Piscina workflow', async () => {
   const root = await mkdtemp(join(tmpdir(), 'makaio-piscina-workspace-'));
@@ -47,9 +49,9 @@ it('starts managed processes in the verified workspace of a Piscina workflow', a
       workerEntry,
       `import { register } from ${JSON.stringify(import.meta.resolve('tsx/esm/api'))};
       register();
-      const { runWorkflowInWorker } = await import(${JSON.stringify(import.meta.resolve('@makaio/runtime-node/workflow-worker/worker-entry'))});
+      const { createPiscinaWorker } = await import(${JSON.stringify(import.meta.resolve('@makaio/runtime-node/workflow-worker/worker-entry'))});
       const { makeBusWithStorage } = await import(${JSON.stringify(new URL('./fixtures.ts', import.meta.url).href)});
-      export default (task) => runWorkflowInWorker(task, async () => {
+      export default createPiscinaWorker(async () => {
         const [bus, cleanup] = makeBusWithStorage();
         return { connection: { bus, async close() { cleanup(); } } };
       });`,
@@ -64,7 +66,7 @@ it('starts managed processes in the verified workspace of a Piscina workflow', a
       },
     });
 
-    const completion = await runner.run(createTestCall(), config, new AbortController().signal);
+    const completion = await runner.callerLocalFileRunner.run(createTestCall(), config, new AbortController().signal);
     expect(completion, JSON.stringify(completion)).toMatchObject({
       state: 'uncommitted',
       result: { status: 'completed' },

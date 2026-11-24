@@ -466,7 +466,7 @@ describe('workflow execution bus access', () => {
       expect(allowedMessageSubjects).toContain('workflow.frame.completed');
       expect(allowedMessageSubjects).toContain('workflow.frame.failed');
       expect(allowedMessageSubjects).toContain('workflow.frame.sessionLinked');
-      expect(allowedMessageSubjects).toContain('workflow.execution.progress');
+      expect(allowedMessageSubjects).not.toContain('workflow.execution.progress');
 
       // State RPC
       expect(allowedMessageSubjects).toContain('workflow.state.get');
@@ -482,7 +482,7 @@ describe('workflow execution bus access', () => {
       expect(allowedMessageSubjects).toContain('artifact.create');
       expect(allowedMessageSubjects).toContain('artifact.revise');
       expect(allowedMessageSubjects).toContain('artifact.patch');
-      expect(allowedMessageSubjects).toContain('workflow.artifact.updated');
+      expect(allowedMessageSubjects).not.toContain('workflow.artifact.updated');
 
       // Subagent subjects
       expect(allowedMessageSubjects).toContain('subagent.spawn');

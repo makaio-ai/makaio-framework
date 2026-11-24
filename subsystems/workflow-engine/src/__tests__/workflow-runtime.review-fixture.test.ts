@@ -2,9 +2,8 @@ import { describe, expect, it } from 'vitest';
 import { createBusInstance } from '@makaio/bus-core';
 import { createTestCall } from '@makaio/test-utils';
 import { codeStep, defineWorkflow, WorkflowNamespace } from '@makaio/contracts';
-import { RuntimeContext } from '../runtime/runtime-context.js';
 import { executeSequence } from '../runtime/primitive-runtime.js';
-import { registerInMemoryFrameStore } from './shared.js';
+import { createLocalTestRuntimeContext, registerInMemoryFrameStore } from './shared.js';
 
 describe('review workflow fixture — parallel branch outputs in WorkLog', () => {
   it('each parallel delegate branch output is individually accessible in the parallel output', async () => {
@@ -32,7 +31,7 @@ describe('review workflow fixture — parallel branch outputs in WorkLog', () =>
         return null;
       });
 
-    const runtimeCtx = new RuntimeContext(
+    const runtimeCtx = createLocalTestRuntimeContext(
       'exec-review-worklog-test',
       'review-workflow',
       built.definition,

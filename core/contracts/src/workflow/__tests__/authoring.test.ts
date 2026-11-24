@@ -14,7 +14,7 @@ import {
 } from '../authoring.js';
 import {
   loop as rootLoop,
-  LoopCheckOutcomeSchema as RootLoopCheckOutcomeSchema,
+  LoopCheckOutputSchema as RootLoopCheckOutputSchema,
   WorkflowLoopNodeSchema as RootWorkflowLoopNodeSchema,
 } from '../../index.js';
 import type { WorkflowLoopNode, WorkflowParallelNode, WorkflowSequenceNode } from '../schemas.js';
@@ -1136,82 +1136,46 @@ describe('defineWorkflowBundle', () => {
 
 describe('WorkflowDefinitionSchema — loop node', () => {
   it('serializes the exhaustion policy in fluent and standalone loops', () => {
-    const options = {
-      maxRounds: 3,
-      onExhausted: 'complete' as const,
-      check: { handler: 'check', evaluate: () => ({ kind: 'loop' as const }) },
-    };
-    const workflow = defineWorkflow('review-loop').loop('fluent', [], options);
-    workflow.addNode(loop('standalone', [], options));
+    const options = { maxRounds: 3, onExhausted: 'complete' as const };
+    const workflow = defineWorkflow('review-loop').loop('fluent', [codeStep('first', () => ({ done: true }))], {
+      ...options,
+      check: 'first',
+    });
+    workflow.addNode(
+      loop('standalone', [codeStep('second', () => ({ done: false }))], {
+        ...options,
+        check: 'second',
+      }),
+    );
 
     expect(WorkflowDefinitionSchema.parse(workflow.definition).root.nodes).toMatchObject([
-      { id: 'fluent', onExhausted: 'complete' },
-      { id: 'standalone', onExhausted: 'complete' },
+      { id: 'fluent', check: 'first', onExhausted: 'complete' },
+      { id: 'standalone', check: 'second', onExhausted: 'complete' },
     ]);
   });
 
-  it('parses a loop node with a configured check', () => {
+  it('parses a loop whose check references an agent step nested in the body', () => {
+    const body = {
+      id: 'converge__body',
+      type: 'sequence',
+      nodes: [
+        {
+          id: 'review-group',
+          type: 'sequence',
+          nodes: [{ id: 'review', type: 'agent-step', role: 'analyst', prompt: 'Check the result' }],
+        },
+      ],
+    };
     const parsed = WorkflowDefinitionSchema.parse({
       id: 'review-loop',
-      name: 'Review Loop',
       scope: { type: 'global' },
       root: {
         id: 'root',
         type: 'sequence',
-        nodes: [
-          {
-            id: 'converge',
-            type: 'loop',
-            maxRounds: 3,
-            body: {
-              id: 'converge__body',
-              type: 'sequence',
-              nodes: [{ id: 'aggregate', type: 'code-step' }],
-            },
-            check: {
-              handler: 'no-open-blockers',
-              input: 'frames.aggregate.output',
-              config: { blockerSeverities: ['blocker'] },
-            },
-          },
-        ],
+        nodes: [{ id: 'converge', type: 'loop', maxRounds: 3, body, check: 'review' }],
       },
     });
-    expect(parsed.root.nodes[0]).toMatchObject({
-      type: 'loop',
-      check: {
-        handler: 'no-open-blockers',
-        input: 'frames.aggregate.output',
-        config: { blockerSeverities: ['blocker'] },
-      },
-    });
-  });
-
-  it('parses a loop node without optional check fields', () => {
-    const parsed = WorkflowDefinitionSchema.parse({
-      id: 'minimal-loop',
-      scope: { type: 'global' },
-      root: {
-        id: 'root',
-        type: 'sequence',
-        nodes: [
-          {
-            id: 'retry',
-            type: 'loop',
-            maxRounds: 5,
-            body: {
-              id: 'retry__body',
-              type: 'sequence',
-              nodes: [{ id: 'attempt', type: 'code-step' }],
-            },
-            check: {
-              handler: 'check-success',
-            },
-          },
-        ],
-      },
-    });
-    expect(parsed.root.nodes[0]?.type).toBe('loop');
+    expect(parsed.root.nodes).toMatchObject([{ id: 'converge', type: 'loop', body, check: 'review' }]);
   });
 });
 
@@ -1228,15 +1192,15 @@ describe('validateNoNestedLoops', () => {
       body: {
         id: 'outer__body',
         type: 'sequence',
-        nodes: [{ id: 'step', type: 'code-step' }],
+        nodes: [{ id: 'outer-check', type: 'code-step' }],
       },
-      check: { handler: 'check' },
+      check: 'outer-check',
     });
     expect(validateNoNestedLoops(loopNode)).toBeUndefined();
   });
 
   it('rejects a directly nested loop', () => {
-    const loopNode = WorkflowLoopNodeSchema.parse({
+    const result = WorkflowLoopNodeSchema.safeParse({
       id: 'outer',
       type: 'loop',
       maxRounds: 3,
@@ -1244,6 +1208,7 @@ describe('validateNoNestedLoops', () => {
         id: 'outer__body',
         type: 'sequence',
         nodes: [
+          { id: 'outer-check', type: 'code-step' },
           {
             id: 'inner',
             type: 'loop',
@@ -1253,20 +1218,22 @@ describe('validateNoNestedLoops', () => {
               type: 'sequence',
               nodes: [{ id: 'step', type: 'code-step' }],
             },
-            check: { handler: 'check' },
+            check: 'step',
           },
         ],
       },
-      check: { handler: 'check' },
+      check: 'outer-check',
     });
-    const result = validateNoNestedLoops(loopNode);
-    expect(result).toBeDefined();
-    expect(result).toContain("Nested loop 'inner'");
-    expect(result).toContain("inside loop 'outer'");
+    expect(result).toMatchObject({
+      success: false,
+      error: {
+        issues: [{ path: ['body'], message: expect.stringContaining("Nested loop 'inner' found inside loop 'outer'") }],
+      },
+    });
   });
 
   it('rejects a loop nested inside a parallel branch', () => {
-    const loopNode = WorkflowLoopNodeSchema.parse({
+    const result = WorkflowLoopNodeSchema.safeParse({
       id: 'outer',
       type: 'loop',
       maxRounds: 3,
@@ -1274,6 +1241,7 @@ describe('validateNoNestedLoops', () => {
         id: 'outer__body',
         type: 'sequence',
         nodes: [
+          { id: 'outer-check', type: 'code-step' },
           {
             id: 'par',
             type: 'parallel',
@@ -1291,7 +1259,7 @@ describe('validateNoNestedLoops', () => {
                       type: 'sequence',
                       nodes: [{ id: 'x', type: 'code-step' }],
                     },
-                    check: { handler: 'check' },
+                    check: 'x',
                   },
                 ],
               },
@@ -1299,15 +1267,20 @@ describe('validateNoNestedLoops', () => {
           },
         ],
       },
-      check: { handler: 'check' },
+      check: 'outer-check',
     });
-    const result = validateNoNestedLoops(loopNode);
-    expect(result).toBeDefined();
-    expect(result).toContain("Nested loop 'deep-loop'");
+    expect(result).toMatchObject({
+      success: false,
+      error: {
+        issues: [
+          { path: ['body'], message: expect.stringContaining("Nested loop 'deep-loop' found inside loop 'outer'") },
+        ],
+      },
+    });
   });
 
   it('rejects a loop nested inside an iterate body', () => {
-    const loopNode = WorkflowLoopNodeSchema.parse({
+    const result = WorkflowLoopNodeSchema.safeParse({
       id: 'outer',
       type: 'loop',
       maxRounds: 3,
@@ -1315,6 +1288,7 @@ describe('validateNoNestedLoops', () => {
         id: 'outer__body',
         type: 'sequence',
         nodes: [
+          { id: 'outer-check', type: 'code-step' },
           {
             id: 'iter',
             type: 'iterate',
@@ -1332,22 +1306,27 @@ describe('validateNoNestedLoops', () => {
                     type: 'sequence',
                     nodes: [{ id: 'y', type: 'code-step' }],
                   },
-                  check: { handler: 'check' },
+                  check: 'y',
                 },
               ],
             },
           },
         ],
       },
-      check: { handler: 'check' },
+      check: 'outer-check',
     });
-    const result = validateNoNestedLoops(loopNode);
-    expect(result).toBeDefined();
-    expect(result).toContain("Nested loop 'nested-loop'");
+    expect(result).toMatchObject({
+      success: false,
+      error: {
+        issues: [
+          { path: ['body'], message: expect.stringContaining("Nested loop 'nested-loop' found inside loop 'outer'") },
+        ],
+      },
+    });
   });
 
   it('rejects a loop nested inside an iterate-chain body', () => {
-    const loopNode = WorkflowLoopNodeSchema.parse({
+    const result = WorkflowLoopNodeSchema.safeParse({
       id: 'outer',
       type: 'loop',
       maxRounds: 3,
@@ -1355,6 +1334,7 @@ describe('validateNoNestedLoops', () => {
         id: 'outer__body',
         type: 'sequence',
         nodes: [
+          { id: 'outer-check', type: 'code-step' },
           {
             id: 'chain',
             type: 'iterate-chain',
@@ -1372,18 +1352,26 @@ describe('validateNoNestedLoops', () => {
                     type: 'sequence',
                     nodes: [{ id: 'z', type: 'code-step' }],
                   },
-                  check: { handler: 'check' },
+                  check: 'z',
                 },
               ],
             },
           },
         ],
       },
-      check: { handler: 'check' },
+      check: 'outer-check',
     });
-    const result = validateNoNestedLoops(loopNode);
-    expect(result).toBeDefined();
-    expect(result).toContain("Nested loop 'nested-chain-loop'");
+    expect(result).toMatchObject({
+      success: false,
+      error: {
+        issues: [
+          {
+            path: ['body'],
+            message: expect.stringContaining("Nested loop 'nested-chain-loop' found inside loop 'outer'"),
+          },
+        ],
+      },
+    });
   });
 });
 
@@ -1392,33 +1380,26 @@ describe('validateNoNestedLoops', () => {
 // ─────────────────────────────────────────────────────────────
 
 describe('fluent builder — loop nodes', () => {
-  it('appends a serializable loop node and stores check handler', () => {
-    const workflow = defineWorkflow('review-loop').loop('converge', [codeStep('aggregate', () => ({ blockers: [] }))], {
+  it('serializes the body step reference and collects the body code step handler', () => {
+    const handler = () => ({ done: true });
+    const workflow = defineWorkflow('review-loop').loop('converge', [codeStep('aggregate', handler)], {
       maxRounds: 3,
-      check: {
-        handler: 'no-open-blockers',
-        evaluate: () => ({ kind: 'pass' as const }),
-      },
+      check: 'aggregate',
     });
 
     expect(workflow.definition.root.nodes[0]).toMatchObject({
       id: 'converge',
       type: 'loop',
       maxRounds: 3,
-      check: { handler: 'no-open-blockers' },
+      check: 'aggregate',
     });
-    expect(workflow.runtimeLoopChecks.get('no-open-blockers')).toBeTypeOf('function');
-    // body code step handler should be collected
-    expect(workflow.runtimeHandlers.get('aggregate')).toBeTypeOf('function');
+    expect(workflow.runtimeHandlers.get('aggregate')).toBe(handler);
   });
 
   it('creates the body sequence with correct ID convention', () => {
-    const workflow = defineWorkflow('loop-body-id').loop('retry', [codeStep('attempt', () => null)], {
+    const workflow = defineWorkflow('loop-body-id').loop('retry', [codeStep('attempt', () => ({ done: true }))], {
       maxRounds: 5,
-      check: {
-        handler: 'check-success',
-        evaluate: () => ({ kind: 'pass' as const }),
-      },
+      check: 'attempt',
     });
 
     const loopNode = workflow.definition.root.nodes[0] as WorkflowLoopNode | undefined;
@@ -1428,29 +1409,20 @@ describe('fluent builder — loop nodes', () => {
     expect(loopNode?.body.nodes[0]?.id).toBe('attempt');
   });
 
-  it('serializes check input and config', () => {
-    const workflow = defineWorkflow('loop-full-check').loop('converge', [codeStep('work', () => null)], {
-      maxRounds: 3,
-      check: {
-        handler: 'checker',
-        evaluate: () => ({ kind: 'loop' as const }),
-        input: 'frames.work.output',
-        config: { severity: 'blocker' },
-      },
-    });
-
-    const loopNode = workflow.definition.root.nodes[0] as WorkflowLoopNode | undefined;
-    expect(loopNode?.check.input).toBe('frames.work.output');
-    expect(loopNode?.check.config).toEqual({ severity: 'blocker' });
+  it('rejects a check that names a code step outside the loop', () => {
+    const workflow = defineWorkflow('loop-scope').codeStep('outside', () => ({ done: true }));
+    expect(() =>
+      workflow.loop('converge', [codeStep('inside', () => ({ done: false }))], {
+        maxRounds: 3,
+        check: 'outside',
+      }),
+    ).toThrow(/outside/iu);
   });
 
   it('applies when/skip conditions to loop nodes', () => {
-    const workflow = defineWorkflow('loop-conditions').loop('retry', [codeStep('attempt', () => null)], {
+    const workflow = defineWorkflow('loop-conditions').loop('retry', [codeStep('attempt', () => ({ done: true }))], {
       maxRounds: 2,
-      check: {
-        handler: 'check',
-        evaluate: () => ({ kind: 'pass' as const }),
-      },
+      check: 'attempt',
       when: "ctx.inputs.retry == 'true'",
       skip: "ctx.inputs.skipRetry == 'true'",
     });
@@ -1461,12 +1433,9 @@ describe('fluent builder — loop nodes', () => {
   });
 
   it('loop node definition is JSON-serializable', () => {
-    const workflow = defineWorkflow('loop-serial').loop('converge', [codeStep('work', () => null)], {
+    const workflow = defineWorkflow('loop-serial').loop('converge', [codeStep('work', () => ({ done: true }))], {
       maxRounds: 3,
-      check: {
-        handler: 'checker',
-        evaluate: () => ({ kind: 'pass' as const }),
-      },
+      check: 'work',
     });
     expect(() => JSON.stringify(workflow.definition)).not.toThrow();
   });
@@ -1475,12 +1444,9 @@ describe('fluent builder — loop nodes', () => {
     const workflow = defineWorkflow('loop-dup');
     workflow.codeStep('converge', () => null);
     expect(() =>
-      workflow.loop('converge', [codeStep('work', () => null)], {
+      workflow.loop('converge', [codeStep('work', () => ({ done: true }))], {
         maxRounds: 3,
-        check: {
-          handler: 'check',
-          evaluate: () => ({ kind: 'pass' as const }),
-        },
+        check: 'work',
       }),
     ).toThrow('Duplicate step ID: converge');
   });
@@ -1489,12 +1455,9 @@ describe('fluent builder — loop nodes', () => {
     const workflow = defineWorkflow('loop-dup-body');
     workflow.codeStep('work', () => null);
     expect(() =>
-      workflow.loop('converge', [codeStep('work', () => null)], {
+      workflow.loop('converge', [codeStep('work', () => ({ done: true }))], {
         maxRounds: 3,
-        check: {
-          handler: 'check',
-          evaluate: () => ({ kind: 'pass' as const }),
-        },
+        check: 'work',
       }),
     ).toThrow('Duplicate step ID: work');
   });
@@ -1503,31 +1466,20 @@ describe('fluent builder — loop nodes', () => {
     const workflow = defineWorkflow('loop-dup-body-seq');
     workflow.codeStep('retry__body', () => null);
     expect(() =>
-      workflow.loop('retry', [codeStep('attempt', () => null)], {
+      workflow.loop('retry', [codeStep('attempt', () => ({ done: true }))], {
         maxRounds: 2,
-        check: {
-          handler: 'check',
-          evaluate: () => ({ kind: 'pass' as const }),
-        },
+        check: 'attempt',
       }),
     ).toThrow('Duplicate step ID: retry__body');
   });
 
   it('does not register the loop node itself in runtimeHandlers', () => {
-    const workflow = defineWorkflow('loop-no-handler').loop('converge', [codeStep('work', () => null)], {
+    const workflow = defineWorkflow('loop-no-handler').loop('converge', [codeStep('work', () => ({ done: true }))], {
       maxRounds: 3,
-      check: {
-        handler: 'checker',
-        evaluate: () => ({ kind: 'pass' as const }),
-      },
+      check: 'work',
     });
     expect(workflow.runtimeHandlers.has('converge')).toBe(false);
     expect(workflow.runtimeHandlers.has('work')).toBe(true);
-  });
-
-  it('runtimeLoopChecks is empty when no loop nodes are present', () => {
-    const workflow = defineWorkflow('no-loop').codeStep('work', () => null);
-    expect(workflow.runtimeLoopChecks.size).toBe(0);
   });
 });
 
@@ -1537,43 +1489,39 @@ describe('fluent builder — loop nodes', () => {
 
 describe('standalone factory — loop()', () => {
   it('is exported from the root package barrel with loop schemas', () => {
-    const loopNode = rootLoop('converge', [codeStep('aggregate', () => null)], {
+    const loopNode = rootLoop('converge', [codeStep('aggregate', () => ({ done: true }))], {
       maxRounds: 2,
-      check: { handler: 'check', evaluate: () => ({ kind: 'pass' as const }) },
+      check: 'aggregate',
     });
 
-    expect(RootWorkflowLoopNodeSchema.parse(loopNode).type).toBe('loop');
-    expect(RootLoopCheckOutcomeSchema.parse({ kind: 'loop' })).toEqual({ kind: 'loop' });
+    expect(RootWorkflowLoopNodeSchema.parse(loopNode)).toMatchObject({ type: 'loop', check: 'aggregate' });
+    expect(RootLoopCheckOutputSchema.parse({ done: false })).toEqual({ done: false });
+    expect(RootLoopCheckOutputSchema.safeParse({ kind: 'loop' }).success).toBe(false);
   });
 
   it('creates a serializable loop node', () => {
-    const loopNode = loop('converge', [codeStep('aggregate', () => ({ blockers: [] }))], {
+    const loopNode = loop('converge', [codeStep('aggregate', () => ({ done: true }))], {
       maxRounds: 3,
-      check: {
-        handler: 'no-open-blockers',
-        evaluate: () => ({ kind: 'pass' as const }),
-      },
+      check: 'aggregate',
     });
 
     expect(loopNode).toMatchObject({
       id: 'converge',
       type: 'loop',
       maxRounds: 3,
-      check: { handler: 'no-open-blockers' },
+      check: 'aggregate',
       body: {
         id: 'converge__body',
         type: 'sequence',
       },
     });
+    expect(JSON.parse(JSON.stringify(loopNode))).toEqual(loopNode);
   });
 
   it('applies when/skip to the standalone loop node', () => {
-    const loopNode = loop('retry', [codeStep('attempt', () => null)], {
+    const loopNode = loop('retry', [codeStep('attempt', () => ({ done: true }))], {
       maxRounds: 2,
-      check: {
-        handler: 'check',
-        evaluate: () => ({ kind: 'pass' as const }),
-      },
+      check: 'attempt',
       when: 'x',
       skip: 'y',
     });
@@ -1581,30 +1529,8 @@ describe('standalone factory — loop()', () => {
     expect(loopNode.skip).toBe('y');
   });
 
-  it('is JSON-serializable', () => {
-    const loopNode = loop('retry', [codeStep('attempt', () => null)], {
-      maxRounds: 2,
-      check: {
-        handler: 'check',
-        evaluate: () => ({ kind: 'pass' as const }),
-      },
-    });
-    expect(() => JSON.stringify(loopNode)).not.toThrow();
-  });
-
-  it('serializes check input and config on standalone node', () => {
-    const loopNode = loop('converge', [codeStep('work', () => null)], {
-      maxRounds: 3,
-      check: {
-        handler: 'checker',
-        evaluate: () => ({ kind: 'loop' as const }),
-        input: 'frames.work.output',
-        config: { threshold: 0.9 },
-      },
-    });
-
-    expect(loopNode.check.input).toBe('frames.work.output');
-    expect(loopNode.check.config).toEqual({ threshold: 0.9 });
+  it.each(['missing-step', 'converge__body'])('rejects a check naming %s instead of a body step', (check) => {
+    expect(() => loop('converge', [codeStep('work', () => ({ done: true }))], { maxRounds: 3, check })).toThrow();
   });
 
   it('rejects nested loops before returning a standalone node', () => {
@@ -1612,34 +1538,15 @@ describe('standalone factory — loop()', () => {
       loop(
         'outer',
         [
-          loop('inner', [codeStep('work', () => null)], {
+          codeStep('outer-check', () => ({ done: true })),
+          loop('inner', [codeStep('inner-check', () => ({ done: true }))], {
             maxRounds: 2,
-            check: { handler: 'inner-check', evaluate: () => ({ kind: 'pass' as const }) },
+            check: 'inner-check',
           }),
         ],
-        {
-          maxRounds: 3,
-          check: { handler: 'outer-check', evaluate: () => ({ kind: 'pass' as const }) },
-        },
+        { maxRounds: 3, check: 'outer-check' },
       ),
     ).toThrow("Nested loop 'inner' found inside loop 'outer'");
-  });
-
-  it('addNode collects standalone loop check handler into runtimeLoopChecks', () => {
-    const checkEvaluate = () => ({ kind: 'pass' as const });
-    const workflow = defineWorkflow('standalone-loop-addnode');
-    workflow.addNode(
-      loop('converge', [codeStep('aggregate', () => null)], {
-        maxRounds: 3,
-        check: {
-          handler: 'blocker-check',
-          evaluate: checkEvaluate,
-        },
-      }),
-    );
-
-    expect(workflow.runtimeLoopChecks.get('blocker-check')).toBe(checkEvaluate);
-    expect(workflow.runtimeHandlers.get('aggregate')).toBeTypeOf('function');
   });
 
   it('addNode collects standalone loop body code step handlers into runtimeHandlers', () => {
@@ -1648,13 +1555,11 @@ describe('standalone factory — loop()', () => {
     workflow.addNode(
       loop('converge', [codeStep('work', bodyHandler), agentStep('review', 'analyst')], {
         maxRounds: 3,
-        check: {
-          handler: 'check',
-          evaluate: () => ({ kind: 'pass' as const }),
-        },
+        check: 'review',
       }),
     );
 
+    expect(workflow.definition.root.nodes[0]).toMatchObject({ check: 'review' });
     expect(workflow.runtimeHandlers.get('work')).toBe(bodyHandler);
     expect(workflow.runtimeHandlers.has('review')).toBe(false);
   });

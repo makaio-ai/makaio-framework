@@ -4,13 +4,32 @@ import type { CallContext } from '@makaio/contracts/call-context';
 import {
   AgentModelReplySchema,
   AgentModelRequestSchema,
+  MODEL_MESSAGE_LIMIT_BYTES,
   ModelFailureCodeSchema,
+  serializeModelMessage,
   type AgentModelRequest,
   type AgentModelReply,
   type ModelFailureCode,
 } from './protocol.js';
 
-const MAX_REQUEST_BYTES = 128 * 1024;
+/** Resolves authorization for a named model target inside the worker. */
+export type ModelCredentialSource = {
+  /**
+   * Request the initial authorization or refresh it through the same source.
+   * @param call - Context of the workflow run requesting the model turn.
+   * @param input - Scoped purpose, named target, cancellation and reason.
+   * @returns Issued authorization or a refusal without credential details.
+   */
+  request(
+    call: CallContext,
+    input: {
+      readonly purpose: 'model.use';
+      readonly target: string;
+      readonly signal: AbortSignal;
+      readonly reason: 'initial' | 'refresh';
+    },
+  ): Promise<{ readonly kind: 'issued'; readonly credential: string } | { readonly kind: 'purpose-not-granted' }>;
+};
 
 /** Worker-owned model invocation. The adapter never receives this port or its authorization. */
 export interface WorkerModelPort {
@@ -22,7 +41,8 @@ export interface WorkerModelPort {
 export interface WorkerModelInvocation {
   readonly call: CallContext;
   readonly request: AgentModelRequest;
-  readonly credential: string;
+  readonly credentialSource: ModelCredentialSource;
+  readonly target: string;
   readonly signal: AbortSignal;
 }
 
@@ -38,11 +58,12 @@ export type WorkerModelResult =
   | { readonly kind: 'completed'; readonly reply: AgentModelReply }
   | { readonly kind: 'failed'; readonly code: ModelFailureCode };
 
-/** The worker owns the session, upstream credential and time bounds. */
+/** The worker owns the session, authorization source, named target and time bounds. */
 export interface LocalModelOptions {
   readonly call: CallContext;
   readonly model: WorkerModelPort;
-  readonly credential: string;
+  readonly credentialSource: ModelCredentialSource;
+  readonly target: string;
   readonly signal: AbortSignal;
   readonly requestTimeoutMs: number;
   readonly onOutcome?: (outcome: ModelMediationOutcome) => void;
@@ -69,7 +90,7 @@ async function readModelRequest(request: IncomingMessage): Promise<unknown> {
   for await (const chunk of request.iterator({ destroyOnReturn: false })) {
     if (!Buffer.isBuffer(chunk)) throw new Error('Invalid model request bytes');
     size += chunk.length;
-    if (size > MAX_REQUEST_BYTES) return undefined;
+    if (size > MODEL_MESSAGE_LIMIT_BYTES) return undefined;
     chunks.push(chunk);
   }
   return JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(Buffer.concat(chunks)));
@@ -163,7 +184,8 @@ async function handleModel(
     const operation = options.model.complete({
       call: options.call,
       request: input.data,
-      credential: options.credential,
+      credentialSource: options.credentialSource,
+      target: options.target,
       signal,
     });
     pending.add(operation);
@@ -171,12 +193,15 @@ async function handleModel(
     if (signal.aborted) return;
     if (result.kind !== 'completed') {
       const code = ModelFailureCodeSchema.safeParse(result.code);
+      if (code.success && code.data === 'environmentMissing') return fail(403, code.data);
       return fail(502, code.success ? code.data : 'upstream-failed');
     }
     const output = AgentModelReplySchema.safeParse(result.reply);
     if (!output.success) return fail(502, 'reply-invalid');
+    const body = serializeModelMessage(output.data);
+    if (body === undefined) return fail(502, 'reply-invalid');
     finish({ kind: 'completed', usage: output.data.usage });
-    response.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify(output.data));
+    response.writeHead(200, { 'content-type': 'application/json' }).end(body);
   } catch {
     fail(502, 'upstream-failed');
   } finally {
@@ -186,7 +211,7 @@ async function handleModel(
 
 /**
  * Open an authenticated capability on the worker's loopback address.
- * @param options - Authority, upstream port, credential and lifetime.
+ * @param options - Authority, upstream port, credential source, named target and lifetime.
  * @returns The revocable session address.
  */
 export async function openLocalModelAddress(options: LocalModelOptions): Promise<LocalModelLease> {
