@@ -9,11 +9,10 @@
  * never in another transaction. A value the facade did not mint is rejected
  * with `foreign-transaction`.
  *
- * Every negative case whose rejection could possibly follow database access
- * also re-reads the stored rows through the plain handle (weak-net: the
- * database is the evidence, not the rejection alone). The foreign-transaction
- * case is the one exception: its rejection comes from a registry lookup that
- * never reaches the database, so there is no row to re-read.
+ * Negative cases that could write rows also re-read them through the plain
+ * handle. Both `foreign-transaction` and `transaction-database-mismatch` are
+ * rejected before database access. The malformed driver-result case uses
+ * read-only statements.
  */
 import { randomUUID } from 'node:crypto';
 import { beforeAll, expect, it } from 'vitest';
@@ -29,6 +28,7 @@ import {
   type TransactionQueryContext,
 } from '@makaio/storage-drizzle';
 import type { HostTransaction } from '@makaio/contracts/host-database';
+import { getPostgresHostTransactionSession } from '@makaio/storage-drizzle/internal/postgres-host-transaction';
 import { describeStorageConformance } from '../harness/env.js';
 import { useSuiteDatabaseContext } from '../harness/suite-context.js';
 import { fixtureKvDdl, fixtureKv, type conformanceKvSqlite } from '../harness/fixture-table.js';
@@ -316,6 +316,39 @@ function messageChain(error: unknown): string {
 
 describeStorageConformance('host-database', (config) => {
   const getCtx = useSuiteDatabaseContext(config, { applyCentralChain: false });
+
+  if (config.dialect === 'postgres') {
+    it('rejects PostgreSQL batch results through both host-session methods', async () => {
+      const { db } = getCtx();
+      await createHostDatabase(db).transaction(async (tx) => {
+        const session = getPostgresHostTransactionSession(tx, db);
+        const batch = sql`SELECT 1; SELECT 2`;
+        const error = { name: HostTransactionError.name, code: 'transaction-result-invalid' };
+        await expect(session.run(batch)).rejects.toMatchObject(error);
+        await expect(session.all(batch)).rejects.toMatchObject(error);
+      });
+    });
+
+    it('binds a PostgreSQL host session to the exact database handle that opened it', async () => {
+      const ctx = getCtx();
+      const sibling = await ctx.createSiblingClient();
+      try {
+        await createHostDatabase(ctx.db).transaction(async (tx) => {
+          expect(() => getPostgresHostTransactionSession(tx, sibling.db)).toThrow(
+            expect.objectContaining({
+              name: HostTransactionError.name,
+              code: 'transaction-database-mismatch',
+            }),
+          );
+          await expect(getPostgresHostTransactionSession(tx, ctx.db).run(sql`SELECT 1`)).resolves.toEqual({
+            rowsAffected: 1,
+          });
+        });
+      } finally {
+        await sibling.close();
+      }
+    });
+  }
 
   beforeAll(async () => {
     // fixtureKvDdl emits CREATE TABLE IF NOT EXISTS, so repeated setup is idempotent.
