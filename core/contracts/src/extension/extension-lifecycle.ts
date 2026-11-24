@@ -38,6 +38,11 @@ export interface ExtensionInitOptions {
  */
 export interface ExtensionServiceLifecycle {
   /**
+   * Optional service API returned by extension contexts in place of this instance.
+   * The host retains the full instance for lifecycle and host-only operations.
+   */
+  readonly extensionServiceView?: object;
+  /**
    * Initialize the service when startup work is not constructor-owned.
    *
    * Messages sent from here use the context from `ctx.bus.own('start')`.

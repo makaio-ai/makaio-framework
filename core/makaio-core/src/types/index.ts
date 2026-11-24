@@ -105,6 +105,7 @@ export {
   ExtensionNameSchema,
   isOwnNameOrContribution,
   localContributionName,
+  ownsCanonicalContributionName,
 } from './names.js';
 
 export type { WildcardSubject, WildcardSubjectDefinition } from './wildcards.js';

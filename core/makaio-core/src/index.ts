@@ -84,6 +84,7 @@ export {
   isOwnNameOrContribution,
   JsonValueSchema,
   localContributionName,
+  ownsCanonicalContributionName,
   MAKAIO_BUS_DELIVERY_READER,
   MAKAIO_CLI_LOCAL_PARTY_KIND,
   MAKAIO_E2E_PEER_PARTY_KIND,

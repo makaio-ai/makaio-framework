@@ -1,5 +1,6 @@
 import * as path from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { createUnavailableRulesCapability } from '@makaio/contracts/rules';
 import { createRefusingRightsCapability } from '@makaio/contracts/rights';
 import type { IMakaioBus } from '@makaio/bus-core';
 import { createCarrierBus } from '@makaio/bus-core/kernel-api';
@@ -156,6 +157,7 @@ function createWorkerToolsetContext(
         ? undefined
         : createCarrierBus(options.bus, { kind: 'makaio.extension', id: name }, rejectNamespaceClaim),
     rights: createRefusingRightsCapability(),
+    rules: createUnavailableRulesCapability(),
     identity: Object.freeze({ extensionName: name }),
     dataDir: '',
     machineId: '',

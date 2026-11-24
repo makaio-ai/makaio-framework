@@ -19,6 +19,7 @@ import {
 import { capabilityPackage, CapabilityToken } from './capability/package.js';
 import { canonicalModelPackage } from './canonical-model/package.js';
 import { reactionRegistryPackage } from './reaction/packages.js';
+import { ruleContributionsPackage } from './rule-contributions/packages.js';
 import {
   automationTriggerRegistryPackage,
   automationTriggerBindingRuntimePackage,
@@ -93,6 +94,8 @@ export { SubagentServiceToken };
 export { ArtifactSchemaRegistryToken, artifactSchemaRegistryPackage };
 /** Reaction-domain package (defined in the reaction domain module). */
 export { reactionRegistryPackage };
+/** Rule-contributions-domain package (defined in the rule-contributions domain module). */
+export { ruleContributionsPackage };
 /** Materialization-domain tokens and packages (defined in the materialization domain module). */
 export {
   ArtifactViewBuilderRegistryToken,
@@ -421,6 +424,7 @@ function buildFrameworkCorePackages(
     frameworkShellWindowPackage,
     workflowBlockRegistryPackage,
     reactionRegistryPackage,
+    ruleContributionsPackage,
     automationTriggerRegistryPackage,
     automationTriggerBindingRuntimePackage,
     automationTriggerBuiltinsPackage,

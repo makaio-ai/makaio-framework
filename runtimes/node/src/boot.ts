@@ -74,12 +74,16 @@ import {
   createArtifactLifecycleHookContributionProcessor,
   createFacetNamespaceContributionProcessor,
   createReactionContributionProcessor,
+  createRuleContributionProcessor,
+  createRuleContributionsBuiltinsPackage,
   createToolContributionProcessor,
   createTransitionContributionProcessor,
   createWorkflowBlockContributionProcessor,
   frameworkCorePackages,
   FrameworkServicesCoreNamespaces,
   ModelRegistryToken,
+  RuleContributionsToken,
+  type RuleContributionsService,
 } from '@makaio/services-core';
 import {
   AutomationCronSchedulerToken,
@@ -820,7 +824,11 @@ export async function bootMakaioRuntimeCore(
     // never reaches `active`, so it must not be allowed to win the
     // coordinator's own name-collision coalescing against a framework package
     // that otherwise loads unconditionally: see `excludeIneffectiveCoreNameOverrides`.
-    const packagesToLoad = [...frameworkPackages, ...orderAfterAdapterSubsystem(mergeableExtensionPackages)];
+    const coreRulesPackage = createRuleContributionsBuiltinsPackage(bus, coordinator.ruleRights);
+    const packagesToLoad = [
+      ...frameworkPackages.map((pkg) => (pkg.name === coreRulesPackage.name ? coreRulesPackage : pkg)),
+      ...orderAfterAdapterSubsystem(mergeableExtensionPackages),
+    ];
     const loadedPackageNames = new Set(packagesToLoad.map((pkg) => pkg.name));
     const configDefaults = filterConfigDefaultsForLoadedPackages(
       mergePackageConfigDefaults(
@@ -864,6 +872,11 @@ export async function bootMakaioRuntimeCore(
       createReactionContributionProcessor({
         forEachActiveExtension: (callback) => coordinator.forEachActiveExtension(callback),
       }),
+    );
+    coordinator.registerContributionProcessor(
+      createRuleContributionProcessor(() =>
+        coordinator.getExtensionService<RuleContributionsService>(RuleContributionsToken.name),
+      ),
     );
     coordinator.registerContributionProcessor(
       createAutomationTriggerContributionProcessor({

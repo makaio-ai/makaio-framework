@@ -65,6 +65,16 @@ export function localContributionName(owner: ExtensionName, name: string): strin
 }
 
 /**
+ * Whether a contribution name is canonical and owned by an extension.
+ * @param owner - Extension claiming the name.
+ * @param name - Full contribution name.
+ * @returns Whether the name satisfies both the naming schema and owner prefix.
+ */
+export function ownsCanonicalContributionName(owner: ExtensionName, name: string): boolean {
+  return localContributionName(owner, name) !== undefined && ContributionNameSchema.safeParse(name).success;
+}
+
+/**
  * Whether `name` is the extension's own name or a contribution it owns.
  *
  * Combines the identity check with {@link localContributionName}: `true` when

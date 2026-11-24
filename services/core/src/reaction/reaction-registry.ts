@@ -1,39 +1,45 @@
+import type { ReactionCatalogEntries, ReactionCatalogEntry } from '@makaio/contracts/rules';
+import { zodSchemaToJsonRecord } from '@makaio/contracts/shared';
+import type { ReactionCause } from '@makaio/contracts/reaction';
 import type { IMakaioBus } from '@makaio/bus-core';
 import type {
+  FrameworkReactionFailureCode,
   ReactionDefinition,
   ReactionDescriptor,
   ReactionExecutionContext,
   ReactionInvocationId,
   ReactionOutcome,
-  ReactionRuleRef,
 } from '@makaio/contracts';
-import { ReactionDescriptorSchema } from '@makaio/contracts';
-import { localContributionName } from '@makaio/core';
+import { FrameworkReactionFailureCodeSchema, ReactionDescriptorSchema } from '@makaio/contracts';
+import type { CallContext } from '@makaio/core';
 import { BaseService } from '@makaio/service-base';
 import { getErrorString } from '@makaio/utils';
+import { ContributionRegistryCore } from '../contribution-registry/index.js';
 
 /**
  * Host-supplied input for a single Reaction invocation.
  *
- * The host has already evaluated its (consumer-owned) rule system and
- * resolved raw parameters before calling {@link ReactionRegistry.invoke};
- * this input carries everything the runtime needs to build the frozen
- * {@link ReactionExecutionContext} envelope for the handler. Its
- * `eventPayload`, `hostContext`, and `ruleRef` remain host-owned references;
- * hosts must detach them before invocation when they need deeper isolation.
+ * The host has already evaluated its rules (`makaio.rules`) and resolved raw
+ * parameters before calling {@link ReactionRegistry.invoke}; this input
+ * carries everything the runtime needs to build the frozen
+ * {@link ReactionExecutionContext} envelope for the handler. `call` and
+ * `cause` remain host-owned references; hosts must detach them before
+ * invocation when they need deeper isolation.
  */
 export interface ReactionInvocationInput {
-  /** Event kind string the host evaluated when deciding to dispatch. */
-  readonly eventKind: string;
-  /** Event payload the host evaluated, passed through verbatim. */
-  readonly eventPayload: unknown;
-  /** Host-composed context, passed through verbatim. */
-  readonly hostContext: unknown;
   /**
-   * Opaque host-supplied reference to the rule that caused this dispatch, or
-   * `undefined` when the host dispatched without a rule system.
+   * Context of the call: caller `makaio.rules`, principal and attesting
+   * party of the occasion. Passed through verbatim as the handler's first
+   * parameter.
    */
-  readonly ruleRef?: ReactionRuleRef;
+  readonly call: CallContext;
+  /**
+   * Key of the part this invocation runs:
+   * `(ruleId, occasion, location of the element)`. A reaction may refine it.
+   */
+  readonly key: string;
+  /** What caused this invocation to run. */
+  readonly cause: ReactionCause;
   /** Bus correlation identifier from the triggering message, when one exists. */
   readonly correlationId?: string;
   /**
@@ -83,12 +89,21 @@ interface RegisteredReaction {
   readonly parameterSchema: ReactionDefinition['parameterSchema'];
   /** Executable handler captured when this Reaction was registered. */
   readonly handler: ReactionDefinition['handler'];
+  /** Custom rule check captured when this Reaction was registered. */
+  readonly validate: ReactionDefinition['validate'];
   /** Detached descriptor used only for discovery. */
   readonly descriptor: ReactionDescriptor;
+  /** Result schema derived from the contributed definition. */
+  readonly resultSchema: ReactionCatalogEntry['result'];
+  /** Whether the handler is idempotent per key. */
+  readonly keyed: boolean;
 }
 
-/** Stable classifications for normalized Reaction invocation failures. */
-type ReactionFailureCode = NonNullable<Extract<ReactionOutcome, { success: false }>['error']['code']>;
+/** Contribution and discovery API made available to extension contexts. */
+export type ReactionRegistryView = Pick<
+  ReactionRegistry,
+  'register' | 'deregister' | 'listCatalog' | 'listDescriptors' | 'getValidator'
+>;
 
 /**
  * Owner-aware registry and in-process dispatcher for Reactions contributed by
@@ -115,10 +130,20 @@ type ReactionFailureCode = NonNullable<Extract<ReactionOutcome, { success: false
  * deliberate later seam, not an omission.
  */
 export class ReactionRegistry extends BaseService {
-  /** Registered definitions grouped by owning extension. */
-  private definitionsByExtension = new Map<string, readonly RegisteredReaction[]>();
-  /** Global kind index for collision checks and dispatch lookup. */
-  private definitionsByKind = new Map<string, RegisteredReaction>();
+  /** Exposes registration and discovery without handing out host dispatch. */
+  public readonly extensionServiceView: ReactionRegistryView = Object.freeze({
+    register: this.register.bind(this),
+    deregister: this.deregister.bind(this),
+    listCatalog: this.listCatalog.bind(this),
+    listDescriptors: this.listDescriptors.bind(this),
+    getValidator: this.getValidator.bind(this),
+  });
+
+  /** Generic owner-aware name index, owner check, and batch lifecycle. */
+  private readonly core = new ContributionRegistryCore<RegisteredReaction>({
+    label: 'Reaction',
+    nameOf: (reaction) => reaction.descriptor.kind,
+  });
 
   /**
    * @param bus - Bus instance used for the service lifecycle.
@@ -142,8 +167,7 @@ export class ReactionRegistry extends BaseService {
    * released on teardown.
    */
   protected override onDestroy(): void {
-    this.definitionsByExtension.clear();
-    this.definitionsByKind.clear();
+    this.core.clear();
   }
 
   /**
@@ -160,23 +184,8 @@ export class ReactionRegistry extends BaseService {
    *   local name, duplicates another incoming kind, or belongs to another owner.
    */
   public register(extensionName: string, reactions: readonly ReactionDefinition[]): void {
-    const registeredBatch = this.validateBatch(extensionName, reactions);
-
-    const nextDefinitionsByExtension = new Map(this.definitionsByExtension);
-    if (registeredBatch.length === 0) {
-      nextDefinitionsByExtension.delete(extensionName);
-    } else {
-      nextDefinitionsByExtension.set(extensionName, registeredBatch);
-    }
-
-    const nextDefinitionsByKind = new Map<string, RegisteredReaction>();
-    for (const definitions of nextDefinitionsByExtension.values()) {
-      for (const definition of definitions) {
-        nextDefinitionsByKind.set(definition.descriptor.kind, definition);
-      }
-    }
-    this.definitionsByExtension = nextDefinitionsByExtension;
-    this.definitionsByKind = nextDefinitionsByKind;
+    const registeredBatch = this.buildBatch(extensionName, reactions);
+    this.core.commitBatch(extensionName, registeredBatch);
   }
 
   /**
@@ -188,7 +197,7 @@ export class ReactionRegistry extends BaseService {
    * @param extensionName - The extension to remove.
    */
   public deregister(extensionName: string): void {
-    if (!this.definitionsByExtension.has(extensionName)) return;
+    if (this.core.ownerBatch(extensionName) === undefined) return;
     this.register(extensionName, []);
   }
 
@@ -199,8 +208,29 @@ export class ReactionRegistry extends BaseService {
    * cannot execute extension code or mutate the stored discovery snapshot.
    * @returns Detached discovery metadata for every registered Reaction.
    */
+  public listCatalog(): ReactionCatalogEntries {
+    return this.core.listOwned().map(({ extension, entry }) => ({
+      extension,
+      kind: entry.descriptor.kind,
+      description: entry.descriptor.description,
+      params: structuredClone(entry.descriptor.parameterSchema),
+      result: structuredClone(entry.resultSchema),
+      keyed: entry.keyed,
+    }));
+  }
+
+  /** @returns Detached serializable descriptors for all registered reactions. */
   public listDescriptors(): ReactionDescriptor[] {
-    return Array.from(this.definitionsByKind.values(), ({ descriptor }) => structuredClone(descriptor));
+    return this.core.list().map(({ descriptor }) => structuredClone(descriptor));
+  }
+
+  /**
+   * Finds the custom rule check declared by a registered Reaction.
+   * @param kind - Canonical Reaction kind.
+   * @returns The rule check, when one was declared for that kind.
+   */
+  public getValidator(kind: string): ReactionDefinition['validate'] {
+    return this.core.get(kind)?.validate;
   }
 
   /**
@@ -214,8 +244,8 @@ export class ReactionRegistry extends BaseService {
    * one shape.
    *
    * Guarantees:
-   * - An already-aborted host signal or an already-past deadline fails the
-   *   invocation without entering the handler; these cheap gates run BEFORE
+   * - An already-aborted host signal or an already-past deadline interrupts
+   *   the invocation without entering the handler; these gates run BEFORE
    *   parameter validation, so an already-dead dispatch never pays for it.
    * - Parameters are validated against the Reaction's live Zod schema BEFORE
    *   handler entry; invalid parameters — and schema code that itself throws
@@ -226,16 +256,14 @@ export class ReactionRegistry extends BaseService {
    *   validation through handler settlement (listeners and timers are
    *   released after settle), and aborting one invocation never affects
    *   another. Cancellation is cooperative after handler entry: a mid-flight
-   *   abort only signals the handler, and a handler that resolves anyway still
-   *   yields a success outcome. A cancellation observed before handler entry
-   *   always yields a failure outcome.
-   * - The handler receives a frozen top-level invocation envelope.
-   *   `eventPayload`, `hostContext`, and `ruleRef` are host-owned values passed
-   *   through verbatim, not deep-cloned or frozen. Hosts detach those values
-   *   before invocation when they need deeper isolation.
+   *   abort signals the handler, which may still return its own outcome.
+   *   Cancellation without a handler outcome yields `'retry'` for a keyed
+   *   Reaction and `'failed'` with `'outcome-unknown'` otherwise.
+   * - The handler receives a frozen top-level invocation envelope. `cause` is
+   *   a host-owned value passed through verbatim, not deep-cloned or frozen.
+   *   Hosts detach it before invocation when they need deeper isolation.
    * - Any thrown value (including non-`Error`) is caught, logged with the
-   *   kind, invocation id, and correlation id, and normalized to a failure
-   *   outcome.
+   *   kind, invocation id, and correlation id, and normalized to an outcome.
    * @param kind - Canonical Reaction kind to invoke.
    * @param parameters - Host-resolved, not-yet-validated invocation parameters.
    * @param input - Host-supplied invocation input (event, context, controls).
@@ -244,7 +272,7 @@ export class ReactionRegistry extends BaseService {
   public async invoke(kind: string, parameters: unknown, input: ReactionInvocationInput): Promise<ReactionOutcome> {
     const invocationId: ReactionInvocationId = crypto.randomUUID();
 
-    const registered = this.definitionsByKind.get(kind);
+    const registered = this.core.get(kind);
     if (!registered) {
       return this.failure(
         kind,
@@ -255,8 +283,14 @@ export class ReactionRegistry extends BaseService {
       );
     }
     const deadlineEpochMs = normalizeDeadline(input.deadlineEpochMs);
-    const preValidationFailure = this.cancelledBeforeValidation(kind, invocationId, input, deadlineEpochMs);
-    if (preValidationFailure) return preValidationFailure;
+    const preValidationCancellation = this.cancelledBeforeValidation(
+      kind,
+      invocationId,
+      input,
+      deadlineEpochMs,
+      registered.keyed,
+    );
+    if (preValidationCancellation) return preValidationCancellation;
 
     // Cancellation ownership begins before the first async boundary, so a
     // host abort or deadline reached during async validation cannot race into
@@ -267,6 +301,7 @@ export class ReactionRegistry extends BaseService {
     // async boundary. The opaque host values intentionally remain shared by
     // reference, but subsequent reassignment on the input envelope cannot
     // change this invocation's context or post-validation log correlation.
+    const call = input.call;
     const context = freezeExecutionContext(invocationId, cancellation.controller.signal, input);
     try {
       // safeParseAsync supports async refinements (sync safeParse throws on
@@ -277,14 +312,14 @@ export class ReactionRegistry extends BaseService {
       try {
         parsed = await registered.parameterSchema.safeParseAsync(parameters);
       } catch (error) {
-        const cancellationFailure = this.cancelledAfterValidation(
+        const interrupted = this.cancelledAfterValidation(
           kind,
-          invocationId,
-          context.correlationId,
+          context,
           cancellation,
           deadlineEpochMs,
+          registered.keyed,
         );
-        if (cancellationFailure) return cancellationFailure;
+        if (interrupted) return interrupted;
         return this.failure(
           kind,
           invocationId,
@@ -294,14 +329,8 @@ export class ReactionRegistry extends BaseService {
           error,
         );
       }
-      const cancellationFailure = this.cancelledAfterValidation(
-        kind,
-        invocationId,
-        context.correlationId,
-        cancellation,
-        deadlineEpochMs,
-      );
-      if (cancellationFailure) return cancellationFailure;
+      const interrupted = this.cancelledAfterValidation(kind, context, cancellation, deadlineEpochMs, registered.keyed);
+      if (interrupted) return interrupted;
       if (!parsed.success) {
         return this.failure(
           kind,
@@ -312,14 +341,30 @@ export class ReactionRegistry extends BaseService {
         );
       }
 
-      await registered.handler(parsed.data, context);
-      return { success: true };
+      // The handler's return value already is the final ReactionOutcome; the
+      // registry neither wraps nor reinterprets it.
+      return await registered.handler(call, parsed.data, context);
     } catch (error) {
-      // The outcome carries the extracted message; the log line names only the
-      // failure site and lets the rendered error carry that message, avoiding
+      if (deadlineEpochMs !== undefined) abortWhenDeadlineReached(cancellation.controller, deadlineEpochMs);
+      if (context.signal.aborted) {
+        return this.cancellationOutcome(
+          kind,
+          invocationId,
+          context.correlationId,
+          registered.keyed,
+          getErrorString(context.signal.reason),
+          error,
+        );
+      }
+      // The outcome carries the extracted reason; the log line names only the
+      // failure site and lets the rendered error carry that reason, avoiding
       // printing it twice in one console.error call.
       this.logFailure(kind, invocationId, context.correlationId, `Reaction '${kind}' handler threw`, error);
-      return { success: false, error: { code: 'handler-failed', message: getErrorString(error) } };
+      return {
+        state: 'failed',
+        code: FrameworkReactionFailureCodeSchema.enum['handler-failed'],
+        reason: getErrorString(error),
+      };
     } finally {
       cancellation.release();
     }
@@ -332,44 +377,44 @@ export class ReactionRegistry extends BaseService {
    * @param invocationId - Runtime-minted identifier of the failed invocation.
    * @param correlationId - Bus correlation identifier, when one exists.
    * @param code - Stable machine-readable classification of the failure.
-   * @param message - Normalized failure message for the log line and outcome.
+   * @param reason - Normalized failure reason for the log line and outcome.
    * @param cause - Original thrown value, retained only in the log.
-   * @returns Normalized failure outcome carrying `message`.
+   * @returns Normalized `'failed'` outcome carrying `reason`.
    */
   private failure(
     kind: string,
     invocationId: ReactionInvocationId,
     correlationId: string | undefined,
-    code: ReactionFailureCode,
-    message: string,
+    code: FrameworkReactionFailureCode,
+    reason: string,
     cause?: unknown,
   ): ReactionOutcome {
-    this.logFailure(kind, invocationId, correlationId, message, cause);
-    return { success: false, error: { code, message } };
+    this.logFailure(kind, invocationId, correlationId, reason, cause);
+    return { state: 'failed', code, reason };
   }
 
   /**
-   * Returns the normalized outcome when cancellation prevents handler entry.
+   * Classifies cancellation by whether it is safe to dispatch the same key again.
    * @param kind - Reaction kind that was cancelled.
    * @param invocationId - Runtime-minted identifier of the cancelled invocation.
    * @param correlationId - Bus correlation identifier, when one exists.
-   * @param reason - Cancellation reason owned by the invocation signal.
-   * @returns Normalized cancelled outcome carrying the existing diagnostic message.
+   * @param keyed - Whether the Reaction is idempotent per key.
+   * @param reason - Human-readable cancellation reason.
+   * @param cause - Original thrown value, retained only in the log.
+   * @returns A retry for keyed Reactions or a terminal outcome for unkeyed Reactions.
    */
-  private cancelledBeforeHandler(
+  private cancellationOutcome(
     kind: string,
     invocationId: ReactionInvocationId,
     correlationId: string | undefined,
-    reason: unknown,
+    keyed: boolean,
+    reason: string,
+    cause?: unknown,
   ): ReactionOutcome {
-    return this.failure(
-      kind,
-      invocationId,
-      correlationId,
-      'cancelled',
-      `Reaction '${kind}' cancelled before handler entry: ${getErrorString(reason)}`,
-      reason,
-    );
+    this.logFailure(kind, invocationId, correlationId, reason, cause);
+    return keyed
+      ? { state: 'retry', reason }
+      : { state: 'failed', code: FrameworkReactionFailureCodeSchema.enum['outcome-unknown'], reason };
   }
 
   /**
@@ -378,6 +423,7 @@ export class ReactionRegistry extends BaseService {
    * @param invocationId - Runtime-minted identifier of the cancelled invocation.
    * @param input - Host-supplied input for the invocation.
    * @param deadlineEpochMs - Normalized invocation deadline, when one exists.
+   * @param keyed - Whether the Reaction is idempotent per key.
    * @returns A normalized cancellation outcome, or `undefined` when validation may proceed.
    */
   private cancelledBeforeValidation(
@@ -385,22 +431,23 @@ export class ReactionRegistry extends BaseService {
     invocationId: ReactionInvocationId,
     input: ReactionInvocationInput,
     deadlineEpochMs: number | undefined,
+    keyed: boolean,
   ): ReactionOutcome | undefined {
     if (input.hostSignal?.aborted) {
-      return this.failure(
+      return this.cancellationOutcome(
         kind,
         invocationId,
         input.correlationId,
-        'cancelled',
+        keyed,
         `Reaction '${kind}' host signal already aborted`,
       );
     }
     if (deadlineEpochMs !== undefined && deadlineEpochMs <= Date.now()) {
-      return this.failure(
+      return this.cancellationOutcome(
         kind,
         invocationId,
         input.correlationId,
-        'cancelled',
+        keyed,
         `Reaction '${kind}' deadline already passed`,
       );
     }
@@ -414,25 +461,32 @@ export class ReactionRegistry extends BaseService {
    * callback runs. This authoritative check therefore precedes both a parsed
    * validation failure and handler entry.
    * @param kind - Reaction kind that was cancelled.
-   * @param invocationId - Runtime-minted identifier of the cancelled invocation.
-   * @param correlationId - Bus correlation identifier, when one exists.
+   * @param context - Frozen invocation envelope.
    * @param cancellation - Runtime-owned cancellation wiring for the invocation.
    * @param deadlineEpochMs - Normalized invocation deadline, when one exists.
+   * @param keyed - Whether the Reaction is idempotent per key.
    * @returns A normalized cancellation outcome, or `undefined` when processing may continue.
    */
   private cancelledAfterValidation(
     kind: string,
-    invocationId: ReactionInvocationId,
-    correlationId: string | undefined,
+    context: ReactionExecutionContext,
     cancellation: InvocationCancellation,
     deadlineEpochMs: number | undefined,
+    keyed: boolean,
   ): ReactionOutcome | undefined {
     if (deadlineEpochMs !== undefined) {
       abortWhenDeadlineReached(cancellation.controller, deadlineEpochMs);
     }
-    return cancellation.controller.signal.aborted
-      ? this.cancelledBeforeHandler(kind, invocationId, correlationId, cancellation.controller.signal.reason)
-      : undefined;
+    if (!context.signal.aborted) return undefined;
+    const reason: unknown = context.signal.reason;
+    return this.cancellationOutcome(
+      kind,
+      context.invocationId,
+      context.correlationId,
+      keyed,
+      `Reaction '${kind}' cancelled before handler entry: ${getErrorString(reason)}`,
+      reason,
+    );
   }
 
   /**
@@ -458,40 +512,35 @@ export class ReactionRegistry extends BaseService {
   }
 
   /**
-   * Validates a complete registration batch without mutating registry state.
+   * Validates a complete registration batch and derives its registered entries,
+   * without mutating registry state.
+   *
+   * Namespace, duplicate-kind, and cross-owner collision checks are the
+   * generic {@link ContributionRegistryCore.validateBatch}; this method adds
+   * the kind-specific step of deriving and validating each descriptor.
    * @param extensionName - Owner of the proposed definitions.
    * @param reactions - Definitions to validate.
    * @returns Registered definitions paired with validated descriptor snapshots.
    * @throws If namespace, descriptor, or kind-uniqueness invariants are violated.
    */
-  private validateBatch(
-    extensionName: string,
-    reactions: readonly ReactionDefinition[],
-  ): readonly RegisteredReaction[] {
-    const pendingKinds = new Set<string>();
-    const ownedKinds = new Set(
-      this.definitionsByExtension.get(extensionName)?.map((reaction) => reaction.descriptor.kind),
-    );
-    const registered: RegisteredReaction[] = [];
-    for (const reaction of reactions) {
-      if (localContributionName(extensionName, reaction.kind) === undefined) {
-        throw new Error(`Reaction '${reaction.kind}' must be namespaced by extension '${extensionName}.'`);
-      }
-      if (pendingKinds.has(reaction.kind)) {
-        throw new Error(`Reaction kind collision: '${reaction.kind}' appears twice in batch from '${extensionName}'`);
-      }
-      if (this.definitionsByKind.has(reaction.kind) && !ownedKinds.has(reaction.kind)) {
-        throw new Error(`Reaction kind collision: '${reaction.kind}' is already registered`);
-      }
-      pendingKinds.add(reaction.kind);
+  private buildBatch(extensionName: string, reactions: readonly ReactionDefinition[]): readonly RegisteredReaction[] {
+    const registered: RegisteredReaction[] = reactions.map((reaction) => {
       const descriptor = ReactionDescriptorSchema.parse(reaction.toDescriptor());
       if (descriptor.kind !== reaction.kind) {
         throw new Error(
           `Reaction descriptor kind '${descriptor.kind}' does not match definition kind '${reaction.kind}'`,
         );
       }
-      registered.push({ parameterSchema: reaction.parameterSchema, handler: reaction.handler, descriptor });
-    }
+      return {
+        parameterSchema: reaction.parameterSchema,
+        handler: reaction.handler,
+        validate: reaction.validate?.bind(reaction),
+        descriptor,
+        resultSchema: reaction.resultSchema ? zodSchemaToJsonRecord(reaction.resultSchema) : null,
+        keyed: reaction.keyed,
+      };
+    });
+    this.core.validateBatch(extensionName, registered);
     return registered;
   }
 }
@@ -600,9 +649,9 @@ function abortWhenDeadlineReached(controller: AbortController, deadlineEpochMs: 
  * invocation.
  *
  * The envelope is frozen so a handler cannot reassign its fields. Its
- * `eventPayload`, `hostContext`, and `ruleRef` are opaque host-owned values
- * passed through verbatim rather than deep-cloned or frozen. Hosts detach
- * those values before invocation when they need deeper isolation.
+ * `cause` is an opaque host-owned value passed through verbatim rather than
+ * deep-cloned or frozen. Hosts detach it before invocation when they need
+ * deeper isolation.
  * @param invocationId - Runtime-minted identifier for this invocation.
  * @param signal - Per-invocation runtime-controlled cancellation signal.
  * @param input - Host-supplied invocation input.
@@ -615,10 +664,8 @@ function freezeExecutionContext(
 ): ReactionExecutionContext {
   return Object.freeze({
     invocationId,
-    ruleRef: input.ruleRef,
-    eventKind: input.eventKind,
-    eventPayload: input.eventPayload,
-    hostContext: input.hostContext,
+    key: input.key,
+    cause: input.cause,
     correlationId: input.correlationId,
     signal,
     deadlineEpochMs: input.deadlineEpochMs,

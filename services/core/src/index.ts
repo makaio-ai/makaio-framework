@@ -149,7 +149,11 @@ export { FacetNamespaceRegistry, createFacetNamespaceContributionProcessor } fro
 export { createToolContributionProcessor, ToolRegistry } from './tools/index.js';
 export { createWorkflowBlockContributionProcessor, WorkflowBlockRegistry } from './workflow-blocks/index.js';
 export { createReactionContributionProcessor, ReactionRegistry, ReactionRegistryToken } from './reaction/index.js';
-export type { ReactionContributionProcessorOptions, ReactionInvocationInput } from './reaction/index.js';
+export type {
+  ReactionContributionProcessorOptions,
+  ReactionInvocationInput,
+  ReactionRegistryView,
+} from './reaction/index.js';
 export {
   createTransitionContributionProcessor,
   TransitionActionRegistry,
@@ -157,6 +161,35 @@ export {
   TransitionRuleRegistry,
   WORKFLOW_START_ACTION_TYPE,
 } from './workflow-transitions/index.js';
+export {
+  ALL_GROUP_STRATEGY_KIND,
+  allGroupStrategy,
+  BUS_MESSAGE_TRIGGER_KIND,
+  BusMessageTriggerParamsSchema,
+  busMessageTrigger,
+  createHasRightLookup,
+  createRuleContributionProcessor,
+  createRuleContributionsBuiltinsPackage,
+  createSendBusRequestReaction,
+  GroupStrategyRegistry,
+  HAS_RIGHT_LOOKUP_KIND,
+  HasRightLookupArgsSchema,
+  LookupRegistry,
+  RuleBlockRegistry,
+  RuleContributionsService,
+  RuleContributionsToken,
+  ruleContributionsPackage,
+  SEND_BUS_REQUEST_REACTION_KIND,
+  SendBusRequestParamsSchema,
+  TriggerRegistry,
+} from './rule-contributions/index.js';
+export type { RuleContributionsView } from './rule-contributions/index.js';
+export { ContributionRegistryCore } from './contribution-registry/index.js';
+export type {
+  ContributionOwnershipPredicate,
+  ContributionRegistryCoreMessages,
+  ContributionRegistryCoreOptions,
+} from './contribution-registry/index.js';
 export type {
   ListToolsFilter,
   ToolRegistryOptions,

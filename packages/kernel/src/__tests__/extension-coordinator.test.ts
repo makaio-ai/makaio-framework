@@ -23,6 +23,7 @@ import { extensionToken } from '@makaio/contracts';
 import { BaseService } from '@makaio/service-base';
 import { ExtensionCoordinator } from '../extension/extension-coordinator.js';
 import { OpenContributionIndex } from '../extension/open-contribution-index.js';
+import { RuleSourceRegistry } from '../extension/rule-source-registry.js';
 import { handleSetEnabled, type ToggleHost } from '../extension/extension-toggle.js';
 import { createExtensionIdentity } from '../extension/extension-identity-builder.js';
 import { ExtensionSubjects } from '../observability/extension-namespace.js';
@@ -1418,6 +1419,7 @@ describe('ExtensionCoordinator', () => {
         bus,
         db: undefined,
         rights: createRightsHub({ bus }),
+        rules: new RuleSourceRegistry(),
         runInStartScope: (_name, start) => start(),
         extensionContextBase: TEST_PKG_CTX_BASE,
         loadConfig: undefined,
