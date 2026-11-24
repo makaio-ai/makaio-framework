@@ -1,5 +1,5 @@
 import type { CallContext } from '@makaio/core';
-import type { CodeStepData, CodeStepHandler, WorkflowCodeStepNode } from '@makaio/contracts';
+import { JsonValueSchema, type CodeStepData, type CodeStepHandler, type WorkflowCodeStepNode } from '@makaio/contracts';
 import { abortableWait } from '@makaio/utils';
 import type { RuntimeContext } from './runtime-context.js';
 import type { CallerLocalStepOutcome } from './caller-local-step-runner.js';
@@ -53,7 +53,7 @@ export async function executeCallerLocalCodeStep(
       ctx.signal.throwIfAborted();
       return handler({ ...data, signal: ctx.signal, request, launchProcess });
     });
-    const output = await abortableWait(work, ctx.signal);
+    const output = JsonValueSchema.parse(await abortableWait(work, ctx.signal));
     outcome = { status: 'completed', output };
   } catch (error) {
     outcome = {

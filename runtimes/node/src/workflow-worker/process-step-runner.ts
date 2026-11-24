@@ -77,6 +77,7 @@ const agentFailureCodes = {
   environmentMissing: 'environmentMissing',
   'agent-start-refused': 'agentStartRefused',
   'agent-turn-failed': 'agentTurnFailed',
+  'process-failed': 'processFailed',
   'output-invalid': 'invalidOutput',
   'prompt-too-large': 'promptTooLarge',
 } satisfies Record<AgentStepProcessFailure, StepRunErrorCode>;

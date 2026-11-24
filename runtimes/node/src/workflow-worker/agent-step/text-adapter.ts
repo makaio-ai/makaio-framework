@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { JsonValueSchema } from '@makaio/contracts';
+import type { JsonSchema } from '@makaio/contracts';
 import {
   AgentModelReplySchema,
   ModelFailureSchema,
@@ -13,13 +13,18 @@ import {
 /**
  * Decode the reply without passing model text into diagnostic output.
  * @param body - Parsed HTTP response body.
+ * @param outputSchema - Declared output schema for the turn.
  * @returns Structured output, usage, or a fixed failure.
  */
-function readTurnResult(body: unknown): AgentStepTurnResult {
+async function readTurnResult(body: unknown, outputSchema: JsonSchema): Promise<AgentStepTurnResult> {
   const reply = AgentModelReplySchema.safeParse(body);
   if (!reply.success) return { kind: 'failed', reason: 'reply-invalid' };
+  const decoder = (await import('@makaio/subsystem-workflow-engine/workflow-orchestrator').catch(() => undefined))
+    ?.decodeAgentStepOutput;
+  if (decoder === undefined) return { kind: 'failed', reason: 'process-failed' };
   try {
-    const output = JsonValueSchema.parse(JSON.parse(reply.data.text));
+    const output = decoder(reply.data.text, outputSchema);
+    if (output === undefined) return { kind: 'failed', reason: 'output-invalid' };
     const { usage } = reply.data;
     return { kind: 'completed', result: { output, ...(usage === undefined ? {} : { usage }) } };
   } catch {
@@ -31,10 +36,16 @@ function readTurnResult(body: unknown): AgentStepTurnResult {
  * Run one model turn using only the scoped address supplied by the worker.
  * @param address - Mediator address for this step.
  * @param requestBody - Serialized text turn within the wire budget.
+ * @param outputSchema - Declared output schema for the turn.
  * @param signal - Step cancellation.
  * @returns A typed turn outcome with content-free transport errors.
  */
-async function complete(address: string, requestBody: string, signal: AbortSignal): Promise<AgentStepTurnResult> {
+async function complete(
+  address: string,
+  requestBody: string,
+  outputSchema: JsonSchema,
+  signal: AbortSignal,
+): Promise<AgentStepTurnResult> {
   try {
     const response = await fetch(address, {
       method: 'POST',
@@ -49,7 +60,8 @@ async function complete(address: string, requestBody: string, signal: AbortSigna
     }
     const body: unknown = await response.json().catch(() => undefined);
     if (signal.aborted) return { kind: 'cancelled' };
-    return readTurnResult(body);
+    const turn = await readTurnResult(body, outputSchema);
+    return signal.aborted ? { kind: 'cancelled' } : turn;
   } catch {
     return signal.aborted ? { kind: 'cancelled' } : { kind: 'failed', reason: 'model-unreachable' };
   }
@@ -135,7 +147,7 @@ export function createTextAgentStepAdapter(adapterId: string, ownerInstanceId: s
           sessionId: request.sessionId ?? randomUUID(),
           messageId: randomUUID(),
         },
-        turn: complete(modelAddress, turn.body, signal),
+        turn: complete(modelAddress, turn.body, responseSchema.schema, signal),
       };
     },
   };

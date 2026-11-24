@@ -1,12 +1,14 @@
-import Ajv, { type ValidateFunction } from 'ajv';
+import Ajv from 'ajv';
 import Ajv2019 from 'ajv/dist/2019.js';
 import Ajv2020 from 'ajv/dist/2020.js';
 import {
+  JsonValueSchema,
   walkWorkflowDefinition,
   WorkflowAgentStepNodeSchema,
   WorkflowCodeStepNodeSchema,
   WorkflowError,
   WorkflowErrorCode,
+  type JsonSchema,
   type JsonValue,
   type WorkflowAgentStepNode,
   type WorkflowCodeStepNode,
@@ -15,9 +17,10 @@ import {
 } from '@makaio/contracts';
 
 type WorkflowStep = WorkflowAgentStepNode | WorkflowCodeStepNode;
+type StepOutputValidator = (value: JsonValue) => boolean;
 
 // Preflight and repeated dispatch can share the validator for a declared schema.
-const validators = new WeakMap<WorkflowNode, ValidateFunction>();
+const validators = new WeakMap<WorkflowNode, StepOutputValidator>();
 
 /**
  * Compile all declared output schemas before starting the workflow.
@@ -58,6 +61,39 @@ function createSchemaCompiler(uri: JsonValue | undefined) {
 }
 
 /**
+ * Compile a synchronous validator for workflow output.
+ * @param schema - Declared output schema.
+ * @returns A validator for the declared JSON Schema dialect.
+ */
+function compileOutputValidator(schema: JsonSchema): StepOutputValidator {
+  const validate = createSchemaCompiler(schema['$schema']).compile(schema);
+  if ('$async' in validate) throw new Error('Asynchronous step output schemas are unsupported');
+  return validate;
+}
+
+/**
+ * Validate an Agent Step response, decoding text according to its output contract.
+ * @param response - Raw result returned by the agent.
+ * @param schema - Declared output schema.
+ * @param validate - An existing validator for this schema, when available.
+ * @returns A conforming response, or undefined for an invalid result.
+ */
+export function decodeAgentStepOutput(
+  response: JsonValue,
+  schema: JsonSchema,
+  validate: StepOutputValidator = compileOutputValidator(schema),
+): JsonValue | undefined {
+  if (typeof response !== 'string') return validate(response) ? response : undefined;
+  try {
+    const parsed = JsonValueSchema.safeParse(JSON.parse(response));
+    if (parsed.success && validate(parsed.data)) return parsed.data;
+  } catch {
+    // Plain text can satisfy the schema even without a JSON representation.
+  }
+  return validate(response) ? response : undefined;
+}
+
+/**
  * Compile a declared step output schema without exposing compiler diagnostics.
  * @param step - Authored step and its optional output contract.
  * @param node - Original workflow node when preflight has parsed a copy of it.
@@ -66,17 +102,15 @@ function createSchemaCompiler(uri: JsonValue | undefined) {
 export function resolveStepOutputValidator(
   step: WorkflowStep,
   node: WorkflowNode = step,
-): ValidateFunction | undefined {
+): StepOutputValidator | undefined {
   const { outputSchema } = step;
   if (outputSchema === undefined) return undefined;
   const cached = validators.get(node);
   if (cached !== undefined) return cached;
   try {
-    const validate = createSchemaCompiler(outputSchema['$schema']).compile(outputSchema);
-    if (!('$async' in validate)) {
-      validators.set(node, validate);
-      return validate;
-    }
+    const validate = compileOutputValidator(outputSchema);
+    validators.set(node, validate);
+    return validate;
   } catch {
     // Compiler diagnostics may contain authored data.
   }

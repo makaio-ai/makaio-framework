@@ -39,6 +39,73 @@ function run(bus: ReturnType<typeof createBusInstance>, workflow: BuiltWorkflow)
   });
 }
 
+describe('workflow structural frame diagnostics', () => {
+  const detail = 'Leaf diagnostic';
+  const fail = (): never => {
+    throw new Error(detail);
+  };
+
+  it.each([
+    {
+      kind: 'all-settled parallel',
+      workflow: defineWorkflow('frame-checkpoint').parallel('parent', { mode: 'all-settled' }, [
+        codeStep('leaf', fail),
+      ]),
+      failedParents: 1,
+      status: 'completed',
+    },
+    {
+      kind: 'fail-fast parallel',
+      workflow: defineWorkflow('frame-checkpoint').parallel('parent', { mode: 'fail-fast' }, [codeStep('leaf', fail)]),
+      failedParents: 2,
+      status: 'failed',
+    },
+    {
+      kind: 'iterate',
+      workflow: defineWorkflow('frame-checkpoint').iterate('parent', fail, { collection: 'inputs.items' }),
+      failedParents: 2,
+      status: 'completed',
+    },
+    {
+      kind: 'iterate-chain',
+      workflow: defineWorkflow('frame-checkpoint').iterateChain('parent', [codeStep('leaf', fail)], {
+        collection: 'inputs.items',
+      }),
+      failedParents: 2,
+      status: 'failed',
+    },
+    {
+      kind: 'loop',
+      workflow: defineWorkflow('frame-checkpoint').loop('parent', [codeStep('leaf', fail)], {
+        maxRounds: 1,
+        check: 'leaf',
+      }),
+      failedParents: 2,
+      status: 'failed',
+    },
+  ])('persists the leaf diagnostic in failed $kind frames', async ({ workflow, failedParents, status }) => {
+    const bus = createBusInstance();
+    bus.registerNamespace(WorkflowNamespace);
+    const storage = await createTestDbForBus(bus);
+    const errors: string[] = [];
+    const offFailed = bus.on(WorkflowSubjects.frame.failed, ({ payload }) => {
+      if (payload.nodeId === 'parent') errors.push(payload.error);
+    });
+    try {
+      const result = await run(bus, workflow);
+      expect(result.status).toBe(status);
+      if (result.status === 'failed') expect(result.error).toBe('stepExecutionFailed');
+      const { frames } = await bus.request(WorkflowStorageSubjects.listFrames, { executionId });
+      const parents = frames.filter((frame) => frame.nodeId === 'parent' && frame.status === 'failed');
+      expect(parents.map((frame) => frame.error)).toEqual(Array.from({ length: failedParents }, () => detail));
+      expect(errors).toEqual(Array.from({ length: failedParents }, () => 'stepExecutionFailed'));
+    } finally {
+      offFailed();
+      storage.cleanup();
+    }
+  });
+});
+
 describe('workflow frame storage failures', () => {
   it.each([
     { kind: 'parallel', target: 'container' },

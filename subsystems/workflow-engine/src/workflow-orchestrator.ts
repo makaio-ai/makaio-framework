@@ -28,6 +28,7 @@ import { buildWorkflowRunResult, type RuntimeSequenceResult } from './workflow-r
 
 export { resolveAgentStepConfig } from './runtime/delegate-execution-policy.js';
 export { assertProcessWorkflowSupported } from './runtime/process-workflow-definition.js';
+export { decodeAgentStepOutput } from './runtime/step-output-validation.js';
 
 // ─────────────────────────────────────────────────────────────
 // Public types

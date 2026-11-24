@@ -291,6 +291,12 @@ export const StepRunResultSchema = z.object({
   status: z.enum(['completed', 'failed', 'cancelled']),
   /** Functional output of the step (JSON-serializable). */
   output: JsonValueSchema.optional(),
+  /**
+   * For a completed Agent Step with a declared output schema and result finalizer,
+   * set true only after validating the raw response against the schema and applying
+   * the configured finalizer. Dispatch then accepts its output without applying the raw schema.
+   */
+  outputFinalized: z.boolean().optional(),
   /** Machine-readable error when execution fails. */
   error: StepRunErrorCodeSchema.optional(),
   /** Optional caller-local diagnostic, separate from the failure code. */

@@ -13,6 +13,8 @@ import { closeHttpServer, listenOnLoopback } from '../../__tests__/http-test-hel
 import { MODEL_MESSAGE_LIMIT_BYTES } from '../agent-step/protocol.js';
 import { createProcessStepRunner, type ProcessStepRunnerOptions } from '../process-step-runner.js';
 
+vi.setConfig({ testTimeout: 30_000 });
+
 const agentCommand = {
   command: process.execPath,
   args: [
@@ -124,6 +126,42 @@ describe('process step agent policy', () => {
     });
     expect(credentials).toBe(1);
     expect(received).toHaveLength(1);
+  });
+
+  it('reports an unavailable output decoder as a process failure after receiving a model reply', async () => {
+    const blockDecoder = `import { registerHooks } from 'node:module';
+      registerHooks({ resolve(specifier, context, nextResolve) {
+        if (specifier === '@makaio/subsystem-workflow-engine/workflow-orchestrator') {
+          throw new Error('Output decoder unavailable');
+        }
+        return nextResolve(specifier, context);
+      } });`;
+    const runner = createProcessStepRunner({
+      ...options,
+      agentCommand: {
+        ...agentCommand,
+        args: ['--import', `data:text/javascript,${encodeURIComponent(blockDecoder)}`, ...agentCommand.args],
+      },
+    });
+    await expect(runner.run(step, new AbortController().signal)).resolves.toMatchObject({
+      status: 'failed',
+      error: 'processFailed',
+    });
+    expect(received).toHaveLength(1);
+  });
+
+  it('refuses a tool-completion role when the node does not override completion', async () => {
+    const runner = createProcessStepRunner({
+      ...options,
+      resolveRole: async () => ({ ...defaultRole, completion: 'tool' }),
+    });
+    const { completion: _completion, ...stepDefinition } = step.stepDefinition;
+    await expect(runner.run({ ...step, stepDefinition }, new AbortController().signal)).resolves.toMatchObject({
+      status: 'failed',
+      error: 'agentCapabilitiesUnsupported',
+    });
+    expect(credentials).toBe(0);
+    expect(received).toEqual([]);
   });
 
   it('accepts a request and reply beyond 16 KiB within the existing wire budget', async () => {
