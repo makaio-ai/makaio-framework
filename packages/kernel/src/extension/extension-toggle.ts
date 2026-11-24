@@ -501,6 +501,7 @@ function failReEnable<THostContext extends KernelHostContext>(
   name: string,
   message: string,
 ): 'rejected' {
+  host.rights.deactivate(name);
   closeEntryRegistration(entry);
   entry.error = message;
   console.error(`[ExtensionCoordinator] Cannot re-enable "${name}":`, message);
@@ -606,6 +607,7 @@ async function enableExtension<THostContext extends KernelHostContext>(
   entry.error = undefined;
   reopenExtensionContext(entry.identity);
   transitionPackageEntry(call, host.bus, entry, 'initializing');
+  host.rights.beginActivation(name);
 
   // Config resolution fails only when an operator-supplied layer cannot be
   // honoured; loadConfig and stored-config parse failures stay non-throwing and

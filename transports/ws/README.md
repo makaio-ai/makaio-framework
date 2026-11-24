@@ -33,13 +33,15 @@ await MakaioBus.connect();
 
 ```typescript
 import { createWebSocketTransport } from '@makaio/bus-transport-websocket';
-import { MakaioBus } from '@makaio/bus-core';
+import { MakaioBus, NO_BOUNDARY_ACCESS_CHECK } from '@makaio/bus-core';
 import { WebSocketServer } from 'ws';
 
-const wss = new WebSocketServer({ port: 8080 });
+const wss = new WebSocketServer({ host: '127.0.0.1', port: 8080 });
 const transport = createWebSocketTransport({
   mode: 'server',
   websocket: wss,
+  // This example runs a private loopback server without a host rights directory.
+  checkBoundaryAccess: NO_BOUNDARY_ACCESS_CHECK,
 });
 
 MakaioBus.registerTransport(transport);
@@ -98,13 +100,16 @@ const transport = createWebSocketTransport({
 root entrypoint.
 
 ```typescript
-interface WebSocketTransportOptions {
-  mode: 'client' | 'server';
-  websocket: WebSocketLike | WebSocketServerLike;
+type WebSocketTransportOptions = {
   auth?: TransportAuth;
   debug?: boolean;
-}
+} & (
+  | { mode: 'client'; websocket: WebSocketLike }
+  | { mode: 'server'; websocket: WebSocketServerLike; checkBoundaryAccess: BoundaryAccessPolicy }
+);
 ```
+
+Server mode requires a host check or the explicit `NO_BOUNDARY_ACCESS_CHECK` opt-out from `@makaio/bus-core`.
 
 For client-mode reconnect or socket creation options, use `WebSocketClientTransport`
 directly. `createWebSocketTransport({ mode: 'client' })` wraps an already-created

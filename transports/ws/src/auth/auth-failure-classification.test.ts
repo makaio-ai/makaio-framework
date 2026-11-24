@@ -1,3 +1,4 @@
+import { NO_BOUNDARY_ACCESS_CHECK } from '@makaio/bus-core';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { E2EAuth } from './e2e-auth.js';
 import { HmacAuth } from './hmac-auth.js';
@@ -68,7 +69,11 @@ describe('built-in authentication failure categories', () => {
   ] as const)('closes a real E2E %s-client refusal with 1008 and returns a typed client rejection', async (serverLookup) => {
     const pair = await createPair({ serverLookup });
     const { wss, port } = await createTestServer();
-    const server = new ServerTransport({ websocket: wss, auth: pair.server });
+    const server = new ServerTransport({
+      checkBoundaryAccess: NO_BOUNDARY_ACCESS_CHECK,
+      websocket: wss,
+      auth: pair.server,
+    });
     cleanups.push(() => server.disconnect());
     await server.connect();
     const socket = new WebSocket(`ws://127.0.0.1:${port}`);
@@ -273,7 +278,11 @@ describe('built-in authentication failure categories', () => {
     const signatureBytes = await sign(pair.clientKeys.privateKey, encodeText(`${malformedKey}client`));
     const signature = Array.from(signatureBytes, (byte) => byte.toString(16).padStart(2, '0')).join('');
     const { wss, port } = await createTestServer();
-    const server = new ServerTransport({ websocket: wss, auth: pair.server });
+    const server = new ServerTransport({
+      checkBoundaryAccess: NO_BOUNDARY_ACCESS_CHECK,
+      websocket: wss,
+      auth: pair.server,
+    });
     cleanups.push(() => server.disconnect());
     await server.connect();
     const socket = new WebSocket(`ws://127.0.0.1:${port}`);
@@ -373,7 +382,7 @@ describe('built-in authentication failure categories', () => {
   ])('rejects a malformed $label HMAC identity against the actual registry with close 1008', async ({ identityId }) => {
     const { wss, port } = await createTestServer();
     const auth = new HmacAuth({ secret: 'global-secret', resolveSecret: resolveHmacIdentitySecret });
-    const server = new ServerTransport({ websocket: wss, auth });
+    const server = new ServerTransport({ checkBoundaryAccess: NO_BOUNDARY_ACCESS_CHECK, websocket: wss, auth });
     cleanups.push(() => server.disconnect());
     await server.connect();
     const socket = new WebSocket(`ws://127.0.0.1:${port}`);
@@ -459,7 +468,11 @@ describe('built-in authentication failure categories', () => {
         socket.once('close', resolve);
       });
     });
-    const server = new ServerTransport({ websocket: wss, auth: new HmacAuth({ secret: 'test-secret' }) });
+    const server = new ServerTransport({
+      checkBoundaryAccess: NO_BOUNDARY_ACCESS_CHECK,
+      websocket: wss,
+      auth: new HmacAuth({ secret: 'test-secret' }),
+    });
     cleanups.push(() => server.disconnect());
     await server.connect();
     const client = new WebSocketClientTransport({

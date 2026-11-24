@@ -5,7 +5,7 @@
  * transport for server-side usage.
  */
 
-import type { BusTransport, IMakaioBus } from '@makaio/bus-core';
+import type { BoundaryAccessPolicy, BusTransport, IMakaioBus } from '@makaio/bus-core';
 import type { WebSocketServerLike, TransportAuth } from '@makaio/bus-transport-websocket';
 
 /**
@@ -29,6 +29,9 @@ export interface BusServerConfig {
    * Optional authentication provider for connection validation.
    */
   auth?: TransportAuth;
+
+  /** Host authorization policy or an explicit opt-out. */
+  checkBoundaryAccess: BoundaryAccessPolicy;
 
   /**
    * Enable debug logging.

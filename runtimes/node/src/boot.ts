@@ -33,12 +33,14 @@ import { MakaioBus } from '@makaio/bus-core';
 import {
   ExtensionCoordinator,
   createShutdownSequence,
+  createCoordinatorRights,
   runBoundedShutdownSteps,
   type BoundedShutdownStep,
   cancellationRejection,
   readCancellation,
   BootNamespace,
   ExtensionNamespace,
+  ExtensionSubjects,
   KernelNamespace,
   type KernelMakaioExtension,
   type KernelExtensionContext,
@@ -205,7 +207,7 @@ export function buildLocalBusUrl(host: string, port: number): string {
  * Runs the full startup sequence (steps 1–12) given a pre-constructed
  * transport provider and the bound address of the server it is attached to.
  * The transport must be constructed but NOT yet connected — this function
- * calls `transport.connect(bus, machineId)` internally once the bus and
+ * calls `transport.connect(bus, options)` internally once the bus and
  * machine ID are available (step 3).
  *
  * This function is the shared implementation reused by both
@@ -266,8 +268,10 @@ export async function bootMakaioRuntimeCore(
   const peerSigningKeyResolver = options.peerSigningKeyResolver;
 
   const startGate = new JournalStartBarrier(options.journalStartupWaitTimeoutMs);
+  const rights = createCoordinatorRights(MakaioBus, 'host');
   /** Reject inbound work as soon as boot is cancelled. */
   const closeOnAbort = (): void => {
+    rights.closeBoundary();
     startGate.close(options.signal?.reason);
   };
   options.signal?.addEventListener('abort', closeOnAbort, { once: true });
@@ -340,7 +344,37 @@ export async function bootMakaioRuntimeCore(
     // -----------------------------------------------------------------------
     // 3. Transport (Phase 0 — resolves in ~50ms)
     // -----------------------------------------------------------------------
-    await transport.connect(bus, machineId);
+    const boundaryCheck = rights.checkBoundaryAccess;
+    const subscriptionAvailabilityListeners = new Set<() => Promise<void>>();
+    const notifySubscriptionAvailability = async (): Promise<void> => {
+      await Promise.all([...subscriptionAvailabilityListeners].map((retry) => retry()));
+    };
+    const hostCaller = bus.own('observer').caller;
+    const stopActivationObserver = bus.on(ExtensionSubjects.stateChanged, ({ call, payload }) => {
+      if (
+        rights.isBoundaryReady() &&
+        payload.to === 'active' &&
+        call.caller.kind === hostCaller.kind &&
+        call.caller.id === hostCaller.id
+      ) {
+        return notifySubscriptionAvailability();
+      }
+    });
+    const { registrationListeners } = busContextOf(bus).namespaceRegistry;
+    registrationListeners.add(notifySubscriptionAvailability);
+    shutdownSteps.push(
+      localStep('subscription availability observers', () => {
+        stopActivationObserver();
+        registrationListeners.delete(notifySubscriptionAvailability);
+      }),
+    );
+    boundaryCheck.watchSubscriptionAvailability = (retry) => {
+      subscriptionAvailabilityListeners.add(retry);
+      return () => {
+        subscriptionAvailabilityListeners.delete(retry);
+      };
+    };
+    await transport.connect(bus, { machineId, checkBoundaryAccess: boundaryCheck });
     const transportDisconnected = Promise.withResolvers<void>();
     shutdownSteps.push(
       resourceStep('bus transport', async () => {
@@ -554,6 +588,7 @@ export async function bootMakaioRuntimeCore(
     const credentialBinder = createCredentialBinder();
 
     const coordinator = new ExtensionCoordinator<KernelExtensionContext>(bus, {
+      rights,
       surface: options.surface ?? 'headless',
       // An extension that declares no stop window of its own may own a child
       // process, so it gets the window of one bounded stop of one.
@@ -881,6 +916,8 @@ export async function bootMakaioRuntimeCore(
     reportStartedConfig();
     checkpoint();
     startGate.open();
+    rights.openBoundary();
+    await notifySubscriptionAvailability();
     // ORIGIN: Startup announces that the extension start phase is complete.
     await bus.emit(bus.own('start'), KernelSubjects.phase.servicesReady, { machineId });
     const allExtensions = coordinator.list();
@@ -968,12 +1005,14 @@ export async function bootMakaioRuntimeCore(
        * @returns Completion of the runtime shutdown sequence.
        */
       shutdown() {
+        rights.closeBoundary();
         startGate.close(new Error('The journal host is shutting down.'));
         return shutdownSequence.run();
       },
       stopBudgetMs: shutdownSequence.budgetMs,
     };
   } catch (err) {
+    rights.closeBoundary();
     startGate.close(err);
     reportOperatorConfig?.();
     // A cancellation reaches here as the signal's reason, or as an aggregate of the

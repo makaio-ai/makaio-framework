@@ -67,7 +67,7 @@ interface PendingServerAuth {
  *   e2e: new E2EAuth({ ... }),
  * });
  *
- * const server = createBusServer({ websocket: wss, auth });
+ * const server = createBusServer({ websocket: wss, bus, checkBoundaryAccess, auth });
  * ```
  */
 export class DispatchingAuth implements TransportAuth {

@@ -1,10 +1,12 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { Server as HttpServer } from 'node:http';
 import { EventEmitter } from 'node:events';
-import { createBusInstance } from '@makaio/bus-core';
+import { NO_BOUNDARY_ACCESS_CHECK, createBusInstance } from '@makaio/bus-core';
 import { startBusServer, type BusServer } from '@makaio/bus-server';
 import type { WebSocketLike } from '@makaio/bus-transport-websocket';
 import { BusServerTransportProvider } from './bus-server-transport.js';
+
+const testConnectionOptions = { machineId: 'machine-1', checkBoundaryAccess: NO_BOUNDARY_ACCESS_CHECK } as const;
 
 const { stopBusServerMock, closeWebSocketServerMock, handleUpgradeMock, WebSocketServerMock } = vi.hoisted(() => {
   const closeWebSocketServerMock = vi.fn((cb?: (err?: Error) => void) => cb?.());
@@ -65,7 +67,7 @@ describe('BusServerTransportProvider', () => {
       httpServer: makeMockHttpServer(),
     });
 
-    await expect(transport.connect(bus, 'machine-1')).resolves.toBeUndefined();
+    await expect(transport.connect(bus, testConnectionOptions)).resolves.toBeUndefined();
 
     await transport.disconnect();
   });
@@ -76,7 +78,7 @@ describe('BusServerTransportProvider', () => {
       httpServer: makeMockHttpServer(),
     });
 
-    await transport.connect(bus, 'machine-1');
+    await transport.connect(bus, testConnectionOptions);
 
     const auth = vi.mocked(startBusServer).mock.calls[0]?.[0]?.auth;
     expect(auth).toBeDefined();
@@ -112,7 +114,7 @@ describe('BusServerTransportProvider', () => {
     vi.mocked(httpServer.address).mockReturnValue({ port: 9999, family: 'IPv4', address: '0.0.0.0' });
     const transport = new BusServerTransportProvider({ httpServer });
 
-    await transport.connect(bus, 'machine-1');
+    await transport.connect(bus, testConnectionOptions);
 
     expect(vi.mocked(startBusServer).mock.calls[0]?.[0]?.auth).toBeUndefined();
     await transport.disconnect();
@@ -127,7 +129,7 @@ describe('BusServerTransportProvider', () => {
       auth,
     });
 
-    await transport.connect(bus, 'machine-1');
+    await transport.connect(bus, testConnectionOptions);
 
     expect(vi.mocked(startBusServer).mock.calls[0]?.[0]?.auth).toBe(auth);
     await transport.disconnect();
@@ -140,7 +142,7 @@ describe('BusServerTransportProvider', () => {
       httpServer,
     });
 
-    await transport.connect(bus, 'machine-1');
+    await transport.connect(bus, testConnectionOptions);
 
     expect(httpServer.on).toHaveBeenCalledWith('upgrade', expect.any(Function));
 
@@ -175,9 +177,9 @@ describe('BusServerTransportProvider', () => {
       httpServer: makeMockHttpServer(),
     });
 
-    await transport.connect(bus, 'machine-1');
+    await transport.connect(bus, testConnectionOptions);
 
-    await expect(transport.connect(bus, 'machine-2')).rejects.toThrow(
+    await expect(transport.connect(bus, { ...testConnectionOptions, machineId: 'machine-2' })).rejects.toThrow(
       '[BusServerTransport] connect() called while transport is already connected or connecting',
     );
 
@@ -190,10 +192,10 @@ describe('BusServerTransportProvider', () => {
       httpServer: makeMockHttpServer(),
     });
 
-    await transport.connect(bus, 'machine-1');
+    await transport.connect(bus, testConnectionOptions);
     await transport.disconnect();
 
-    await expect(transport.connect(bus, 'machine-2')).resolves.toBeUndefined();
+    await expect(transport.connect(bus, { ...testConnectionOptions, machineId: 'machine-2' })).resolves.toBeUndefined();
     await transport.disconnect();
   });
 
@@ -206,7 +208,7 @@ describe('BusServerTransportProvider', () => {
       httpServer,
     });
 
-    await expect(transport.connect(bus, 'machine-1')).rejects.toThrow(
+    await expect(transport.connect(bus, testConnectionOptions)).rejects.toThrow(
       '[BusServerTransport] httpServer must already be listening before connect() is called',
     );
   });
@@ -217,7 +219,7 @@ describe('BusServerTransportProvider', () => {
       httpServer: makeMockHttpServer(),
     });
 
-    await transport.connect(bus, 'machine-1');
+    await transport.connect(bus, testConnectionOptions);
     await transport.disconnect();
 
     expect(stopBusServerMock).toHaveBeenCalledOnce();
@@ -231,7 +233,7 @@ describe('BusServerTransportProvider', () => {
       httpServer,
     });
 
-    await transport.connect(bus, 'machine-1');
+    await transport.connect(bus, testConnectionOptions);
     await transport.disconnect();
 
     expect(httpServer.off).toHaveBeenCalledWith('upgrade', expect.any(Function));
@@ -244,7 +246,7 @@ describe('BusServerTransportProvider', () => {
       httpServer,
     });
 
-    await transport.connect(bus, 'machine-1');
+    await transport.connect(bus, testConnectionOptions);
     await transport.disconnect();
 
     const closeMock = (httpServer as unknown as { close: ReturnType<typeof vi.fn> }).close;
@@ -260,7 +262,7 @@ describe('BusServerTransportProvider', () => {
       httpServer,
     });
 
-    await expect(transport.connect(bus, 'machine-1')).rejects.toThrow('bus start failure');
+    await expect(transport.connect(bus, testConnectionOptions)).rejects.toThrow('bus start failure');
 
     expect(closeWebSocketServerMock).toHaveBeenCalledOnce();
     expect(httpServer.off).toHaveBeenCalledWith('upgrade', expect.any(Function));
@@ -298,7 +300,7 @@ describe('BusServerTransportProvider', () => {
       const transport = new BusServerTransportProvider({
         httpServer,
       });
-      await transport.connect(bus, 'machine-1');
+      await transport.connect(bus, testConnectionOptions);
       return transport;
     }
 
@@ -388,7 +390,7 @@ describe('BusServerTransportProvider', () => {
       });
 
       // connect() is intentionally not awaited — busReady is still false.
-      const connectPromise = transport.connect(bus, 'machine-1');
+      const connectPromise = transport.connect(bus, testConnectionOptions);
 
       const socket = makeMockSocket();
       const head = Buffer.alloc(0);

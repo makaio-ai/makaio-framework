@@ -1,4 +1,5 @@
 /** Real server coverage for auth-protocol refusal versus delegated infrastructure failure. */
+import { NO_BOUNDARY_ACCESS_CHECK } from '@makaio/bus-core';
 import { afterEach, describe, expect, it } from 'vitest';
 import { WebSocket } from 'ws';
 import { DispatchingAuth } from './dispatching-auth.js';
@@ -33,7 +34,7 @@ describe('dispatching authentication failure categories', () => {
     const closed = new Promise<number>((resolve) => {
       wss.once('connection', (socket) => socket.once('close', resolve));
     });
-    const server = new ServerTransport({ websocket: wss, auth });
+    const server = new ServerTransport({ checkBoundaryAccess: NO_BOUNDARY_ACCESS_CHECK, websocket: wss, auth });
     cleanups.push(() => server.disconnect());
     await server.connect();
     return { server, closed, url: `ws://127.0.0.1:${port}` };

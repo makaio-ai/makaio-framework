@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import * as path from 'node:path';
 import { MakaioBus } from '@makaio/bus-core';
 import { createBusNamespace } from '@makaio/core';
-import type { KernelMakaioExtension, TransportProvider } from '@makaio/kernel';
+import { NoTransportProvider, type KernelMakaioExtension } from '@makaio/kernel';
 import { sessionStoragePackage, SessionStorageSubjects } from '@makaio/services-core';
 import { getRawSqlExecutor, registerDrizzleHandlers } from '@makaio/storage-drizzle';
 import { clientStoragePackage, ClientRuntimeStorageSubjects, ClientsCoreToken } from '@makaio/subsystem-client';
@@ -17,12 +17,7 @@ const storageProbeNamespace = createBusNamespace('storage:boot-probe', {
   read: { request: z.object({}), response: z.object({ value: z.number() }) },
 });
 
-const transport: TransportProvider = {
-  /** Connect without a network listener for in-process requests. */
-  connect: async () => {},
-  /** Release the in-process transport. */
-  disconnect: async () => {},
-};
+const transport = new NoTransportProvider();
 
 it('starts framework and discovered storage packages on the default SQLite database', { timeout: 30_000 }, async () => {
   const makaioHome = await fs.mkdtemp(path.join(tmpdir(), 'makaio-boot-storage-'));

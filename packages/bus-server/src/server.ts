@@ -168,6 +168,7 @@ async function stopServerTransport(transport: BusTransport, state: BusServerRunt
  * const server = createBusServer({
  *   websocket: wss,
  *   bus,
+ *   checkBoundaryAccess,
  *   auth: new HmacAuth({ secret: process.env.BUS_SECRET! }),
  *   debug: true,
  * });
@@ -189,6 +190,7 @@ export function createBusServer(config: BusServerConfig): BusServer {
     websocket,
     auth,
     debug,
+    checkBoundaryAccess: config.checkBoundaryAccess,
   });
 
   const state: BusServerRuntimeState = {

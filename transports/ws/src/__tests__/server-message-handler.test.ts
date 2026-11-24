@@ -1,12 +1,15 @@
 import {
   CorrelationTracker,
   DEFAULT_REQUEST_TIMEOUT_MS,
+  deserializeTransportError,
   type BusReceiveHandler,
   type BusRequestMessage,
 } from '@makaio/bus-core';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { BroadcastAggregator } from '../broadcast-aggregator.js';
 import { ClientRegistry } from '../client-registry.js';
+import { DeferredSubscriptionReplay } from '../deferred-subscription-replay.js';
+import { ServerBoundaryAccess } from '../server-boundary-access.js';
 import { createInboundMessageHandler, routeMessage, type MessageHandlerDeps } from '../server-message-handler.js';
 import {
   clearHmacIdentitySecretsForTesting,
@@ -66,6 +69,85 @@ function makePerSocketAuth(
 describe('createInboundMessageHandler', () => {
   afterEach(() => {
     vi.restoreAllMocks();
+    vi.useRealTimers();
+  });
+
+  it.each([0, 20, 40])('charges send authorization against the inbound budget of %i ms', async (timeout) => {
+    vi.useFakeTimers();
+    const socket = new MockWebSocket();
+    const requests: BusRequestMessage[] = [];
+    const access = new ServerBoundaryAccess('websocket', undefined, async () => {
+      await Promise.resolve();
+      vi.setSystemTime(Date.now() + 20);
+      return undefined;
+    });
+    const deps = makeDeps({
+      access,
+      handlers: new Set([
+        async (message) => {
+          if (message.type === 'request') requests.push(message);
+        },
+      ]),
+      sendSafely: (client, frame) => {
+        client.send(frame);
+        return true;
+      },
+    });
+    deps.registry.addClient(socket);
+    const handler = createInboundMessageHandler(socket, deps);
+    await handler(
+      JSON.stringify({
+        type: 'request',
+        namespace: 'test',
+        subject: 'action',
+        correlationId: 'corr',
+        messageId: 'msg',
+        payload: {},
+        timeout,
+      }),
+    );
+
+    if (timeout === 20) {
+      expect(requests).toHaveLength(0);
+      expect(socket.sentMessages.map((frame) => JSON.parse(frame))).toMatchObject([
+        { type: 'response', correlationId: 'corr', error: { subject: 'test.action', data: { timeoutMs: timeout } } },
+      ]);
+    } else {
+      expect(requests.map((request) => request.timeout)).toEqual([timeout === 0 ? 0 : timeout - 20]);
+    }
+  });
+
+  it('removes a subscription and rejects its acknowledgement when the peer changes during dispatch', async () => {
+    const socket = new MockWebSocket();
+    const identities = new Map([[socket, 'before']]);
+    const auth = makePerSocketAuth(identities);
+    const registry = new ClientRegistry();
+    registry.addClient(socket);
+    const handle = vi.fn<BusReceiveHandler>(async (message) => {
+      if (message.type === 'subscribe') identities.set(socket, 'after');
+    });
+    const access = new ServerBoundaryAccess('websocket', auth, async () => undefined);
+    const deps = makeDeps({ access, auth, registry, handlers: new Set([handle]) });
+    await routeMessage(
+      {
+        type: 'subscribe',
+        ackId: 'ack',
+        subjects: { 'test.action': [1] },
+        deliveryClasses: { 'test.action': 'relayable' },
+      },
+      socket,
+      deps,
+    );
+    expect(registry.matchesDelivery(socket, 'test.action', {}, 'handler')).toBe(false);
+    expect(handle.mock.calls.map(([message]) => message.type)).toEqual(['subscribe', 'unsubscribe']);
+    expect(deps.sendSafely).toHaveBeenCalledExactlyOnceWith(socket, expect.any(String));
+    const ack = JSON.parse(vi.mocked(deps.sendSafely).mock.calls[0][1]);
+    expect(ack).toMatchObject({
+      type: 'subscription-ack',
+      ackId: 'ack',
+      error: { code: 'forbidden' },
+    });
+    expect(deserializeTransportError(ack.error)).toMatchObject({ data: { reason: 'peer-changed' } });
   });
 
   it('logs malformed JSON as a parse failure', async () => {
@@ -735,6 +817,22 @@ describe('subscribe/unsubscribe subject restriction', () => {
     expect(handler).not.toHaveBeenCalled();
   });
 
+  it('forgets a deferred subscription rejected by the live identity filter', async () => {
+    const socket = new MockWebSocket();
+    const auth = makePerSocketAuth(new Map([[socket, BOOTSTRAP_IDENTITY]]));
+    const replay = new DeferredSubscriptionReplay(socket);
+    const subjects = { 'test.action': [] };
+    replay.defer({ type: 'subscribe', subjects, deliveryClasses: {} }, subjects);
+    registerHmacIdentitySecret(BOOTSTRAP_IDENTITY, BOOTSTRAP_SECRET, {
+      partyKind: 'test.worker-bootstrap',
+      allowedSubscriptionSubjects: [ALLOWED_SUBJECT],
+    });
+
+    expect(replay.snapshot()).toHaveLength(1);
+    for (const message of replay.snapshot()) await routeMessage(message, socket, makeDeps({ auth }), replay);
+    expect(replay.snapshot()).toEqual([]);
+  });
+
   it('filters disallowed subjects from an unsubscribe message', async () => {
     registerHmacIdentitySecret(BOOTSTRAP_IDENTITY, BOOTSTRAP_SECRET, {
       partyKind: 'test.worker-bootstrap',
@@ -1319,7 +1417,7 @@ describe('outbound subject restriction on forwarding', () => {
 
     expect(sendSafely).toHaveBeenCalledWith(
       subscriberSocket,
-      expect.stringContaining('"correlationId":"matching-broadcast"'),
+      expect.stringContaining('"messageId":"matching-broadcast-id"'),
     );
   });
 
@@ -1619,7 +1717,7 @@ describe('outbound required recipient filters', () => {
 
     expect(sendSafely).toHaveBeenCalledWith(
       attemptASocket,
-      expect.stringContaining('"correlationId":"attempt-filtered-broadcast"'),
+      expect.stringContaining('"messageId":"attempt-filtered-broadcast-id"'),
     );
     expect(sendSafely.mock.calls.some(([client]) => client === attemptBSocket)).toBe(false);
   });

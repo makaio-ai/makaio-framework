@@ -1,6 +1,6 @@
 import { createServer } from 'node:http';
 import { describe, it, expect } from 'vitest';
-import { createBusInstance, ValidationError } from '@makaio/bus-core';
+import { NO_BOUNDARY_ACCESS_CHECK, createBusInstance, ValidationError } from '@makaio/bus-core';
 import {
   AgentSubjects,
   FrameworkContractNamespaces,
@@ -93,7 +93,10 @@ describe('bootWorkerBus', () => {
     let worker: Awaited<ReturnType<typeof bootWorkerBus>> | undefined;
 
     try {
-      await transport.connect(hostBus, 'worker-boot-readiness-host');
+      await transport.connect(hostBus, {
+        machineId: 'worker-boot-readiness-host',
+        checkBoundaryAccess: NO_BOUNDARY_ACCESS_CHECK,
+      });
       cleanup = hostBus.on(WorkflowSubjects.getExecution, (ctx) => {
         expect(ctx.payload.executionId).toBe('exec-ready');
         ctx.setResult({ execution: null });

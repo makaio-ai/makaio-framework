@@ -6,6 +6,7 @@ import type { ExtensionWarningAction } from '@makaio/contracts/extension';
 import { createOpenContributionProcessor, OpenContributionIndex } from './open-contribution-index.js';
 import { BootProgressObserver } from './boot-progress-observer.js';
 import { registerWarningActionHandler } from './warning-action-dispatcher.js';
+import { createCoordinatorRights, type CoordinatorRights } from '../rights/coordinator-rights.js';
 import { registerCoordinatorRpcHandlers } from './coordinator-rpc-handlers.js';
 import { emitWarnings, emitWarningsForEntry } from './health-warning-emitter.js';
 import { entryToExtensionInfo } from './extension-info.js';
@@ -146,6 +147,7 @@ export class ExtensionCoordinator<THostContext extends KernelHostContext = Kerne
   private loadOrder: string[] = [];
   private loaded = false;
   private started = false;
+  private readonly rights: CoordinatorRights;
   private shutdownRequested = false;
   private shutdownPromise: Promise<void> | undefined;
   /** FIFO lane for lifecycle transitions that mutate extension entries. */
@@ -189,6 +191,7 @@ export class ExtensionCoordinator<THostContext extends KernelHostContext = Kerne
   public constructor(bus: IMakaioBus, ...args: ExtensionCoordinatorArguments<THostContext>) {
     const [options = {}] = args;
     this.bus = bus;
+    this.rights = typeof options.rights === 'object' ? options.rights : createCoordinatorRights(bus, options.rights);
     this.surface = options.surface ?? 'headless';
     this.db = options.db;
     this.runInStartScope = options.runInStartScope ?? ((_name, start) => start());
@@ -413,6 +416,7 @@ export class ExtensionCoordinator<THostContext extends KernelHostContext = Kerne
         handleSetEnabled: (name, enabled) => this.handleSetEnabled(name, enabled),
         getInstalledCatalog: () => buildInstalledExtensionCatalog(this.createCatalogHost()),
       }),
+      ...this.rights.registerHandlers(),
     );
   }
 
@@ -542,6 +546,7 @@ export class ExtensionCoordinator<THostContext extends KernelHostContext = Kerne
     // Signal all active packages to cancel long-running operations before
     // their services are destroyed. The queued callback cannot begin until the
     // current turn completes, so this still precedes teardown.
+    this.rights.closeBoundary();
     this.shutdownController.abort();
 
     return shutdownPromise;
@@ -963,10 +968,11 @@ export class ExtensionCoordinator<THostContext extends KernelHostContext = Kerne
     return {
       bus: this.bus,
       extensionContextBase: this.extensionContextBase,
+      rights: this.rights,
       loadConfig: this.loadConfig,
       operatorConfig: this.operatorConfig,
       signal: this.shutdownController.signal,
-      hasActiveExtension: (name: string): boolean => this.hasActiveExtension(name),
+      hasActiveExtension: (name) => this.entries.get(name)?.state === 'active',
       openContributionReaderFor: (name: string) => this.openContributionIndex.readerFor(name),
       getExtensionService: <T>(name: string): T | undefined => this.getExtensionService<T>(name),
     };
@@ -981,14 +987,5 @@ export class ExtensionCoordinator<THostContext extends KernelHostContext = Kerne
       bus: this.bus,
       entries: this.entries,
     };
-  }
-
-  /**
-   * Check whether an extension has reached active state.
-   * @param name - Extension name to check.
-   * @returns `true` when the extension is active.
-   */
-  private hasActiveExtension(name: string): boolean {
-    return this.entries.get(name)?.state === 'active';
   }
 }

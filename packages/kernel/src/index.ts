@@ -17,6 +17,7 @@ export type {
 } from './providers/index.js';
 
 export { BootNamespace, BootSubjects } from './boot-namespace.js';
+export { createCoordinatorRights, type CoordinatorRights } from './rights/coordinator-rights.js';
 export { ServiceSkipError } from './service-skip-error.js';
 export { cancellationRejection, readCancellation } from './cancellation.js';
 export { createShutdownSequence, runBoundedShutdownSteps, shutdownBudgetMs } from './shutdown.js';

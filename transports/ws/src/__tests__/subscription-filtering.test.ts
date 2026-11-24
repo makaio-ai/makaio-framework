@@ -13,7 +13,7 @@
 import { describe, it, expect } from 'vitest';
 import { WebSocketClientTransport } from '../ws-client-transport.js';
 import { ServerTransport } from '../server-transport.js';
-import { BusEventMessage } from '@makaio/bus-core';
+import { NO_BOUNDARY_ACCESS_CHECK, type BusEventMessage } from '@makaio/bus-core';
 import { createTestServer, waitForMessageCount } from './test-utils.js';
 
 // ============================================================================
@@ -21,9 +21,42 @@ import { createTestServer, waitForMessageCount } from './test-utils.js';
 // ============================================================================
 
 describe('Subscription filtering E2E', () => {
+  it('authorizes each event for a client that only registers a receive callback', async () => {
+    const { wss, port } = await createTestServer();
+    const decisions: string[] = [];
+    const server = new ServerTransport({
+      websocket: wss,
+      checkBoundaryAccess: async (target) => {
+        if (target.operation !== 'deliver') return;
+        decisions.push(target.subject);
+        if (target.subject === 'restricted') return new Error('Event access denied');
+      },
+    });
+    const client = new WebSocketClientTransport({ url: `ws://localhost:${port}`, autoReconnect: false });
+    const received: string[] = [];
+    client.onReceive(async (message) => {
+      if (message.type === 'event') received.push(message.subject);
+    });
+    await server.connect();
+    try {
+      await client.connect();
+      await client.ready;
+      for (const subject of ['restricted', 'allowed']) {
+        await server.send({ type: 'event', namespace: 'test', subject, payload: {}, messageId: subject });
+      }
+      expect(decisions).toEqual(['restricted', 'allowed']);
+      await waitForMessageCount(() => received.length, 1);
+      expect(received).toEqual(['allowed']);
+    } finally {
+      await client.disconnect();
+      await server.disconnect();
+      await new Promise<void>((resolve) => wss.close(() => resolve()));
+    }
+  });
+
   it('filters messages based on client subscriptions', async () => {
     const { wss, port } = await createTestServer();
-    const serverTransport = new ServerTransport({ websocket: wss });
+    const serverTransport = new ServerTransport({ checkBoundaryAccess: NO_BOUNDARY_ACCESS_CHECK, websocket: wss });
     await serverTransport.connect();
 
     try {
@@ -116,7 +149,7 @@ describe('Subscription filtering E2E', () => {
 
   it('supports dynamic subscribe and unsubscribe', async () => {
     const { wss, port } = await createTestServer();
-    const serverTransport = new ServerTransport({ websocket: wss });
+    const serverTransport = new ServerTransport({ checkBoundaryAccess: NO_BOUNDARY_ACCESS_CHECK, websocket: wss });
     await serverTransport.connect();
 
     try {

@@ -136,7 +136,9 @@ const BootSchemas = {
 /**
  * Boot namespace for bus operations.
  */
-export const BootNamespace = createBusNamespace('kernel:boot', BootSchemas);
+export const BootNamespace = createBusNamespace('kernel:boot', BootSchemas, {
+  startupObservable: { readOnlyRequests: ['getState'] },
+});
 
 /**
  * Boot subjects for type-safe bus operations.

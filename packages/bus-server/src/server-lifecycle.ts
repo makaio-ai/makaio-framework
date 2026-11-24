@@ -11,6 +11,7 @@ import { createBusServer } from './server.js';
 import type { BusServer } from './types.js';
 import { HmacAuth } from '@makaio/bus-transport-websocket';
 import type { TransportAuth, WebSocketServerLike } from '@makaio/bus-transport-websocket';
+import type { BusServerConfig } from './types.js';
 import type { IMakaioBus } from '@makaio/bus-core';
 
 /**
@@ -42,6 +43,9 @@ export interface StartBusServerOptions {
    * when multiple auth protocols must be supported on a single port.
    */
   auth?: TransportAuth;
+
+  /** Host authorization policy or an explicit opt-out. */
+  checkBoundaryAccess: BusServerConfig['checkBoundaryAccess'];
 
   /**
    * Enable debug logging.
@@ -93,6 +97,7 @@ export interface StartBusServerOptions {
  *   websocket: wss,
  *   secret: process.env.BUS_SECRET,
  *   bus,
+ *   checkBoundaryAccess,
  *   debug: true,
  * });
  *
@@ -121,6 +126,7 @@ export async function startBusServer(options: StartBusServerOptions): Promise<Bu
     const busServer = createBusServer({
       websocket,
       auth,
+      checkBoundaryAccess: options.checkBoundaryAccess,
       debug,
       bus,
       loopbackName,

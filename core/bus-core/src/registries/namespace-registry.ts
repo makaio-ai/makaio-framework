@@ -8,6 +8,7 @@ import { inspectSubjectSchema } from '@makaio/core';
 import { isRequestSchema } from '../utils/is-request-schema.js';
 import {
   type SubjectRoutingMetadata,
+  validateStartupObservation,
   buildNamespaceRoutingMetadataFromInspections,
   failOnRoutingMetadataCollision,
 } from './routing-metadata.js';
@@ -156,6 +157,8 @@ export interface RegisteredSubjectSchema {
   hostLocalRequest: boolean;
   /** Transport policy explicitly declared on this subject. */
   defaultTransports?: TransportRoutingDefault;
+  /** Read-only subject of a host namespace accessible during startup. */
+  startupObservable?: true;
   /** Journal declaration of a `journalSubject()`-wrapped subject, if any. */
   journal?: JournalOptions;
 }
@@ -232,11 +235,7 @@ function schemaFingerprint(schema: BaseSubjectSchema): string | BaseSubjectSchem
  * @returns Schema inspections keyed by canonical subject key.
  */
 function buildNamespaceInspections(schemas: Record<string, SubjectSchema>): SubjectInspections {
-  const inspections = new Map<string, SubjectSchemaInspection<BaseSubjectSchema>>();
-  for (const [subject, schema] of Object.entries(schemas)) {
-    inspections.set(subject, inspectSubjectSchema(schema));
-  }
-  return inspections;
+  return new Map(Object.entries(schemas).map(([subject, schema]) => [subject, inspectSubjectSchema(schema)]));
 }
 
 /**
@@ -333,6 +332,8 @@ export type TypedNamespace<Domain extends string, Schemas extends Record<string,
 
 /** Runtime namespace and subject metadata for one bus context. */
 export class NamespaceRegistry {
+  /** Observers notified after a new namespace registration becomes visible. */
+  public readonly registrationListeners = new Set<() => void>();
   private readonly namespaces = new Map<string, RegisteredNamespace>();
   // Dotted domains and dotted subject keys can produce the same fully qualified key.
   // Keep both registrations so releasing one cannot erase the other's contract.
@@ -398,6 +399,7 @@ export class NamespaceRegistry {
     }
 
     const inspections = buildNamespaceInspections(schemas);
+    validateStartupObservation(domain, holder.kind, inspections, options?.startupObservable);
     const routing = buildNamespaceRoutingMetadataFromInspections(inspections);
     const validation = validationConfigFromOptions(options);
     const existing = this.namespaces.get(domain);
@@ -433,23 +435,18 @@ export class NamespaceRegistry {
     this.releasedLocality.delete(domain);
     for (const [subject, inspection] of inspections) {
       const fullSubject = `${domain}.${subject}`;
-      const { local, collectorOnly, channel, hostLocalRequest, journal } = inspection.marks;
-      const subjectDefaultTransports = inspection.marks.defaultTransports;
       const registrations = this.registeredSubjects.get(fullSubject) ?? [];
       registrations.push({
         namespace: domain,
         subject,
         fullSubject,
         schema: inspection.schema,
-        local,
-        collectorOnly,
-        channel,
-        hostLocalRequest,
-        ...(subjectDefaultTransports !== undefined && { defaultTransports: subjectDefaultTransports }),
-        journal,
+        ...inspection.marks,
+        ...(options?.startupObservable && { startupObservable: true }),
       });
       this.registeredSubjects.set(fullSubject, registrations);
     }
+    this.registrationListeners.forEach((notify) => notify());
     return registration;
   }
 

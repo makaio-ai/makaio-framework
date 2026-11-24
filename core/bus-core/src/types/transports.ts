@@ -115,6 +115,8 @@ export interface BusSubscribeSyncCompleteMessage {
 export interface BusSubscriptionAckMessage {
   type: 'subscription-ack';
   ackId: string;
+  /** Policy failure, when the update was refused. */
+  error?: BusTransportError;
 }
 
 /**

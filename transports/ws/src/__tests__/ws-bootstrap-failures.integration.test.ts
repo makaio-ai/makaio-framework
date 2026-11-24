@@ -1,4 +1,5 @@
 /** Real-socket coverage for bootstrap failure classification and disposal. */
+import { NO_BOUNDARY_ACCESS_CHECK } from '@makaio/bus-core';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { WebSocket } from 'ws';
 import { HmacAuth, ServerTransport, WebSocketClientTransport, WebSocketConnectionError } from '../index.js';
@@ -46,6 +47,7 @@ describe('WebSocket bootstrap failures with real HMAC authentication', () => {
   ) {
     const { wss, port } = await createTestServer();
     const server = new ServerTransport({
+      checkBoundaryAccess: NO_BOUNDARY_ACCESS_CHECK,
       websocket: wss,
       auth: options.serverAuth ?? new HmacAuth({ secret: 'bootstrap-test-secret', challengeTimeout: 2000 }),
     });
@@ -82,6 +84,7 @@ describe('WebSocket bootstrap failures with real HMAC authentication', () => {
   it('closes a missing server-side HMAC response with 1011, not a policy rejection', async () => {
     const { wss, port } = await createTestServer();
     const server = new ServerTransport({
+      checkBoundaryAccess: NO_BOUNDARY_ACCESS_CHECK,
       websocket: wss,
       auth: new HmacAuth({ secret: 'bootstrap-test-secret', challengeTimeout: 300 }),
     });

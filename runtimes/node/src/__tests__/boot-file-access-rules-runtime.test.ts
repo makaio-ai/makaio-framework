@@ -11,13 +11,14 @@ import * as fs from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import * as path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { MakaioBus, type IMakaioBus } from '@makaio/bus-core';
+import { MakaioBus } from '@makaio/bus-core';
 import { AgentSubjects } from '@makaio/contracts';
 import { createMakaioIgnoreProvider } from '@makaio/extension-filesystem';
-import type { KernelMakaioExtension, TransportProvider } from '@makaio/kernel';
+import type { KernelMakaioExtension } from '@makaio/kernel';
 import { AgentStorageSubjects, SessionStorageSubjects, ToolApprovalToken } from '@makaio/services-core';
 import type { FileAccessRuleProvider } from '@makaio/tools-core';
 import { bootMakaioRuntimeCore, type MakaioRuntime } from '../boot.js';
+import type { ServerTransportProvider } from '../boot-types.js';
 import { ExplicitDescriptorDiscovery, type DiscoveredExtension } from '../extension-discovery.js';
 
 const { homedirMock } = vi.hoisted(() => ({
@@ -39,8 +40,8 @@ const ADAPTER_NAME = 'test-adapter';
 /** Env vars boot reads that an ambient developer value must not leak into. */
 const ISOLATED_ENV_KEYS = ['MAKAIO_SKIP_EXTENSIONS', 'MAKAIO_DATABASE_URL', 'MAKAIO_DATABASE_PATH', 'MAKAIO_HOME'];
 
-class FakeTransportProvider implements TransportProvider {
-  public async connect(_bus: IMakaioBus, _machineId: string): Promise<void> {}
+class FakeTransportProvider implements ServerTransportProvider {
+  public async connect(): Promise<void> {}
 
   public async disconnect(): Promise<void> {}
 }

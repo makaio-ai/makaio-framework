@@ -9,7 +9,38 @@
  * @packageDocumentation
  */
 
-import type { JournalOptions, SubjectMarks, SubjectSchemaInspection } from '@makaio/core';
+import type {
+  BaseSubjectSchema,
+  JournalOptions,
+  NamespaceRegistrationOptions,
+  SubjectMarks,
+  SubjectSchemaInspection,
+} from '@makaio/core';
+import { isRequestSchema } from '../utils/is-request-schema.js';
+
+/**
+ * Require host ownership and explicit read-only declarations for requests observable during startup.
+ * @param domain - Namespace being registered.
+ * @param owner - Kind of holder registering the namespace.
+ * @param inspections - Unwrapped subject contracts.
+ * @param observation - Optional startup observation declaration.
+ */
+export function validateStartupObservation(
+  domain: string,
+  owner: 'host' | 'extension',
+  inspections: ReadonlyMap<string, SubjectSchemaInspection<BaseSubjectSchema>>,
+  observation: NamespaceRegistrationOptions['startupObservable'],
+): void {
+  if (observation === undefined) return;
+  if (
+    owner !== 'host' ||
+    [...inspections].some(
+      ([name, { schema }]) => isRequestSchema(schema) && !observation.readOnlyRequests.includes(name),
+    )
+  ) {
+    throw new Error(`Startup-observable namespace '${domain}' must be host-owned and declare every read-only request`);
+  }
+}
 
 /**
  * Routing metadata flags extracted from a subject schema's wrapper layer.

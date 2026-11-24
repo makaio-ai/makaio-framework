@@ -33,6 +33,7 @@ import type {
   ExtensionTransitionActionsContribution,
   ExtensionTransitionRulesContribution,
 } from '../workflow/transition.js';
+import type { RightContribution, RightsSourceContribution } from '../rights/right.js';
 
 /**
  * Awaited contribution processor registered with the runtime coordinator.
@@ -600,6 +601,28 @@ export interface MakaioExtension<THostContext extends ExtensionContext = NodeExt
    * Duplicate type keys across all sources hard-fail activation.
    */
   readonly transitionActions?: ExtensionTransitionActionsContribution;
+
+  /**
+   * Rights this extension declares in code, under its own namespace.
+   *
+   * A right name is owned by the declaring extension (`localContributionName`:
+   * prefix `'<extensionName>.'` and a non-empty rest). The kernel folds these
+   * into the directory of declared rights on activation and removes them when
+   * the extension stops. A right without any answer source is granted; see
+   * {@link RightsSourceContribution} for how a source restricts it.
+   */
+  readonly rights?: readonly RightContribution[];
+
+  /**
+   * Answer sources this extension contributes, each answering questions about
+   * the rights whose names its patterns cover.
+   *
+   * A source can only restrict: once a source exists for a right, the right is
+   * denied by default and granted only when every source for it answers yes.
+   * The kernel registers these on activation and removes them when the
+   * extension stops.
+   */
+  readonly rightsSources?: readonly RightsSourceContribution[];
 
   /**
    * Bus namespace introspection for this extension.

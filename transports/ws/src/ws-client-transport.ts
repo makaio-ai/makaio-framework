@@ -578,8 +578,9 @@ export class WebSocketClientTransport implements BusTransport {
         }
         return finishOwnReady;
       },
-      resolveSubscriptionAck: (ackId) => {
-        this.resolveSubscriptionAck(ackId);
+      settleSubscriptionAck: (ackId, error) => {
+        if (error === undefined) this.resolveSubscriptionAck(ackId);
+        else this.rejectSubscriptionAck(ackId, error);
       },
       rejectPendingSubscriptionAcks: (error) => {
         this.rejectPendingSubscriptionAcks(error);

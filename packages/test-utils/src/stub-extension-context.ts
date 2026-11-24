@@ -8,6 +8,7 @@
  * {@link NodeExtensionContext}.
  */
 
+import { createRefusingRightsCapability } from '@makaio/contracts/rights';
 import type { IMakaioBus } from '@makaio/bus-core';
 import { createCarrierBus, leaseNamespace } from '@makaio/bus-core/kernel-api';
 import type {
@@ -145,6 +146,7 @@ export function makeStubNodeExtensionContext(
     homedir: base.dataDir,
     makaioHome: `${base.dataDir}/.makaio`,
     username: 'test',
+    rights: createRefusingRightsCapability(),
     ...overrides,
   };
 }

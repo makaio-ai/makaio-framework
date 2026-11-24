@@ -1,18 +1,19 @@
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { MakaioBus, type IMakaioBus } from '@makaio/bus-core';
-import { KernelSubjects, type TransportProvider } from '@makaio/kernel';
+import { MakaioBus } from '@makaio/bus-core';
+import { KernelSubjects } from '@makaio/kernel';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { bootMakaioRuntimeCore } from './boot.js';
+import type { ServerTransportProvider } from './boot-types.js';
 import { ExplicitDescriptorDiscovery } from './extension-discovery.js';
 
 /** Transport that records whether the boot opened it. */
-class RecordingTransport implements TransportProvider {
+class RecordingTransport implements ServerTransportProvider {
   public connectCount = 0;
   public disconnectCount = 0;
 
-  public async connect(_bus: IMakaioBus, _machineId: string): Promise<void> {
+  public async connect(): Promise<void> {
     this.connectCount += 1;
   }
 

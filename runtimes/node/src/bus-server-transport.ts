@@ -15,8 +15,8 @@ import type { IMakaioBus } from '@makaio/bus-core';
 import { startBusServer, type BusServer, type TransportAuth } from '@makaio/bus-server';
 import { DispatchingAuth, type WebSocketLike } from '@makaio/bus-transport-websocket';
 import { MAKAIO_LOOPBACK_PARTY_KIND, type TransportReceiveContext } from '@makaio/core';
-import type { TransportProvider } from '@makaio/kernel';
 import { WebSocketServer } from 'ws';
+import type { ServerTransportConnectOptions, ServerTransportProvider } from './boot-types.js';
 
 /**
  * Whether an incoming upgrade should be handled as a bus connection.
@@ -142,7 +142,7 @@ class LoopbackReceiveContextAuth implements TransportAuth {
 /**
  * Platform-specific bus server transport provider for Node.js.
  */
-export class BusServerTransportProvider implements TransportProvider {
+export class BusServerTransportProvider implements ServerTransportProvider {
   private readonly options: BusServerTransportOptions;
 
   /** Active bus server instance. Set during connect, cleared on disconnect. */
@@ -191,9 +191,9 @@ export class BusServerTransportProvider implements TransportProvider {
   /**
    * Attach the `/bus` upgrade handler to the HTTP server and start the bus server.
    * @param bus - Bus instance to attach the transport to.
-   * @param _machineId - Machine identifier (unused; callers provide auth externally).
+   * @param options - Host settings supplying the boundary access policy.
    */
-  public async connect(bus: IMakaioBus, _machineId: string): Promise<void> {
+  public async connect(bus: IMakaioBus, options: ServerTransportConnectOptions): Promise<void> {
     if (this.connecting || this.busServer || this.websocketServer) {
       throw new Error('[BusServerTransport] connect() called while transport is already connected or connecting');
     }
@@ -220,6 +220,7 @@ export class BusServerTransportProvider implements TransportProvider {
       this.busServer = await startBusServer({
         websocket: websocketServer,
         bus,
+        checkBoundaryAccess: options.checkBoundaryAccess,
         auth,
         loopbackName: this.options.loopbackName ?? DEFAULT_LOOPBACK_NAME,
       });

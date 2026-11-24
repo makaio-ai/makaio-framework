@@ -60,6 +60,9 @@ function asWs(client: MockClient): WebSocketLike {
   return client as WebSocketLike;
 }
 
+/** Report successful delivery when a test only concerns response aggregation. */
+const acceptDelivery = (): boolean => true;
+
 /**
  * Build a minimal BusBroadcastMessage.
  * @param correlationId - Correlation ID for the broadcast
@@ -110,15 +113,16 @@ describe('BroadcastAggregator', () => {
       const message = makeBroadcastMessage('corr-zero-peers');
 
       const forwarded: string[] = [];
-      aggregator.startClientBroadcast(asWs(sender), message, [], (_client, data) => {
+      const correlationId = aggregator.startClientBroadcast(asWs(sender), message, [], (_client, data) => {
         forwarded.push(data);
+        return true;
       });
 
       // No forwarding should occur
       expect(forwarded).toHaveLength(0);
 
       const nodeResults: BroadcastResult[] = [{ nodeId: 'node-1', payload: 'hello' }];
-      const handled = aggregator.handleNodeResults('corr-zero-peers', nodeResults);
+      const handled = aggregator.handleNodeResults(correlationId, nodeResults);
 
       expect(handled).toBe(true);
       // Sender must receive the aggregated response
@@ -138,8 +142,8 @@ describe('BroadcastAggregator', () => {
       const sender = makeMockClient(3); // CLOSED
       const message = makeBroadcastMessage('corr-closed-sender');
 
-      aggregator.startClientBroadcast(asWs(sender), message, [], vi.fn());
-      aggregator.handleNodeResults('corr-closed-sender', []);
+      const correlationId = aggregator.startClientBroadcast(asWs(sender), message, [], acceptDelivery);
+      aggregator.handleNodeResults(correlationId, []);
 
       // Sender is closed — should not attempt to send
       expect(sender.send).not.toHaveBeenCalled();
@@ -158,9 +162,10 @@ describe('BroadcastAggregator', () => {
       const message = makeBroadcastMessage('corr-peers');
 
       const forwarded: Array<{ client: WebSocketLike; data: string }> = [];
-      aggregator.startClientBroadcast(asWs(sender), message, [asWs(peerA), asWs(peerB)], (client, data) =>
-        forwarded.push({ client, data }),
-      );
+      aggregator.startClientBroadcast(asWs(sender), message, [asWs(peerA), asWs(peerB)], (client, data) => {
+        forwarded.push({ client, data });
+        return true;
+      });
 
       expect(forwarded).toHaveLength(2);
       expect(forwarded[0].client).toBe(asWs(peerA));
@@ -174,12 +179,17 @@ describe('BroadcastAggregator', () => {
       const peerB = makeMockClient();
       const message = makeBroadcastMessage('corr-partial');
 
-      aggregator.startClientBroadcast(asWs(sender), message, [asWs(peerA), asWs(peerB)], vi.fn());
+      const correlationId = aggregator.startClientBroadcast(
+        asWs(sender),
+        message,
+        [asWs(peerA), asWs(peerB)],
+        acceptDelivery,
+      );
 
       // Only peerA responds
       aggregator.handleResponse(asWs(peerA), {
         type: 'broadcast-response',
-        correlationId: 'corr-partial',
+        correlationId,
         results: [{ nodeId: 'peer-a', payload: 'a' }],
       });
 
@@ -187,7 +197,7 @@ describe('BroadcastAggregator', () => {
       expect(sender.send).not.toHaveBeenCalled();
 
       // Node results arrive before peerB
-      aggregator.handleNodeResults('corr-partial', [{ nodeId: 'server-node', payload: 'srv' }]);
+      aggregator.handleNodeResults(correlationId, [{ nodeId: 'server-node', payload: 'srv' }]);
 
       // Still not done — peerB is still pending
       expect(sender.send).not.toHaveBeenCalled();
@@ -195,7 +205,7 @@ describe('BroadcastAggregator', () => {
       // peerB responds
       aggregator.handleResponse(asWs(peerB), {
         type: 'broadcast-response',
-        correlationId: 'corr-partial',
+        correlationId,
         results: [{ nodeId: 'peer-b', payload: 'b' }],
       });
 
@@ -205,18 +215,40 @@ describe('BroadcastAggregator', () => {
       expect(response.results).toHaveLength(3);
     });
 
+    it('accepts one result only from the delivered socket', () => {
+      const aggregator = new BroadcastAggregator();
+      const recipient = asWs(makeMockClient());
+      const other = asWs(makeMockClient());
+      const sender = asWs(makeMockClient());
+      const message = makeBroadcastMessage('corr-delivered');
+      const correlationId = aggregator.startClientBroadcast(sender, message, [recipient, other], (client) => {
+        return client === recipient;
+      });
+      const response = {
+        type: 'broadcast-response' as const,
+        correlationId,
+        results: [{ nodeId: 'recipient', payload: 'result' }],
+      };
+
+      expect(aggregator.handleResponse(other, response)).toBe(false);
+      expect(aggregator.handleResponse(recipient, response)).toBe(true);
+      expect(aggregator.handleResponse(recipient, response)).toBe(false);
+      aggregator.handleNodeResults(correlationId, []);
+      expect(sender.send).toHaveBeenCalledWith(JSON.stringify({ ...response, correlationId: message.correlationId }));
+    });
+
     it('aggregates results from all peer clients and node results', () => {
       const aggregator = new BroadcastAggregator({ timeout: 5000 });
       const sender = makeMockClient();
       const peerA = makeMockClient();
       const message = makeBroadcastMessage('corr-agg');
 
-      aggregator.startClientBroadcast(asWs(sender), message, [asWs(peerA)], vi.fn());
+      const correlationId = aggregator.startClientBroadcast(asWs(sender), message, [asWs(peerA)], acceptDelivery);
 
-      aggregator.handleNodeResults('corr-agg', [{ nodeId: 'node', payload: 'node-result' }]);
+      aggregator.handleNodeResults(correlationId, [{ nodeId: 'node', payload: 'node-result' }]);
       aggregator.handleResponse(asWs(peerA), {
         type: 'broadcast-response',
-        correlationId: 'corr-agg',
+        correlationId,
         results: [{ nodeId: 'peer-a', payload: 'peer-result' }],
       });
 
@@ -239,12 +271,12 @@ describe('BroadcastAggregator', () => {
       const peer = makeMockClient();
       const message = makeBroadcastMessage('corr-timeout-before-node');
 
-      aggregator.startClientBroadcast(asWs(sender), message, [asWs(peer)], vi.fn());
+      const correlationId = aggregator.startClientBroadcast(asWs(sender), message, [asWs(peer)], acceptDelivery);
 
       // peer responds but node results have not arrived yet
       aggregator.handleResponse(asWs(peer), {
         type: 'broadcast-response',
-        correlationId: 'corr-timeout-before-node',
+        correlationId,
         results: [{ nodeId: 'peer', payload: 'peer-data' }],
       });
 
@@ -268,7 +300,7 @@ describe('BroadcastAggregator', () => {
       const peer = makeMockClient();
       const message = makeBroadcastMessage('corr-full-timeout');
 
-      aggregator.startClientBroadcast(asWs(sender), message, [asWs(peer)], vi.fn());
+      aggregator.startClientBroadcast(asWs(sender), message, [asWs(peer)], acceptDelivery);
 
       vi.advanceTimersByTime(501);
 
@@ -282,7 +314,7 @@ describe('BroadcastAggregator', () => {
       const sender = makeMockClient();
       const message = makeBroadcastMessage('corr-late-node');
 
-      aggregator.startClientBroadcast(asWs(sender), message, [], vi.fn());
+      const correlationId = aggregator.startClientBroadcast(asWs(sender), message, [], acceptDelivery);
 
       vi.advanceTimersByTime(501);
 
@@ -290,7 +322,7 @@ describe('BroadcastAggregator', () => {
       expect(sender.send).toHaveBeenCalledOnce();
 
       // Late handleNodeResults call should be a no-op
-      const handled = aggregator.handleNodeResults('corr-late-node', [{ nodeId: 'late', payload: 'late-data' }]);
+      const handled = aggregator.handleNodeResults(correlationId, [{ nodeId: 'late', payload: 'late-data' }]);
       expect(handled).toBe(false);
       // Sender still only called once
       expect(sender.send).toHaveBeenCalledOnce();
@@ -301,12 +333,12 @@ describe('BroadcastAggregator', () => {
       const sender = makeMockClient();
       const message = makeBroadcastMessage('corr-client-no-timeout');
 
-      aggregator.startClientBroadcast(asWs(sender), message, [], vi.fn(), 0);
+      const correlationId = aggregator.startClientBroadcast(asWs(sender), message, [], acceptDelivery, 0);
 
       vi.advanceTimersByTime(501);
       expect(sender.send).not.toHaveBeenCalled();
 
-      aggregator.handleNodeResults('corr-client-no-timeout', [{ nodeId: 'node', payload: 'late-result' }]);
+      aggregator.handleNodeResults(correlationId, [{ nodeId: 'node', payload: 'late-result' }]);
 
       expect(sender.send).toHaveBeenCalledOnce();
       const response = lastSentMessage(sender) as { results: BroadcastResult[] };
@@ -324,7 +356,7 @@ describe('BroadcastAggregator', () => {
       const peer = makeMockClient();
       const message = makeBroadcastMessage('corr-sender-disc');
 
-      aggregator.startClientBroadcast(asWs(sender), message, [asWs(peer)], vi.fn());
+      const correlationId = aggregator.startClientBroadcast(asWs(sender), message, [asWs(peer)], acceptDelivery);
 
       // Sender disconnects
       aggregator.handleClientDisconnect(asWs(sender));
@@ -332,7 +364,7 @@ describe('BroadcastAggregator', () => {
       // Broadcast is aborted — peer response is a no-op
       const handled = aggregator.handleResponse(asWs(peer), {
         type: 'broadcast-response',
-        correlationId: 'corr-sender-disc',
+        correlationId,
         results: [{ nodeId: 'peer', payload: 'data' }],
       });
       expect(handled).toBe(false);
@@ -345,10 +377,10 @@ describe('BroadcastAggregator', () => {
       const peer = makeMockClient();
       const message = makeBroadcastMessage('corr-peer-disc');
 
-      aggregator.startClientBroadcast(asWs(sender), message, [asWs(peer)], vi.fn());
+      const correlationId = aggregator.startClientBroadcast(asWs(sender), message, [asWs(peer)], acceptDelivery);
 
       // Node results arrive first
-      aggregator.handleNodeResults('corr-peer-disc', [{ nodeId: 'node', payload: 'node-data' }]);
+      aggregator.handleNodeResults(correlationId, [{ nodeId: 'node', payload: 'node-data' }]);
 
       expect(sender.send).not.toHaveBeenCalled();
 
@@ -367,7 +399,7 @@ describe('BroadcastAggregator', () => {
       const peer = makeMockClient();
       const message = makeBroadcastMessage('corr-peer-disc-no-node');
 
-      aggregator.startClientBroadcast(asWs(sender), message, [asWs(peer)], vi.fn());
+      aggregator.startClientBroadcast(asWs(sender), message, [asWs(peer)], acceptDelivery);
 
       // Peer disconnects before node results
       aggregator.handleClientDisconnect(asWs(peer));
@@ -381,7 +413,7 @@ describe('BroadcastAggregator', () => {
       const client = makeMockClient();
       const message = makeBroadcastMessage('corr-srv-disc');
 
-      const resultPromise = aggregator.startServerBroadcast(message, [asWs(client)], vi.fn());
+      const resultPromise = aggregator.startServerBroadcast(message, [asWs(client)], acceptDelivery);
 
       aggregator.handleClientDisconnect(asWs(client));
 
@@ -398,7 +430,7 @@ describe('BroadcastAggregator', () => {
       const aggregator = new BroadcastAggregator({ timeout: 5000 });
       const message = makeBroadcastMessage('corr-srv-empty');
 
-      const results = await aggregator.startServerBroadcast(message, [], vi.fn());
+      const results = await aggregator.startServerBroadcast(message, [], acceptDelivery);
 
       expect(results).toEqual([]);
     });
@@ -406,7 +438,7 @@ describe('BroadcastAggregator', () => {
     it('does not forward any messages when no clients are provided', async () => {
       const aggregator = new BroadcastAggregator({ timeout: 5000 });
       const message = makeBroadcastMessage('corr-srv-empty-no-fwd');
-      const sendToClient = vi.fn();
+      const sendToClient = vi.fn(acceptDelivery);
 
       await aggregator.startServerBroadcast(message, [], sendToClient);
 
@@ -424,7 +456,7 @@ describe('BroadcastAggregator', () => {
       const clientB = makeMockClient();
       const message = makeBroadcastMessage('corr-srv-all');
 
-      const resultPromise = aggregator.startServerBroadcast(message, [asWs(clientA), asWs(clientB)], vi.fn());
+      const resultPromise = aggregator.startServerBroadcast(message, [asWs(clientA), asWs(clientB)], acceptDelivery);
 
       aggregator.handleResponse(asWs(clientA), {
         type: 'broadcast-response',
@@ -453,7 +485,7 @@ describe('BroadcastAggregator', () => {
       const clientB = makeMockClient();
       const message = makeBroadcastMessage('corr-srv-timeout');
 
-      const resultPromise = aggregator.startServerBroadcast(message, [asWs(clientA), asWs(clientB)], vi.fn());
+      const resultPromise = aggregator.startServerBroadcast(message, [asWs(clientA), asWs(clientB)], acceptDelivery);
 
       // Only clientA responds
       aggregator.handleResponse(asWs(clientA), {
@@ -473,7 +505,7 @@ describe('BroadcastAggregator', () => {
       const client = makeMockClient();
       const message = makeBroadcastMessage('corr-srv-timeout-override');
 
-      const resultPromise = aggregator.startServerBroadcast(message, [asWs(client)], vi.fn(), 250);
+      const resultPromise = aggregator.startServerBroadcast(message, [asWs(client)], acceptDelivery, 250);
 
       vi.advanceTimersByTime(251);
 
@@ -486,10 +518,12 @@ describe('BroadcastAggregator', () => {
       const message = makeBroadcastMessage('corr-srv-no-timeout');
 
       let settled = false;
-      const resultPromise = aggregator.startServerBroadcast(message, [asWs(client)], vi.fn(), 0).then((result) => {
-        settled = true;
-        return result;
-      });
+      const resultPromise = aggregator
+        .startServerBroadcast(message, [asWs(client)], acceptDelivery, 0)
+        .then((result) => {
+          settled = true;
+          return result;
+        });
 
       vi.advanceTimersByTime(5001);
       await Promise.resolve();
@@ -520,8 +554,8 @@ describe('BroadcastAggregator', () => {
       const sender = makeMockClient();
       const message = makeBroadcastMessage('corr-node-error');
 
-      aggregator.startClientBroadcast(asWs(sender), message, [], vi.fn());
-      aggregator.handleNodeResults('corr-node-error', [], {
+      const correlationId = aggregator.startClientBroadcast(asWs(sender), message, [], acceptDelivery);
+      aggregator.handleNodeResults(correlationId, [], {
         message: 'Node execution failed',
         code: 'NODE_FAILED',
       });
@@ -563,15 +597,15 @@ describe('BroadcastAggregator', () => {
       const peer = makeMockClient();
       const message = makeBroadcastMessage('corr-no-results');
 
-      aggregator.startClientBroadcast(asWs(sender), message, [asWs(peer)], vi.fn());
+      const correlationId = aggregator.startClientBroadcast(asWs(sender), message, [asWs(peer)], acceptDelivery);
 
       // Response with no results (undefined)
       aggregator.handleResponse(asWs(peer), {
         type: 'broadcast-response',
-        correlationId: 'corr-no-results',
+        correlationId,
       });
 
-      aggregator.handleNodeResults('corr-no-results', []);
+      aggregator.handleNodeResults(correlationId, []);
 
       // Should finalize cleanly with empty results
       expect(sender.send).toHaveBeenCalledOnce();
@@ -590,7 +624,7 @@ describe('BroadcastAggregator', () => {
       const peer = makeMockClient();
       const message = makeBroadcastMessage('corr-cleanup-client');
 
-      aggregator.startClientBroadcast(asWs(sender), message, [asWs(peer)], vi.fn());
+      aggregator.startClientBroadcast(asWs(sender), message, [asWs(peer)], acceptDelivery);
       aggregator.cleanup();
 
       // Timer cleared — advancing time should not trigger finalize
@@ -604,7 +638,7 @@ describe('BroadcastAggregator', () => {
       const clientB = makeMockClient();
       const message = makeBroadcastMessage('corr-cleanup-server');
 
-      const resultPromise = aggregator.startServerBroadcast(message, [asWs(clientA), asWs(clientB)], vi.fn());
+      const resultPromise = aggregator.startServerBroadcast(message, [asWs(clientA), asWs(clientB)], acceptDelivery);
 
       // Only clientA responds before cleanup
       aggregator.handleResponse(asWs(clientA), {

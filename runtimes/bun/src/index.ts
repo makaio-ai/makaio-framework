@@ -52,6 +52,7 @@ export {
   type BridgeBrowserOptions,
   bootMakaioRuntimeCore,
   type CoreBootOptions,
+  type ServerTransportConnectOptions,
   type ServerTransportProvider,
   type MakaioRuntime,
   type TransportReadyInfo,

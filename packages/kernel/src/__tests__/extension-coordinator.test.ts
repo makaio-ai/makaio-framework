@@ -27,6 +27,7 @@ import { handleSetEnabled, type ToggleHost } from '../extension/extension-toggle
 import { createExtensionIdentity } from '../extension/extension-identity-builder.js';
 import { ExtensionSubjects } from '../observability/extension-namespace.js';
 import { BootSubjects } from '../boot-namespace.js';
+import { createRightsHub } from '../rights/rights-hub.js';
 import { ServiceSkipError } from '../service-skip-error.js';
 import { useJournalHostFixture } from '@makaio/storage-conformance';
 
@@ -1416,6 +1417,7 @@ describe('ExtensionCoordinator', () => {
       const host: ToggleHost = {
         bus,
         db: undefined,
+        rights: createRightsHub({ bus }),
         runInStartScope: (_name, start) => start(),
         extensionContextBase: TEST_PKG_CTX_BASE,
         loadConfig: undefined,

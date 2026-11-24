@@ -49,7 +49,7 @@ describe('ServerTransport receive context', () => {
       debug: false,
     });
 
-    expect(handler).toHaveBeenCalledWith(message, receiveContext);
+    expect(handler).toHaveBeenCalledWith(expect.objectContaining(message), receiveContext);
   });
 
   it.each([
@@ -85,7 +85,10 @@ describe('ServerTransport receive context', () => {
       handlers: new Set([handler]),
       auth,
       normalizeBroadcastTimeout: () => 5000,
-      sendSafely: (client, data) => client.send(data),
+      sendSafely: (client, data) => {
+        client.send(data);
+        return true;
+      },
       debug: false,
     };
     const request: BusRequestMessage = {

@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 import { createBusNamespace } from '@makaio/core';
+import { AccessDeniedError, CoreDenialPlace } from '@makaio/contracts/access';
+import { MockTransport } from './helpers/transport-fixtures.js';
 import type { BusMessage, BusTransport } from '../index.js';
 import { createBusInstance } from '../bus.js';
 import { createBusContext } from '../kernel-api.js';
@@ -81,6 +83,43 @@ describe('once() subscription race', () => {
     await vi.advanceTimersByTimeAsync(1);
     await oncePromise;
     expect(rejectedError).toBeInstanceOf(OnceTimeoutError);
+  });
+
+  it.each([
+    'all',
+    'local-only',
+  ] as const)('keeps once active after a transport denial with %s routing', async (routing) => {
+    vi.useFakeTimers();
+    const bus = createBusInstance({ context: createBusContext() });
+    const denied = new MockTransport('denied');
+    const accepted = new MockTransport('accepted');
+    vi.spyOn(denied, 'subscribe').mockRejectedValue(
+      new AccessDeniedError({
+        at: CoreDenialPlace.subscribe,
+        reason: 'test-policy',
+      }),
+    );
+    bus.registerTransport(denied);
+    if (routing === 'all') bus.registerTransport(accepted);
+    const { subjects } = bus.registerNamespace(
+      createBusNamespace('race-test', { ping: z.object({ seq: z.number() }) }, { defaultTransports: routing }),
+    );
+    const outcome = bus.once(subjects.ping).catch((error: unknown) => error);
+    await vi.advanceTimersByTimeAsync(50);
+    expect(denied.subscribe).toHaveBeenCalled();
+    const payload = { seq: 1 };
+    if (routing === 'all') {
+      await accepted.simulateReceive({
+        type: 'event',
+        namespace: 'race-test',
+        subject: 'ping',
+        payload,
+        messageId: 'ping',
+      });
+    } else {
+      await bus.emit(bus.own('root'), subjects.ping, payload);
+    }
+    await expect(outcome).resolves.toMatchObject({ payload });
   });
 
   it('still resolves if the event arrives after propagation and before the deferred timeout elapses', async () => {

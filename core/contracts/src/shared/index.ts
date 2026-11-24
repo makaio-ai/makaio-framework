@@ -40,6 +40,13 @@ export {
 } from './condition.js';
 export { zodSchemaToJsonRecord } from './zod-json-schema.js';
 export {
+  compileJsonSchemaCheck,
+  type JsonSchemaCheck,
+  type JsonSchemaCheckOptions,
+  type JsonSchemaCheckResult,
+  type JsonSchemaIssue,
+} from './json-schema-check.js';
+export {
   defineOwnValue,
   isJsonObject,
   type JsonValueType,

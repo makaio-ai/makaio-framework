@@ -14,8 +14,15 @@
  * the `BusTransport` contract while this module owns connection mechanics.
  */
 
+import type { ServerBoundaryAccess } from './server-boundary-access.js';
 import type { BusReceiveHandler, BusRequestMessage, CorrelationTracker } from '@makaio/bus-core';
-import { NoHandlerError, TimeoutError, isNoHandlerErrorForSubject, isRequestCancellation } from '@makaio/bus-core';
+import {
+  ConnectionLostError,
+  NoHandlerError,
+  TimeoutError,
+  isNoHandlerErrorForSubject,
+  isRequestCancellation,
+} from '@makaio/bus-core';
 import type { TransportAuth, WebSocketLike } from './types.js';
 import type { BroadcastAggregator } from './broadcast-aggregator.js';
 import type { ClientRegistry } from './client-registry.js';
@@ -46,6 +53,8 @@ export function normalizeClientBroadcastTimeout(timeout: unknown): number {
  * Dependencies required by `setupClientConnection`.
  */
 export interface ClientSetupDeps {
+  /** External subject policy for this server. */
+  access?: ServerBoundaryAccess;
   /** Per-client routing and subscription state. */
   registry: ClientRegistry;
   /** Correlation tracker for server-initiated request/response pairs. */
@@ -63,7 +72,7 @@ export interface ClientSetupDeps {
    */
   serverSubscriptions: Map<string, SubscriptionEntry>;
   /** Safe send callback: delivers serialized data to one client without propagating socket errors. */
-  sendSafely: (client: WebSocketLike, data: string) => void;
+  sendSafely: (client: WebSocketLike, data: string) => boolean;
   /** Enable debug logging. */
   debug: boolean;
   /** Notify the owner after an authenticated connection is no longer routable. */
@@ -102,21 +111,28 @@ export async function setupClientConnection(socket: WebSocketLike, deps: ClientS
     registry.addAuthenticating(socket);
   }
 
-  const messageHandler = createInboundMessageHandler(socket, {
-    registry,
-    correlations,
-    broadcastAggregator,
-    handlers,
-    auth,
-    normalizeBroadcastTimeout: normalizeClientBroadcastTimeout,
-    sendSafely,
-    debug,
-  });
+  const lifetime = new AbortController();
+  const messageHandler = createInboundMessageHandler(
+    socket,
+    {
+      registry,
+      correlations,
+      broadcastAggregator,
+      handlers,
+      auth,
+      access: deps.access,
+      normalizeBroadcastTimeout: normalizeClientBroadcastTimeout,
+      sendSafely,
+      debug,
+    },
+    lifetime.signal,
+  );
 
   const messageListener = (event: { data: string | Buffer }): void => {
     void messageHandler(event.data);
   };
   const closeListener = (): void => {
+    lifetime.abort();
     // Keep the authenticated owner before cleanup removes its socket context.
     const connectionId = auth?.getReceiveContext?.(socket)?.connectionId;
     auth?.cleanupSocket(socket);
@@ -125,6 +141,7 @@ export async function setupClientConnection(socket: WebSocketLike, deps: ClientS
     socket.removeEventListener('message', messageListener);
     socket.removeEventListener('close', closeListener);
     socket.removeEventListener('error', errorListener);
+    correlations.rejectAll(new ConnectionLostError('websocket'));
     broadcastAggregator.handleClientDisconnect(socket);
     void invokeSubscriptionUpdates(subscriptionUpdates, handlers, {
       debug,
@@ -198,10 +215,12 @@ export async function setupClientConnection(socket: WebSocketLike, deps: ClientS
  * Dependencies required by `routeRequestToClients`.
  */
 export interface RequestRoutingDeps {
+  /** External subject policy for client delivery. */
+  access?: ServerBoundaryAccess;
   /** Per-client routing and subscription state. */
   registry: ClientRegistry;
-  /** Correlation tracker for server-initiated request/response pairs. */
-  correlations: CorrelationTracker;
+  /** The tracker owned by the socket selected for this request attempt. */
+  correlationsFor: (client: WebSocketLike) => CorrelationTracker | undefined;
   /** Caller cancellation: rejects the in-flight attempt and ends routing. */
   signal: AbortSignal;
 }
@@ -231,11 +250,9 @@ export interface RequestRoutingDeps {
  *   preceded by one checkpoint: cancellation first — the caller's own reason
  *   wins — then budget exhaustion, which is a `TimeoutError` for the request
  *   subject. Nothing is sent once either happened.
- * - Only after the checkpoint is the outcome classified. The budget guards
- *   sending, so a route that has nothing to send ends with `NoHandlerError`
- *   even when the budget is spent: that answer is definitive, whereas a timeout
- *   would claim an unknown outcome for a request that was never sent. Caller
- *   cancellation still outranks it, so an empty route is not a separate exit.
+ * - A delivery decision spends the budget even when it denies a candidate.
+ *   When there are no candidates or all attempts ended before the deadline,
+ *   an exhausted route reports `NoHandlerError` after checking cancellation.
  *
  * Each attempt uses a unique correlation ID so stale responses from earlier
  * attempts cannot settle the currently active attempt.
@@ -251,7 +268,7 @@ export async function routeRequestToClients(
   timeout: number,
   deps: RequestRoutingDeps,
 ): Promise<unknown> {
-  const { registry, correlations, signal } = deps;
+  const { registry, correlationsFor, signal } = deps;
   const fullSubject = `${requestMsg.namespace}.${requestMsg.subject}`;
   // One deadline for the whole routing, anchored before anything else runs: the
   // budget is measured from the moment the transport accepts the request, so
@@ -293,13 +310,18 @@ export async function routeRequestToClients(
   // below, which checks cancellation before classifying.
   const interestedClients = registry.getInterestedRequestClients(fullSubject, requestMsg.payload, origin);
 
-  for (const [attemptIndex, targetClient] of interestedClients.entries()) {
-    // After candidate lookup, or after the previous attempt: nothing is
-    // serialized or sent once the caller cancelled or the budget is spent.
+  for (const targetClient of interestedClients) {
     checkpoint();
+    if (deps.access) {
+      const revalidate = await deps.access.authorizeDelivery(requestMsg, targetClient, () =>
+        registry.matchesDelivery(targetClient, fullSubject, requestMsg.payload, 'handler'),
+      );
+      checkpoint();
+      if (!revalidate?.()) continue;
+    }
     // Each attempt must have a unique correlation ID so stale responses from
     // earlier attempts cannot settle the currently active attempt.
-    const attemptCorrelationId = `${requestMsg.correlationId}:attempt-${attemptIndex + 1}`;
+    const attemptCorrelationId = globalThis.crypto.randomUUID();
     // Serialized outside the send guard: an unserializable payload fails the
     // request for every client alike, it is not a lost socket. `timeout` is
     // left out here (an `undefined` value is not serialized) and appended below.
@@ -313,22 +335,20 @@ export async function routeRequestToClients(
     // valid JSON.
     const frame = `${envelope.slice(0, -1)},"timeout":${attemptBudget}}`;
 
+    const correlations = correlationsFor(targetClient);
+    if (correlations === undefined || targetClient.readyState !== 1) continue;
+    const response = correlations.track(attemptCorrelationId, attemptBudget, signal);
     try {
-      // send() can throw synchronously if the socket closed between
-      // the readyState check in getReadyClients and now.
       targetClient.send(frame);
     } catch {
-      continue; // socket gone, try next client
+      // The frame did not leave; release the pending attempt before trying the next socket.
+      correlations.cancel(attemptCorrelationId);
+      await response.catch(() => undefined);
+      continue;
     }
 
-    // TODO(FACT-460): settle this attempt when the target connection drops. With
-    // `timeout` 0 and no caller cancellation nothing ends the wait below, so the
-    // request and its `requestRoutes` and tracker entries stay until the process
-    // exits. Settling needs per-connection in-flight attempt tracking and
-    // no-resend `ConnectionLostError` semantics: the client may already be running
-    // the handler, so routing must end instead of moving to the next client.
     try {
-      return await correlations.track(attemptCorrelationId, attemptBudget, signal);
+      return await response;
     } catch (error) {
       // The caller's own cancellation reaches it unchanged, before any
       // classification — even a reason shaped like a no-handler answer or a
@@ -353,9 +373,7 @@ export async function routeRequestToClients(
     }
   }
 
-  // No client took the request: none was a candidate, or every attempt failed
-  // to send or answered no handler. Cancellation outranks that classification;
-  // the budget does not, as nothing is pending (see the routing contract).
+  // No client took the request and no decision or attempt remains pending.
   signal.throwIfAborted();
   throw new NoHandlerError(fullSubject);
 }

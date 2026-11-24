@@ -58,6 +58,18 @@ export function isMintedCallContext(value: unknown): value is CallContext {
 }
 
 /**
+ * Require that the core minted `value`: the one guard every place that accepts a
+ * call context uses, so the check and its message exist exactly once.
+ * @param value - Anything.
+ * @throws InvalidCallContextError When `value` was not minted by the core.
+ */
+export function assertMintedCallContext(value: unknown): asserts value is CallContext {
+  if (!isMintedCallContext(value)) {
+    throw new InvalidCallContextError('Invalid call context: the value was not minted by the core');
+  }
+}
+
+/**
  * The carrier recorded for an own context (`bus.own`).
  * @param call - A call context.
  * @returns Kind and id of the carrier, or `undefined` for a context that is not an own context.

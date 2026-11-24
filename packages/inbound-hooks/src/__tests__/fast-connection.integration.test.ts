@@ -7,7 +7,7 @@
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { WebSocketServer } from 'ws';
-import { createBusInstance } from '@makaio/bus-core';
+import { NO_BOUNDARY_ACCESS_CHECK, createBusInstance } from '@makaio/bus-core';
 import { HmacAuth, ServerTransport } from '@makaio/bus-transport-websocket';
 import {
   connectFastHookBus,
@@ -45,7 +45,13 @@ describe('fast hook connection over a real WebSocket bus', () => {
     if (address === null || typeof address === 'string') throw new Error('Expected TCP server address');
 
     const bus = createBusInstance({
-      transports: [new ServerTransport({ websocket: wss, auth: new HmacAuth({ secret: SECRET }) })],
+      transports: [
+        new ServerTransport({
+          checkBoundaryAccess: NO_BOUNDARY_ACCESS_CHECK,
+          websocket: wss,
+          auth: new HmacAuth({ secret: SECRET }),
+        }),
+      ],
     });
     const namespace = bus.registerNamespace(createInboundHookNamespace('git'));
     const seen: RawInboundHookPayload[] = [];

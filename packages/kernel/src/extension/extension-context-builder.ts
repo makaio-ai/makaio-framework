@@ -1,4 +1,5 @@
 import path from 'node:path';
+import type { RightsHub } from '../rights/rights-hub.js';
 import type { IMakaioBus } from '@makaio/bus-core';
 import { createCarrierBus } from '@makaio/bus-core/kernel-api';
 import { MAKAIO_EXTENSION_PARTY_KIND } from '@makaio/core';
@@ -41,6 +42,8 @@ export interface ExtensionContextHost<THostContext extends KernelHostContext = K
    * from it, never this one. Must be a bus built by the bus core.
    */
   readonly bus: IMakaioBus;
+  /** Rights binding and activation lifecycle for this coordinator. */
+  readonly rights: Pick<RightsHub, 'capabilityFor' | 'beginActivation' | 'activate' | 'deactivate'>;
   /**
    * Node platform/user context supplied by the composition root.
    *
@@ -333,6 +336,7 @@ export function buildExtensionContext<THostContext extends KernelHostContext>(
   const context: KernelNodeContext = {
     ...base,
     bus,
+    rights: host.rights.capabilityFor(extensionName, carrier),
     namespaces: namespaceCapabilityFor(host.bus, entry.identity),
     ...(credentials !== undefined ? { credentials } : {}),
     identity: entry.identity,

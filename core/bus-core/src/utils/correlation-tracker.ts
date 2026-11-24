@@ -127,6 +127,15 @@ export class CorrelationTracker {
   }
 
   /**
+   * Check whether a reply can settle a request on this tracker.
+   * @param correlationId - Correlation ID from the reply.
+   * @returns Whether the request is still pending.
+   */
+  public has(correlationId: string): boolean {
+    return this.pending.has(correlationId);
+  }
+
+  /**
    * Resolve a pending request.
    *
    * Clears the timeout and removes the request from tracking.

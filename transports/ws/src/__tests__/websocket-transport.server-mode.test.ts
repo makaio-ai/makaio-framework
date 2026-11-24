@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { ServerTransport } from '../server-transport.js';
 import { MockWebSocket, MockWebSocketServer } from './test-helpers.js';
 import type { BusBroadcastMessage, BusEventMessage, BusRequestMessage } from '@makaio/bus-core';
-import { NO_HANDLER_ERROR_CODE, NoHandlerError } from '@makaio/bus-core';
+import { NO_BOUNDARY_ACCESS_CHECK, NO_HANDLER_ERROR_CODE, NoHandlerError } from '@makaio/bus-core';
 import type { TransportAuth, WebSocketLike, WebSocketServerLike } from '../types.js';
 import { clearHmacIdentitySecretsForTesting, registerHmacIdentitySecret } from '../auth/identity-secret-registry.js';
 
@@ -98,7 +98,7 @@ describe('Server mode behavior', () => {
       cleanupSocket: () => undefined,
       cleanup: () => undefined,
     };
-    const transport = new ServerTransport({ websocket: wss, auth });
+    const transport = new ServerTransport({ checkBoundaryAccess: NO_BOUNDARY_ACCESS_CHECK, websocket: wss, auth });
     const inbound = vi.fn();
     const closed = vi.fn();
     transport.onReceive(inbound);
@@ -162,6 +162,7 @@ describe('Server mode behavior', () => {
     const wss = new MockWebSocketServer();
     const restrictedClient = new MockWebSocket();
     const transport = new ServerTransport({
+      checkBoundaryAccess: NO_BOUNDARY_ACCESS_CHECK,
       websocket: wss,
       auth: makeAuth(new Map([[restrictedClient, identityId]])),
     });
@@ -196,6 +197,7 @@ describe('Server mode behavior', () => {
     const revokedClient = new MockWebSocket();
     const closeSpy = vi.spyOn(revokedClient, 'close');
     const transport = new ServerTransport({
+      checkBoundaryAccess: NO_BOUNDARY_ACCESS_CHECK,
       websocket: wss,
       auth: makeAuth(new Map(), (socket) => socket !== revokedClient),
     });
@@ -234,6 +236,7 @@ describe('Server mode behavior', () => {
     const restrictedObserver = new MockWebSocket();
     const requester = new MockWebSocket();
     const transport = new ServerTransport({
+      checkBoundaryAccess: NO_BOUNDARY_ACCESS_CHECK,
       websocket: wss,
       auth: makeAuth(new Map([[restrictedObserver, identityId]])),
     });
@@ -274,7 +277,7 @@ describe('Server mode behavior', () => {
 
   it('replaces the aggregate until the final client disconnects abruptly', async () => {
     const wss = new MockWebSocketServer();
-    const transport = new ServerTransport({ websocket: wss });
+    const transport = new ServerTransport({ checkBoundaryAccess: NO_BOUNDARY_ACCESS_CHECK, websocket: wss });
     const received: unknown[] = [];
     transport.onReceive(async (message) => {
       received.push(message);
@@ -327,6 +330,7 @@ describe('Server mode behavior', () => {
   it('manages multiple client connections and broadcasts', async () => {
     const wss = new MockWebSocketServer();
     const transport = new ServerTransport({
+      checkBoundaryAccess: NO_BOUNDARY_ACCESS_CHECK,
       websocket: wss,
     });
 
@@ -364,6 +368,7 @@ describe('Server mode behavior', () => {
   it('rejects a second connect and unregisters the connection listener on disconnect', async () => {
     const wss = new CountingWebSocketServer();
     const transport = new ServerTransport({
+      checkBoundaryAccess: NO_BOUNDARY_ACCESS_CHECK,
       websocket: wss,
     });
 
@@ -388,6 +393,7 @@ describe('Server mode behavior', () => {
   it('removes disconnected clients', async () => {
     const wss = new MockWebSocketServer();
     const transport = new ServerTransport({
+      checkBoundaryAccess: NO_BOUNDARY_ACCESS_CHECK,
       websocket: wss,
     });
 
@@ -422,6 +428,7 @@ describe('Server mode behavior', () => {
   it('returns false when sending event with no clients connected', async () => {
     const wss = new MockWebSocketServer();
     const transport = new ServerTransport({
+      checkBoundaryAccess: NO_BOUNDARY_ACCESS_CHECK,
       websocket: wss,
     });
 
@@ -445,6 +452,7 @@ describe('Server mode behavior', () => {
   it('retries next client when first client reports no handler', async () => {
     const wss = new MockWebSocketServer();
     const transport = new ServerTransport({
+      checkBoundaryAccess: NO_BOUNDARY_ACCESS_CHECK,
       websocket: wss,
     });
 
@@ -506,6 +514,7 @@ describe('Server mode behavior', () => {
   it('ignores stale first-attempt responses after retrying another client', async () => {
     const wss = new MockWebSocketServer();
     const transport = new ServerTransport({
+      checkBoundaryAccess: NO_BOUNDARY_ACCESS_CHECK,
       websocket: wss,
     });
 
@@ -580,7 +589,7 @@ describe('Server mode behavior', () => {
 
   it('continues client-initiated broadcast when one target client send throws', async () => {
     const wss = new MockWebSocketServer();
-    const transport = new ServerTransport({ websocket: wss });
+    const transport = new ServerTransport({ checkBoundaryAccess: NO_BOUNDARY_ACCESS_CHECK, websocket: wss });
 
     try {
       await transport.connect();
@@ -619,7 +628,7 @@ describe('Server mode behavior', () => {
 
   it('bounds client-supplied broadcast timeouts before tracking aggregation state', async () => {
     const wss = new MockWebSocketServer();
-    const transport = new ServerTransport({ websocket: wss });
+    const transport = new ServerTransport({ checkBoundaryAccess: NO_BOUNDARY_ACCESS_CHECK, websocket: wss });
     const setTimeoutSpy = vi.spyOn(globalThis, 'setTimeout');
 
     try {
@@ -651,6 +660,7 @@ describe('Server mode behavior', () => {
 
       sender.receiveMessage(JSON.stringify(oversizedBroadcast));
       sender.receiveMessage(JSON.stringify(disabledTimeoutBroadcast));
+      await Promise.resolve();
 
       expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), 60_000);
       expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), 5_000);
@@ -662,7 +672,7 @@ describe('Server mode behavior', () => {
 
   it('does not route requests to unmatched or event-only subscriptions', async () => {
     const wss = new MockWebSocketServer();
-    const transport = new ServerTransport({ websocket: wss });
+    const transport = new ServerTransport({ checkBoundaryAccess: NO_BOUNDARY_ACCESS_CHECK, websocket: wss });
 
     try {
       await transport.connect();
@@ -702,7 +712,7 @@ describe('Server mode behavior', () => {
 
   it('routes requests only when subject and payload filter match', async () => {
     const wss = new MockWebSocketServer();
-    const transport = new ServerTransport({ websocket: wss });
+    const transport = new ServerTransport({ checkBoundaryAccess: NO_BOUNDARY_ACCESS_CHECK, websocket: wss });
 
     try {
       await transport.connect();
@@ -750,7 +760,7 @@ describe('Server mode behavior', () => {
 
   it('never routes an inbound request back to its origin socket', async () => {
     const wss = new MockWebSocketServer();
-    const transport = new ServerTransport({ websocket: wss });
+    const transport = new ServerTransport({ checkBoundaryAccess: NO_BOUNDARY_ACCESS_CHECK, websocket: wss });
     transport.onReceive(async (message) => {
       if (message.type !== 'request') return;
       const result = await transport.send(message);
@@ -805,7 +815,7 @@ describe('Server mode behavior', () => {
 
   it('propagates onBroadcastResults errors to the originating client', async () => {
     const wss = new MockWebSocketServer();
-    const transport = new ServerTransport({ websocket: wss });
+    const transport = new ServerTransport({ checkBoundaryAccess: NO_BOUNDARY_ACCESS_CHECK, websocket: wss });
 
     try {
       await transport.connect();
@@ -823,10 +833,13 @@ describe('Server mode behavior', () => {
         messageId: 'msg-node-error',
       };
 
+      const onReceive = vi.fn();
+      transport.onReceive(onReceive);
       sender.receiveMessage(JSON.stringify(broadcast));
       await new Promise((resolve) => setTimeout(resolve, 20));
 
-      transport.onBroadcastResults?.(broadcast.correlationId, [], {
+      const [forwarded] = onReceive.mock.calls[0];
+      transport.onBroadcastResults?.(forwarded.correlationId, [], {
         message: 'Node execution failed',
         code: 'NODE_FAILED',
       });
@@ -847,7 +860,7 @@ describe('Server mode behavior', () => {
 
   it('throws NoHandlerError when no clients are connected for a request', async () => {
     const wss = new MockWebSocketServer();
-    const transport = new ServerTransport({ websocket: wss });
+    const transport = new ServerTransport({ checkBoundaryAccess: NO_BOUNDARY_ACCESS_CHECK, websocket: wss });
 
     try {
       await transport.connect();
@@ -869,7 +882,7 @@ describe('Server mode behavior', () => {
 
   it('throws NoHandlerError when all clients decline with no-handler', async () => {
     const wss = new MockWebSocketServer();
-    const transport = new ServerTransport({ websocket: wss });
+    const transport = new ServerTransport({ checkBoundaryAccess: NO_BOUNDARY_ACCESS_CHECK, websocket: wss });
 
     try {
       await transport.connect();
@@ -928,7 +941,7 @@ describe('Server mode behavior', () => {
     };
 
     const wss = new MockWebSocketServer();
-    const transport = new ServerTransport({ websocket: wss, auth });
+    const transport = new ServerTransport({ checkBoundaryAccess: NO_BOUNDARY_ACCESS_CHECK, websocket: wss, auth });
     const client = new MockWebSocket();
 
     await transport.connect();

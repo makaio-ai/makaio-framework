@@ -33,7 +33,7 @@ import { MAKAIO_LOOPBACK_PARTY_KIND, type TransportReceiveContext } from '@makai
 import { startBusServer, HonoWebSocketBridge, type BusServer } from '@makaio/bus-server';
 import { createWebSocketCloseEvent, DispatchingAuth } from '@makaio/bus-transport-websocket';
 import type { TransportAuth, WebSocketCloseEvent, WebSocketLike } from '@makaio/bus-transport-websocket';
-import type { ServerTransportProvider } from '@makaio/runtime-node';
+import type { ServerTransportConnectOptions, ServerTransportProvider } from '@makaio/runtime-node';
 
 /**
  * Configuration options for {@link BunBusServerTransportProvider}.
@@ -392,9 +392,9 @@ export class BunBusServerTransportProvider implements ServerTransportProvider {
   /**
    * Start the bus server and mark the transport as ready to accept connections.
    * @param bus - Bus instance to attach the transport to.
-   * @param _machineId - Machine identifier (unused; callers provide auth externally).
+   * @param options - Host settings supplying the boundary access policy.
    */
-  public async connect(bus: IMakaioBus, _machineId: string): Promise<void> {
+  public async connect(bus: IMakaioBus, options: ServerTransportConnectOptions): Promise<void> {
     if (this.connecting || this.busServer) {
       throw new Error('[BunBusServerTransport] connect() called while transport is already connected or connecting');
     }
@@ -404,6 +404,7 @@ export class BunBusServerTransportProvider implements ServerTransportProvider {
       this.busServer = await startBusServer({
         websocket: this.bridge,
         bus,
+        checkBoundaryAccess: options.checkBoundaryAccess,
         auth:
           this.options.auth ??
           (isLoopbackAuthorityHost(this.options.loopbackAuthorityHost) ? new LoopbackReceiveContextAuth() : undefined),

@@ -10,6 +10,7 @@
 import { CorrelationTracker, NoHandlerError, TimeoutError, type BusRequestMessage } from '@makaio/bus-core';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ClientRegistry } from '../client-registry.js';
+import { ServerBoundaryAccess } from '../server-boundary-access.js';
 import { routeRequestToClients } from '../server-client-setup.js';
 import { MockWebSocket } from './test-helpers.js';
 
@@ -37,7 +38,11 @@ describe('routeRequestToClients', () => {
    * @returns Resolved value or rejection reason
    */
   function routeSettled(request: BusRequestMessage, timeout: number): Promise<unknown> {
-    return routeRequestToClients(request, timeout, { registry, correlations, signal: route.signal }).then(
+    return routeRequestToClients(request, timeout, {
+      registry,
+      correlationsFor: () => correlations,
+      signal: route.signal,
+    }).then(
       (value: unknown) => value,
       (error: unknown) => error,
     );
@@ -65,7 +70,7 @@ describe('routeRequestToClients', () => {
     expect(sockets[0].sentMessages).toHaveLength(1);
 
     // The answer settles the attempt; cancellation arrives before routing resumes.
-    correlations.reject('corr:attempt-1', new NoHandlerError(SUBJECT));
+    correlations.reject(JSON.parse(sockets[0].sentMessages[0]).correlationId, new NoHandlerError(SUBJECT));
     const cancellation = new Error('caller cancelled');
     route.abort(cancellation);
 
@@ -77,7 +82,7 @@ describe('routeRequestToClients', () => {
     registry.removeClient(sockets[1]);
     const outcome = routeSettled(makeRequest(), 0);
 
-    correlations.reject('corr:attempt-1', new NoHandlerError(SUBJECT));
+    correlations.reject(JSON.parse(sockets[0].sentMessages[0]).correlationId, new NoHandlerError(SUBJECT));
     const cancellation = new Error('caller cancelled');
     route.abort(cancellation);
 
@@ -108,6 +113,25 @@ describe('routeRequestToClients', () => {
 
     expect(error).toBeInstanceOf(TimeoutError);
     expect(error).toMatchObject({ subject: SUBJECT, timeoutMs: 20 });
+    expect(sockets.map((socket) => socket.sentMessages.length)).toEqual([0, 0]);
+  });
+
+  it('times out when a denied delivery decision spends the routing budget', async () => {
+    vi.useFakeTimers();
+    const access = new ServerBoundaryAccess('websocket', undefined, async (target) => {
+      if (target.operation !== 'handle') return undefined;
+      await Promise.resolve();
+      vi.setSystemTime(Date.now() + 40);
+      return new Error('Delivery denied');
+    });
+    await expect(
+      routeRequestToClients(makeRequest(), 20, {
+        access,
+        registry,
+        correlationsFor: () => correlations,
+        signal: route.signal,
+      }),
+    ).rejects.toBeInstanceOf(TimeoutError);
     expect(sockets.map((socket) => socket.sentMessages.length)).toEqual([0, 0]);
   });
 
@@ -227,7 +251,7 @@ describe('routeRequestToClients', () => {
 
     void routeSettled(makeRequest(payload), 100);
 
-    expect(JSON.parse(sockets[0].sentMessages[0])).toMatchObject({ correlationId: 'corr:attempt-1', timeout: 40 });
+    expect(JSON.parse(sockets[0].sentMessages[0])).toMatchObject({ timeout: 40 });
   });
 
   it('advertises an unbounded request as unbounded on the wire', async () => {

@@ -109,6 +109,7 @@ function removeFromHandlerMap(
  * @param subjectDefinition - Subject definition with subject pattern and metadata
  * @param handler - Handler function (EventHandler for events, RequestHandler for requests)
  * @param options - Optional filter and other subscription options
+ * @param onSubscribeResult - Observer for a transport's subscription result.
  * @returns Unsubscribe function
  * @see {@link IMakaioBus.on} for full documentation and examples.
  */
@@ -118,6 +119,7 @@ export function on<T extends SubjectDefinition>(
   subjectDefinition: T,
   handler: HandlerForSubjectDefinition<T>,
   options?: OnOptions,
+  onSubscribeResult?: (accepted: boolean, error?: unknown) => void,
 ): () => void {
   const subject = subjectDefinition.subject;
   const fullSubjectKey = getFullSubjectForSubjectDefinition(subjectDefinition);
@@ -192,7 +194,7 @@ export function on<T extends SubjectDefinition>(
   // Propagate the full aggregated advertised state to all transports.
   // Passing null for excludeTransportName includes all registered transports
   // (local handler change — not sourced from any specific transport).
-  const propagated = pushAdvertisedSubjectsToPeers(context, null, [fullSubjectKey]);
+  const propagated = pushAdvertisedSubjectsToPeers(context, null, [fullSubjectKey], onSubscribeResult);
 
   // Return unsubscribe function that cleans up from all registered maps
   const unsubscribe: OnCleanup = (): void => {

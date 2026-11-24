@@ -45,7 +45,7 @@ export async function runContributionProcessors<THostContext extends KernelHostC
     return [];
   }
 
-  return runStoppedProcessors(processors, name);
+  return runStoppedProcessors(processors, name, contextHost.rights);
 }
 
 /**
@@ -84,8 +84,11 @@ async function activateContributions<THostContext extends KernelHostContext>(
       rollback.delete(processor);
       rollback.add(processor);
     }
+    if (contextHost.rights.activate(name, entry.pkg)) {
+      console.warn(`[ExtensionCoordinator] Rights contributions from "${name}" require a host process.`);
+    }
   } catch (err) {
-    const failures = await runStoppedProcessors([...rollback], name);
+    const failures = await runStoppedProcessors([...rollback], name, contextHost.rights);
     for (const failure of failures) {
       console.error(`[ExtensionCoordinator] Contribution processor rollback error for "${name}":`, failure);
     }
@@ -100,13 +103,20 @@ async function activateContributions<THostContext extends KernelHostContext>(
  * Errors are collected while subsequent processors continue to run.
  * @param processors - Registration-ordered list of processors to invoke.
  * @param name - Extension name used in log messages.
- * @returns Failures raised by stopped processors, in invocation order.
+ * @param rights - The coordinator's rights lifecycle.
+ * @returns Failures raised by rights release and stopped processors, in invocation order.
  */
 async function runStoppedProcessors(
   processors: ReadonlyArray<Pick<ContributionProcessor, 'processStopped'>>,
   name: string,
+  rights: Pick<ExtensionContextHost['rights'], 'deactivate'>,
 ): Promise<unknown[]> {
   const failures: unknown[] = [];
+  try {
+    rights.deactivate(name);
+  } catch (error) {
+    failures.push(error);
+  }
 
   for (const processor of [...processors].reverse()) {
     if (!processor.processStopped) continue;

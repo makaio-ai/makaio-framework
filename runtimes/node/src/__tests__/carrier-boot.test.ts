@@ -11,7 +11,7 @@ import {
   type ArtifactKindRegistration,
   type ExtensionWarning,
 } from '@makaio/contracts';
-import { ExtensionSubjects, type KernelMakaioExtension, type TransportProvider } from '@makaio/kernel';
+import { ExtensionSubjects, NoTransportProvider, type KernelMakaioExtension } from '@makaio/kernel';
 import { BaseService } from '@makaio/service-base';
 import { ArtifactSchemaRegistryToken, type ArtifactSchemaRegistry } from '@makaio/services-core';
 import { expect, it, vi } from 'vitest';
@@ -33,10 +33,7 @@ const WARNING: ExtensionWarning = {
   title: 'Carrier health fixture',
   message: 'The extension could query the artifact registry on its own bus.',
 };
-const transport: TransportProvider = {
-  async connect() {},
-  async disconnect() {},
-};
+const transport = new NoTransportProvider();
 
 class CarrierHealthService extends BaseService {
   public constructor(bus: IMakaioBus) {

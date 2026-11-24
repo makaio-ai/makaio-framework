@@ -5,7 +5,7 @@
  * implementation without depending on specific libraries (ws, browser WebSocket, etc.)
  */
 
-import type { BusMessage } from '@makaio/bus-core';
+import type { BoundaryAccessPolicy, BusMessage } from '@makaio/bus-core';
 import type { TransportAuth } from './auth/index.js';
 
 export type { TransportAuth };
@@ -170,6 +170,9 @@ export interface WebSocketServerTransportOptions extends WebSocketTransportOptio
    * WebSocketServer instance for server mode.
    */
   websocket: WebSocketServerLike;
+
+  /** Host authorization policy or an explicit opt-out. */
+  checkBoundaryAccess: BoundaryAccessPolicy;
 }
 
 /**

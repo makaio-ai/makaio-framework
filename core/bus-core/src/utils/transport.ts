@@ -8,6 +8,7 @@ import type {
 import type { BusTransportKeys } from '../registries/transport-registry.js';
 import { NoHandlerError, NO_HANDLER_ERROR_CODE } from '../errors/index.js';
 import { defineOwnValue, isJsonObject } from '@makaio/contracts';
+import { ACCESS_DENIED_ERROR_CODE, AccessDeniedError, ForbiddenSchema } from '@makaio/contracts/access';
 
 /**
  * Detects a "no handler" error for a specific request subject.
@@ -311,6 +312,10 @@ export async function sendErrorResponse(
  * @returns An Error with `code` and data properties attached
  */
 export function deserializeTransportError(transportError: BusTransportError): Error {
+  if (transportError.code === ACCESS_DENIED_ERROR_CODE) {
+    const denied = ForbiddenSchema.safeParse(transportError.data?.['data']);
+    if (denied.success) return new AccessDeniedError(denied.data, transportError.message);
+  }
   const error = new Error(transportError.message);
   if (transportError.code) {
     (error as Error & { code?: string }).code = transportError.code;

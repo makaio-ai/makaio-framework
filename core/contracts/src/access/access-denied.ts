@@ -9,7 +9,7 @@ import { SubjectNameSchema } from '../journal/identifiers.js';
 export type DenialPlace = ContributionName;
 
 /**
- * The eight places of the core where a denial can arise.
+ * The places of the core where a denial can arise.
  */
 export const CoreDenialPlace = {
   /** A verifier chain at a boundary. */
@@ -20,6 +20,10 @@ export const CoreDenialPlace = {
   send: 'makaio.send',
   /** Subscribing. */
   subscribe: 'makaio.subscribe',
+  /** Advertising a request handler. */
+  'register-handler': 'makaio.register-handler',
+  /** Delivering a request to a handler. */
+  handle: 'makaio.handle',
   /** Delivering a message to a subscriber. */
   deliver: 'makaio.deliver',
   /** Reading journal entries or a reader. */
@@ -30,7 +34,7 @@ export const CoreDenialPlace = {
   handler: 'makaio.handler',
 } as const;
 
-/** One of the eight places of the core where a denial can arise. */
+/** One of the places of the core where a denial can arise. */
 export type CoreDenialPlace = (typeof CoreDenialPlace)[keyof typeof CoreDenialPlace];
 
 /**
