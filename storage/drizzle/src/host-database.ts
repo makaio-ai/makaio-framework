@@ -159,6 +159,7 @@ function requireTransactionState(tx: HostTransaction): TransactionState {
  * @throws A `HostTransactionError` (`transaction-dialect-unsupported`) when the host is not using PostgreSQL.
  * @throws A `HostTransactionError` (`transaction-database-mismatch`) when the transaction belongs to another database handle.
  * @throws A `HostTransactionError` (`transaction-result-invalid`) when the driver cannot provide a valid query result.
+ *   The session's `run` and `all` can throw this error after the statement has executed.
  * @internal
  */
 export function getPostgresHostTransactionSession(tx: HostTransaction, db: MakaioDatabase): RawSqlSession {
