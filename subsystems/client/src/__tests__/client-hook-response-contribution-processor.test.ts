@@ -15,10 +15,13 @@ import type {
 } from '@makaio/contracts/client';
 import type { KernelExtensionContext, KernelMakaioExtension } from '@makaio/kernel/extension';
 import { createBusInstance } from '@makaio/bus-core';
-import { makeStubNodeExtensionContext, stubExtensionIdentity } from '@makaio/test-utils';
+import { stubExtensionIdentity } from '@makaio/test-utils';
 import { ClientHookProviderContractRegistry } from '../client-hook-provider-contract-registry.js';
 import { ClientHookResponseRegistry } from '../client-hook-response-registry.js';
 import { createClientHookResponseContributionProcessor } from '../client-hook-response-contribution-processor.js';
+import { useJournalHostFixture } from '@makaio/storage-conformance';
+
+const { makeContext: makeStubNodeExtensionContext } = useJournalHostFixture();
 
 type CanonicalContributorDefinition = Extract<ContributorDefinition, { lane: 'canonical' }>;
 

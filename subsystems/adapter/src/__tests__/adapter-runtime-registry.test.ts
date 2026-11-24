@@ -1,9 +1,9 @@
 import { hasNamespace, ownerOf } from '@makaio/bus-core/kernel-api';
 import { createBusNamespace } from '@makaio/core';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 import { createBusInstance, MakaioBus } from '@makaio/bus-core';
-import { makeStubExtensionBus, makeStubNodeExtensionContext, stubExtensionIdentity } from '@makaio/test-utils';
+import { makeStubExtensionBus, stubExtensionIdentity } from '@makaio/test-utils';
 import {
   AdapterSubjects,
   dep,
@@ -17,7 +17,7 @@ import {
 } from '@makaio/contracts';
 import { ClientSubjects } from '@makaio/contracts/client';
 import type { AdapterFile, ProviderConfigFile } from '@makaio/contracts/config';
-import type { KernelExtensionContext, KernelMakaioExtension } from '@makaio/kernel/extension';
+import type { KernelMakaioExtension } from '@makaio/kernel/extension';
 import type {
   AdapterFileConfigSet,
   IAdapterConfigRepository,
@@ -28,6 +28,7 @@ import { AdapterSubsystemSubjects } from '@makaio/services-core/adapter-subsyste
 import { ModelRegistryProviderNotFoundError, ModelRegistrySubjects } from '@makaio/services-core/model-registry';
 import { ProviderStorageSubjects } from '@makaio/services-core/settings/storage';
 import { ExtensionCoordinator, ExtensionSubjects } from '@makaio/kernel';
+import { useJournalHostFixture } from '@makaio/storage-conformance';
 import { AdapterDefinitionInvalidError, createAdapterSubsystemContributionProcessor } from '../index.js';
 import { AdapterRuntimeRegistry } from '../adapter-runtime-registry.js';
 import {
@@ -39,14 +40,23 @@ import { cloneAdapterClientRefs, resolveDefaultClientId } from '../adapter-clien
 import type { AdapterInitOptions, AdapterInstance, LoadedAdapter } from '../adapter-runtime-types.js';
 import { createStubCoordinator, TEST_MACHINE_ID, TEST_PLATFORM_DEFAULTS } from './test-utils.js';
 
-const TEST_EXTENSION_CONTEXT: KernelExtensionContext = makeStubNodeExtensionContext(MakaioBus, {
-  identity: stubExtensionIdentity('test-extension'),
+const { constructContext, makeContext } = useJournalHostFixture();
+const nodeContextDefaults = {
   platform: process.platform,
   homedir: '/tmp',
   makaioHome: '/tmp/.makaio',
   username: 'test-user',
-  dataDir: '/tmp/test-extension',
   machineId: TEST_MACHINE_ID,
+  tryImport: async () => null,
+};
+
+let TEST_EXTENSION_CONTEXT: ReturnType<typeof makeContext>;
+beforeAll(() => {
+  TEST_EXTENSION_CONTEXT = makeContext(MakaioBus, {
+    ...nodeContextDefaults,
+    identity: stubExtensionIdentity('test-extension'),
+    dataDir: '/tmp/test-extension',
+  });
 });
 
 /** Test composition with an explicit ownership-authority incarnation. */
@@ -988,6 +998,7 @@ describe('AdapterContributionProcessor rollback', () => {
     const contribution = createContribution(name, factory);
     Reflect.deleteProperty(contribution.definition, 'busNamespace');
     const lease = vi.fn(TEST_EXTENSION_CONTEXT.namespaces.lease);
+    const context = { ...TEST_EXTENSION_CONTEXT, namespaces: { lease } };
     service = new AdapterSubsystemService({
       bus: MakaioBus,
       configRepository: new MemoryRepository(),
@@ -1000,7 +1011,7 @@ describe('AdapterContributionProcessor rollback', () => {
     const activation = service.processAdapterContributions(
       '@owner/missing-namespace',
       createExtension('@owner/missing-namespace', [contribution]),
-      { ...TEST_EXTENSION_CONTEXT, namespaces: { lease } },
+      context,
     );
     await expect(activation).rejects.toMatchObject({
       code: 'bus-namespace-missing',
@@ -1025,7 +1036,9 @@ describe('AdapterContributionProcessor rollback', () => {
     const name = 'coordinator-retained';
     const domain = `adapter:${name}`;
     const bus = createBusInstance();
-    const coordinator = new ExtensionCoordinator(bus, { extensionContextBase: TEST_EXTENSION_CONTEXT });
+    const coordinator = new ExtensionCoordinator(bus, {
+      extensionContextBase: { ...nodeContextDefaults, constructContext },
+    });
     const closeStarted = Promise.withResolvers<void>();
     const finishClose = Promise.withResolvers<ConnectorTeardownResult>();
     const released = { evidence: 'released' } as const;

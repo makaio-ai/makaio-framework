@@ -1,9 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
 import { createBusInstance, type IMakaioBus } from '@makaio/bus-core';
 import type { MakaioNodeExtension, NodeExtensionContext as ExtensionContext } from '@makaio/contracts';
-import { makeStubNodeExtensionContext, stubExtensionIdentity } from '@makaio/test-utils';
+import { stubExtensionIdentity } from '@makaio/test-utils';
+import { useJournalHostFixture } from '@makaio/storage-conformance';
 import { registerDrizzleHandlers } from '../register-handlers';
-import type { MakaioDatabase } from '../types';
+const { makeContext, getDatabase } = useJournalHostFixture();
 
 /**
  * Build a minimal extension context for storage handler wrapper tests.
@@ -11,7 +12,7 @@ import type { MakaioDatabase } from '../types';
  * @returns Extension context with stable test identity and platform fields.
  */
 function makeExtensionContext(bus: IMakaioBus): ExtensionContext<IMakaioBus> {
-  return makeStubNodeExtensionContext(bus, {
+  return makeContext(bus, {
     identity: stubExtensionIdentity('storage-test'),
     platform: 'linux',
     homedir: '/home/test',
@@ -25,7 +26,7 @@ function makeExtensionContext(bus: IMakaioBus): ExtensionContext<IMakaioBus> {
 describe('registerDrizzleHandlers', () => {
   it('adapts typed Drizzle registration to the extension storage handler contract', () => {
     const bus = createBusInstance();
-    const db = {} as MakaioDatabase;
+    const { db } = getDatabase();
     const ctx = makeExtensionContext(bus);
     const cleanup = vi.fn();
     const registration = vi.fn(() => cleanup);

@@ -16,12 +16,16 @@ import {
 import { OpenContributionIndex } from '../extension/open-contribution-index.js';
 import type { ExtensionContextBase, ExtensionEntry, KernelMakaioExtension } from '../extension/types.js';
 import { ServiceSkipError } from '../service-skip-error.js';
+import { useJournalHostFixture } from '@makaio/storage-conformance';
+
+const { constructContext } = useJournalHostFixture();
 
 const shared = createBusNamespace('shared', { ping: z.object({}) });
 const runtime = createBusNamespace('runtime', { ping: z.object({}) });
 const other = createBusNamespace('other', { ping: z.object({}) });
 const owner = { kind: 'extension', extension: 'owner' };
 const extensionContextBase: ExtensionContextBase = {
+  constructContext,
   platform: 'linux',
   homedir: '/home/test',
   makaioHome: '/home/test/.makaio',

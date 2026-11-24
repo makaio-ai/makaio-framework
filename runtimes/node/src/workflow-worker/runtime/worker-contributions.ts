@@ -2,9 +2,11 @@ import * as path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import type { IMakaioBus } from '@makaio/bus-core';
 import { createCarrierBus } from '@makaio/bus-core/kernel-api';
-import type { NodeExtensionContext } from '@makaio/contracts';
-import { WORKER_NAMESPACE_CLAIM_UNAVAILABLE } from '@makaio/contracts/extension';
+import type { IsolatedNodeExtensionContext } from '@makaio/contracts/extension';
+import { WORKER_NAMESPACE_CLAIM_UNAVAILABLE, type ExtensionManifest } from '@makaio/contracts/extension';
+import { filterEligibleExtensions } from '@makaio/kernel';
 import type { Toolset } from '@makaio/tools-core';
+import { buildRuntimeEnvironment } from '../../boot-extension-selection.js';
 
 /** A toolset and the carrier from the context of its contributing extension. */
 interface WorkerToolsetContribution {
@@ -28,11 +30,11 @@ export interface WorkerRuntimeContributions {
 /**
  * Shape of a loaded extension module that may contribute tools.
  *
- * This is a structural subset of `MakaioExtension` -- workers only harvest
- * toolsets, so we inspect just the `tools` surface without depending on the
- * full extension lifecycle surface.
+ * Workers inspect eligibility metadata and harvest toolsets without invoking
+ * extension lifecycle callbacks.
  */
-interface ExtensionModuleShape {
+interface ExtensionModuleShape
+  extends Pick<ExtensionManifest, 'name' | 'storage' | 'requires' | 'surface' | 'dependencies'> {
   readonly tools?: {
     // `unknown` on purpose: the worker context carries an optional `bus` (see
     // `WorkerToolsetContext`), so it is not assignable to `NodeExtensionContext`.
@@ -58,7 +60,7 @@ export interface WorkerRuntimeContributionLoadOptions {
  * @param value - Candidate value from a dynamic import.
  * @returns `true` when the value structurally matches an extension module.
  */
-function isExtensionShape(value: unknown): value is ExtensionModuleShape & { name: string } {
+function isExtensionShape(value: unknown): value is ExtensionModuleShape {
   if (typeof value !== 'object' || value === null) return false;
   const obj = value as Record<string, unknown>;
   if (typeof obj['name'] !== 'string') return false;
@@ -68,16 +70,12 @@ function isExtensionShape(value: unknown): value is ExtensionModuleShape & { nam
 /**
  * Resolve the extension shape from a dynamically imported module.
  *
- * Inspects the module's `default` export first, then falls back to a named
- * export matching the package name (with hyphens removed, camelCase variant).
+ * Inspects the module's `default` export first, then falls back to the first
+ * named export with the same shape.
  * @param mod - ESM module namespace from `import()`.
- * @param packageName - Package name from the manifest (for named-export fallback).
  * @returns The extension shape, or `undefined` when no recognizable export is found.
  */
-function resolveExtensionExport(
-  mod: Record<string, unknown>,
-  packageName: string,
-): (ExtensionModuleShape & { name: string }) | undefined {
+function resolveExtensionExport(mod: Record<string, unknown>): ExtensionModuleShape | undefined {
   // 1. Check default export
   if (isExtensionShape(mod['default'])) {
     return mod['default'];
@@ -92,14 +90,13 @@ function resolveExtensionExport(
   }
 
   // 3. Not found -- fall through to caller diagnostic
-  void packageName;
   return undefined;
 }
 
 /**
  * Context handed to `tools.createToolsets()` in the worker.
  *
- * Every required key of {@link NodeExtensionContext} except three known gaps:
+ * Every required key of {@link IsolatedNodeExtensionContext} except three known gaps:
  * - `bus` is optional in the worker (see {@link WorkerRuntimeContributionLoadOptions}).
  * - `config` is present only for an extension that declares a `configSchema`;
  *   the worker loads no schema, so it passes none.
@@ -111,7 +108,7 @@ function resolveExtensionExport(
  * A new required key on the contract makes {@link createWorkerToolsetContext}
  * fail to compile until it is supplied here.
  */
-type WorkerToolsetContext = Omit<NodeExtensionContext, 'bus' | 'config' | 'identity'> & {
+type WorkerToolsetContext = Omit<IsolatedNodeExtensionContext, 'bus' | 'config' | 'identity'> & {
   readonly bus?: IMakaioBus;
   readonly identity: { readonly extensionName: string };
 };
@@ -187,47 +184,46 @@ function createWorkerToolsetContext(
  * For each package reference in the manifest, the loader:
  * 1. Dynamic-imports each verified absolute entrypoint
  * 2. Resolves the extension export (default or first matching named export)
- * 3. Extracts toolsets via `pkg.tools.createToolsets()` when available
+ * 3. Checks eligibility for the isolated worker
+ * 4. Extracts toolsets via `pkg.tools.createToolsets()` when available
  *
- * All failures are fatal: import errors, unrecognizable exports, and toolset
- * creation failures throw immediately. Contribution load is fail-closed so
+ * Import errors, unrecognizable exports, ineligible packages, and toolset
+ * creation failures are fatal. Contribution load is fail-closed so
  * workers never start execution with a partial contribution set.
  * @param entrypoints - Absolute worker-local entrypoints verified by a materializer.
  * @param options - Worker-local runtime surfaces exposed during extraction.
  * @returns Combined toolsets from all loaded packages.
- * @throws When any declared package fails to import, export, or create toolsets.
+ * @throws When a package is ineligible or fails to import, export, or create toolsets.
  */
 export async function loadWorkerRuntimeContributions(
   entrypoints: readonly string[],
   options?: WorkerRuntimeContributionLoadOptions,
 ): Promise<WorkerRuntimeContributions> {
-  const results = await Promise.all(entrypoints.map((entrypoint) => loadSinglePackage(entrypoint, options)));
+  const packages = await Promise.all(entrypoints.map(loadSinglePackage));
+  const environment = buildRuntimeEnvironment(process.platform, ['node']);
+  const eligible = new Set(filterEligibleExtensions(packages, 'headless', environment));
+  const rejected = packages.filter((pkg) => !eligible.has(pkg));
+  if (rejected.length > 0) {
+    throw new Error(`Ineligible workflow worker contributions: ${rejected.map((pkg) => pkg.name).join(', ')}`);
+  }
 
-  return { toolsets: results.flat() };
+  return { toolsets: packages.flatMap((pkg) => extractWorkerToolsets(pkg, options)) };
 }
 
 /**
- * Load and extract contributions from a single package reference.
- *
- * All failures are fatal: import errors, unrecognizable exports, and
- * toolset creation failures throw immediately. Workers never proceed
- * with partial contributions.
+ * Import and resolve one contribution package.
  * @param entrypoint - Verified absolute path to the contribution entrypoint.
- * @param options - Worker-local runtime surfaces exposed during extraction.
- * @returns Extracted toolsets with their contributor's carrier bus.
- * @throws When the package cannot be imported, has no recognizable export, or toolset creation fails.
+ * @returns The package manifest before admission.
+ * @throws When the package cannot be imported or has no recognizable export.
  */
-async function loadSinglePackage(
-  entrypoint: string,
-  options?: WorkerRuntimeContributionLoadOptions,
-): Promise<WorkerToolsetContribution[]> {
+async function loadSinglePackage(entrypoint: string): Promise<ExtensionModuleShape> {
   if (!path.isAbsolute(entrypoint)) {
     throw new Error(`Worker contribution entrypoint must be an absolute materialized path: ${entrypoint}`);
   }
   const importSpecifier = pathToFileURL(entrypoint).href;
   const mod = (await import(importSpecifier)) as Record<string, unknown>;
 
-  const ext = resolveExtensionExport(mod, entrypoint);
+  const ext = resolveExtensionExport(mod);
   if (!ext) {
     throw new Error(
       `No recognizable extension export in "${entrypoint}". ` +
@@ -235,6 +231,20 @@ async function loadSinglePackage(
     );
   }
 
+  return ext;
+}
+
+/**
+ * Create an admitted package's toolsets, each with the carrier bus of its contributing extension.
+ * @param ext - Admitted extension module.
+ * @param options - Worker-local runtime surfaces exposed during extraction.
+ * @returns The package's toolsets with their contributor's carrier.
+ * @throws When toolset creation fails.
+ */
+function extractWorkerToolsets(
+  ext: ExtensionModuleShape,
+  options?: WorkerRuntimeContributionLoadOptions,
+): WorkerToolsetContribution[] {
   if (!ext.tools?.createToolsets) return [];
 
   const ctx = createWorkerToolsetContext(ext.name, options);

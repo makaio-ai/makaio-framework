@@ -7,14 +7,16 @@
  * never by calling the driver glue directly.
  * @packageDocumentation
  */
-import { brandDatabase, type MakaioDatabase } from '@makaio/storage-drizzle';
+import {
+  bindDatabaseSignals,
+  brandDatabase,
+  releaseHostDatabaseWake,
+  type MakaioDatabase,
+} from '@makaio/storage-drizzle';
 import type { DatabaseClient, PostgresClientOptions } from '@makaio/storage-drizzle/client';
 import { attachPgPoolErrorLogger, createPostgresRawSqlExecutor, type PostgresPoolLike } from './raw-sql.js';
-
-/** Structural surface of the `pg` module used by {@link createNodePgClient}. */
-interface PgModule {
-  default: { Pool: new (config: { connectionString: string; max: number }) => PostgresPoolLike };
-}
+import type { PostgresDriverModule } from './pg-signal-client.js';
+import { createPostgresDatabaseSignals } from './signal-listener.js';
 
 /** Structural surface of the `drizzle-orm/node-postgres` module used by {@link createNodePgClient}. */
 interface NodePgDrizzleModule {
@@ -29,8 +31,8 @@ interface NodePgDrizzleModule {
  * path without mocking the module system.
  */
 export interface NodePgDriverLoaders {
-  /** Loads the `pg` module. */
-  readonly loadPg: () => Promise<PgModule>;
+  /** Loads the `pg` module. Typed via the shared {@link PostgresDriverModule}, which covers both the writing pool and the dedicated signal-listener connection constructed from it. */
+  readonly loadPg: () => Promise<{ default: PostgresDriverModule }>;
   /** Loads the `drizzle-orm/node-postgres` module. */
   readonly loadDrizzlePg: () => Promise<NodePgDrizzleModule>;
 }
@@ -81,7 +83,7 @@ export async function createNodePgClient(
   options: PostgresClientOptions | undefined,
   loaders: NodePgDriverLoaders = defaultDriverLoaders,
 ): Promise<DatabaseClient> {
-  let pg: PgModule['default'];
+  let pg: PostgresDriverModule;
   let drizzlePg: NodePgDrizzleModule['drizzle'];
   try {
     ({ default: pg } = await loaders.loadPg());
@@ -103,6 +105,16 @@ export async function createNodePgClient(
   const db = drizzlePg(pool);
   brandDatabase(db, 'postgres', createPostgresRawSqlExecutor(pool));
 
+  // Same connection configuration as the pool (the connection string), but a
+  // dedicated pg.Client — a pool connection cannot stay subscribed to LISTEN
+  // between checkouts. Opened lazily on the first subscribe/ready call, so
+  // creating a client never opens this connection by itself.
+  const signals = createPostgresDatabaseSignals({
+    connectionString: url,
+    createClient: (config) => new pg.Client(config),
+  });
+  bindDatabaseSignals(db, signals);
+
   // NodePgDatabase and LibSQLDatabase share the portable query-builder surface
   // (select, insert, update, delete, transaction) with compatible call
   // signatures.  MakaioDatabase already excludes every libsql-only member
@@ -111,14 +123,28 @@ export async function createNodePgClient(
   // database, so drizzle emits dialect-correct SQL — the bridge is types-only,
   // the same documented honesty model as the Bun cast.
   // Validated against drizzle-orm 0.45.2.
-  let closed = false;
+  let closePromise: Promise<void> | undefined;
   return {
     db: db as unknown as MakaioDatabase,
     dialect: 'postgres',
-    close: async () => {
-      if (closed) return;
-      closed = true;
-      await pool.end();
+    signals,
+    close: () => {
+      if (closePromise !== undefined) return closePromise;
+      closePromise = (async () => {
+        // Release the handle's wake dispatcher registrations first (a purely
+        // local, synchronous teardown), then the listener connection — it
+        // depends on nothing in the pool, and tearing it down before the pool
+        // means a reconnect attempt racing this close observes a closed
+        // capability instead of a pool that is also mid-shutdown. The pool
+        // still closes even if the listener teardown fails.
+        releaseHostDatabaseWake(db);
+        try {
+          await signals.close();
+        } finally {
+          await pool.end();
+        }
+      })();
+      return closePromise;
     },
   };
 }

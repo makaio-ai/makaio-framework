@@ -44,8 +44,7 @@ export async function createTempDatabaseClient(name: string): Promise<DatabaseCl
   const databaseFile = tempDatabasePath(name);
   const client = await createDatabaseClient({ url: `file:${databaseFile}` });
   return {
-    db: client.db,
-    dialect: client.dialect,
+    ...client,
     close: createFileRemovingClose(client, () => removeDatabaseFiles(databaseFile)),
   };
 }

@@ -39,7 +39,7 @@ import {
 } from '@makaio/services-core/adapter-subsystem';
 import { localAutomationCronSchedulerPackage } from '@makaio/services-core/automation-trigger';
 import { AdapterSubsystemToken } from '@makaio/subsystem-adapter';
-import { ClientsCoreToken } from '@makaio/subsystem-client';
+import { clientStoragePackage, ClientsCoreToken } from '@makaio/subsystem-client';
 import { NATIVE_SESSION_SUPERVISOR_PACKAGE_NAME } from '@makaio/subsystem-native-session-supervisor/package';
 import { LogImportRegistryToken } from '@makaio/services-log-import';
 import { WorkflowEngineToken } from '@makaio/subsystem-workflow-engine';
@@ -69,6 +69,7 @@ vi.mock('node:os', async () => {
 const EXPECTED_FRAMEWORK_BOOT_PACKAGE_NAMES = new Set([
   'preferences-storage',
   CLI_DETECTION_PACKAGE_NAME,
+  clientStoragePackage.name,
   ClientsCoreToken.name,
   createPackageManagerPackage().name,
   AdapterSubsystemToken.name,

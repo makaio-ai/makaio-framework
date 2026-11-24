@@ -1,5 +1,6 @@
 import type { IMakaioBus } from '@makaio/bus-core';
-import { dep, type MakaioNodeExtension } from '@makaio/contracts';
+import type { IsolatedNodeExtensionContext } from '@makaio/contracts/extension';
+import { dep, type MakaioExtension } from '@makaio/contracts';
 import { ADAPTER_SUBSYSTEM_PACKAGE_NAME } from '../adapter-subsystem/namespace.js';
 import { CanonicalModelService } from './canonical-model-service.js';
 
@@ -15,7 +16,7 @@ import { CanonicalModelService } from './canonical-model-service.js';
  * the subsystem later in the graph; declaring it makes the requirement the
  * coordinator's to satisfy rather than the load list's to preserve.
  */
-export const canonicalModelPackage: MakaioNodeExtension<IMakaioBus> = {
+export const canonicalModelPackage = {
   name: 'makaio.canonical-model',
   displayName: 'Canonical Model',
   version: '0.1.0',
@@ -27,4 +28,4 @@ export const canonicalModelPackage: MakaioNodeExtension<IMakaioBus> = {
    * @returns Uninitialized service instance; host calls `init()`
    */
   create: (ctx) => new CanonicalModelService(ctx.bus),
-};
+} satisfies MakaioExtension<IsolatedNodeExtensionContext<IMakaioBus>>;

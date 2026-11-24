@@ -3,11 +3,14 @@ import { z } from 'zod';
 import { createBusInstance, type IMakaioBus } from '@makaio/bus-core';
 import type { ExtensionToken } from '@makaio/contracts';
 import { ArtifactSubjects, defineArtifactKind } from '@makaio/contracts';
-import { createTestCall, makeStubNodeExtensionContext, stubExtensionIdentity } from '@makaio/test-utils';
+import { createTestCall, stubExtensionIdentity } from '@makaio/test-utils';
 import type { KernelExtensionContext, KernelMakaioExtension } from '@makaio/kernel/extension';
 import { ArtifactSchemaRegistryToken } from '../packages.js';
 import { createArtifactKindContributionProcessor } from '../artifact-contribution-processor.js';
 import { ArtifactSchemaRegistry } from '../artifact-schema-registry.js';
+import { useJournalHostFixture } from '@makaio/storage-conformance';
+
+const { makeContext: makeStubNodeExtensionContext } = useJournalHostFixture();
 
 /**
  * Build a minimal extension context that shares the given bus and exposes an

@@ -2,11 +2,14 @@ import { describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 import { createBusInstance, type IMakaioBus } from '@makaio/bus-core';
 import { defineArtifactKind, defineArtifactLifecycleHooks, type ExtensionToken } from '@makaio/contracts';
-import { createTestCall, makeStubNodeExtensionContext, stubExtensionIdentity } from '@makaio/test-utils';
+import { createTestCall, stubExtensionIdentity } from '@makaio/test-utils';
 import type { KernelExtensionContext, KernelMakaioExtension } from '@makaio/kernel/extension';
 import { ArtifactLifecycleHookRegistryToken } from '../../framework-packages.js';
 import { ArtifactLifecycleHookRegistry } from '../artifact-lifecycle-hook-registry.js';
 import { createArtifactLifecycleHookContributionProcessor } from '../artifact-lifecycle-hook-contribution-processor.js';
+import { useJournalHostFixture } from '@makaio/storage-conformance';
+
+const { makeContext: makeStubNodeExtensionContext } = useJournalHostFixture();
 
 function makeContext(bus: IMakaioBus, registry?: ArtifactLifecycleHookRegistry): KernelExtensionContext {
   return makeStubNodeExtensionContext(bus, {

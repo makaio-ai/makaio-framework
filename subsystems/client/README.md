@@ -7,15 +7,15 @@ Makaio session model.
 
 ## Usage
 
-### Register the package in the composition root
+### Register the packages in a full Node host
 
 ```typescript
-import { createClientsCorePackage } from '@makaio/subsystem-client';
+import { clientStoragePackage, createClientsCorePackage } from '@makaio/subsystem-client';
 
 const clientsCoreExt = createClientsCorePackage({
   definitions: clientDefinitions,
 });
-coordinator.load([clientsCoreExt]);
+coordinator.load([clientStoragePackage, clientsCoreExt]);
 ```
 
 ### Install and manage a client binary
@@ -45,6 +45,7 @@ MakaioBus.on(ClientSubjects.hookReceived, ({ payload }) => {
 | `ClientsCoreService` | Service class — registers bus handlers for binary management and session wiring |
 | `ClientsCoreToken` | Extension token for retrieving the service |
 | `createClientsCorePackage()` | Factory for the `MakaioExtension` manifest |
+| `clientStoragePackage` | Registers persistent runtime, binary, and profile storage handlers |
 | `ClientBinaryManager` | Orchestrates binary download, versioning, and disk layout |
 | `ClientBinaryJobRunner` | Executes install/uninstall jobs with progress callbacks |
 | `ClientBinaryVersionResolver` | Resolves install requests against descriptor-pinned versions |

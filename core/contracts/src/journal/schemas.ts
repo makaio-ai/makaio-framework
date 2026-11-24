@@ -146,16 +146,28 @@ const subjectDirectoryEntryBase = {
   suggestedFor: SuggestedForSchema.optional(),
 };
 
+/** Explicit marker for a subject schema that could not be projected to JSON Schema. */
+export const NotProjectableSchemaMark = z
+  .strictObject({ projectable: z.literal(false), reason: z.string() })
+  .readonly();
+
 /**
- * Serialisable projection of a subject declaration, without any function.
+ * A projected JSON Schema or the explicit reason projection was unavailable.
+ * The record arm preserves arbitrary JSON Schema annotation keys.
+ */
+const DirectorySchemaProjection = z.union([NotProjectableSchemaMark, JsonSchemaRecordSchema]);
+
+/**
+ * Serialisable projection of a subject declaration. Each unprojectable schema
+ * on a request or volatile event carries a {@link NotProjectableSchemaMark}.
  */
 export const SubjectDirectoryEntrySchema = z.discriminatedUnion('type', [
   z
     .object({
       ...subjectDirectoryEntryBase,
       type: z.literal('event'),
-      /** JSON schema of the event payload. */
-      schema: JsonSchemaRecordSchema,
+      /** JSON Schema of the event payload or its non-projectable mark. */
+      schema: DirectorySchemaProjection,
       /** Whether entries are recorded; absent means volatile. */
       retention: z.enum(['recorded', 'volatile']).optional(),
       /** Version of the payload schema. */
@@ -172,8 +184,8 @@ export const SubjectDirectoryEntrySchema = z.discriminatedUnion('type', [
     .object({
       ...subjectDirectoryEntryBase,
       type: z.literal('request'),
-      /** JSON schemas of the request and of the response. */
-      schema: z.object({ request: JsonSchemaRecordSchema, response: JsonSchemaRecordSchema }).strict(),
+      /** Independent JSON Schema projections or marks for the request and response. */
+      schema: z.object({ request: DirectorySchemaProjection, response: DirectorySchemaProjection }).strict(),
     })
     .strict(),
 ]);

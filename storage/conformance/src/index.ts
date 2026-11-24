@@ -54,3 +54,5 @@ export { readCentralChain } from './harness/chains.js';
 export { fixtureMigration } from './harness/fixture-migrations.js';
 export { conformanceKvSqlite, fixtureKv, fixtureKvDdl } from './harness/fixture-table.js';
 export { makeSession } from './harness/fixture-session.js';
+
+export { useJournalHostFixture } from './harness/journal-host-fixture.js';

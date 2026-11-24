@@ -69,10 +69,14 @@ import {
   sessionsDual,
   turnsDual,
 } from '@makaio/services-core/session';
+import { journalEntriesDual, journalReaderStatesDual } from '@makaio/services-core/journal/storage';
 import { discoverSchemas } from '@makaio/storage-migrations/discover-schemas';
 import type {
   AdapterSessionClaimStatus,
+  JsonValue,
   MessageRoutingStatus,
+  Origin,
+  ReaderEntryState,
   SpanStatus,
   TurnStatus,
   WorkflowExecutionScope,
@@ -399,6 +403,42 @@ type SessionEventPgSelect = typeof sessionEventsDual.postgres.$inferSelect;
 type _SessionEventSelectCongruent = Expect<Equal<SessionEventSqliteSelect, SessionEventPgSelect>>;
 
 // ─────────────────────────────────────────────────────────────────────────────
+// journal_entries — the fixed journal's append-only event row: `payload` is
+// contract-anchored `JsonValue`, `origin` is contract-anchored `Origin`. Both
+// must stay narrowed (not `unknown`/widened) on both dialects.
+// ─────────────────────────────────────────────────────────────────────────────
+
+type JournalEntrySqliteSelect = typeof journalEntriesDual.sqlite.$inferSelect;
+type JournalEntryPgSelect = typeof journalEntriesDual.postgres.$inferSelect;
+
+// Parity: both dialect faces infer the same select row.
+type _JournalEntryCongruent = Expect<Equal<JournalEntrySqliteSelect, JournalEntryPgSelect>>;
+
+// Contract-anchored: `payload` must equal the contract `JsonValue` on both dialects.
+type _JournalEntryPayloadSqlite = Expect<Equal<JournalEntrySqliteSelect['payload'], JsonValue>>;
+type _JournalEntryPayloadPg = Expect<Equal<JournalEntryPgSelect['payload'], JsonValue>>;
+
+// Contract-anchored: `origin` must equal the contract `Origin` on both dialects.
+type _JournalEntryOriginSqlite = Expect<Equal<JournalEntrySqliteSelect['origin'], Origin>>;
+type _JournalEntryOriginPg = Expect<Equal<JournalEntryPgSelect['origin'], Origin>>;
+
+// ─────────────────────────────────────────────────────────────────────────────
+// journal_reader_states — the fixed journal's per-reader reading state:
+// `state` must stay the narrowed `ReaderEntryState['state']` union (not plain
+// `string`) on both dialects.
+// ─────────────────────────────────────────────────────────────────────────────
+
+type JournalReaderStateSqliteSelect = typeof journalReaderStatesDual.sqlite.$inferSelect;
+type JournalReaderStatePgSelect = typeof journalReaderStatesDual.postgres.$inferSelect;
+
+// Parity: both dialect faces infer the same select row.
+type _JournalReaderStateCongruent = Expect<Equal<JournalReaderStateSqliteSelect, JournalReaderStatePgSelect>>;
+
+// Contract-anchored: `state` must equal `ReaderEntryState['state']` on both dialects.
+type _JournalReaderStateStateSqlite = Expect<Equal<JournalReaderStateSqliteSelect['state'], ReaderEntryState['state']>>;
+type _JournalReaderStateStatePg = Expect<Equal<JournalReaderStatePgSelect['state'], ReaderEntryState['state']>>;
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Runtime completeness guard
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -423,6 +463,8 @@ const PINNED_DUAL_TABLES: ReadonlySet<string> = new Set([
   'turns',
   'message_routing',
   'session_events',
+  'journal_entries',
+  'journal_reader_states',
 ]);
 
 /**
@@ -468,6 +510,10 @@ const STRUCTURAL_ONLY_DUAL_TABLES: ReadonlySet<string> = new Set([
   'provider_operation',
   'execution_attempt_cancellation',
   'execution_attempt_control_evidence',
+  // No enum/$type narrowing — net 2 covers them structurally.
+  'journal_position_counter',
+  'journal_reader_cursors',
+  'journal_edge_cursors',
 ]);
 
 /**

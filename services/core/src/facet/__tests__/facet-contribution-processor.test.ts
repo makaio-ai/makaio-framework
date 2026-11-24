@@ -1,4 +1,4 @@
-import { createTestCall, makeStubNodeExtensionContext, stubExtensionIdentity } from '@makaio/test-utils';
+import { createTestCall, stubExtensionIdentity } from '@makaio/test-utils';
 import { createBusInstance, type IMakaioBus } from '@makaio/bus-core';
 import type { ExtensionToken } from '@makaio/contracts';
 import { defineFacetNamespace, FacetSubjects } from '@makaio/contracts/facet';
@@ -7,6 +7,9 @@ import { describe, expect, it } from 'vitest';
 import { FacetNamespaceRegistryToken } from '../../framework-packages.js';
 import { createFacetNamespaceContributionProcessor } from '../facet-contribution-processor.js';
 import { FacetNamespaceRegistry } from '../facet-namespace-registry.js';
+import { useJournalHostFixture } from '@makaio/storage-conformance';
+
+const { makeContext: makeStubNodeExtensionContext } = useJournalHostFixture();
 
 /**
  * Build a minimal extension context that shares the given bus and exposes an

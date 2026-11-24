@@ -10,7 +10,7 @@ import {
 import type { ProtocolRef } from '@makaio/contracts/extension';
 import { ExtensionSubjects } from '@makaio/kernel';
 import type { ExtensionCoordinator } from '@makaio/kernel';
-import type { ContributionProcessor, KernelExtensionContext, KernelMakaioExtension } from '@makaio/kernel/extension';
+import type { KernelHostContext } from '@makaio/kernel/extension';
 import { buildDeterministicAdapterId } from '@makaio/services-core/adapter-runtime';
 import type { AdapterConfigStore } from './adapter-config-store.js';
 import type { AdapterRuntimeRegistry } from './adapter-runtime-registry.js';
@@ -18,7 +18,7 @@ import { AdapterDefinitionInvalidError } from './adapter-runtime-admission.js';
 import type { PlatformDefaults } from './adapter-runtime-lifecycle.js';
 import type { LoadedAdapter } from './adapter-runtime-types.js';
 import type { AdapterInstanceTeardownResult } from './adapter-instance-teardown.js';
-import { contributesToAdapterSubsystem } from './adapter-subsystem-contribution-factory.js';
+import type { AdapterContributionManifest } from './adapter-subsystem-contribution-factory.js';
 import {
   cloneAdapterClientRefs,
   resolveAdapterClientDefinitions,
@@ -32,6 +32,9 @@ import {
   resolveProviderDefinitions,
   type ProviderDefinitionCacheEntry,
 } from './adapter-provider-resolution.js';
+
+/** Context fields the processor reads: the contributing extension's carrier bus and its identity. */
+export type AdapterActivationContext = Pick<KernelHostContext, 'bus' | 'identity'>;
 
 /**
  * Extract protocol IDs from a manifest protocol declaration.
@@ -96,9 +99,9 @@ export interface AdapterContributionProcessorOptions {
    */
   readonly registry: AdapterRuntimeRegistry;
   /**
-   * Extension coordinator with which the contribution processor is registered.
+   * Read the provider definitions known to the extension coordinator.
    */
-  readonly coordinator: ExtensionCoordinator;
+  readonly coordinator: Pick<ExtensionCoordinator, 'getLoadedProviderDefinitionIds'>;
   /**
    * Stable machine identifier used for deterministic adapter ID derivation.
    */
@@ -115,10 +118,8 @@ export interface AdapterContributionProcessorOptions {
  * Handles the full activation and deactivation lifecycle for adapter
  * contributions declared by extension packages.
  *
- * Registers a {@link ContributionProcessor} with the {@link ExtensionCoordinator}
- * so that adapter initialization is awaited before the coordinator advances to
- * subsequent boot phases, preventing races between adapter setup and later boot
- * phases.
+ * The composition root registers the contribution processor that awaits adapter
+ * initialization before the coordinator advances to subsequent boot phases.
  *
  * **Error semantics (Q2):** Hard failures during activation throw. If the Nth
  * adapter in a package fails, every adapter registered so far, including the
@@ -129,7 +130,7 @@ export interface AdapterContributionProcessorOptions {
 export class AdapterContributionProcessor {
   private readonly configStore: AdapterConfigStore;
   private readonly registry: AdapterRuntimeRegistry;
-  private readonly coordinator: ExtensionCoordinator;
+  private readonly coordinator: AdapterContributionProcessorOptions['coordinator'];
   private readonly machineId: string;
   private readonly platformDefaults: PlatformDefaults;
   private readonly prepareAuthRuntime: unknown;
@@ -152,31 +153,6 @@ export class AdapterContributionProcessor {
   }
 
   /**
-   * Create a {@link ContributionProcessor} and register it with the coordinator.
-   *
-   * The cleanup function returned by `registerContributionProcessor` is passed
-   * to `addCleanup` so the owning service can unregister the processor during
-   * teardown.
-   * @param addCleanup - Callback that registers a teardown function with the owning lifecycle.
-   */
-  public register(addCleanup: (fn: () => void) => void): void {
-    const processor: ContributionProcessor = {
-      filter: contributesToAdapterSubsystem,
-      processActivated: async (
-        name: string,
-        pkg: KernelMakaioExtension,
-        ctx: KernelExtensionContext,
-      ): Promise<void> => {
-        await this.onPackageActivated(name, pkg, ctx);
-      },
-      processStopped: async (name: string): Promise<void> => {
-        await this.onPackageStopped(name);
-      },
-    };
-    addCleanup(this.coordinator.registerContributionProcessor(processor));
-  }
-
-  /**
    * Process all adapters declared by a package that just became `active`.
    *
    * Processes each contribution sequentially to maintain the publication chain
@@ -196,8 +172,8 @@ export class AdapterContributionProcessor {
    */
   public async onPackageActivated(
     packageName: string,
-    pkg: KernelMakaioExtension,
-    ctx: KernelExtensionContext,
+    pkg: AdapterContributionManifest,
+    ctx: AdapterActivationContext,
   ): Promise<void> {
     const contributions = pkg.adapters ?? [];
     const registered: LoadedAdapter[] = [];
@@ -273,7 +249,7 @@ export class AdapterContributionProcessor {
     call: CallContext,
     packageName: string,
     contribution: AdapterContribution,
-    ctx: KernelExtensionContext,
+    ctx: AdapterActivationContext,
     registered: LoadedAdapter[],
     providerModelCache: Map<string, ProviderAIModel[]>,
     providerDefinitionCache: Map<string, ProviderDefinitionCacheEntry> | undefined,

@@ -2,6 +2,16 @@ import path from 'node:path';
 import { primaryMigrationsPath, type StorageDialect } from '@makaio/contracts';
 import type { ExtensionEntry, KernelMakaioExtension } from './types.js';
 
+type MigrationManifest = {
+  readonly storage?: Pick<
+    NonNullable<KernelMakaioExtension['storage']>,
+    'migrations' | 'packageRoot' | 'migrationSourceId'
+  >;
+};
+type MigrationEntry = Pick<ExtensionEntry, 'enabled' | 'surfacesCollected'> & {
+  readonly pkg: MigrationManifest;
+};
+
 /** Extension migration source passed from the coordinator to the host runtime. */
 export interface ExtensionMigrationSource {
   /** Extension name used for diagnostics. */
@@ -26,7 +36,7 @@ export type ExtensionMigrationRunner = (sources: ReadonlyArray<ExtensionMigratio
  */
 export async function runExtensionMigrations(options: {
   readonly loadOrder: readonly string[];
-  readonly entries: ReadonlyMap<string, ExtensionEntry>;
+  readonly entries: ReadonlyMap<string, MigrationEntry>;
   readonly runMigrations: ExtensionMigrationRunner | undefined;
 }): Promise<void> {
   if (!options.runMigrations) return;
@@ -84,7 +94,7 @@ export async function runExtensionMigrations(options: {
  * @param migrationsPath - Raw path from {@link StorageManifest.migrations}.
  * @returns Absolute migrations folder path.
  */
-function resolveMigrationPath(name: string, pkg: KernelMakaioExtension, migrationsPath: string): string {
+function resolveMigrationPath(name: string, pkg: MigrationManifest, migrationsPath: string): string {
   if (path.isAbsolute(migrationsPath)) {
     return migrationsPath;
   }

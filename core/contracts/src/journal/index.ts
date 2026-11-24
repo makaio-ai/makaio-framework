@@ -11,6 +11,7 @@ export {
   JournalPageLimitSchema,
   JournalReprocessRequestSchema,
   JournalReprocessResponseSchema,
+  NotProjectableSchemaMark,
   ReaderStatesPageSchema,
   ReaderStatesRequestSchema,
   SubjectDirectoryEntrySchema,

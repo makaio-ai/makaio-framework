@@ -8,12 +8,16 @@ import type { ExtensionContextBase, KernelMakaioExtension } from '@makaio/kernel
 import { ReactionRegistryToken, reactionRegistryPackage } from '../packages.js';
 import type { ReactionRegistry } from '../reaction-registry.js';
 import { createReactionContributionProcessor } from '../reaction-contribution-processor.js';
+import { useJournalHostFixture } from '@makaio/storage-conformance';
+
+const { constructContext } = useJournalHostFixture();
 
 /**
  * Minimal {@link KernelExtensionContext} fields (excluding coordinator-owned
  * and bus-owned fields) for test coordinators.
  */
 const TEST_PKG_CTX_BASE: ExtensionContextBase = {
+  constructContext,
   platform: 'linux',
   homedir: '/home/test',
   makaioHome: '/home/test/.makaio',

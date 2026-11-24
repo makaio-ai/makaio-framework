@@ -12,6 +12,9 @@ import { z } from 'zod';
 import { ExtensionCoordinator } from '../extension/extension-coordinator.js';
 import type { ExtensionContextBase, KernelMakaioExtension as MakaioExtension } from '../extension/types.js';
 import { WARNING_ACTION_ID } from '../extension/warning-action-dispatcher.js';
+import { useJournalHostFixture } from '@makaio/storage-conformance';
+
+const { constructContext } = useJournalHostFixture();
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -21,6 +24,7 @@ import { WARNING_ACTION_ID } from '../extension/warning-action-dispatcher.js';
  * Minimal {@link ExtensionContextBase} base for test coordinators.
  */
 const TEST_PKG_CTX_BASE: ExtensionContextBase = {
+  constructContext,
   platform: 'linux',
   homedir: '/home/test',
   makaioHome: '/home/test/.makaio',

@@ -13,7 +13,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import { ADAPTER_SUBSYSTEM_PACKAGE_NAME } from '../adapter-subsystem/namespace.js';
-import { canonicalModelPackage, frameworkCorePackages } from '../index.js';
+import { canonicalModelPackage, frameworkCorePackages, sessionBridgePackage, SessionStorageToken } from '../index.js';
 
 /**
  * Required dependencies a host is expected to satisfy from a sibling set.
@@ -39,6 +39,12 @@ describe('frameworkCorePackages', () => {
       ADAPTER_SUBSYSTEM_PACKAGE_NAME,
     );
     expect(frameworkCorePackages.map((pkg) => pkg.name)).not.toContain(ADAPTER_SUBSYSTEM_PACKAGE_NAME);
+  });
+
+  it('orders the local bridge after storage while the reusable bridge takes storage from its host', () => {
+    expect(sessionBridgePackage).not.toHaveProperty('dependencies');
+    const localBridge = frameworkCorePackages.find((pkg) => pkg.name === sessionBridgePackage.name);
+    expect(localBridge?.dependencies?.map((dependency) => dependency.name)).toContain(SessionStorageToken.name);
   });
 
   it('reaches outside itself only for required dependencies a host is told to compose', () => {

@@ -3,9 +3,11 @@
  * @packageDocumentation
  */
 
-import type { SQL } from 'drizzle-orm';
+import { sql, type SQL } from 'drizzle-orm';
 import type { RawSqlSession } from './raw-sql';
 import type { HostDatabase, HostTransaction } from '@makaio/contracts';
+import { getDatabaseSignals } from './database-signals';
+import { deliverLocalWakeTopics, registerHostDatabaseHandle } from './host-database-wake';
 import { HostTransactionError } from './host-transaction';
 import type { DriverTransaction, TransactionQueryContext } from './host-transaction';
 import { executeTransaction } from './transaction';
@@ -13,29 +15,29 @@ import { createGuardedTransactionView } from './transaction-query-session';
 import type { MakaioDatabase } from './types';
 import { getDatabaseDialect } from './types';
 
-/** Lifetime of one transaction's authorization. */
-interface Lifetime {
-  /** Set once the `transaction(fn)` callback settled. */
-  finished: boolean;
-}
-
 /** What the storage owner knows about one minted `HostTransaction`. */
 interface TransactionState {
-  /** Database handle on which the host opened this transaction. */
+  /** Facade that minted the transaction. */
+  readonly host: HostDatabase;
+  /** Database handle and driver transaction used by the PostgreSQL storage adapter. */
   readonly db: MakaioDatabase;
+  readonly driver: DriverTransaction;
   /** Query surface bound to the driver transaction. */
   readonly context: TransactionQueryContext;
-  readonly driver: DriverTransaction;
-  /** Authorization lifetime the context's guard reads. */
-  readonly lifetime: Lifetime;
+  /** Set once the `transaction(fn)` callback settled. */
+  finished: boolean;
+  /** Error that causes a fulfilled callback to roll back. */
+  rollbackCause?: Error;
+  /** Topics marked on this transaction via `markTransactionWakeTopic`, deduplicated. Fresh per minted transaction. */
+  readonly wakeTopics: Set<string>;
 }
 
-/** A freshly minted `HostTransaction` with the lifetime to end when its callback settled. */
+/** A freshly minted transaction and its state. */
 interface MintedTransaction {
-  /** The opaque transaction handed to the callback. */
+  /** Opaque transaction passed to the callback. */
   readonly hostTx: HostTransaction;
-  /** Authorization lifetime of that transaction. */
-  readonly lifetime: Lifetime;
+  /** State held in the transaction registry. */
+  readonly state: TransactionState;
 }
 
 /** Every `HostTransaction` minted by this module; anything else is foreign. */
@@ -54,19 +56,19 @@ function transactionFinishedError(): HostTransactionError {
 
 /**
  * Mint the `HostTransaction` of one driver transaction and register its state.
+ * @param host - Facade that owns the transaction.
  * @param db - Handle the transaction was opened on.
  * @param tx - Driver transaction handed out by `executeTransaction`.
- * @returns The minted transaction and the lifetime to end when its callback settled.
+ * @returns The minted transaction and its state.
  */
-function mintHostTransaction(db: MakaioDatabase, tx: DriverTransaction): MintedTransaction {
-  const lifetime: Lifetime = { finished: false };
+function mintHostTransaction(host: HostDatabase, db: MakaioDatabase, tx: DriverTransaction): MintedTransaction {
   const {
     select,
     insert,
     update,
     delete: remove,
   } = createGuardedTransactionView(tx, () => {
-    if (lifetime.finished) throw transactionFinishedError();
+    if (state.finished) throw transactionFinishedError();
   });
   const context: TransactionQueryContext = Object.freeze({
     dialect: getDatabaseDialect(db),
@@ -78,8 +80,61 @@ function mintHostTransaction(db: MakaioDatabase, tx: DriverTransaction): MintedT
   // The single sanctioned assertion: `HostTransaction` is an opaque brand that only
   // the storage owner may mint, so no structurally valid value exists to build it from.
   const hostTx = Object.freeze({}) as HostTransaction;
-  transactions.set(hostTx, { db, context, driver: tx, lifetime });
-  return { hostTx, lifetime };
+  const state: TransactionState = { host, db, driver: tx, context, finished: false, wakeTopics: new Set() };
+  transactions.set(hostTx, state);
+  return { hostTx, state };
+}
+
+/**
+ * Run one `transaction(fn)` call: mint its `HostTransaction`, end its
+ * authorization once `fn` settled, notify any topics it marked, and — only
+ * after the transaction committed — deliver those topics to this process's
+ * own wake listeners.
+ * @param host - Facade that owns the transaction.
+ * @param db - Handle the transaction runs on.
+ * @param fn - Callback the minted `HostTransaction` is handed to.
+ * @returns Whatever `fn` resolved to.
+ * @typeParam T - Result type of `fn`.
+ */
+async function runHostTransaction<T>(
+  host: HostDatabase,
+  db: MakaioDatabase,
+  fn: (hostTx: HostTransaction) => Promise<T>,
+): Promise<T> {
+  let committedTopics: ReadonlySet<string> | undefined;
+
+  const result = await executeTransaction(db, async (tx) => {
+    const { hostTx, state } = mintHostTransaction(host, db, tx);
+    let fnResult: T;
+    try {
+      fnResult = await fn(hostTx);
+    } finally {
+      state.finished = true;
+    }
+
+    if (state.rollbackCause !== undefined) throw state.rollbackCause;
+
+    const { wakeTopics } = state;
+    if (wakeTopics.size > 0) {
+      const signals = getDatabaseSignals(db);
+      if (signals.kind === 'database-notify') {
+        // Original driver transaction parameter, not the guarded view (whose
+        // authorization already ended above) and not the raw SQL executor —
+        // the portable select pattern of `transaction-locks.ts`.
+        for (const topic of wakeTopics) {
+          await tx.select({ notified: signals.notifyExpression(topic) }).from(sql.raw('(SELECT 1) AS wake_anchor'));
+        }
+      }
+      committedTopics = wakeTopics;
+    }
+
+    return fnResult;
+  });
+
+  if (committedTopics !== undefined) {
+    deliverLocalWakeTopics(db, committedTopics);
+  }
+  return result;
 }
 
 /**
@@ -87,10 +142,19 @@ function mintHostTransaction(db: MakaioDatabase, tx: DriverTransaction): MintedT
  *
  * Each `transaction(fn)` call mints one `HostTransaction`, bound to the driver
  * transaction it opened and to the dialect of the handle. The transaction is
- * committed when `fn` fulfils and rolled back when it rejects. The
- * authorization of the `HostTransaction` ends when `fn` fulfilled or rejected,
- * before the commit or rollback statement is issued: from then on every query
- * made through it fails with a `HostTransactionError`.
+ * committed when `fn` fulfils unless it was marked rollback-only. A rejecting
+ * `fn` rolls back with its own error. The `HostTransaction` authorization ends
+ * when `fn` settles, before commit or rollback. From then on every query made
+ * through it fails with a `HostTransactionError`.
+ *
+ * A transaction may mark topics on itself (`markTransactionWakeTopic`,
+ * internal to this package). Once `fn` fulfils without a rollback cause, marked
+ * topics are notified through the handle's signal capability (`database-notify` only) inside the
+ * same driver transaction, so delivery to other processes happens exactly
+ * when the transaction commits. Only once the transaction has committed are
+ * the same topics delivered to this process's own wake listeners (see
+ * `getHostDatabaseWake`); a rolled-back transaction, a rejecting `fn`, a
+ * failing notify statement, or a failing commit all skip that local delivery.
  *
  * Transactions are queued per handle (see `executeTransaction`), so the
  * `HostDatabase` must be created from the handle the host itself writes on.
@@ -98,17 +162,29 @@ function mintHostTransaction(db: MakaioDatabase, tx: DriverTransaction): MintedT
  * @returns The host database seam of that handle.
  */
 export function createHostDatabase(db: MakaioDatabase): HostDatabase {
-  return {
-    transaction: (fn) =>
-      executeTransaction(db, async (tx) => {
-        const { hostTx, lifetime } = mintHostTransaction(db, tx);
-        try {
-          return await fn(hostTx);
-        } finally {
-          lifetime.finished = true;
-        }
-      }),
+  const host: HostDatabase = {
+    transaction: (fn) => runHostTransaction(host, db, fn),
   };
+  registerHostDatabaseHandle(host, db);
+  return host;
+}
+
+/**
+ * Resolve the state of a live transaction and optionally require its minting facade.
+ * @param tx - Host transaction received from `HostDatabase.transaction`.
+ * @param host - Facade that must have minted the transaction, if supplied.
+ * @returns The live transaction state.
+ */
+function requireTransactionState(tx: HostTransaction, host?: HostDatabase): TransactionState {
+  const state = transactions.get(tx);
+  if (state === undefined || (host !== undefined && state.host !== host)) {
+    throw new HostTransactionError(
+      'foreign-transaction',
+      'The value was not minted by createHostDatabase or belongs to another host database facade.',
+    );
+  }
+  if (state.finished) throw transactionFinishedError();
+  return state;
 }
 
 /**
@@ -129,23 +205,6 @@ export function createHostDatabase(db: MakaioDatabase): HostDatabase {
  */
 export function getTransactionQueryContext(tx: HostTransaction): TransactionQueryContext {
   return requireTransactionState(tx).context;
-}
-
-/**
- * Resolve a live host transaction and its underlying storage state.
- * @param tx - Host transaction to authorize.
- * @returns State owned by the storage facade.
- */
-function requireTransactionState(tx: HostTransaction): TransactionState {
-  const state = transactions.get(tx);
-  if (state === undefined) {
-    throw new HostTransactionError(
-      'foreign-transaction',
-      'The value is not a host transaction minted by createHostDatabase.',
-    );
-  }
-  if (state.lifetime.finished) throw transactionFinishedError();
-  return state;
 }
 
 /**
@@ -202,4 +261,49 @@ export function getPostgresHostTransactionSession(tx: HostTransaction, db: Makai
       return result.rows as TRow[];
     },
   };
+}
+
+/**
+ * Resolve the query context only for a live transaction minted by `host`.
+ *
+ * Each facade has its own transaction authority, including facades over the
+ * same handle. Those facades share wake delivery and the driver's transaction queue.
+ * @param host - Facade that must have minted the transaction.
+ * @param tx - Host transaction received from `HostDatabase.transaction`.
+ * @returns The query context bound to the transaction.
+ * @throws A `HostTransactionError` (`foreign-transaction`) when `host` did not mint `tx`.
+ * @throws A `HostTransactionError` (`transaction-finished`) when `tx` belongs to `host` and already ended.
+ * @internal
+ */
+export function getHostTransactionQueryContext(host: HostDatabase, tx: HostTransaction): TransactionQueryContext {
+  return requireTransactionState(tx, host).context;
+}
+
+/**
+ * Mark a topic on a host transaction: once the transaction commits, it is
+ * notified through the handle's signal capability (when available) and
+ * delivered to this process's own wake listeners. Marking the same topic more
+ * than once on a transaction has no additional effect.
+ * @param tx - Host transaction received from `HostDatabase.transaction`.
+ * @param topic - Application-defined topic to notify at commit.
+ * @throws A `HostTransactionError` (`foreign-transaction`) when `tx` was not minted by `createHostDatabase`.
+ * @throws A `HostTransactionError` (`transaction-finished`) when the transaction already ended.
+ */
+export function markTransactionWakeTopic(tx: HostTransaction, topic: string): void {
+  requireTransactionState(tx).wakeTopics.add(topic);
+}
+
+/**
+ * Make a live transaction roll back even if its callback fulfils.
+ *
+ * The first cause is used if the callback fulfils. A rejecting callback's
+ * own error still propagates.
+ * @param tx - Host transaction received from `HostDatabase.transaction`.
+ * @param cause - Error to throw if the transaction callback fulfils.
+ * @throws A `HostTransactionError` (`foreign-transaction`) when `tx` was not minted by `createHostDatabase`.
+ * @throws A `HostTransactionError` (`transaction-finished`) when the transaction already ended.
+ * @internal
+ */
+export function markTransactionRollbackOnly(tx: HostTransaction, cause: Error): void {
+  requireTransactionState(tx).rollbackCause ??= cause;
 }

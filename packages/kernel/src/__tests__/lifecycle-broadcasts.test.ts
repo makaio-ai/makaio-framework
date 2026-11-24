@@ -5,6 +5,9 @@ import { BaseService } from '@makaio/service-base';
 import { ExtensionCoordinator } from '../extension/extension-coordinator.js';
 import type { ExtensionContextBase, KernelMakaioExtension as MakaioExtension } from '../extension/types.js';
 import { KernelSubjects } from '../namespace/index.js';
+import { useJournalHostFixture } from '@makaio/storage-conformance';
+
+const { constructContext } = useJournalHostFixture();
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -49,6 +52,7 @@ function makePackage(
  * bus-owned fields) for test coordinators.
  */
 const TEST_PKG_CTX_BASE: ExtensionContextBase = {
+  constructContext,
   platform: 'linux',
   homedir: '/home/test',
   makaioHome: '/home/test/.makaio',

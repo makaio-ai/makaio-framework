@@ -23,6 +23,9 @@ import type { KernelMakaioExtension } from '@makaio/kernel';
 import { ADAPTER_SUBSYSTEM_PACKAGE_NAME } from '@makaio/services-core/adapter-subsystem';
 import { createAdapterSubsystemPackage, orderAfterAdapterSubsystem } from '../index.js';
 import { createStubCoordinator, TEST_PLATFORM_DEFAULTS } from './test-utils.js';
+import { useJournalHostFixture } from '@makaio/storage-conformance';
+
+const { constructContext } = useJournalHostFixture();
 
 /** Config repository that holds nothing — the package never reads it here. */
 const EMPTY_CONFIG_REPOSITORY: IAdapterConfigRepository = {
@@ -178,6 +181,7 @@ describe('orderAfterAdapterSubsystem', () => {
 
     const coordinator = new ExtensionCoordinator(createBusInstance(), {
       extensionContextBase: {
+        constructContext,
         platform: process.platform,
         homedir: '/home/test',
         makaioHome: '/home/test/.makaio',

@@ -3,9 +3,13 @@ import type { ExtensionInitOptions, ExtensionServiceLifecycle } from '@makaio/co
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ExtensionCoordinator } from '../extension/extension-coordinator.js';
 import type { ExtensionContextBase, KernelMakaioExtension } from '../extension/types.js';
+import { useJournalHostFixture } from '@makaio/storage-conformance';
+
+const { constructContext } = useJournalHostFixture();
 
 /** Host fields the coordinator needs to build the context of an extension with a service. */
 const CTX_BASE: ExtensionContextBase = {
+  constructContext,
   platform: 'linux',
   homedir: '/home/test',
   makaioHome: '/home/test/.makaio',

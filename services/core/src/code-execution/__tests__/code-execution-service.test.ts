@@ -17,13 +17,14 @@ import {
   type ICodeExecutionProvider,
 } from '@makaio/contracts';
 import type { CallContext, ExtensionToken, NodeExtensionContext } from '@makaio/contracts';
-import { createTestCall, makeStubNodeExtensionContext } from '@makaio/test-utils';
+import { createTestCall } from '@makaio/test-utils';
 import { DeferredPromise } from '@makaio/utils';
 import { CapabilityService } from '../../capability/capability-service.js';
 import { CapabilityToken } from '../../capability/package.js';
 import { frameworkCorePackages } from '../../framework-packages.js';
 import { CodeExecutionService } from '../code-execution-service.js';
 import { codeExecutionPackage, CodeExecutionServiceToken } from '../package.js';
+import { useJournalHostFixture } from '@makaio/storage-conformance';
 
 /** Behavior a test provider runs when its `execute` entry point is reached. */
 type ProviderBehavior = (
@@ -839,6 +840,8 @@ describe('CodeExecutionService', () => {
   });
 
   describe('codeExecutionPackage', () => {
+    const { makeContext: makeStubNodeExtensionContext } = useJournalHostFixture();
+
     /**
      * Build the extension context a host hands to `create`.
      * @param hostBus - Bus the created service registers its handler on.

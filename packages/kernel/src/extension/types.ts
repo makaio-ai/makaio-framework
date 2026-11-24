@@ -1,6 +1,8 @@
+import type { IsolatedNodeExtensionContext } from '@makaio/contracts/extension';
 import type {
   CredentialResolver,
   ExtensionContributionProcessor,
+  ExtensionContext,
   ExtensionOperatorConfigSource,
   ExtensionWarning,
   MakaioExtension,
@@ -11,7 +13,7 @@ import type {
   VersionLiteral,
 } from '@makaio/contracts';
 import type { IMakaioBus } from '@makaio/bus-core';
-import type { PartyRef } from '@makaio/core';
+import type { ExtensionName, PartyRef } from '@makaio/core';
 import type { ComponentState } from '../observability/index.js';
 import type { InstalledExtensionRecord } from '../observability/installed-extension-catalog-schemas.js';
 
@@ -41,6 +43,12 @@ export type InstalledExtensionCatalogSource = () => Promise<readonly InstalledEx
 /** Concrete Node runtime context supplied by the kernel coordinator. */
 export type KernelExtensionContext = NodeExtensionContext<IMakaioBus>;
 
+/** Base contract for the context constructed by a coordinator host. */
+export type KernelHostContext = ExtensionContext<IMakaioBus>;
+
+/** Node context assembled by the kernel before the host adds its capabilities. */
+export type KernelNodeContext = IsolatedNodeExtensionContext<IMakaioBus>;
+
 /**
  * Host-supplied factory that binds a credential resolver to the carrier that asks.
  *
@@ -56,7 +64,7 @@ export type KernelExtensionContext = NodeExtensionContext<IMakaioBus>;
 export type CredentialResolverBinder = (requester: PartyRef, bus: IMakaioBus) => CredentialResolver;
 
 /**
- * Host-supplied Node fields of {@link KernelExtensionContext}: everything the
+ * Host-supplied Node fields of {@link KernelNodeContext}: everything the
  * composition root provides once for all extensions.
  *
  * Omits the fields the coordinator owns and assembles per extension at
@@ -64,8 +72,8 @@ export type CredentialResolverBinder = (requester: PartyRef, bus: IMakaioBus) =>
  * `signal`, `hasExtension`, `openContributions`, `namespaces`) and `credentials`,
  * which the coordinator derives per extension from {@link ExtensionContextBase.credentialsFor}.
  */
-export type ExtensionContextBase = Omit<
-  KernelExtensionContext,
+export type ExtensionContextBase<THostContext extends KernelHostContext = KernelExtensionContext> = Omit<
+  KernelNodeContext,
   | 'bus'
   | 'identity'
   | 'getService'
@@ -84,13 +92,30 @@ export type ExtensionContextBase = Omit<
    * `ctx.credentials`. It never appears on the context handed to an extension.
    */
   readonly credentialsFor?: CredentialResolverBinder;
+  /**
+   * Complete the context with host-specific capabilities.
+   * @param context - Shared context with the extension's carrier-bound bus.
+   * @returns The context used for this extension's callbacks.
+   */
+  readonly constructContext: (context: KernelNodeContext) => THostContext;
 };
 
 /** Concrete executable extension shape loaded by the kernel coordinator. */
-export type KernelMakaioExtension = MakaioExtension<KernelExtensionContext>;
+export type KernelMakaioExtension<THostContext extends KernelHostContext = KernelExtensionContext> =
+  MakaioExtension<THostContext>;
 
 /** Awaited contribution processor registered with the {@link ExtensionCoordinator}. */
-export type ContributionProcessor = ExtensionContributionProcessor<KernelExtensionContext>;
+export type ContributionProcessor<THostContext extends KernelHostContext = KernelExtensionContext> =
+  ExtensionContributionProcessor<THostContext> & {
+    /**
+     * Stage static manifest contributions before the service is created.
+     * Runs in registration order independently of the activation filter.
+     * If staging or activation fails, processStopped can undo partial staging.
+     * @param name - Extension package name.
+     * @param pkg - Extension manifest.
+     */
+    readonly processActivating?: (name: string, pkg: KernelMakaioExtension<THostContext>) => void | Promise<void>;
+  };
 
 /**
  * Hosted runtime surface category used for extension/package gating.
@@ -146,9 +171,16 @@ export interface RuntimeEnvironment {
 /**
  * Options for constructing an {@link ExtensionCoordinator}.
  */
-export interface ExtensionCoordinatorOptions {
+export interface ExtensionCoordinatorOptions<THostContext extends KernelHostContext = KernelExtensionContext> {
   /** Hosted surface category used to apply package gating. Defaults to `'headless'`. */
   surface?: ExtensionRuntimeSurface;
+  /**
+   * Run one entry’s startup in a host-supplied asynchronous scope.
+   * @param extension - Entry being started or re-enabled.
+   * @param start - Startup operation to invoke and await in the scope.
+   * @returns The result of the startup operation.
+   */
+  runInStartScope?: <T>(extension: ExtensionName, start: () => Promise<T>) => Promise<T>;
   /**
    * Stop window, in milliseconds, of an extension whose service declares none
    * (`ExtensionServiceLifecycle.stopBudgetMs`). Every extension is stopped
@@ -176,7 +208,7 @@ export interface ExtensionCoordinatorOptions {
    * Omit `config`, `signal`, `hasExtension`, and `openContributions` — those are coordinator-owned
    * and assembled per extension at context-build time.
    */
-  extensionContextBase?: ExtensionContextBase;
+  extensionContextBase?: ExtensionContextBase<THostContext>;
   /**
    * Host-provided runtime environment snapshot used to evaluate extension
    * {@link RuntimeRequirement} gates during {@link ExtensionCoordinator.load}.
@@ -331,12 +363,22 @@ export interface ExtensionCoordinatorOptions {
   ) => Promise<void>;
 }
 
+/** Constructor options are required when the default context cannot satisfy the host. */
+export type ExtensionCoordinatorArguments<THostContext extends KernelHostContext> =
+  KernelExtensionContext extends NoInfer<THostContext>
+    ? [options?: ExtensionCoordinatorOptions<THostContext>]
+    : [
+        options: ExtensionCoordinatorOptions<THostContext> & {
+          extensionContextBase: ExtensionContextBase<THostContext>;
+        },
+      ];
+
 /**
  * Per-extension runtime entry tracked by the coordinator.
  */
-export interface ExtensionEntry {
+export interface ExtensionEntry<THostContext extends KernelHostContext = KernelExtensionContext> {
   /** The extension manifest and executable code. */
-  pkg: KernelMakaioExtension;
+  pkg: KernelMakaioExtension<THostContext>;
   /** Opaque identity minted for this extension by the coordinator. */
   identity: ExtensionIdentity;
   /** Current lifecycle state. */

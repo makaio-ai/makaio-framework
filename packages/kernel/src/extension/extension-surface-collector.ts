@@ -3,7 +3,7 @@ import type { TrayManifest } from '@makaio/contracts';
 import type { CliContribution } from '../cli/types.js';
 import type { WindowRegistry } from '../window/window-registry.js';
 import { claimManifestNamespaces } from './extension-start-runner.js';
-import type { ExtensionEntry, KernelMakaioExtension } from './types.js';
+import type { ExtensionEntry, KernelHostContext, KernelMakaioExtension } from './types.js';
 
 /** A CLI contribution paired with the extension that contributes it. */
 export interface OwnedCliContribution {
@@ -28,7 +28,10 @@ export interface ExtensionSurfaceCollections {
  * @param collections - Surface registries owned by the coordinator.
  * @param pkg - Extension manifest whose static surfaces should be collected.
  */
-export function collectExtensionSurfaces(collections: ExtensionSurfaceCollections, pkg: KernelMakaioExtension): void {
+export function collectExtensionSurfaces(
+  collections: ExtensionSurfaceCollections,
+  pkg: Pick<KernelMakaioExtension, 'name' | 'displayName' | 'windows' | 'tray' | 'cli'>,
+): void {
   if (pkg.windows) {
     for (const window of pkg.windows) {
       collections.windowRegistry.register(pkg.name, pkg.displayName, window);
@@ -53,14 +56,14 @@ export function collectExtensionSurfaces(collections: ExtensionSurfaceCollection
  * @param surfaceEligibleNames - Entries eligible under the enablement policy.
  * @returns Manifests retained for boot contributions.
  */
-export function collectBootExtensionSurfaces(
+export function collectBootExtensionSurfaces<THostContext extends KernelHostContext>(
   bus: IMakaioBus,
   collections: ExtensionSurfaceCollections,
-  entries: Iterable<ExtensionEntry>,
+  entries: Iterable<ExtensionEntry<THostContext>>,
   surfaceEligibleNames: ReadonlySet<string>,
-): readonly KernelMakaioExtension[] {
+): readonly KernelMakaioExtension<THostContext>[] {
   const ownershipExcluded = new Set<string>();
-  const retained: KernelMakaioExtension[] = [];
+  const retained: KernelMakaioExtension<THostContext>[] = [];
   for (const entry of entries) {
     const { name, dependencies } = entry.pkg;
     const blocked = dependencies?.some((dep) => !dep.optional && ownershipExcluded.has(dep.name));
@@ -85,12 +88,13 @@ export function collectBootExtensionSurfaces(
  * @returns Extensions with HTTP route manifests.
  */
 export function extensionsWithHttp(
-  entries: ReadonlyMap<string, ExtensionEntry>,
-): ReadonlyArray<KernelMakaioExtension & { readonly http: NonNullable<KernelMakaioExtension['http']> }> {
+  entries: ReadonlyMap<
+    string,
+    Pick<ExtensionEntry, 'enabled' | 'surfacesCollected'> & { readonly pkg: Pick<ExtensionEntry['pkg'], 'http'> }
+  >,
+): ReadonlyArray<{ readonly http: NonNullable<KernelMakaioExtension['http']> }> {
   return Array.from(entries.values())
     .filter((entry) => entry.enabled && entry.surfacesCollected)
     .map((entry) => entry.pkg)
-    .filter(
-      (pkg): pkg is KernelMakaioExtension & { readonly http: NonNullable<KernelMakaioExtension['http']> } => !!pkg.http,
-    );
+    .filter((pkg): pkg is { readonly http: NonNullable<KernelMakaioExtension['http']> } => !!pkg.http);
 }

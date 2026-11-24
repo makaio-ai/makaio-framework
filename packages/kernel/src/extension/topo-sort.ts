@@ -55,7 +55,10 @@ export interface TopoSortOptions {
  *   package's dependency version is incompatible, or a circular dependency
  *   involving at least one fatal-validated package is detected
  */
-export function topoSort(packages: ReadonlyArray<KernelMakaioExtension>, options: TopoSortOptions = {}): string[] {
+export function topoSort(
+  packages: ReadonlyArray<Pick<KernelMakaioExtension, 'name' | 'dependencies' | 'version'>>,
+  options: TopoSortOptions = {},
+): string[] {
   const nodes = collectUniqueNames(packages);
   const byName = new Map(packages.map((pkg) => [pkg.name, pkg] as const));
 
@@ -72,7 +75,9 @@ export function topoSort(packages: ReadonlyArray<KernelMakaioExtension>, options
  * @param packages - Extensions to inspect.
  * @returns Unique package names.
  */
-function collectUniqueNames(packages: ReadonlyArray<KernelMakaioExtension>): Set<string> {
+function collectUniqueNames(
+  packages: ReadonlyArray<Pick<KernelMakaioExtension, 'name' | 'dependencies' | 'version'>>,
+): Set<string> {
   const nodes = new Set<string>();
   for (const p of packages) {
     if (nodes.has(p.name)) {
@@ -91,9 +96,9 @@ function collectUniqueNames(packages: ReadonlyArray<KernelMakaioExtension>): Set
  * @param options - Scopes fatal validation to a subset of packages.
  */
 function validateDependencies(
-  packages: ReadonlyArray<KernelMakaioExtension>,
+  packages: ReadonlyArray<Pick<KernelMakaioExtension, 'name' | 'dependencies' | 'version'>>,
   nodes: ReadonlySet<string>,
-  byName: ReadonlyMap<string, KernelMakaioExtension>,
+  byName: ReadonlyMap<string, Pick<KernelMakaioExtension, 'name' | 'dependencies' | 'version'>>,
   options: TopoSortOptions,
 ): void {
   for (const p of packages) {
@@ -113,9 +118,9 @@ function validateDependencies(
  * @param options - Scopes fatal validation to a subset of packages.
  */
 function validatePackageDependencies(
-  pkg: KernelMakaioExtension,
+  pkg: Pick<KernelMakaioExtension, 'name' | 'dependencies' | 'version'>,
   nodes: ReadonlySet<string>,
-  byName: ReadonlyMap<string, KernelMakaioExtension>,
+  byName: ReadonlyMap<string, Pick<KernelMakaioExtension, 'name' | 'dependencies' | 'version'>>,
   options: TopoSortOptions,
 ): void {
   const isFatal = options.enabledNames === undefined || options.enabledNames.has(pkg.name);
@@ -166,7 +171,7 @@ function reportValidationFailure(options: TopoSortOptions, isFatal: boolean, nam
  * @returns Map from package name to unresolved dependency names.
  */
 function buildRemainingDependencyMap(
-  packages: ReadonlyArray<KernelMakaioExtension>,
+  packages: ReadonlyArray<Pick<KernelMakaioExtension, 'name' | 'dependencies' | 'version'>>,
   nodes: ReadonlySet<string>,
 ): Map<string, Set<string>> {
   const remainingDeps = new Map<string, Set<string>>();

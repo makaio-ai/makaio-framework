@@ -4,8 +4,13 @@ import { ExtensionSubjects } from '../observability/extension-namespace.js';
 import type { ComponentState } from '../observability/shared-schemas.js';
 import type { KernelMakaioExtension } from './types.js';
 
+type TransitionManifest = Pick<
+  KernelMakaioExtension,
+  'name' | 'displayName' | 'adapters' | 'hashTriggers' | 'providers' | 'clients' | 'ui' | 'sessionEventActions'
+> & { readonly tools?: unknown; readonly storage?: unknown };
+
 interface TransitionEntry {
-  readonly pkg: KernelMakaioExtension;
+  readonly pkg: TransitionManifest;
   state: ComponentState;
   readonly error?: string;
 }
@@ -44,7 +49,7 @@ export interface ContributionFlags {
  * @param pkg - Extension manifest to inspect.
  * @returns Object with one boolean flag per contribution surface.
  */
-function deriveContributes(pkg: KernelMakaioExtension): ContributionFlags {
+function deriveContributes(pkg: TransitionManifest): ContributionFlags {
   return {
     adapters: !!pkg.adapters?.length,
     tools: !!pkg.tools,

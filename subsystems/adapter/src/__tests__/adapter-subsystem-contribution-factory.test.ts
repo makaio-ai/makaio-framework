@@ -1,11 +1,14 @@
 import { createBusNamespace } from '@makaio/core';
-import { describe, expect, it, vi } from 'vitest';
+import { beforeAll, describe, expect, it, vi } from 'vitest';
 import { createBusInstance } from '@makaio/bus-core';
-import { makeStubNodeExtensionContext, stubExtensionIdentity } from '@makaio/test-utils';
+import { stubExtensionIdentity } from '@makaio/test-utils';
 import type { AdapterContribution } from '@makaio/contracts';
-import type { KernelExtensionContext, KernelMakaioExtension } from '@makaio/kernel/extension';
+import type { KernelMakaioExtension } from '@makaio/kernel/extension';
 import { createAdapterSubsystemContributionProcessor } from '../adapter-subsystem-contribution-factory.js';
 import type { AdapterSubsystemService } from '../adapter-subsystem-service.js';
+import { useJournalHostFixture } from '@makaio/storage-conformance';
+
+const { makeContext: makeStubNodeExtensionContext } = useJournalHostFixture();
 
 /** Build a minimal service stub for use in factory tests. */
 function createServiceStub(): Pick<
@@ -44,15 +47,18 @@ const PKG_WITH_ADAPTERS: KernelMakaioExtension = {
 };
 
 /** Minimal extension context stub. */
-const STUB_CTX: KernelExtensionContext = makeStubNodeExtensionContext(createBusInstance(), {
-  identity: stubExtensionIdentity('test-adapter-pkg'),
-  platform: process.platform,
-  homedir: '/tmp',
-  makaioHome: '/tmp/.makaio',
-  dataDir: '/tmp/.makaio/test-adapter-pkg',
-  username: 'test-user',
-  machineId: 'test-machine',
-  config: undefined,
+let STUB_CTX: ReturnType<typeof makeStubNodeExtensionContext>;
+beforeAll(() => {
+  STUB_CTX = makeStubNodeExtensionContext(createBusInstance(), {
+    identity: stubExtensionIdentity('test-adapter-pkg'),
+    platform: process.platform,
+    homedir: '/tmp',
+    makaioHome: '/tmp/.makaio',
+    dataDir: '/tmp/.makaio/test-adapter-pkg',
+    username: 'test-user',
+    machineId: 'test-machine',
+    config: undefined,
+  });
 });
 
 describe('createAdapterSubsystemContributionProcessor', () => {

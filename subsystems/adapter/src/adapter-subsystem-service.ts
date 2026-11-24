@@ -4,13 +4,17 @@ import type { IAdapterConfigRepository } from '@makaio/services-core/adapter-sub
 import { AdapterRuntimeSubjects } from '@makaio/services-core/adapter-runtime';
 import type { AvailableAdapter } from '@makaio/services-core/settings';
 import { ProviderDefinitionSchema, teardownWasObserved } from '@makaio/contracts';
-import { ExtensionSubjects, type ExtensionCoordinator } from '@makaio/kernel';
-import type { KernelExtensionContext, KernelMakaioExtension } from '@makaio/kernel/extension';
+import { ExtensionSubjects } from '@makaio/kernel';
 import { AdapterConfigStore } from './adapter-config-store.js';
 import { AdapterRuntimeRegistry } from './adapter-runtime-registry.js';
 import { AdapterProviderConfigService } from './adapter-provider-config-service.js';
 import { AdapterBindingService } from './adapter-binding-service.js';
-import { AdapterContributionProcessor } from './adapter-contribution-processor.js';
+import {
+  AdapterContributionProcessor,
+  type AdapterActivationContext,
+  type AdapterContributionProcessorOptions,
+} from './adapter-contribution-processor.js';
+import type { AdapterContributionManifest } from './adapter-subsystem-contribution-factory.js';
 import { buildCompatibleAuthOptions } from './compatible-auth-options.js';
 import { AdapterSubsystemSubjects } from './namespace.js';
 import type { PlatformDefaults } from './adapter-runtime-lifecycle.js';
@@ -33,13 +37,9 @@ export interface AdapterSubsystemServiceOptions {
    */
   readonly configRepository: IAdapterConfigRepository;
   /**
-   * Extension coordinator forwarded to {@link AdapterContributionProcessor}.
-   *
-   * The processor uses the coordinator to call `registerContributionProcessor`
-   * when its `register()` method is invoked. Registration itself is performed
-   * by the composition root before `coordinator.startAll()`.
+   * Coordinator lookup used to resolve provider definitions during adapter activation.
    */
-  readonly coordinator: ExtensionCoordinator;
+  readonly coordinator: AdapterContributionProcessorOptions['coordinator'];
   /**
    * Stable machine identifier used for deterministic adapter ID derivation.
    */
@@ -68,7 +68,7 @@ export interface AdapterSubsystemServiceOptions {
  *
  * Adapter packages are processed incrementally as they become `active` via
  * an awaited {@link ContributionProcessor} registered with the
- * {@link ExtensionCoordinator}. When a package declares adapters, each
+ * extension coordinator. When a package declares adapters, each
  * adapter contribution is processed synchronously within `startAll()` before
  * the coordinator advances to the next package, ensuring post-coordinator boot
  * phases run only after adapter contributions are registered and enabled
@@ -426,10 +426,10 @@ export class AdapterSubsystemService extends BaseService {
    * @param pkg - Extension manifest.
    * @param ctx - Per-extension context.
    */
-  public async processAdapterContributions(
+  public async processAdapterContributions<TManifest extends AdapterContributionManifest>(
     packageName: string,
-    pkg: KernelMakaioExtension,
-    ctx: KernelExtensionContext,
+    pkg: TManifest,
+    ctx: AdapterActivationContext,
   ): Promise<void> {
     await this.contributionProcessor.onPackageActivated(packageName, pkg, ctx);
   }

@@ -17,6 +17,17 @@
  * holding hand-stringified JSON stay `text` on both dialects — this bundle is
  * for structured JSON that drizzle serializes and deserializes.
  *
+ * **`jsonCol` single decode boundary:** node-postgres already runs `JSON.parse`
+ * on `jsonb`/`json` columns at the driver layer (via `pg-types`), so the
+ * driver value `jsonCol` receives is already the decoded JS value, not a JSON
+ * string. drizzle's built-in `jsonb()` column assumes the opposite and
+ * re-parses any driver value that happens to be a string — which corrupts a
+ * JSON root whose decoded form is itself a string that reads as JSON (the
+ * stored root `"123"` comes back as the number `123`, `"true"`/`"null"` come
+ * back as the boolean/null). `jsonCol` is declared via `customType` with an
+ * identity `fromDriver` to keep the decode boundary singular; `getSQLType()`
+ * still reports `jsonb`, so this is not a schema change.
+ *
  * **Partial-index predicate rewrites:** boolean partial indexes use `= 1` on
  * SQLite and `= true` on Postgres. Postgres twin schema files must rewrite such
  * predicates to `= true` in their `.where()` clauses — drizzle-kit emits DDL
@@ -36,7 +47,7 @@
  * @packageDocumentation
  */
 
-import { bigint, boolean, doublePrecision, jsonb } from 'drizzle-orm/pg-core';
+import { bigint, boolean, customType, doublePrecision } from 'drizzle-orm/pg-core';
 
 /**
  * Unix-epoch-milliseconds timestamp column.
@@ -58,6 +69,22 @@ export const epochMs = (name: string) => bigint(name, { mode: 'number' });
 export const bool = (name: string) => boolean(name);
 
 /**
+ * Postgres `jsonb` column with a single decode boundary.
+ *
+ * Built via `customType` instead of drizzle's built-in `jsonb()`: node-postgres
+ * decodes `jsonb` values at the driver layer already, so `fromDriver` returns
+ * that value as is rather than re-running `JSON.parse` on it (see the module
+ * doc's "single decode boundary" note). `toDriver` stringifies for the wire,
+ * matching the built-in column's behavior. `dataType` still reports `jsonb`,
+ * so drizzle-kit's generated SQL type is unchanged.
+ */
+const pgJsonb = customType<{ data: unknown }>({
+  dataType: () => 'jsonb',
+  toDriver: (value) => JSON.stringify(value),
+  fromDriver: (value) => value,
+});
+
+/**
  * Structured JSON column (drizzle serializes/deserializes).
  * SQLite: `text` in `'json'` mode. Postgres twin: `jsonb` (accepted divergence:
  * jsonb rejects `\u0000` escapes, normalizes key order, drops duplicate keys).
@@ -66,7 +93,7 @@ export const bool = (name: string) => boolean(name);
  * @typeParam T - Deserialized value type pinned via `$type`.
  * @returns Chainable Postgres `jsonb` column builder typed as `T`.
  */
-export const jsonCol = <T>(name: string) => jsonb(name).$type<T>();
+export const jsonCol = <T>(name: string) => pgJsonb(name).$type<T>();
 
 /**
  * Auto-generated integer primary key.

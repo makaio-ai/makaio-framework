@@ -582,6 +582,13 @@ export interface CoreBootOptions {
   readonly signal?: AbortSignal;
 
   /**
+   * Maximum time each inbound journal delivery waits for extension startup.
+   * Must be an integer in milliseconds between 1 and 2147483647.
+   * @defaultValue 30000
+   */
+  readonly journalStartupWaitTimeoutMs?: number;
+
+  /**
    * Receives, before the boot does any work, the bound on how long cancelling
    * it takes: the grace for the phase in flight to reach its next checkpoint
    * plus the rollback of the steps registered so far. The function reads the

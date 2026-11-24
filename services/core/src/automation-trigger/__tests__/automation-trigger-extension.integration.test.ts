@@ -19,6 +19,9 @@ import {
 } from '../packages.js';
 import type { AutomationTriggerBindingRuntime } from '../automation-trigger-binding-runtime.js';
 import { createAutomationTriggerContributionProcessor } from '../automation-trigger-contribution-processor.js';
+import { useJournalHostFixture } from '@makaio/storage-conformance';
+
+const { constructContext } = useJournalHostFixture();
 
 // ---------------------------------------------------------------------------
 // Test constants
@@ -29,6 +32,7 @@ import { createAutomationTriggerContributionProcessor } from '../automation-trig
  * and bus-owned fields) for test coordinators.
  */
 const TEST_PKG_CTX_BASE: ExtensionContextBase = {
+  constructContext,
   platform: 'linux',
   homedir: '/home/test',
   makaioHome: '/home/test/.makaio',

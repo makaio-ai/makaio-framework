@@ -121,10 +121,10 @@ describe('Postgres column bundles: type image', () => {
     expect(col.notNull).toBe(true);
   });
 
-  it('jsonCol maps to PgJsonb / jsonb', () => {
+  it('jsonCol maps to PgCustomColumn / jsonb (single decode boundary via customType)', () => {
     const cfg = getPgTableConfig(pgBundleTable);
     const col = cfg.columns.find((c) => c.name === 'payload')!;
-    expect(col.columnType).toBe('PgJsonb');
+    expect(col.columnType).toBe('PgCustomColumn');
     expect(col.getSQLType()).toBe('jsonb');
   });
 

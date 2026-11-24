@@ -1,5 +1,7 @@
 import type { ExtensionEntry } from './types.js';
 
+type ClosureEntry = Pick<ExtensionEntry, 'enabled'> & { readonly pkg: Pick<ExtensionEntry['pkg'], 'dependencies'> };
+
 /**
  * One coordinator entry excluded from the dependency-closed enabled set,
  * carrying the required, non-optional dependency names that kept it out.
@@ -59,7 +61,7 @@ export interface ExtensionEntryClosureResult {
  *   the excluded entries and the dependency names responsible for each.
  */
 export function closeEnabledExtensionEntries(
-  orderedEntries: ReadonlyArray<{ readonly name: string; readonly entry: ExtensionEntry }>,
+  orderedEntries: ReadonlyArray<{ readonly name: string; readonly entry: ClosureEntry }>,
 ): ExtensionEntryClosureResult {
   const managedNames = new Set(orderedEntries.map(({ name }) => name));
   const entryByName = new Map(orderedEntries.map(({ name, entry }) => [name, entry]));

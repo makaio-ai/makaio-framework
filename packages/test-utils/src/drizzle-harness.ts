@@ -179,8 +179,7 @@ export async function createTempDatabaseClient(name: string): Promise<TempDataba
   const dbPath = path.join(os.tmpdir(), `makaio-${name}-test-${crypto.randomUUID()}.db`);
   const client = await createDatabaseClient({ url: `file:${dbPath}` });
   return {
-    db: client.db,
-    dialect: client.dialect,
+    ...client,
     dbPath,
     close: createFileRemovingClose(client, () => removeDatabaseFiles(dbPath)),
   };

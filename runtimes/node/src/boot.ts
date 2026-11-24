@@ -41,7 +41,11 @@ import {
   ExtensionNamespace,
   KernelNamespace,
   type KernelMakaioExtension,
+  type KernelExtensionContext,
 } from '@makaio/kernel';
+import { createHostDatabase } from '@makaio/storage-drizzle';
+import { createJournalCapability, JournalContributionProcessor, SubjectDirectory } from '@makaio/services-core/journal';
+import { JournalStartBarrier } from './journal-start-barrier.js';
 import { CliNamespace } from '@makaio/kernel/cli';
 import { RuntimeSubjects, RuntimeNamespace } from './bus/runtime/namespace.js';
 import { BusServerTransportProvider } from './bus-server-transport.js';
@@ -92,7 +96,7 @@ import { createInstalledExtensionCatalogSource } from './installed-extension-cat
 import { createHttpContributionProcessor } from './http-contribution-processor.js';
 import { resolveMakaioHome } from './makaio-config.js';
 import { preferencesStoragePackage } from '@makaio/preferences/package';
-import { ClientsCoreToken, createClientsCorePackage } from '@makaio/subsystem-client';
+import { clientStoragePackage, ClientsCoreToken, createClientsCorePackage } from '@makaio/subsystem-client';
 import { createNodeClientBinaryStrategyDependencies } from './client-binary-strategy-dependencies.js';
 import { cliDetectionPackage } from './cli-detection/package.js';
 import { activateAdapterRuntimeIdentity, prepareAdapterRuntime } from './compose-adapter-runtime.js';
@@ -261,6 +265,12 @@ export async function bootMakaioRuntimeCore(
   const skipExtensions = parseSkipExtensions();
   const peerSigningKeyResolver = options.peerSigningKeyResolver;
 
+  const startGate = new JournalStartBarrier(options.journalStartupWaitTimeoutMs);
+  /** Reject inbound work as soon as boot is cancelled. */
+  const closeOnAbort = (): void => {
+    startGate.close(options.signal?.reason);
+  };
+  options.signal?.addEventListener('abort', closeOnAbort, { once: true });
   try {
     // Nothing is acquired yet: a boot that was cancelled before it began leaves at once.
     checkpoint();
@@ -373,6 +383,7 @@ export async function bootMakaioRuntimeCore(
     const db = databaseClient.db;
     console.info('[boot] Database initialized');
     shutdownSteps.push(resourceStep('database', () => databaseClient.close()));
+    const database = createHostDatabase(db);
     checkpoint();
 
     // -----------------------------------------------------------------------
@@ -469,7 +480,10 @@ export async function bootMakaioRuntimeCore(
         createMount: options.createMount,
       });
     checkpoint();
-    const runtimeEnvironment = buildRuntimeEnvironment(process.platform, options.hostCapabilities);
+    const runtimeEnvironment = buildRuntimeEnvironment(process.platform, [
+      ...(options.hostCapabilities ?? []),
+      { id: 'storage.drizzle' },
+    ]);
     const bootEligibleExtensionPackages = selectBootEligibleExtensionPackages({
       packages: allExtensionPackages,
       configProvider: enablementStore,
@@ -507,6 +521,7 @@ export async function bootMakaioRuntimeCore(
     const frameworkPackageNames = new Set<string>([
       preferencesStoragePackage.name,
       cliDetectionPackage.name,
+      clientStoragePackage.name,
       ClientsCoreToken.name,
       ...(options.enablePackageManager !== false ? [createPackageManagerPackage().name] : []),
       AdapterSubsystemToken.name,
@@ -538,12 +553,13 @@ export async function bootMakaioRuntimeCore(
 
     const credentialBinder = createCredentialBinder();
 
-    const coordinator = new ExtensionCoordinator(bus, {
+    const coordinator = new ExtensionCoordinator<KernelExtensionContext>(bus, {
       surface: options.surface ?? 'headless',
       // An extension that declares no stop window of its own may own a child
       // process, so it gets the window of one bounded stop of one.
       defaultStopBudgetMs: processStopBudgetMs(),
       db,
+      runInStartScope: (extension, start) => startGate.runInStartScope(extension, start),
       extensionContextBase: {
         cwd: process.cwd(),
         platform: process.platform,
@@ -554,6 +570,26 @@ export async function bootMakaioRuntimeCore(
         busUrl,
         tryImport,
         credentialsFor: credentialBinder.credentialsFor,
+        /**
+         * @param context - Shared fields and carrier bound by the coordinator.
+         * @returns Full context for the extension.
+         */
+        constructContext(context): KernelExtensionContext {
+          const extension = context.identity.extensionName;
+          return {
+            ...context,
+            database,
+            journal: createJournalCapability({
+              extension,
+              bus: context.bus,
+              host: database,
+              subjects: directory,
+              contributions: journalContributions,
+              isActive: () => context.hasExtension(extension),
+              startGate,
+            }),
+          };
+        },
       },
       runtimeEnvironment,
       launcherCommand: options.launcherCommand,
@@ -591,6 +627,12 @@ export async function bootMakaioRuntimeCore(
       frameworkPackageNames,
     });
 
+    const directory = new SubjectDirectory(bus, coordinator);
+    const journalContributions = new JournalContributionProcessor(directory);
+    shutdownSteps.push(resourceStep('subject directory', () => directory.destroy()));
+    await directory.init();
+    coordinator.registerContributionProcessor(journalContributions);
+
     // Framework-level packages load unconditionally — they provide core
     // infrastructure (e.g. preferences storage) that the shell and framework
     // layer depend on regardless of whether a host descriptor is present.
@@ -605,6 +647,7 @@ export async function bootMakaioRuntimeCore(
     const frameworkPackages = [
       preferencesStoragePackage,
       cliDetectionPackage,
+      clientStoragePackage,
       createClientsCorePackage({
         definitions: clientDefinitions,
         strategyDependencies: options.clientBinaryStrategyDependencies,
@@ -837,6 +880,7 @@ export async function bootMakaioRuntimeCore(
     reportOperatorConfig = undefined;
     reportStartedConfig();
     checkpoint();
+    startGate.open();
     // ORIGIN: Startup announces that the extension start phase is complete.
     await bus.emit(bus.own('start'), KernelSubjects.phase.servicesReady, { machineId });
     const allExtensions = coordinator.list();
@@ -919,10 +963,18 @@ export async function bootMakaioRuntimeCore(
       coordinator,
       trayEntries: coordinator.trayEntries,
       windowRegistry: coordinator.windowRegistry,
-      shutdown: shutdownSequence.run,
+      /**
+       * Close inbound admission before tearing down extensions and storage.
+       * @returns Completion of the runtime shutdown sequence.
+       */
+      shutdown() {
+        startGate.close(new Error('The journal host is shutting down.'));
+        return shutdownSequence.run();
+      },
       stopBudgetMs: shutdownSequence.budgetMs,
     };
   } catch (err) {
+    startGate.close(err);
     reportOperatorConfig?.();
     // A cancellation reaches here as the signal's reason, or as an aggregate of the
     // cleanup failures it set off (see `cancellationRejection`).
@@ -950,6 +1002,8 @@ export async function bootMakaioRuntimeCore(
       );
     }
     throw err;
+  } finally {
+    options.signal?.removeEventListener('abort', closeOnAbort);
   }
 }
 

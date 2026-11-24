@@ -1,6 +1,6 @@
 import type { IMakaioBus } from '@makaio/bus-core';
 import type { CallContext } from '@makaio/core';
-import type { ExtensionCoordinator } from '@makaio/kernel';
+import type { ExtensionCoordinator, KernelExtensionContext, KernelHostContext } from '@makaio/kernel';
 import {
   AdapterSubsystemToken,
   createAdapterSubsystemPackage,
@@ -37,9 +37,9 @@ import { registerAdapterNameResolver } from './register-adapter-name-resolver.js
  */
 
 /** Input for {@link prepareAdapterRuntime} (the pre-`startAll` phase). */
-export interface PrepareAdapterRuntimeInput {
+export interface PrepareAdapterRuntimeInput<THostContext extends KernelHostContext = KernelExtensionContext> {
   /** Coordinator that loads the adapter-subsystem package and owns activation. */
-  readonly coordinator: ExtensionCoordinator;
+  readonly coordinator: ExtensionCoordinator<THostContext>;
   /** Persistence seam for adapter/provider configuration. */
   readonly configRepository: IAdapterConfigRepository;
   /** Platform defaults (cwd/env) supplied to adapter instances. */
@@ -53,13 +53,13 @@ export interface PrepareAdapterRuntimeInput {
 }
 
 /** Result of {@link prepareAdapterRuntime}. */
-export interface PreparedAdapterRuntime {
+export interface PreparedAdapterRuntime<THostContext extends KernelHostContext = KernelExtensionContext> {
   /**
    * The adapter-subsystem package. The caller MUST add this to the array passed
    * to `coordinator.load(...)`; its `create` reads `ctx.machineId`, so adapter
    * ids derive from the coordinator's machine id.
    */
-  readonly adapterSubsystemPackage: ReturnType<typeof createAdapterSubsystemPackage>;
+  readonly adapterSubsystemPackage: ReturnType<typeof createAdapterSubsystemPackage<THostContext>>;
 }
 
 /** Input for {@link activateAdapterRuntimeIdentity} (the post-`startAll` phase). */
@@ -112,7 +112,9 @@ export interface ActivatedAdapterRuntimeIdentity {
  * @param input - Coordinator, config repository, and platform defaults.
  * @returns The adapter-subsystem package to add to the coordinator load set.
  */
-export function prepareAdapterRuntime(input: PrepareAdapterRuntimeInput): PreparedAdapterRuntime {
+export function prepareAdapterRuntime<THostContext extends KernelHostContext = KernelExtensionContext>(
+  input: PrepareAdapterRuntimeInput<THostContext>,
+): PreparedAdapterRuntime<THostContext> {
   const {
     coordinator,
     configRepository,
@@ -132,7 +134,7 @@ export function prepareAdapterRuntime(input: PrepareAdapterRuntimeInput): Prepar
   });
 
   coordinator.registerContributionProcessor(
-    createAdapterSubsystemContributionProcessor({
+    createAdapterSubsystemContributionProcessor<THostContext>({
       getAdapterSubsystemService: () => coordinator.getExtensionService(AdapterSubsystemToken),
     }),
   );

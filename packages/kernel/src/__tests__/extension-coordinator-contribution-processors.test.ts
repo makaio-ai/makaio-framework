@@ -9,6 +9,9 @@ import type {
   ContributionProcessor,
   KernelMakaioExtension as MakaioExtension,
 } from '../extension/types.js';
+import { useJournalHostFixture } from '@makaio/storage-conformance';
+
+const { constructContext, getDatabase } = useJournalHostFixture();
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -58,6 +61,7 @@ class TrackingService extends BaseService {
  * bus-owned fields) for test coordinators.
  */
 const TEST_PKG_CTX_BASE: ExtensionContextBase = {
+  constructContext,
   platform: 'linux',
   homedir: '/home/test',
   makaioHome: '/home/test/.makaio',
@@ -263,7 +267,7 @@ describe('ExtensionCoordinator contribution processor lifecycle', () => {
     const bus = createBusInstance();
     const events: string[] = [];
     const coordinator = new ExtensionCoordinator(bus, {
-      db: {},
+      db: getDatabase().db,
       extensionContextBase: TEST_PKG_CTX_BASE,
     });
     coordinator.registerContributionProcessor({
@@ -304,7 +308,7 @@ describe('ExtensionCoordinator contribution processor lifecycle', () => {
     const bus = createBusInstance();
     const events: string[] = [];
     const coordinator = new ExtensionCoordinator(bus, {
-      db: {},
+      db: getDatabase().db,
       extensionContextBase: TEST_PKG_CTX_BASE,
     });
 
@@ -344,7 +348,7 @@ describe('ExtensionCoordinator contribution processor lifecycle', () => {
     const bus = createBusInstance();
     const events: string[] = [];
     const coordinator = new ExtensionCoordinator(bus, {
-      db: {},
+      db: getDatabase().db,
       extensionContextBase: TEST_PKG_CTX_BASE,
     });
 

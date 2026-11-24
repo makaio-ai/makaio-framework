@@ -1,4 +1,4 @@
-import { makeStubNodeExtensionContext, stubExtensionIdentity } from '@makaio/test-utils';
+import { stubExtensionIdentity } from '@makaio/test-utils';
 import { describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 import { createBusInstance } from '@makaio/bus-core';
@@ -7,6 +7,9 @@ import type { KernelExtensionContext, KernelMakaioExtension } from '@makaio/kern
 import { ReactionRegistryToken, reactionRegistryPackage } from '../packages.js';
 import { ReactionRegistry } from '../reaction-registry.js';
 import { createReactionContributionProcessor } from '../reaction-contribution-processor.js';
+import { useJournalHostFixture } from '@makaio/storage-conformance';
+
+const { makeContext: makeStubNodeExtensionContext } = useJournalHostFixture();
 
 function makeContext(registry?: ReactionRegistry): KernelExtensionContext {
   const bus = createBusInstance();

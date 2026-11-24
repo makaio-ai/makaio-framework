@@ -37,7 +37,7 @@ export interface BootEnabledResolution {
  * @returns The names that will boot enabled.
  */
 export function resolveBootEnabledNames(
-  eligible: ReadonlyArray<KernelMakaioExtension>,
+  eligible: ReadonlyArray<Pick<KernelMakaioExtension, 'name' | 'critical'>>,
   extensionManagedNames: ReadonlySet<string> | undefined,
   loadEnabled: ((name: string) => boolean | undefined) | undefined,
 ): BootEnabledResolution {

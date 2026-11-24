@@ -1,12 +1,13 @@
 import * as path from 'node:path';
 import type { IMakaioBus } from '@makaio/bus-core';
+import type { IsolatedNodeExtensionContext } from '@makaio/contracts/extension';
 import {
   extensionToken,
   type ClientDefinition,
-  type MakaioNodeExtension,
+  type MakaioExtension,
+  type NodeExtensionContext,
   type ExtensionServiceLifecycle,
 } from '@makaio/contracts';
-import { registerDrizzleHandlers } from '@makaio/storage-drizzle';
 import { ClientRuntimeService } from './client-runtime-service.js';
 import { ClientBinaryManager } from './client-binary-manager.js';
 import { ClientConfigPrimeService } from './client-config-prime-service.js';
@@ -14,18 +15,13 @@ import { ClientProfileService } from './client-profile-service.js';
 import { ClientSessionConfigService } from './client-session-config-service.js';
 import { ClientSessionTokenService, type ClientSessionTokenSink } from './client-session-token-service.js';
 import { ClientDefinitionRegistry } from './client-definition-registry.js';
-import { registerDrizzleRuntimeStorage } from './storage/runtime-drizzle-handler.js';
-import { registerDrizzleClientBinaryStorage } from './storage/client-binary-drizzle-handler.js';
-import { registerDrizzleProfileStorage } from './storage/profile-drizzle-handler.js';
-import { ClientBinaryStorageNamespace } from './storage/client-binary-storage-namespace.js';
-import { ClientRuntimeStorageNamespace } from './storage/runtime-storage-namespace.js';
-import { ClientProfileStorageNamespace } from './storage/profile-storage-namespace.js';
 import type { StrategyDependencies } from './binary-strategies/index.js';
 import type { PostInstallHandler } from './client-binary-manager-types.js';
 import type { ClientBinaryResolutionPolicy } from './client-binary-manager-types.js';
 import { ClientHookProviderContractRegistry } from './client-hook-provider-contract-registry.js';
 import { ClientHookResponseRegistry } from './client-hook-response-registry.js';
 import { createClientHookResponseContributionProcessor } from './client-hook-response-contribution-processor.js';
+import { clientStoragePackage } from './client-storage-package.js';
 
 // ---------------------------------------------------------------------------
 // Composite service
@@ -202,35 +198,6 @@ export interface ClientsCorePackageOptions {
   readonly binaryResolutionPolicy?: ClientBinaryResolutionPolicy;
 }
 
-/**
- * Run storage handler registrations and return one cleanup that unwinds every
- * successful registration in reverse order.
- *
- * If any registration throws, previously registered handlers are immediately
- * rolled back so package startup remains retry-safe.
- * @param registrations - Ordered storage registration callbacks
- * @returns Cleanup function for all successful registrations
- */
-export function registerStorageHandlersWithRollback(registrations: ReadonlyArray<() => () => void>): () => void {
-  const cleanups: Array<() => void> = [];
-  const rollback = (): void => {
-    for (const cleanup of [...cleanups].reverse()) {
-      cleanup();
-    }
-  };
-
-  try {
-    for (const register of registrations) {
-      cleanups.push(register());
-    }
-  } catch (error) {
-    rollback();
-    throw error;
-  }
-
-  return rollback;
-}
-
 // ---------------------------------------------------------------------------
 // Package factory
 // ---------------------------------------------------------------------------
@@ -238,6 +205,9 @@ export function registerStorageHandlersWithRollback(registrations: ReadonlyArray
 /**
  * Create the MakaioExtension manifest for the in-memory client runtime service
  * and the client binary manager.
+ *
+ * Full Node hosts must load {@link clientStoragePackage} alongside this package for persistence.
+ * Startup fails if the storage package is inactive.
  *
  * `@makaio/runtime-node` calls this factory after loading client packages and passes
  * the resulting manifest to the extension coordinator. Definitions supplied
@@ -250,14 +220,17 @@ export function registerStorageHandlersWithRollback(registrations: ReadonlyArray
  * const pkg = createClientsCorePackage({
  *   definitions: clientPackages.flatMap((p) => p.clients ?? []),
  * });
- * coordinator.load([pkg, ...otherPackages], configDefaults);
+ * coordinator.load([clientStoragePackage, pkg, ...otherPackages], configDefaults);
  * await coordinator.startAll();
  * ```
+ * @typeParam THostContext - Context supplied by the runtime hosting the client services.
  * @param options - Package options including pre-seeded client definitions,
  *   strategy I/O dependencies, and post-install handlers
  * @returns Configured MakaioExtension manifest
  */
-export function createClientsCorePackage(options: ClientsCorePackageOptions = {}): MakaioNodeExtension<IMakaioBus> {
+export function createClientsCorePackage<
+  THostContext extends IsolatedNodeExtensionContext<IMakaioBus> = NodeExtensionContext<IMakaioBus>,
+>(options: ClientsCorePackageOptions = {}): MakaioExtension<THostContext> {
   const { definitions = [], strategyDependencies, postInstallHandlers, binaryResolutionPolicy } = options;
   const definitionSnapshot = [...definitions];
 
@@ -272,23 +245,7 @@ export function createClientsCorePackage(options: ClientsCorePackageOptions = {}
     displayName: 'Clients Core',
     version: '0.1.0',
     critical: true,
-    namespaces: [ClientBinaryStorageNamespace, ClientRuntimeStorageNamespace, ClientProfileStorageNamespace],
-    storage: {
-      /**
-       * Register all persistence handlers (runtime, client binary, and
-       * profile) on the bus.
-       * @param bus - Application bus instance
-       * @param db - Drizzle database instance
-       * @returns Cleanup function that unregisters all storage handlers
-       */
-      registerHandlers: registerDrizzleHandlers((bus, db) => {
-        return registerStorageHandlersWithRollback([
-          () => registerDrizzleRuntimeStorage(bus, db),
-          () => registerDrizzleClientBinaryStorage(bus, db),
-          () => registerDrizzleProfileStorage(bus, db),
-        ]);
-      }),
-    },
+    dependencies: [{ type: 'extension', name: clientStoragePackage.name, version: '*', optional: true }],
     /**
      * Create the composite service bound to the runtime bus.
      *
@@ -310,6 +267,9 @@ export function createClientsCorePackage(options: ClientsCorePackageOptions = {}
      * @returns Uninitialized composite service
      */
     create: (ctx) => {
+      if ('database' in ctx && !ctx.hasExtension(clientStoragePackage.name)) {
+        throw new Error(`makaio.clients-core requires active extension ${clientStoragePackage.name} on a full host.`);
+      }
       const defRegistry = new ClientDefinitionRegistry(definitionSnapshot);
       const clientsBasePath = path.join(ctx.makaioHome, 'clients');
       const binaryManager = new ClientBinaryManager(
@@ -350,9 +310,13 @@ export function createClientsCorePackage(options: ClientsCorePackageOptions = {}
      * {@link ClientsCoreService}.
      */
     runtimeBoot: {
+      /**
+       * Install the hook response processor for packages on this runtime.
+       * @param context - Isolated or full host boot context.
+       */
       configure: (context) => {
         context.registerContributionProcessor(
-          createClientHookResponseContributionProcessor(hookResponseRegistry, providerContractRegistry),
+          createClientHookResponseContributionProcessor<THostContext>(hookResponseRegistry, providerContractRegistry),
         );
       },
     },

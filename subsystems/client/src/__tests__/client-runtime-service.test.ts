@@ -3,7 +3,12 @@ import { createBusInstance, type IMakaioBus } from '@makaio/bus-core';
 import { ClientSubjects, type ClientRuntimeStarted, type ClientUsageSnapshot } from '@makaio/contracts/client';
 import { CLIDetectionSubjects, type CLIDetectionResult } from '@makaio/services-core/cli-detection/namespace';
 import { ClientStorageSubjects, type ClientRecord } from '@makaio/services-core/settings/storage';
-import { ClientAccountRegistry, ClientRuntimeService, createClientsCorePackage } from '../index.js';
+import {
+  ClientAccountRegistry,
+  ClientRuntimeService,
+  clientStoragePackage,
+  createClientsCorePackage,
+} from '../index.js';
 import { makeClientRecord } from './helpers.js';
 
 describe('ClientRuntimeService', () => {
@@ -415,12 +420,16 @@ describe('ClientRuntimeService', () => {
     ]);
   });
 
-  it('exports a clients-core package factory', () => {
+  it('exports a clients-core package factory without storage', () => {
     const pkg = createClientsCorePackage();
     expect(pkg.name).toBeTruthy();
     expect(pkg.critical).toBe(true);
     expect(pkg.create).toBeTypeOf('function');
-    expect(pkg.storage?.registerHandlers).toBeTypeOf('function');
+    expect(pkg.storage).toBeUndefined();
+  });
+
+  it('keeps the client storage handlers on the separate storage package', () => {
+    expect(clientStoragePackage.storage?.registerHandlers).toBeTypeOf('function');
   });
 
   describe('runtime.observe', () => {

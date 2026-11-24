@@ -8,14 +8,17 @@ import type { JournalAcceptErrorCode } from './record.js';
  */
 export class JournalError extends Error {
   /**
-   * @param code - Machine-readable error code from {@link JournalAcceptErrorCode}.
+   * @param code - Machine-readable error code for either operation. {@link JournalAcceptErrorCode}
+   *   includes all recording error codes.
    * @param message - Human-readable error description.
+   * @param options - Optional underlying cause.
    */
   public constructor(
     public readonly code: JournalAcceptErrorCode,
     message: string,
+    options?: ErrorOptions,
   ) {
-    super(message);
+    super(message, options);
     this.name = 'JournalError';
   }
 }

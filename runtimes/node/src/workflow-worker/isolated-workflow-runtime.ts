@@ -1,19 +1,29 @@
 import { createBusInstance, type IMakaioBus } from '@makaio/bus-core';
+import type { IsolatedNodeExtensionContext } from '@makaio/contracts/extension';
 import { FrameworkContractNamespaces, FrameworkStorageNamespaces, WorkflowNamespace } from '@makaio/contracts';
-import { ExtensionCoordinator, type KernelMakaioExtension, KernelSubjects } from '@makaio/kernel';
+import {
+  ExtensionCoordinator,
+  filterEligibleExtensions,
+  type KernelMakaioExtension,
+  KernelSubjects,
+} from '@makaio/kernel';
 import {
   canonicalModelPackage,
   sessionBridgePackage,
   sessionOrchestratorPackage,
   sessionPackage,
-  sessionStoragePackage,
   createSubagentServicePackage,
   createToolContributionProcessor,
   ToolRegistryToken,
   toolRegistryPackage,
 } from '@makaio/services-core';
 import { AdapterSubsystemToken, orderAfterAdapterSubsystem } from '@makaio/subsystem-adapter';
-import { createClientsCorePackage } from '@makaio/subsystem-client';
+import {
+  ClientBinaryStorageNamespace,
+  ClientProfileStorageNamespace,
+  ClientRuntimeStorageNamespace,
+  createClientsCorePackage,
+} from '@makaio/subsystem-client';
 import type { Toolset } from '@makaio/tools-core';
 import {
   activateAdapterRuntimeIdentity,
@@ -22,6 +32,7 @@ import {
 } from '../compose-adapter-runtime.js';
 import { cliDetectionPackage } from '../cli-detection/package.js';
 import {
+  buildRuntimeEnvironment,
   registerExtensionBootContributions,
   shouldLoadDefaultSessionOrchestrator,
 } from '../boot-extension-selection.js';
@@ -31,13 +42,21 @@ import { tryImport } from '../optional-package.js';
 import { NodeCredentialProvider } from '../credential-provider.js';
 
 const LOCAL_RUNTIME_SNAPSHOT_PRIORITY = 1;
-const ISOLATED_SESSION_BASE_PACKAGES = [sessionStoragePackage, sessionBridgePackage, sessionPackage] as const;
+const ISOLATED_SESSION_BASE_PACKAGES = [sessionBridgePackage, sessionPackage] as const;
+
+type IsolatedWorkflowExtensionContext = IsolatedNodeExtensionContext<IMakaioBus>;
 
 /** Connect an isolated runtime bus to its authenticated authority. */
 export type WorkflowRuntimeAuthorityConnector = (bus: IMakaioBus) => Promise<void>;
 
-/** Discover runtime contributions after the authority connection is authenticated. */
-export type WorkflowRuntimeContributionLoader = (bus: IMakaioBus) => Promise<readonly KernelMakaioExtension[]>;
+/**
+ * Discover runtime contributions after the authority connection is authenticated.
+ * @param bus - Connected isolated runtime bus.
+ * @returns Contributed manifests for isolated activation.
+ */
+export type WorkflowRuntimeContributionLoader = (
+  bus: IMakaioBus,
+) => Promise<readonly KernelMakaioExtension<IsolatedWorkflowExtensionContext>[]>;
 
 /** Node host context supplied by the runtime composition root. */
 export interface IsolatedWorkflowRuntimeContext {
@@ -62,7 +81,7 @@ export interface CreateIsolatedWorkflowRuntimeOptions {
   /** Load authority-dependent contribution packages after authentication. */
   readonly loadContributedPackages?: WorkflowRuntimeContributionLoader;
   /** Exact extension packages contributed to this runtime. */
-  readonly contributedPackages: readonly KernelMakaioExtension[];
+  readonly contributedPackages: readonly KernelMakaioExtension<IsolatedWorkflowExtensionContext>[];
   /** Adapter configuration persistence supplied by the authority host. */
   readonly configRepository: PrepareAdapterRuntimeInput['configRepository'];
   /** Trusted non-serializable adapter authentication preparer. */
@@ -76,7 +95,7 @@ export interface CreateIsolatedWorkflowRuntimeOptions {
 /** Active isolated workflow runtime and its owned lifecycle. */
 export interface IsolatedWorkflowRuntime {
   readonly bus: IMakaioBus;
-  readonly coordinator: ExtensionCoordinator;
+  readonly coordinator: ExtensionCoordinator<IsolatedWorkflowExtensionContext>;
   readonly machineId: string;
   /** Release all runtime-owned resources in reverse startup order. */
   readonly shutdown: () => Promise<void>;
@@ -91,7 +110,7 @@ export interface IsolatedWorkflowRuntime {
  */
 function activateIsolatedAdapterRuntimeIdentity(
   bus: IMakaioBus,
-  coordinator: ExtensionCoordinator,
+  coordinator: ExtensionCoordinator<IsolatedWorkflowExtensionContext>,
   machineId: string,
 ): ReturnType<typeof activateAdapterRuntimeIdentity> {
   return activateAdapterRuntimeIdentity({
@@ -103,6 +122,40 @@ function activateIsolatedAdapterRuntimeIdentity(
       coordinator.getExtensionService(AdapterSubsystemToken)?.resolveLiveAdapterIdentity(adapterId),
     listLiveAdapterIdentities: () =>
       coordinator.getExtensionService(AdapterSubsystemToken)?.getLiveAdapterIdentities() ?? [],
+  });
+}
+
+/**
+ * Build the isolated extension coordinator without host database capabilities.
+ * @param bus - Isolated runtime bus.
+ * @param context - Worker host fields supplied to extension contexts.
+ * @param runtimeEnvironment - Host identities and capabilities used for admission.
+ * @returns Coordinator for the isolated Node context.
+ */
+function createIsolatedCoordinator(
+  bus: IMakaioBus,
+  context: IsolatedWorkflowRuntimeContext,
+  runtimeEnvironment: ReturnType<typeof buildRuntimeEnvironment>,
+): ExtensionCoordinator<IsolatedWorkflowExtensionContext> {
+  return new ExtensionCoordinator<IsolatedWorkflowExtensionContext>(bus, {
+    surface: 'headless',
+    runtimeEnvironment,
+    extensionContextBase: {
+      cwd: context.cwd,
+      platform: context.platform,
+      homedir: context.homedir,
+      makaioHome: context.makaioHome,
+      username: context.username,
+      machineId: context.machineId,
+      tryImport,
+      credentialsFor: () => new NodeCredentialProvider(),
+      /**
+       * Use the shared Node context fields for isolated extension activation.
+       * @param base - Coordinator-provided extension context.
+       * @returns Isolated extension context.
+       */
+      constructContext: (base) => base,
+    },
   });
 }
 
@@ -122,22 +175,18 @@ export async function createIsolatedWorkflowRuntime(
 ): Promise<IsolatedWorkflowRuntime> {
   const bus = createBusInstance();
   // The runtime hosts the workflow contract for executor traffic without loading the workflow engine extension.
-  bus.registerNamespaces([...FrameworkContractNamespaces, ...FrameworkStorageNamespaces, WorkflowNamespace]);
+  bus.registerNamespaces([
+    ...FrameworkContractNamespaces,
+    ...FrameworkStorageNamespaces,
+    WorkflowNamespace,
+    ClientBinaryStorageNamespace,
+    ClientProfileStorageNamespace,
+    ClientRuntimeStorageNamespace,
+  ]);
 
   const { context } = options;
-  const coordinator = new ExtensionCoordinator(bus, {
-    surface: 'headless',
-    extensionContextBase: {
-      cwd: context.cwd,
-      platform: context.platform,
-      homedir: context.homedir,
-      makaioHome: context.makaioHome,
-      username: context.username,
-      machineId: context.machineId,
-      tryImport,
-      credentialsFor: () => new NodeCredentialProvider(),
-    },
-  });
+  const runtimeEnvironment = buildRuntimeEnvironment(context.platform, ['node']);
+  const coordinator = createIsolatedCoordinator(bus, context, runtimeEnvironment);
 
   const transportDisconnected = Promise.withResolvers<void>();
   const shutdownSteps: ShutdownStep[] = [
@@ -154,10 +203,11 @@ export async function createIsolatedWorkflowRuntime(
   try {
     await options.connectAuthority(bus);
 
-    const contributedPackages = [
-      ...options.contributedPackages,
-      ...((await options.loadContributedPackages?.(bus)) ?? []),
-    ];
+    const contributedPackages = filterEligibleExtensions(
+      [...options.contributedPackages, ...((await options.loadContributedPackages?.(bus)) ?? [])],
+      'headless',
+      runtimeEnvironment,
+    );
 
     const { adapterSubsystemPackage } = prepareAdapterRuntime({
       coordinator,
@@ -170,19 +220,19 @@ export async function createIsolatedWorkflowRuntime(
       runtimeDefinitionHandlerPriority: LOCAL_RUNTIME_SNAPSHOT_PRIORITY,
       ...(options.prepareAuthRuntime !== undefined && { prepareAuthRuntime: options.prepareAuthRuntime }),
     });
-    const clientsCorePackage = createClientsCorePackage({
+    const clientsCorePackage = createClientsCorePackage<IsolatedWorkflowExtensionContext>({
       definitions: contributedPackages.flatMap((pkg) => pkg.clients ?? []),
       binaryResolutionPolicy: 'global-only',
     });
 
-    coordinator.registerContributionProcessor(createToolContributionProcessor());
+    coordinator.registerContributionProcessor(createToolContributionProcessor<IsolatedWorkflowExtensionContext>());
     const packagesToLoad = [
       ...ISOLATED_SESSION_BASE_PACKAGES,
       // Canonical-model initialization synchronously probes the local adapter subsystem.
       adapterSubsystemPackage,
       canonicalModelPackage,
       ...(shouldLoadDefaultSessionOrchestrator(contributedPackages) ? [sessionOrchestratorPackage] : []),
-      createSubagentServicePackage(LOCAL_RUNTIME_SNAPSHOT_PRIORITY),
+      createSubagentServicePackage<IsolatedWorkflowExtensionContext>(LOCAL_RUNTIME_SNAPSHOT_PRIORITY),
       toolRegistryPackage,
       cliDetectionPackage,
       clientsCorePackage,

@@ -1,10 +1,11 @@
-import type { IMakaioBus } from '@makaio/bus-core';
 import { isRuntimeOwnershipFieldClaimed, type ExtensionConfigProvider } from '@makaio/contracts';
 import {
   type BoundedShutdownStep,
   ExtensionCoordinator,
   coalesceExtensionOverrides,
   filterEligibleExtensions,
+  type KernelExtensionContext,
+  type KernelHostContext,
   type KernelMakaioExtension,
   type RuntimeCapability,
   type ExtensionRuntimeSurface,
@@ -116,9 +117,15 @@ export function normalizeNodeHostCapabilities(
 /** Host capability input accepted by Node runtime composition roots. */
 export type HostCapabilityDeclaration = string | RuntimeCapability;
 
+type BootEligibilityManifest = Pick<
+  KernelMakaioExtension,
+  'name' | 'displayName' | 'version' | 'requires' | 'surface' | 'dependencies'
+>;
+type BootSelectionManifest = Pick<KernelMakaioExtension, 'name' | 'critical' | 'dependencies'>;
+
 /** Inputs used to determine which descriptor-backed packages can contribute during boot. */
-export interface BootExtensionEligibilityOptions {
-  readonly packages: ReadonlyArray<KernelMakaioExtension>;
+export interface BootExtensionEligibilityOptions<TManifest extends BootEligibilityManifest = KernelMakaioExtension> {
+  readonly packages: ReadonlyArray<TManifest>;
   /**
    * Optional enablement source used by scheduler policy selection to exclude
    * disabled extensions. Only `loadEnabled` is consumed; `loadConfig` and
@@ -146,11 +153,12 @@ export interface BootExtensionEligibilityOptions {
  * an override.
  * @param options - Package set, surface, and runtime environment.
  * @returns Loaded extension packages eligible for coordinator boot.
+ * @throws `ExtensionStorageCapabilityError` when an extension requires unavailable `storage.drizzle`.
  * @throws Error when two eligible extension packages register under one name.
  */
-export function selectBootEligibleExtensionPackages(
-  options: BootExtensionEligibilityOptions,
-): ReadonlyArray<KernelMakaioExtension> {
+export function selectBootEligibleExtensionPackages<TManifest extends BootEligibilityManifest>(
+  options: BootExtensionEligibilityOptions<TManifest>,
+): ReadonlyArray<TManifest> {
   return coalesceExtensionOverrides(
     filterEligibleExtensions(options.packages, options.surface, options.runtimeEnvironment),
   );
@@ -183,11 +191,13 @@ export function selectBootEligibleExtensionPackages(
  *   full boot selection (e.g. isolated unit tests).
  * @returns Provider packages contributed by still-eligible, dependency-closed enabled owners, preserving discovery order.
  */
-export function selectEligibleAutomationCronSchedulerHostPackages(
-  policies: ReadonlyArray<LoadedAutomationCronSchedulerHostPolicy>,
+export function selectEligibleAutomationCronSchedulerHostPackages<TManifest>(
+  policies: ReadonlyArray<
+    Pick<LoadedAutomationCronSchedulerHostPolicy, 'ownerPackage'> & { readonly package: TManifest }
+  >,
   options: BootExtensionEligibilityOptions,
   effectiveEnabledExtensionPackages?: ReadonlyArray<KernelMakaioExtension>,
-): ReadonlyArray<KernelMakaioExtension> {
+): ReadonlyArray<TManifest> {
   const eligiblePackages = effectiveEnabledExtensionPackages ?? computePreliminaryEffectiveEnabledPackages(options);
   const eligibleSources = new Set(eligiblePackages.map(getExtensionPackageSource));
   return policies.filter(({ ownerPackage }) => eligibleSources.has(ownerPackage)).map(({ package: pkg }) => pkg);
@@ -200,9 +210,9 @@ export function selectEligibleAutomationCronSchedulerHostPackages(
  * @param options - Boot eligibility inputs.
  * @returns Preference-enabled packages closed over the boot-eligible extension pool.
  */
-function computePreliminaryEffectiveEnabledPackages(
-  options: BootExtensionEligibilityOptions,
-): ReadonlyArray<KernelMakaioExtension> {
+function computePreliminaryEffectiveEnabledPackages<
+  TManifest extends BootEligibilityManifest & Pick<BootSelectionManifest, 'critical'>,
+>(options: BootExtensionEligibilityOptions<TManifest>): ReadonlyArray<TManifest> {
   const { configProvider } = options;
   const bootEligiblePackages = selectBootEligibleExtensionPackages(options);
   const preferenceEnabledPackages = configProvider
@@ -257,10 +267,12 @@ function computePreliminaryEffectiveEnabledPackages(
  *   (and thus always satisfied).
  * @returns The dependency-closed subset of `preferenceEnabledPackages`, preserving input order.
  */
-export function closeEffectiveEnabledBootPackages(
-  preferenceEnabledPackages: ReadonlyArray<KernelMakaioExtension>,
-  bootEligibleExtensionPackages: ReadonlyArray<KernelMakaioExtension>,
-): ReadonlyArray<KernelMakaioExtension> {
+export function closeEffectiveEnabledBootPackages<
+  TManifest extends Pick<BootSelectionManifest, 'name' | 'dependencies'>,
+>(
+  preferenceEnabledPackages: ReadonlyArray<TManifest>,
+  bootEligibleExtensionPackages: ReadonlyArray<Pick<BootSelectionManifest, 'name'>>,
+): ReadonlyArray<TManifest> {
   const extensionManagedNames = new Set(bootEligibleExtensionPackages.map((pkg) => pkg.name));
   const closed = new Map(preferenceEnabledPackages.map((pkg) => [pkg.name, pkg]));
 
@@ -326,11 +338,11 @@ export function closeEffectiveEnabledBootPackages(
  * @returns `extensionPackages` minus any package whose name collides with a
  *   framework package name and that is not effectively enabled.
  */
-export function excludeIneffectiveCoreNameOverrides(
-  extensionPackages: ReadonlyArray<KernelMakaioExtension>,
+export function excludeIneffectiveCoreNameOverrides<TManifest extends Pick<BootSelectionManifest, 'name'>>(
+  extensionPackages: ReadonlyArray<TManifest>,
   frameworkPackageNames: ReadonlySet<string>,
   effectiveEnabledPackageNames: ReadonlySet<string>,
-): ReadonlyArray<KernelMakaioExtension> {
+): ReadonlyArray<TManifest> {
   return extensionPackages.filter((pkg) => {
     if (!frameworkPackageNames.has(pkg.name) || effectiveEnabledPackageNames.has(pkg.name)) {
       return true;
@@ -346,9 +358,9 @@ export function excludeIneffectiveCoreNameOverrides(
 }
 
 /** Inputs for {@link composeBootExtensionSelection}. */
-export interface BootExtensionSelectionOptions {
+export interface BootExtensionSelectionOptions<TManifest extends BootSelectionManifest = KernelMakaioExtension> {
   /** Surface- and environment-eligible extension pool this boot considered (see {@link selectBootEligibleExtensionPackages}). */
-  readonly bootEligibleExtensionPackages: ReadonlyArray<KernelMakaioExtension>;
+  readonly bootEligibleExtensionPackages: ReadonlyArray<TManifest>;
   /** Enablement preference source; `undefined` treats every boot-eligible package as preference-enabled. */
   readonly configProvider: Pick<ExtensionConfigProvider, 'loadEnabled'> | undefined;
   /**
@@ -369,7 +381,7 @@ export interface BootExtensionSelectionOptions {
  * sets from this single object instead of recomputing any stage
  * independently — see {@link composeBootExtensionSelection}.
  */
-export interface BootExtensionSelectionResult {
+export interface BootExtensionSelectionResult<TManifest extends BootSelectionManifest = KernelMakaioExtension> {
   /**
    * Extension packages that survived collision resolution against framework
    * package names (Stage 2) and are eligible to merge into `packagesToLoad`.
@@ -377,7 +389,7 @@ export interface BootExtensionSelectionResult {
    * so status/listing know about them and a preference change takes effect on
    * the next boot.
    */
-  readonly mergeableExtensionPackages: ReadonlyArray<KernelMakaioExtension>;
+  readonly mergeableExtensionPackages: ReadonlyArray<TManifest>;
   /**
    * Names of {@link mergeableExtensionPackages} — the set that decides
    * whether a coordinator-retained package with a given name is
@@ -391,7 +403,7 @@ export interface BootExtensionSelectionResult {
    * dependencies are satisfied against the post-collision composition
    * (Stage 3) — the packages that will actually reach `active`.
    */
-  readonly effectiveEnabledBootPackages: ReadonlyArray<KernelMakaioExtension>;
+  readonly effectiveEnabledBootPackages: ReadonlyArray<TManifest>;
   /** Names of {@link effectiveEnabledBootPackages}. */
   readonly effectiveEnabledPackageNames: ReadonlySet<string>;
 }
@@ -441,7 +453,9 @@ export interface BootExtensionSelectionResult {
  * @param options - Extension-selection inputs for this boot.
  * @returns The staged composition result every `boot.ts` consumer reads from.
  */
-export function composeBootExtensionSelection(options: BootExtensionSelectionOptions): BootExtensionSelectionResult {
+export function composeBootExtensionSelection<TManifest extends BootSelectionManifest>(
+  options: BootExtensionSelectionOptions<TManifest>,
+): BootExtensionSelectionResult<TManifest> {
   const { bootEligibleExtensionPackages, configProvider, frameworkPackageNames } = options;
 
   // Stage 1 — preference.
@@ -524,11 +538,11 @@ export function composeBootExtensionSelection(options: BootExtensionSelectionOpt
  *   that will actually reach `active`.
  * @returns Retained packages allowed to register boot contributions.
  */
-export function selectExtensionManagedEnabledPackages(
-  retainedPackages: ReadonlyArray<KernelMakaioExtension>,
+export function selectExtensionManagedEnabledPackages<TManifest extends Pick<BootSelectionManifest, 'name'>>(
+  retainedPackages: ReadonlyArray<TManifest>,
   extensionManagedPackageNames: ReadonlySet<string>,
   effectiveEnabledPackageNames: ReadonlySet<string>,
-): ReadonlyArray<KernelMakaioExtension> {
+): ReadonlyArray<TManifest> {
   return retainedPackages.filter(
     (pkg) => !extensionManagedPackageNames.has(pkg.name) || effectiveEnabledPackageNames.has(pkg.name),
   );
@@ -621,7 +635,7 @@ export function selectFrameworkCorePackages(
  *   tool registry or tool approval package.
  */
 export function assertFileAccessPackagesNotOverridden(
-  mergeableExtensionPackages: ReadonlyArray<KernelMakaioExtension>,
+  mergeableExtensionPackages: ReadonlyArray<Pick<KernelMakaioExtension, 'name' | 'displayName' | 'version'>>,
   fileAccessOptions: FrameworkFileAccessOptions,
 ): void {
   if (!fileAccessOptions.fileAccessRuleProvider) {
@@ -654,10 +668,10 @@ export function assertFileAccessPackagesNotOverridden(
  * @param coordinator - Extension coordinator being configured.
  * @returns Cleanup callbacks for registered boot contributions.
  */
-export function registerExtensionBootContributions(
-  packages: ReadonlyArray<KernelMakaioExtension>,
-  bus: IMakaioBus,
-  coordinator: ExtensionCoordinator,
+export function registerExtensionBootContributions<THostContext extends KernelHostContext = KernelExtensionContext>(
+  packages: ReadonlyArray<Pick<KernelMakaioExtension<NoInfer<THostContext>>, 'runtimeBoot'>>,
+  bus: THostContext['bus'],
+  coordinator: ExtensionCoordinator<THostContext>,
 ): readonly ShutdownStep[] {
   const cleanups: ShutdownStep[] = [];
 

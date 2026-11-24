@@ -1,11 +1,14 @@
 import { describe, expect, it } from 'vitest';
 import { createBusInstance } from '@makaio/bus-core';
-import { makeStubNodeExtensionContext, stubExtensionIdentity } from '@makaio/test-utils';
+import { stubExtensionIdentity } from '@makaio/test-utils';
 import type { ExtensionToken } from '@makaio/contracts';
 import type { KernelExtensionContext, KernelMakaioExtension } from '@makaio/kernel/extension';
 import { TransitionPipelineToken } from '../../framework-packages.js';
 import { createTransitionContributionProcessor } from '../transition-contribution-processor.js';
 import { TransitionPipelineService } from '../transition-pipeline-service.js';
+import { useJournalHostFixture } from '@makaio/storage-conformance';
+
+const { makeContext: makeStubNodeExtensionContext } = useJournalHostFixture();
 
 function makeContext(service?: TransitionPipelineService): KernelExtensionContext {
   const bus = createBusInstance();

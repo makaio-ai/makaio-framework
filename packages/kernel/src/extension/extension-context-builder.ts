@@ -16,7 +16,17 @@ import {
   resolveConfigOutcome,
 } from './resolve-config.js';
 import { namespaceCapabilityFor, namespaceRegistrationFor, reopenExtensionNamespaces } from './namespace-capability.js';
-import type { ExtensionContextBase, ExtensionEntry, KernelExtensionContext } from './types.js';
+import type {
+  ExtensionContextBase,
+  ExtensionEntry,
+  KernelExtensionContext,
+  KernelHostContext,
+  KernelNodeContext,
+} from './types.js';
+
+type ConfigEntry = Pick<ExtensionEntry, 'configDefaults'> & {
+  readonly pkg: Pick<ExtensionEntry['pkg'], 'configSchema'>;
+};
 
 /**
  * Coordinator surface required to resolve extension config and create extension contexts.
@@ -25,7 +35,7 @@ import type { ExtensionContextBase, ExtensionEntry, KernelExtensionContext } fro
  * lifecycle fields (`signal` and `hasActiveExtension`) are provided directly so the
  * coordinator can wire them to its own shutdown sequence and entry map.
  */
-export interface ExtensionContextHost {
+export interface ExtensionContextHost<THostContext extends KernelHostContext = KernelExtensionContext> {
   /**
    * Host bus instance. Every extension gets its own carrier-bound instance derived
    * from it, never this one. Must be a bus built by the bus core.
@@ -37,7 +47,7 @@ export interface ExtensionContextHost {
    * Omits coordinator-owned fields (`config`, `signal`, `hasExtension`, `openContributions`, `namespaces`) that
    * are assembled by `buildExtensionContext` from the host interface.
    */
-  readonly extensionContextBase: ExtensionContextBase | undefined;
+  readonly extensionContextBase: ExtensionContextBase<THostContext> | undefined;
   /** Optional stored-config loader keyed by extension name. */
   readonly loadConfig: ((name: string) => Record<string, unknown> | undefined) | undefined;
   /**
@@ -124,9 +134,9 @@ export interface ExtensionContextHost {
  *   configuration it produces fail the extension's config schema.
  */
 export function resolveExtensionEntryConfig(
-  host: ExtensionContextHost,
+  host: Pick<ExtensionContextHost, 'loadConfig' | 'operatorConfig'>,
   name: string,
-  entry: ExtensionEntry,
+  entry: ConfigEntry,
   mode: ExtensionConfigResolutionMode,
 ): unknown {
   return resolveExtensionEntryConfigOutcome(host, name, entry, mode).config;
@@ -152,9 +162,9 @@ export function resolveExtensionEntryConfig(
  *   configuration it produces fail the extension's config schema.
  */
 export function resolveExtensionEntryConfigOutcome(
-  host: ExtensionContextHost,
+  host: Pick<ExtensionContextHost, 'loadConfig' | 'operatorConfig'>,
   name: string,
-  entry: ExtensionEntry,
+  entry: ConfigEntry,
   mode: ExtensionConfigResolutionMode,
 ): ExtensionConfigResolution {
   let storedConfig: Record<string, unknown> | undefined;
@@ -258,7 +268,7 @@ export function createExtensionCarrierBus(hostBus: IMakaioBus, identity: Extensi
 }
 
 /**
- * Build a {@link NodeExtensionContext} for extension create/storage lifecycles.
+ * Build the host context for extension create/storage lifecycles.
  *
  * The `dataDir` is resolved to `<makaioHome>/data/<encoded>` where `<encoded>`
  * is the percent-encoded form of the extension name produced by
@@ -276,6 +286,8 @@ export function createExtensionCarrierBus(hostBus: IMakaioBus, identity: Extensi
  * `makaio.extension`, id the extension name): its `bus.own(purpose)` yields the
  * extension's own call contexts. When the host supplies `credentialsFor`, the
  * extension also gets a credential resolver bound to the same carrier and bus.
+ * The host's context factory receives those shared fields and supplies any
+ * capabilities required by its extension callbacks.
  * @param host - Coordinator surface providing bus, platform context, and service lookup.
  * @param entry - Extension entry receiving the context.
  * @param config - Optional resolved config.
@@ -283,11 +295,11 @@ export function createExtensionCarrierBus(hostBus: IMakaioBus, identity: Extensi
  * @throws Error when `extensionContextBase` is absent.
  * @throws Error when the extension name cannot be encoded as a filesystem path segment.
  */
-export function buildExtensionContext(
-  host: ExtensionContextHost,
-  entry: ExtensionEntry,
+export function buildExtensionContext<THostContext extends KernelHostContext>(
+  host: ExtensionContextHost<THostContext>,
+  entry: Pick<ExtensionEntry, 'identity'>,
   config?: unknown,
-): KernelExtensionContext {
+): THostContext {
   if (!host.extensionContextBase) {
     throw new Error(
       'ExtensionCoordinator: extensionContextBase is required to start extensions with a create factory. ' +
@@ -314,11 +326,11 @@ export function buildExtensionContext(
         `within the filesystem component length limit.`,
     );
   }
-  const { credentialsFor, ...base } = host.extensionContextBase;
+  const { credentialsFor, constructContext, ...base } = host.extensionContextBase;
   const carrier = extensionCarrierOf(entry.identity);
   const bus = createExtensionCarrierBus(host.bus, entry.identity);
   const credentials = credentialsFor?.(carrier, bus);
-  return {
+  const context: KernelNodeContext = {
     ...base,
     bus,
     namespaces: namespaceCapabilityFor(host.bus, entry.identity),
@@ -331,4 +343,5 @@ export function buildExtensionContext(
     openContributions: host.openContributionReaderFor(extensionName),
     ...(config !== undefined ? { config } : {}),
   };
+  return constructContext(context);
 }

@@ -15,11 +15,21 @@ import {
   resolveExtensionEntryConfig,
 } from './extension-context-builder.js';
 import { createAndInitService, releaseService } from './extension-shutdown-runner.js';
-import { claimManifestNamespaces, closeEntryRegistration } from './extension-start-runner.js';
+import {
+  claimManifestNamespaces,
+  closeEntryRegistration,
+  StorageDatabaseInvariantError,
+} from './extension-start-runner.js';
 import { transitionPackageEntry } from './state-transition.js';
 import { runContributionProcessors } from './contribution-processor-runner.js';
 import { registerPackageTrayMenuEntry, unregisterPackageTrayMenuEntry } from './tray-menu-entry-bridge.js';
-import type { ContributionProcessor, ExtensionEntry } from './types.js';
+import type {
+  ContributionProcessor,
+  ExtensionCoordinatorOptions,
+  ExtensionEntry,
+  KernelHostContext,
+  KernelExtensionContext,
+} from './types.js';
 
 /**
  * Minimal coordinator surface consumed by the toggle helpers.
@@ -27,9 +37,11 @@ import type { ContributionProcessor, ExtensionEntry } from './types.js';
  * Keeps the extraction loosely coupled — the coordinator satisfies this
  * interface without exposing its full internal API.
  */
-export interface ToggleHost extends ExtensionContextHost {
+export interface ToggleHost<THostContext extends KernelHostContext = KernelExtensionContext>
+  extends ExtensionContextHost<THostContext> {
+  readonly runInStartScope: NonNullable<ExtensionCoordinatorOptions<THostContext>['runInStartScope']>;
   readonly db: unknown;
-  readonly entries: ReadonlyMap<string, ExtensionEntry>;
+  readonly entries: ReadonlyMap<string, ExtensionEntry<THostContext>>;
   /**
    * Durably persist the operator's enablement preference for a name.
    *
@@ -53,7 +65,7 @@ export interface ToggleHost extends ExtensionContextHost {
    * processors after a successful enable (activated) or before a disable
    * (stopped) without coupling to coordinator internals.
    */
-  readonly contributionProcessors: ReadonlyArray<ContributionProcessor>;
+  readonly contributionProcessors: ReadonlyArray<ContributionProcessor<THostContext>>;
   /**
    * Run the health-check hook for the named extension and store the result.
    *
@@ -72,7 +84,7 @@ export interface ToggleHost extends ExtensionContextHost {
    * @param name - Extension name used for log prefixes and toast IDs.
    * @param entry - Extension entry whose warnings should be emitted.
    */
-  emitWarningsForEntry(call: CallContext, name: string, entry: ExtensionEntry): Promise<void>;
+  emitWarningsForEntry(call: CallContext, name: string, entry: ExtensionEntry<THostContext>): Promise<void>;
 }
 
 /**
@@ -207,8 +219,8 @@ export type SetEnabledCatalogLookup =
  *   (cleanly, or with a recorded teardown failure on `entry.error`), or
  *   `'rejected'` when the state machine refused the request outright.
  */
-export async function applyExtensionTransition(
-  host: ToggleHost,
+export async function applyExtensionTransition<THostContext extends KernelHostContext>(
+  host: ToggleHost<THostContext>,
   name: string,
   enabled: boolean,
 ): Promise<Exclude<TransitionOutcome, 'restart-required'>> {
@@ -218,7 +230,7 @@ export async function applyExtensionTransition(
   // ORIGIN: The coordinator owns this internal lifecycle transition.
   const call = host.bus.own(enabled ? 'start' : 'stop');
   const outcome = enabled
-    ? await enableExtension(call, host, name, entry)
+    ? await host.runInStartScope(name, () => enableExtension(call, host, name, entry))
     : await disableExtension(call, host, name, entry);
 
   if (outcome === 'rejected') return outcome;
@@ -294,8 +306,8 @@ export async function applyExtensionTransition(
  *   framework package holds the requested name and this runtime exposes no
  *   installed-extension catalog to discover a shadowed install through.
  */
-export async function handleSetEnabled(
-  host: ToggleHost,
+export async function handleSetEnabled<THostContext extends KernelHostContext>(
+  host: ToggleHost<THostContext>,
   name: string,
   enabled: boolean,
   catalog: SetEnabledCatalogLookup,
@@ -327,11 +339,11 @@ export async function handleSetEnabled(
  * @returns The persist-only result for this request.
  * @throws Error when {@link ToggleHost.persistEnabled} is absent.
  */
-async function persistForLoadedEntry(
-  host: ToggleHost,
+async function persistForLoadedEntry<THostContext extends KernelHostContext>(
+  host: ToggleHost<THostContext>,
   name: string,
   enabled: boolean,
-  entry: ExtensionEntry,
+  entry: ExtensionEntry<THostContext>,
 ): Promise<SetEnabledResult> {
   if (!host.persistEnabled) {
     throw new Error(
@@ -414,8 +426,8 @@ async function persistForLoadedEntry(
  *   framework package holds the name and no catalog is available to discover
  *   a shadowed install through.
  */
-async function persistForUnloadedName(
-  host: ToggleHost,
+async function persistForUnloadedName<THostContext extends KernelHostContext>(
+  host: ToggleHost<THostContext>,
   name: string,
   enabled: boolean,
   frameworkPackageHoldsName: boolean,
@@ -482,10 +494,10 @@ const RESTARTABLE_STATES: ReadonlyArray<ExtensionEntry['state']> = ['stopped', '
  * @param message - Human-readable failure reason stored on the entry.
  * @returns Always `'rejected'`, so callers can return the result directly.
  */
-function failReEnable(
+function failReEnable<THostContext extends KernelHostContext>(
   call: CallContext,
-  host: ToggleHost,
-  entry: ExtensionEntry,
+  host: ToggleHost<THostContext>,
+  entry: ExtensionEntry<THostContext>,
   name: string,
   message: string,
 ): 'rejected' {
@@ -520,11 +532,11 @@ function failReEnable(
  *   `'rejected'` for every other failure, including the boot-skip guard
  *   below.
  */
-async function enableExtension(
+async function enableExtension<THostContext extends KernelHostContext>(
   call: CallContext,
-  host: ToggleHost,
+  host: ToggleHost<THostContext>,
   name: string,
-  entry: ExtensionEntry,
+  entry: ExtensionEntry<THostContext>,
 ): Promise<Exclude<TransitionOutcome, 'restart-required'>> {
   if (entry.state === 'active') {
     entry.enabled = true;
@@ -607,8 +619,9 @@ async function enableExtension(
     return failReEnable(call, host, entry, name, `Config resolution failed: ${getErrorString(err)}`);
   }
 
-  if (pkg.storage?.registerHandlers && host.db !== undefined) {
+  if (pkg.storage?.registerHandlers) {
     try {
+      if (host.db === undefined) throw new StorageDatabaseInvariantError(name);
       const pkgCtx = buildExtensionContext(host, entry, config);
       const cleanup = pkg.storage.registerHandlers(pkgCtx.bus, host.db, pkgCtx);
       if (typeof cleanup === 'function') {
@@ -620,19 +633,7 @@ async function enableExtension(
     }
   }
 
-  if (!(await reinitializeService(call, host, name, entry, config, storageCleanup))) return 'rejected';
-
-  // Run contribution processors BEFORE transitioning to active so a hard
-  // failure never leaves the extension in the `active` state.
-  try {
-    await runContributionProcessors(host.contributionProcessors, host, name, entry, 'activated');
-  } catch (err) {
-    // Q2: Contribution activation is part of extension activation.
-    // Hard failures transition the extension to `failed`. The runner already
-    // rolled back previously-invoked processors before re-throwing.
-    await cleanupFailedEnable(name, storageCleanup, entry);
-    return failReEnable(call, host, entry, name, getErrorString(err));
-  }
+  if (!(await activateReenabledEntry(call, host, name, entry, config, storageCleanup))) return 'rejected';
 
   transitionPackageEntry(call, host.bus, entry, 'active');
 
@@ -654,49 +655,47 @@ async function enableExtension(
 }
 
 /**
- * Re-run the `create` + `init` lifecycle for an extension being re-enabled.
- *
- * Mirrors the startup path: a {@link ServiceSkipError} from a non-critical
- * extension settles as `skipped`, every other failure — including a skip
- * attempted by a `critical: true` extension — settles as `failed`. Both
- * outcomes tear down the service and storage handlers first.
+ * Run the contribution and service lifecycle for an extension being re-enabled.
+ * A non-critical service can skip startup; a contribution failure rejects re-enable.
  * @param call - Call responsible for the lifecycle transition.
  * @param host - Coordinator surface providing shared state.
  * @param name - Extension name (used for log messages).
  * @param entry - Mutable runtime entry for the extension.
  * @param config - Configuration resolved for this enable.
  * @param storageCleanup - Cleanup registered by this enable, if any.
- * @returns `true` when the service is ready or the extension declares no
- *   factory, `false` when the entry was transitioned away from `initializing`.
+ * @returns Whether activation succeeded.
  */
-async function reinitializeService(
+async function activateReenabledEntry<THostContext extends KernelHostContext>(
   call: CallContext,
-  host: ToggleHost,
+  host: ToggleHost<THostContext>,
   name: string,
-  entry: ExtensionEntry,
+  entry: ExtensionEntry<THostContext>,
   config: unknown,
   storageCleanup: (() => void) | undefined,
 ): Promise<boolean> {
-  const { create } = entry.pkg;
-  if (!create) return true;
-
+  let initializingService = false;
   try {
-    // The coordinator's shutdown signal is the cancellation that applies to a
-    // re-enable: a shutdown that is queued behind this `init` in the lifecycle
-    // lane can only start once it ends.
-    await createAndInitService(name, entry, buildExtensionContext(host, entry, config), host.signal);
+    await runContributionProcessors(host.contributionProcessors, host, name, entry, 'activated', async () => {
+      if (!entry.pkg.create) return;
+      initializingService = true;
+      // Shutdown signals an admitted init before it can drain the lifecycle lane.
+      await createAndInitService(name, entry, buildExtensionContext(host, entry, config), host.signal);
+      initializingService = false;
+    });
     return true;
   } catch (err) {
     await cleanupFailedEnable(name, storageCleanup, entry);
-    if (err instanceof ServiceSkipError && !entry.pkg.critical) {
-      closeEntryRegistration(entry);
-      entry.error = err.reason;
-      transitionPackageEntry(call, host.bus, entry, 'skipped');
-      return false;
+    if (initializingService && err instanceof ServiceSkipError) {
+      if (entry.pkg.critical) {
+        failReEnable(call, host, entry, name, `Critical extension cannot skip startup: ${err.reason}`);
+      } else {
+        closeEntryRegistration(entry);
+        entry.error = err.reason;
+        transitionPackageEntry(call, host.bus, entry, 'skipped');
+      }
+    } else {
+      failReEnable(call, host, entry, name, getErrorString(err));
     }
-    const message =
-      err instanceof ServiceSkipError ? `Critical extension cannot skip startup: ${err.reason}` : getErrorString(err);
-    failReEnable(call, host, entry, name, message);
     return false;
   }
 }
@@ -728,11 +727,11 @@ async function reinitializeService(
  *   and the disable request was simply recorded; `'rejected'` when the
  *   extension is mid-`init` or active dependents still require it.
  */
-async function disableExtension(
+async function disableExtension<THostContext extends KernelHostContext>(
   call: CallContext,
-  host: ToggleHost,
+  host: ToggleHost<THostContext>,
   name: string,
-  entry: ExtensionEntry,
+  entry: ExtensionEntry<THostContext>,
 ): Promise<Exclude<TransitionOutcome, 'restart-required'>> {
   // Mid create/init is a genuine runtime conflict: interrupting it now is
   // unsafe, so the request is refused outright rather than accepted as a
@@ -845,10 +844,10 @@ async function disableExtension(
  * @param storageCleanup - Storage cleanup callback, if any.
  * @param entry - Extension entry whose service and storageCleanup are released.
  */
-async function cleanupFailedEnable(
+async function cleanupFailedEnable<THostContext extends KernelHostContext>(
   name: string,
   storageCleanup: (() => void) | undefined,
-  entry: ExtensionEntry,
+  entry: ExtensionEntry<THostContext>,
 ): Promise<void> {
   await releaseService(name, entry, 'enable');
   try {
