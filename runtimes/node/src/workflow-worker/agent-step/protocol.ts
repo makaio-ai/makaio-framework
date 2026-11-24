@@ -77,7 +77,7 @@ export const ModelFailureCodeSchema = z.enum([
 ]);
 /** Content-free failures that can be reported by an isolated agent turn. */
 export const AgentStepProcessFailureSchema = ModelFailureCodeSchema.or(
-  z.enum(['agent-start-refused', 'agent-turn-failed', 'output-invalid', 'prompt-too-large']),
+  z.enum(['agent-start-refused', 'agent-turn-failed', 'process-failed', 'output-invalid', 'prompt-too-large']),
 );
 export type AgentStepProcessFailure = z.infer<typeof AgentStepProcessFailureSchema>;
 /** A fixed diagnostic without upstream data. */

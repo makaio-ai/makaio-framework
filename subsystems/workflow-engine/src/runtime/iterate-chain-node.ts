@@ -22,6 +22,8 @@ export interface IterateChainOutput {
   readonly items: ItemSettled[];
 }
 
+type ChainItemOutcome = Exclude<ItemSettled, { status: 'rejected' }> | Extract<NodeOutcome, { status: 'failed' }>;
+
 // ─────────────────────────────────────────────────────────────
 // Iterate-chain node executor
 // ─────────────────────────────────────────────────────────────
@@ -117,18 +119,17 @@ export async function executeIterateChainNode(
       parentPath,
     );
 
-    settled.push(result);
-
     switch (result.status) {
       case 'fulfilled': {
+        settled.push(result);
         // Carry the fulfilled value forward as `previous` for the next item.
         previous = result.value;
         break;
       }
-      case 'rejected': {
+      case 'failed': {
         // Chain fails immediately on item failure — subsequent items would
         // receive a missing `previous` from a failed execution.
-        return { status: 'failed', error: result.reason };
+        return result;
       }
       case 'cancelled': {
         return { status: 'cancelled' };
@@ -173,7 +174,7 @@ async function runChainItem(
   executeSequenceFn: ExecuteSequenceFn,
   parentFrameId: string,
   parentPath: string[],
-): Promise<ItemSettled> {
+): Promise<ChainItemOutcome> {
   if (ctx.signal.aborted) {
     return { status: 'cancelled' };
   }
@@ -206,7 +207,7 @@ async function runChainItem(
     outcome = await executeSequenceFn(call, node.body as WorkflowSequenceNode, ctx, itemCtx, frame.frameId, frame.path);
   } catch (error) {
     const message = await failFrameFromException(call, frame, ctx, error);
-    return { status: 'rejected', reason: message };
+    return { status: 'failed', error: message };
   }
 
   switch (outcome.status) {
@@ -229,8 +230,8 @@ async function runChainItem(
       return { status: 'cancelled' };
     }
     case 'failed': {
-      await failFrame(call, frame, ctx, outcome.error);
-      return { status: 'rejected', reason: outcome.error };
+      await failFrame(call, frame, ctx, outcome.error, outcome.detail);
+      return outcome;
     }
   }
 }

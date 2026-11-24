@@ -73,7 +73,13 @@ export async function dispatchStep(
     if (result.status === 'failed') {
       return { status: 'failed', error: result.error ?? 'stepExecutionFailed', detail: result.detail };
     }
-    if (validateOutput !== undefined && (result.output === undefined || !validateOutput(result.output))) {
+    const outputFinalized =
+      node.type === 'agent-step' && node.resultFinalizerId !== undefined && result.outputFinalized === true;
+    if (
+      !outputFinalized &&
+      validateOutput !== undefined &&
+      (result.output === undefined || !validateOutput(result.output))
+    ) {
       return { status: 'failed', error: 'invalidOutput' };
     }
     return { status: 'completed', output: result.output };

@@ -33,6 +33,8 @@ export interface ExecuteResolvedSubagentNodeParams {
   readonly resolvedConfig: WorkflowResolvedRole;
   /** Optional structured-output schema forwarded to the subagent runtime. */
   readonly outputSchema?: ResponseSchemaDescriptor;
+  /** Validate and decode the successful response before any authority finalization. */
+  readonly decodeOutput?: (raw: JsonValue) => JsonValue | undefined;
   /** Optional await timeout for the spawned subagent. */
   readonly timeoutMs?: number;
   /** Error emitted when the subagent spawn subject has no runtime handler. */
@@ -122,7 +124,11 @@ export async function executeResolvedSubagentNode(
   }
   if (awaitResult.data.status === 'completed') {
     const rawResult = awaitResult.data.result ?? null;
+    const output = params.decodeOutput === undefined ? rawResult : params.decodeOutput(rawResult);
+    if (output === undefined) return { status: 'failed', error: 'invalidOutput' };
+    if (params.resultFinalizerId === undefined) return { status: 'completed', output };
     try {
+      // The authority's finalizer owns the output shape and receives the raw response.
       const finalOutput = await finalizeDelegateResult(
         call,
         { ...params, toolObservations: awaitResult.data.toolObservations, usage: awaitResult.data.usage },
@@ -130,7 +136,11 @@ export async function executeResolvedSubagentNode(
         rawResult,
         elapsedDelegateDuration(delegateStartedAt),
       );
-      return { status: 'completed', output: finalOutput };
+      return {
+        status: 'completed',
+        output: finalOutput,
+        outputFinalized: Boolean(params.decodeOutput),
+      };
     } catch (error) {
       if (ctx.signal.aborted) return { status: 'cancelled' };
       throw error;

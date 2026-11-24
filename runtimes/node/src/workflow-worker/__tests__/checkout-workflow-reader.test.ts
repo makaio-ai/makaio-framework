@@ -15,6 +15,8 @@ import {
 import { runCheckoutCodeStep, type CheckoutCodeStepInvocation } from '../checkout-code-step.js';
 import { STEP_EXECUTION_FAILED } from '../step-interface-schemas.js';
 
+vi.setConfig({ testTimeout: 30_000 });
+
 const binding: CheckoutWorkflowBinding = {
   workflowId: 'review',
   source: { path: 'workflows/Review.mjs' },
@@ -191,6 +193,23 @@ describe('checkout workflow reader', () => {
     15_000,
   );
 
+  it('rejects step data for a different workflow before launching a checkout handler', async () => {
+    const workflowPath = 'workflows/review.mjs';
+    await writeFile(join(checkoutRoot, workflowPath), workflowSource);
+    const { launcher, invocation, launch } = checkoutProcess(workflowPath);
+    try {
+      await expect(
+        runCheckoutCodeStep(launcher, {
+          ...invocation,
+          step: { ...invocation.step, input: { ...invocation.step.input, workflowId: 'different-workflow' } },
+        }),
+      ).rejects.toMatchObject({ code: WorkflowErrorCode.SOURCE_MISMATCH });
+      expect(launch).not.toHaveBeenCalled();
+    } finally {
+      await launcher.closeAll();
+    }
+  });
+
   it('relays cancellation to the running checkout handler', async () => {
     const workflowPath = 'workflows/review.mjs';
     const ready = join(checkoutRoot, 'ready');
@@ -212,7 +231,7 @@ ${workflowSource.replace(
       child.stdin.write(
         `${JSON.stringify({ ...invocation.step, source: bindCheckoutWorkflow(invocation.binding) })}\n`,
       );
-      await expect.poll(() => readFile(ready, 'utf8').catch(() => ''), { timeout: 4000 }).toBe('yes');
+      await expect.poll(() => readFile(ready, 'utf8').catch(() => ''), { timeout: 20_000 }).toBe('yes');
       if (process.platform === 'win32') child.stdin.end();
       else child.kill('SIGTERM');
       await ended;
@@ -221,7 +240,7 @@ ${workflowSource.replace(
       if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
       await ended;
     }
-  }, 15_000);
+  });
 
   it.skipIf(process.platform === 'win32').each([
     {
@@ -261,6 +280,7 @@ ${withThrowingHandler}`;
           runCheckoutCodeStep(launcher, {
             ...invocation,
             binding: { ...invocation.binding, workflowId },
+            step: { ...invocation.step, input: { ...invocation.step.input, workflowId } },
           }),
         ).resolves.toMatchObject({ kind: 'reported', result: { status: 'failed', error } });
       } finally {

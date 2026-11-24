@@ -1200,6 +1200,16 @@ describe('code step and agent step execution', () => {
     });
   });
 
+  it('rejects non-JSON caller-local handler output without a declared schema', async () => {
+    const node: WorkflowCodeStepNode = { id: 'non-json-output', type: 'code-step' };
+    const ctx = makeCtx({ [node.id]: () => Number.NaN });
+
+    await expect(dispatchStep(node, ctx, emptyExpressionCtx)).resolves.toMatchObject({
+      status: 'failed',
+      error: 'stepExecutionFailed',
+    });
+  });
+
   it('propagates the stable handler failure code to the runtime', async () => {
     const node: WorkflowCodeStepNode = {
       id: 'broken',
@@ -1826,6 +1836,64 @@ describe('executeAgentStepNode', () => {
       await expect(dispatchStep(node, ctx, emptyExpressionCtx, 'frame-read')).resolves.toEqual({
         status: 'completed',
         output: { artifact: { id: 'artifact-1' }, summary: 'model summary' },
+      });
+    } finally {
+      unsubscribeRole();
+      unsubscribeSpawn();
+      unsubscribeAwait();
+      unsubscribeFinalizer();
+    }
+  });
+
+  it.each([
+    {
+      label: 'finalizes a valid response into a different shape',
+      rawResult: '{"approved":true}',
+      finalize: true,
+      expected: { status: 'completed', output: { verdict: 'accepted' } },
+    },
+    {
+      label: 'refuses an invalid response before calling the finalizer',
+      rawResult: '{"approved":"yes"}',
+      finalize: true,
+      expected: { status: 'failed', error: 'invalidOutput' },
+    },
+    {
+      label: 'refuses an invalid response without a finalizer',
+      rawResult: '{"approved":"yes"}',
+      finalize: false,
+      expected: { status: 'failed', error: 'invalidOutput' },
+    },
+  ])('$label', async ({ rawResult, finalize, expected }) => {
+    const node: WorkflowAgentStepNode = {
+      id: 'review-result',
+      type: 'agent-step',
+      role: 'reviewer',
+      prompt: 'Review',
+      completion: 'turn',
+      outputSchema: { type: 'object', required: ['approved'], properties: { approved: { type: 'boolean' } } },
+      ...(finalize ? { resultFinalizerId: 'review.verdict' } : {}),
+    };
+    const ctx = makeCtx({});
+    const finalizerInputs: JsonValue[] = [];
+    const unsubscribeRole = ctx.bus.on(WorkflowSubjects.resolveRole, (requestCtx) => {
+      requestCtx.setResult({ adapterName: 'claude-code' });
+    });
+    const unsubscribeSpawn = ctx.bus.on(SubagentSubjects.spawn, (requestCtx) => {
+      requestCtx.setResult({ subagentId: 'subagent-review', status: 'spawning' });
+    });
+    const unsubscribeAwait = ctx.bus.on(SubagentSubjects.await, (requestCtx) => {
+      requestCtx.setResult({ status: 'completed', result: rawResult });
+    });
+    const unsubscribeFinalizer = ctx.bus.on(WorkflowSubjects.finalizeDelegateResult, (requestCtx) => {
+      finalizerInputs.push(requestCtx.payload.rawResult);
+      requestCtx.setResult({ output: { verdict: 'accepted' } });
+    });
+    try {
+      const outcome = await dispatchStep(node, ctx, emptyExpressionCtx, 'review-frame');
+      expect({ outcome, finalizerInputs }).toEqual({
+        outcome: expected,
+        finalizerInputs: expected.status === 'completed' ? [rawResult] : [],
       });
     } finally {
       unsubscribeRole();
@@ -2775,7 +2843,7 @@ describe('executeSequence with serialized parallel mode', () => {
 
     const outcome = await executeSequence(createTestCall(), root, ctx, emptyExpressionCtx);
 
-    expect(outcome).toEqual({ status: 'failed', error: 'stepExecutionFailed' });
+    expect(outcome).toEqual({ status: 'failed', error: 'stepExecutionFailed', detail: 'serialized branch failed' });
   });
 });
 

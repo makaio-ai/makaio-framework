@@ -10,11 +10,13 @@ import {
   type WorkflowParallelNode,
 } from '@makaio/contracts';
 import { execa } from 'execa';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { runWorkflowOrchestrator } from '@makaio/subsystem-workflow-engine/workflow-orchestrator';
 import { closeHttpServer, listenOnLoopback } from '../../__tests__/http-test-helpers.js';
 import { runProcessWorkflow, type ProcessWorkflowRunOptions } from '../process-workflow.js';
 import { makeBusWithStorage, makeWorkerConfig } from './fixtures.js';
+
+vi.setConfig({ testTimeout: 30_000 });
 
 /**
  * Bind an actual isolated bus and workflow storage for one execution.
@@ -119,19 +121,31 @@ describe('process workflow runtime', () => {
   });
 
   it.each([
-    [{ approved: true }, { status: 'completed' }],
-    [{ approved: 'yes' }, { status: 'failed', error: 'invalidOutput' }],
-  ])('runs a real agent process and checks structured output against the frozen schema', async (output, expected) => {
+    { text: '{"approved":true}', schema: outputSchema, expected: { status: 'completed' } },
+    { text: '{"approved":"yes"}', schema: outputSchema, expected: { status: 'failed', error: 'invalidOutput' } },
+    { text: '123', schema: { type: 'string', const: '123' }, expected: { status: 'completed' } },
+  ])('runs a real agent process and checks structured output $text against the frozen schema', async ({
+    text,
+    schema,
+    expected,
+  }) => {
     const server = createServer((request, response) => {
       response.setHeader('content-type', 'application/json');
       if (request.headers.authorization !== 'Bearer scoped-model-token') {
         response.writeHead(401).end('{}');
         return;
       }
-      response.end(JSON.stringify({ text: JSON.stringify(output) }));
+      response.end(JSON.stringify({ text }));
     });
     const { options, cleanup } = makeRun(process.cwd(), [
-      { id: 'review', type: 'agent-step', role: 'reviewer', prompt: 'Review', completion: 'turn', outputSchema },
+      {
+        id: 'review',
+        type: 'agent-step',
+        role: 'reviewer',
+        prompt: 'Review',
+        completion: 'turn',
+        outputSchema: schema,
+      },
     ]);
     const removeRole = options.bus.on(WorkflowSubjects.resolveRole, (ctx) => {
       expect(ctx.payload.roleId).toBe('reviewer');
@@ -160,6 +174,39 @@ describe('process workflow runtime', () => {
       removeRole();
       cleanup();
       await closeHttpServer(server);
+    }
+  });
+
+  it('refuses a result finalizer before dispatching an otherwise valid process Agent Step', async () => {
+    const { options, cleanup } = makeRun(process.cwd(), [
+      {
+        id: 'review',
+        type: 'agent-step',
+        role: 'reviewer',
+        prompt: 'Review',
+        completion: 'turn',
+        outputSchema,
+        resultFinalizerId: 'review.verdict',
+      },
+    ]);
+    const calls: string[] = [];
+    const offRole = options.bus.on(WorkflowSubjects.resolveRole, (ctx) => {
+      calls.push('model');
+      ctx.setResult({ adapterName: 'text-model', model: 'role-selected-model' });
+    });
+    const offFinalizer = options.bus.on(WorkflowSubjects.finalizeDelegateResult, (ctx) => {
+      calls.push('finalizer');
+      ctx.setResult({ output: { verdict: 'accepted' } });
+    });
+    try {
+      await expect(runProcessWorkflow(options)).rejects.toMatchObject({
+        code: WorkflowErrorCode.AGENT_STEP_UNSUPPORTED,
+      });
+      expect(calls).toEqual([]);
+    } finally {
+      offRole();
+      offFinalizer();
+      cleanup();
     }
   });
 

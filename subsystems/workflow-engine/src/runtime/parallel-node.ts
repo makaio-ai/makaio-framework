@@ -133,7 +133,7 @@ export async function executeParallelNode(
     return { status: 'cancelled' };
   }
   if (results.type === 'failed') {
-    return { status: 'failed', error: results.error };
+    return results.outcome;
   }
   const settled = buildSettledMap(branchEntries, results.outcomes);
   return { status: 'completed', output: buildParallelOutput(settled, mode) };
@@ -218,8 +218,8 @@ async function runBranch(
       return { status: 'cancelled' };
     }
     case 'failed': {
-      await failFrame(call, frame, ctx, outcome.error);
-      return { status: 'failed', error: outcome.error };
+      await failFrame(call, frame, ctx, outcome.error, outcome.detail);
+      return outcome;
     }
   }
 }
@@ -233,7 +233,7 @@ async function runBranch(
  */
 type FailFastResult =
   | { readonly type: 'completed'; readonly outcomes: NodeOutcome[] }
-  | { readonly type: 'failed'; readonly error: string }
+  | { readonly type: 'failed'; readonly outcome: Extract<NodeOutcome, { status: 'failed' }> }
   | { readonly type: 'cancelled' };
 
 /**
@@ -249,26 +249,26 @@ async function runFailFast(
   branchPromises: Promise<NodeOutcome>[],
   failFastController: AbortController,
 ): Promise<FailFastResult> {
-  let firstError: string | undefined;
+  let firstFailure: Extract<NodeOutcome, { status: 'failed' }> | undefined;
 
   const monitored = branchPromises.map((p) =>
     p.then(
       (outcome) => {
-        if (outcome.status === 'failed' && firstError === undefined) {
-          firstError = outcome.error;
+        if (outcome.status === 'failed' && firstFailure === undefined) {
+          firstFailure = outcome;
           failFastController.abort();
         }
         return outcome;
       },
       (thrown: unknown) => {
         // Frame lifecycle operations can reject outside the sequence executor.
-        const error = thrown instanceof Error ? thrown.message : String(thrown);
-        if (firstError === undefined) {
-          firstError = error;
+        const failure = { status: 'failed' as const, error: thrown instanceof Error ? thrown.message : String(thrown) };
+        if (firstFailure === undefined) {
+          firstFailure = failure;
           failFastController.abort();
         }
         if (thrown instanceof FramePersistenceError) throw thrown;
-        return { status: 'failed' as const, error };
+        return failure;
       },
     ),
   );
@@ -277,11 +277,11 @@ async function runFailFast(
 
   // Determine the aggregate result.
   const hasCancelled = outcomes.some((o) => o.status === 'cancelled');
-  if (hasCancelled && firstError === undefined) {
-    return { type: 'cancelled' };
+  if (firstFailure !== undefined) {
+    return { type: 'failed', outcome: firstFailure };
   }
-  if (firstError !== undefined) {
-    return { type: 'failed', error: firstError };
+  if (hasCancelled) {
+    return { type: 'cancelled' };
   }
   return { type: 'completed', outcomes };
 }

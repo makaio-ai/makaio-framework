@@ -26,3 +26,7 @@ Extension points and future enhancement opportunities across the codebase.
 | Composite observation | Composite `for-each` state is persisted inside execution snapshots; public executable lifecycle remains `agent | shell`. | Optional dedicated composite lifecycle subjects and UI visualization. |
 | Host/product scoping | `WorkflowExecutionScope` supports `global | workspace | session | external`. | Product maps `projectId` to external scope or extends subjects at the host boundary. |
 | Subagent execution target routing | Workflow agent steps execute through SubagentService for local targets; isolated workflow runners are covered by the StepRunner seam. | Decide whether non-local interactive subagent targets belong in SubagentService or only in workflow StepRunner implementations. |
+
+Dispatch validates the result of a step against its declared output schema. A runner that validates an Agent Step's
+raw response against that schema and then applies the configured result finalizer reports `outputFinalized: true`
+on the completed result. Dispatch accepts the finalizer's output in its own shape.

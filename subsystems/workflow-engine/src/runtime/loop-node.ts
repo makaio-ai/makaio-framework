@@ -55,7 +55,7 @@ async function executeLoopRound(
   }
 
   if (outcome.status === 'failed') {
-    await failFrame(call, frame, ctx, outcome.error);
+    await failFrame(call, frame, ctx, outcome.error, outcome.detail);
     return outcome;
   }
   if (outcome.status === 'cancelled' || ctx.signal.aborted) {

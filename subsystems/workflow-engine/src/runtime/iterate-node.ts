@@ -40,7 +40,7 @@ export type ItemSettled =
  * @param value - Optional JSON output for the item body.
  * @returns Fulfilled item outcome without undefined properties.
  */
-export function fulfilledItem(value?: JsonValue): ItemSettled {
+export function fulfilledItem(value?: JsonValue): Extract<ItemSettled, { status: 'fulfilled' }> {
   return { status: 'fulfilled', ...(value !== undefined ? { value } : {}) };
 }
 
@@ -287,7 +287,7 @@ async function runItem(
       return { status: 'cancelled' };
     }
     case 'failed': {
-      await failFrame(call, frame, ctx, outcome.error);
+      await failFrame(call, frame, ctx, outcome.error, outcome.detail);
       return { status: 'rejected', reason: outcome.error };
     }
   }

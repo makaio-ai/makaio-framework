@@ -32,6 +32,9 @@ export async function runCheckoutCodeStep(
   invocation: CheckoutCodeStepInvocation,
 ): Promise<CodeStepProcessResult> {
   const { binding, preparedSource, step, onRequestRefused, ...launch } = invocation;
+  if (step.input.workflowId !== binding.workflowId) {
+    throw new WorkflowError(WorkflowErrorCode.SOURCE_MISMATCH, 'Checkout workflow does not match the step workflow');
+  }
   const source = bindCheckoutWorkflow(binding);
   if (
     preparedSource.rootId !== binding.sourceRootId ||

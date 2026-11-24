@@ -1,31 +1,12 @@
 /* eslint max-lines: ["error", { "max": 430, "skipBlankLines": true, "skipComments": true }] */
 import type { CallContext } from '@makaio/core';
-import {
-  JsonValueSchema,
-  type JsonValue,
-  type ResponseSchemaDescriptor,
-  type WorkflowAgentStepNode,
-} from '@makaio/contracts';
+import type { ResponseSchemaDescriptor, WorkflowAgentStepNode } from '@makaio/contracts';
 import { WorkflowSubjects } from '../namespace.js';
 import type { RuntimeContext } from './runtime-context.js';
 import type { CallerLocalStepOutcome } from './caller-local-step-runner.js';
 import { executeResolvedSubagentNode } from './role-subagent-node.js';
 import { resolveAgentStepConfig } from './delegate-execution-policy.js';
-
-/**
- * Decode structured output carried by the subagent's text-only result.
- * @param text - Successful subagent result.
- * @returns The decoded JSON value, or the original plain-text result.
- */
-function decodeStructuredOutput(text: string): JsonValue {
-  try {
-    const decoded = JsonValueSchema.safeParse(JSON.parse(text));
-    if (decoded.success) return decoded.data;
-  } catch {
-    // Some adapters return plain text even for a declared string schema.
-  }
-  return text;
-}
+import { decodeAgentStepOutput, resolveStepOutputValidator } from './step-output-validation.js';
 
 // ─────────────────────────────────────────────────────────────
 // Agent step executor
@@ -66,14 +47,19 @@ export async function executeCallerLocalAgentStep(
   const outputSchema: ResponseSchemaDescriptor | undefined =
     node.outputSchema !== undefined ? { schema: node.outputSchema } : undefined;
   const resolvedConfig = resolveAgentStepConfig(node, roleResult.data);
-  const outcome = await executeResolvedSubagentNode(
+  return executeResolvedSubagentNode(
     call,
     {
       nodeId: node.id,
       nodeLabel: 'Agent step',
       task,
       resolvedConfig,
-      ...(outputSchema !== undefined ? { outputSchema } : {}),
+      ...(outputSchema !== undefined
+        ? {
+            outputSchema,
+            decodeOutput: (raw) => decodeAgentStepOutput(raw, outputSchema.schema, resolveStepOutputValidator(node)),
+          }
+        : {}),
       ...(node.timeoutMs !== undefined ? { timeoutMs: node.timeoutMs } : {}),
       unavailableRuntimeError: `Subagent runtime is not available for agent step '${node.id}'`,
       unavailableAwaitError: `Subagent runtime cannot await agent step '${node.id}'`,
@@ -83,14 +69,4 @@ export async function executeCallerLocalAgentStep(
     },
     ctx,
   );
-  // A finalizer receives the raw subagent result and owns the shape of its reply.
-  if (
-    outcome.status === 'completed' &&
-    outputSchema !== undefined &&
-    node.resultFinalizerId === undefined &&
-    typeof outcome.output === 'string'
-  ) {
-    return { ...outcome, output: decodeStructuredOutput(outcome.output) };
-  }
-  return outcome;
 }

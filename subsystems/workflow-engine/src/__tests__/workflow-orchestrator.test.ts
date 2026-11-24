@@ -5,6 +5,7 @@ import {
   ArtifactNamespace,
   ArtifactSubjects,
   FrameworkContractNamespaces,
+  StepRunResultSchema,
   SubagentSubjects,
   WORKFLOW_CANCELLED_REASON,
   WorkflowErrorCode,
@@ -17,7 +18,11 @@ import {
   type WorkflowRunContext,
   type WorkflowWorkerConfig,
 } from '@makaio/contracts';
-import { runCallerLocalWorkflowOrchestrator, runWorkflowOrchestrator } from '../workflow-orchestrator.js';
+import {
+  decodeAgentStepOutput,
+  runCallerLocalWorkflowOrchestrator,
+  runWorkflowOrchestrator,
+} from '../workflow-orchestrator.js';
 import { WorkflowStorageNamespace, WorkflowStorageSubjects } from '../storage/namespace.js';
 import { createTestDbForBus, registerInMemoryFrameStore } from './shared.js';
 import { resolveWorkflowArtifactBinding } from '../artifact-context/artifact-binding.js';
@@ -476,6 +481,59 @@ describe('runCallerLocalWorkflowOrchestrator terminal finalization', () => {
 });
 
 describe('runWorkflowOrchestrator runner admission', () => {
+  it.each([
+    false,
+    true,
+  ])('validates finalizer-backed output unless the injected runner attests finalization (%s)', async (finalize) => {
+    const bus = createBusInstance();
+    bus.registerNamespace(WorkflowNamespace);
+    bus.registerNamespace(WorkflowStorageNamespace);
+    const storage = await createTestDbForBus(bus);
+    const outputSchema = { type: 'object', required: ['approved'], properties: { approved: { type: 'boolean' } } };
+    const workflow = defineWorkflow('review').agentStep('review', 'reviewer', {
+      outputSchema,
+      resultFinalizerId: 'review.verdict',
+    });
+    const call = createTestCall();
+    const config = makeWorkerConfig({ workflowId: workflow.id });
+    try {
+      const result = await runWorkflowOrchestrator({
+        call,
+        config,
+        loaded: workflow,
+        bus,
+        signal: new AbortController().signal,
+        stepRunner: {
+          async run(input) {
+            expect(input.stepDefinition).toMatchObject({ outputSchema, resultFinalizerId: 'review.verdict' });
+            if (!finalize) return { status: 'completed', output: { approved: 'yes' }, telemetry: { duration: 0 } };
+            const response = decodeAgentStepOutput('{"approved":true}', outputSchema);
+            expect(response).toEqual({ approved: true });
+            const finalized = StepRunResultSchema.parse({
+              status: 'completed',
+              output: 'accepted',
+              outputFinalized: true,
+              telemetry: { duration: 0 },
+            });
+            expect(finalized).toHaveProperty('outputFinalized', true);
+            return finalized;
+          },
+        },
+      });
+      if (!finalize) {
+        expect(result).toMatchObject({ status: 'failed', error: 'invalidOutput' });
+        return;
+      }
+      expect(result.status).toBe('completed');
+      const { frames } = await bus.request(call, WorkflowStorageSubjects.listFrames, {
+        executionId: config.executionId,
+      });
+      expect(frames).toMatchObject([{ status: 'completed', output: 'accepted' }]);
+    } finally {
+      storage.cleanup();
+    }
+  });
+
   it('dispatches tool completion to an injected runner that supports it', async () => {
     const bus = createBusInstance();
     bus.registerNamespace(WorkflowNamespace);
@@ -515,6 +573,50 @@ describe('runWorkflowOrchestrator runner admission', () => {
 });
 
 describe('runCallerLocalWorkflowOrchestrator node execution', () => {
+  it.each([
+    ['true', 'true'],
+    ['null', 'null'],
+    ['123', '123'],
+    ['"quoted"', 'quoted'],
+  ])('preserves schema-valid string output from subagent text %s', async (text, expected) => {
+    const bus = createBusInstance();
+    bus.registerNamespaces(FrameworkContractNamespaces);
+    const storage = await createTestDbForBus(bus);
+    const offRole = bus.on(WorkflowSubjects.resolveRole, (ctx) => {
+      ctx.setResult({ adapterName: 'claude-code' });
+    });
+    const offSpawn = bus.on(SubagentSubjects.spawn, (ctx) => {
+      ctx.setResult({ subagentId: 'string-review', status: 'spawning' });
+    });
+    const offAwait = bus.on(SubagentSubjects.await, (ctx) => {
+      ctx.setResult({ status: 'completed', result: text });
+    });
+    const workflow = defineWorkflow('string-output').agentStep('review', 'reviewer', {
+      outputSchema: { type: 'string' },
+    });
+    const config = makeWorkerConfig({ workflowId: workflow.id });
+    const call = createTestCall();
+    try {
+      const result = await runCallerLocalWorkflowOrchestrator({
+        call,
+        config,
+        loaded: workflow,
+        bus,
+        signal: new AbortController().signal,
+      });
+      expect(result.status).toBe('completed');
+      const { frames } = await bus.request(call, WorkflowStorageSubjects.listFrames, {
+        executionId: config.executionId,
+      });
+      expect(frames).toMatchObject([{ nodeId: 'review', status: 'completed', output: expected }]);
+    } finally {
+      offAwait();
+      offSpawn();
+      offRole();
+      storage.cleanup();
+    }
+  });
+
   it('rejects invalid output schemas before running any caller-local handler', async () => {
     const bus = createBusInstance();
     bus.registerNamespace(WorkflowNamespace);
