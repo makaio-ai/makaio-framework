@@ -3,9 +3,12 @@ import { createBusInstance, DEFAULT_REQUEST_TIMEOUT_MS } from '@makaio/bus-core'
 import { ownerOf } from '@makaio/bus-core/kernel-api';
 import type { DetachedDescriptor, ExtensionServiceLifecycle } from '@makaio/contracts/extension';
 import { processStopBudgetMs } from '@makaio/subprocess';
-import { makeStubNodeExtensionContext, stubExtensionIdentity } from '@makaio/test-utils';
+import { stubExtensionIdentity } from '@makaio/test-utils';
 import { createDetachedExtensionPackage } from '../detached-extension-handle.js';
 import { isMakaioExtensionLike } from '../load-extensions.js';
+import { useJournalHostFixture } from '@makaio/storage-conformance';
+
+const { makeContext: makeStubNodeExtensionContext } = useJournalHostFixture();
 
 const subprocessMocks = vi.hoisted(() => ({
   createProcessLifecycle: vi.fn(),

@@ -25,6 +25,9 @@ import { selectAutomationCronSchedulerPackage } from '../cron-scheduler-selectio
 import { localAutomationCronSchedulerPackage } from '../local-cron-scheduler.js';
 import { createCronAutomationTrigger } from '../builtins/cron-trigger.js';
 import { AUTOMATION_TRIGGER_BUILTINS_OWNER, automationTriggerBuiltinsPackage } from '../builtins/package.js';
+import { useJournalHostFixture } from '@makaio/storage-conformance';
+
+const { constructContext } = useJournalHostFixture();
 
 /** No-op listener used when firings do not need to be observed. */
 const noopListener: AutomationTriggerListener = async () => {};
@@ -34,6 +37,7 @@ const noopListener: AutomationTriggerListener = async () => {};
  * for the boot-ordering suite.
  */
 const CRON_TEST_PKG_CTX_BASE: ExtensionContextBase = {
+  constructContext,
   platform: 'linux',
   homedir: '/home/test',
   makaioHome: '/home/test/.makaio',

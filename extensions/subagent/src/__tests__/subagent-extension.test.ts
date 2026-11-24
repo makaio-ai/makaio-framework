@@ -1,17 +1,22 @@
-import { describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
-import type { KernelExtensionContext } from '@makaio/kernel/extension';
-import { makeStubNodeExtensionContext, stubExtensionIdentity } from '@makaio/test-utils';
+import { stubExtensionIdentity } from '@makaio/test-utils';
 import subagentPackage from '../server.js';
+import { useJournalHostFixture } from '@makaio/storage-conformance';
 
-const testContext: KernelExtensionContext = makeStubNodeExtensionContext(MakaioBus, {
-  identity: stubExtensionIdentity('subagent'),
-  dataDir: '/tmp/makaio-subagent-test',
-  machineId: 'test-machine',
-  platform: process.platform,
-  homedir: '/tmp',
-  makaioHome: '/tmp/.makaio',
-  username: 'test',
+const { makeContext: makeStubNodeExtensionContext } = useJournalHostFixture();
+
+let testContext: ReturnType<typeof makeStubNodeExtensionContext>;
+beforeAll(() => {
+  testContext = makeStubNodeExtensionContext(MakaioBus, {
+    identity: stubExtensionIdentity('subagent'),
+    dataDir: '/tmp/makaio-subagent-test',
+    machineId: 'test-machine',
+    platform: process.platform,
+    homedir: '/tmp',
+    makaioHome: '/tmp/.makaio',
+    username: 'test',
+  });
 });
 
 describe('subagent extension package', () => {

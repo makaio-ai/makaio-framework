@@ -5,9 +5,12 @@ import { describe, expect, it } from 'vitest';
 import { dep, parseExtensionDescriptor } from '@makaio/contracts';
 import { TelemetryOtelServiceToken } from '@makaio/extension-telemetry-otel';
 import { ServiceSkipError } from '@makaio/kernel';
-import { makeStubNodeExtensionContext, stubExtensionIdentity } from '@makaio/test-utils';
+import { stubExtensionIdentity } from '@makaio/test-utils';
 import { TelemetryLangfuseConfigSchema } from '../config.js';
 import { telemetryLangfusePackage } from '../index.js';
+import { useJournalHostFixture } from '@makaio/storage-conformance';
+
+const { makeContext: makeStubNodeExtensionContext } = useJournalHostFixture();
 
 /**
  * Build the minimal node extension context needed by the package factory.

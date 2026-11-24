@@ -1,7 +1,7 @@
 import type { OpenContributionEntryOf, OpenContributionReader, OpenContributionSet } from '@makaio/contracts';
 import { ContributionNameSchema, localContributionName } from '@makaio/core';
 import type { ContributionName, ExtensionName } from '@makaio/core';
-import type { ContributionProcessor } from './types.js';
+import type { ContributionProcessor, KernelHostContext } from './types.js';
 
 /**
  * Checks for a plain object: non-null, not an array, prototype `Object.prototype` or `null`.
@@ -116,7 +116,9 @@ export class OpenContributionIndex {
  * @param index - Index to keep in step with the active extensions.
  * @returns Processor handling extensions that declare an open slot.
  */
-export function createOpenContributionProcessor(index: OpenContributionIndex): ContributionProcessor {
+export function createOpenContributionProcessor<THostContext extends KernelHostContext>(
+  index: OpenContributionIndex,
+): ContributionProcessor<THostContext> {
   return {
     filter: (pkg) => pkg.openContributions !== undefined,
     async processActivated(name, pkg) {

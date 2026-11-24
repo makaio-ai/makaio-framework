@@ -1,5 +1,7 @@
 import type { CallContext, MakaioBusLike, RegistrableBusNamespaceDefinition } from '@makaio/core';
 import type { CredentialRef } from '../config/credential-ref.js';
+import type { HostDatabase } from '../host-database/host-database.js';
+import type { JournalCapability } from '../journal/capability.js';
 import type { ExtensionToken } from './extension-token.js';
 import type { ExtensionIdentity } from './extension-lifecycle.js';
 import type { OpenContributionReader } from './open-contributions.js';
@@ -158,7 +160,7 @@ export interface ExtensionContext<TBus extends MakaioBusLike = MakaioBusLike> {
  * Extensions that need these fields should opt into this context explicitly;
  * host-agnostic extensions can type themselves against {@link ExtensionContext}.
  */
-export interface NodeExtensionContext<TBus extends MakaioBusLike = MakaioBusLike> extends ExtensionContext<TBus> {
+export interface NodeExtensionContextFields {
   /** Working directory selected by the Node host for relative filesystem operations. */
   readonly cwd?: string;
   /** Current platform identifier (e.g., `'darwin'`, `'linux'`, `'win32'`). */
@@ -192,3 +194,18 @@ export interface NodeExtensionContext<TBus extends MakaioBusLike = MakaioBusLike
    */
   readonly credentials?: CredentialResolver;
 }
+
+/** Context supplied by a full Node host. */
+export interface NodeExtensionContext<TBus extends MakaioBusLike = MakaioBusLike>
+  extends ExtensionContext<TBus>,
+    NodeExtensionContextFields {
+  /** Transaction facade for the host database. */
+  readonly database: HostDatabase;
+  /** Journal operations bound to this extension. */
+  readonly journal: JournalCapability;
+}
+
+/** Context supplied by an isolated Node host, without full-host capabilities. */
+export interface IsolatedNodeExtensionContext<TBus extends MakaioBusLike = MakaioBusLike>
+  extends ExtensionContext<TBus>,
+    NodeExtensionContextFields {}

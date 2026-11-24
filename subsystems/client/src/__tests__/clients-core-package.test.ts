@@ -16,13 +16,15 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import { createBusInstance, type IMakaioBus } from '@makaio/bus-core';
 import { createBusNamespace } from '@makaio/core';
 import { ClientSubjects, createClientDefinition } from '@makaio/contracts/client';
-import { makeStubNodeExtensionContext, stubExtensionIdentity } from '@makaio/test-utils';
+import { stubExtensionIdentity } from '@makaio/test-utils';
 import { createPluginTestDb, type PluginTestDbContext } from '@makaio/test-utils/drizzle-harness';
 import type { KernelExtensionContext } from '@makaio/kernel/extension';
 import { z } from 'zod';
-import { createClientsCorePackage, registerStorageHandlersWithRollback } from '../package.js';
+import { createClientsCorePackage } from '../package.js';
+import { clientStoragePackage, registerStorageHandlersWithRollback } from '../client-storage-package.js';
 import type { ClientsCorePackageOptions, ClientsCoreService } from '../package.js';
 import { CLIENTS_CORE_DDL } from './test-ddl.js';
+import { useJournalHostFixture } from '@makaio/storage-conformance';
 
 // ---------------------------------------------------------------------------
 // Test client definitions
@@ -56,28 +58,17 @@ const UNMANAGED_DEFINITION = createClientDefinition({
 // Minimal ExtensionContext for tests
 // ---------------------------------------------------------------------------
 
-/**
- * Build a minimal {@link ExtensionContext} for invoking the package factory.
- *
- * Only the fields accessed by {@link createClientsCorePackage} `create` are
- * populated: `bus` and `makaioHome`.
- * @param bus - Bus instance to wire into the service
- * @returns Minimal package context
- */
-function makeTestExtensionContext(bus: IMakaioBus): KernelExtensionContext {
-  return makeStubNodeExtensionContext(bus, {
-    makaioHome: '/opt/makaio/test',
-    homedir: '/home/test',
-    dataDir: '/opt/makaio/test/clients-core',
-    identity: stubExtensionIdentity('makaio.clients-core'),
-  });
-}
-
 // ---------------------------------------------------------------------------
 // Test suite
 // ---------------------------------------------------------------------------
 
 describe('createClientsCorePackage (integration)', () => {
+  it('keeps service creation separate from database storage', () => {
+    expect(createClientsCorePackage().storage).toBeUndefined();
+    expect(clientStoragePackage.create).toBeUndefined();
+    expect(clientStoragePackage.storage?.registerHandlers).toBeTypeOf('function');
+  });
+
   let bus: IMakaioBus;
   let service: ClientsCoreService;
   let storageCleanup: () => void;
@@ -90,6 +81,37 @@ describe('createClientsCorePackage (integration)', () => {
       tables: ['client_binary_versions', 'client_binary_state', 'client_runtimes', 'client_profiles'],
       registerHandlers: () => () => {},
     });
+  });
+
+  afterAll(async () => {
+    await dbCtx.close();
+  });
+
+  const { makeContext } = useJournalHostFixture(() => dbCtx);
+
+  /**
+   * Build a minimal {@link ExtensionContext} for invoking the package factory.
+   *
+   * Only the fields accessed by {@link createClientsCorePackage} `create` are
+   * populated: `bus` and `makaioHome`.
+   * @param bus - Bus instance to wire into the service
+   * @returns Minimal package context
+   */
+  function makeTestExtensionContext(bus: IMakaioBus): KernelExtensionContext {
+    return makeContext(bus, {
+      makaioHome: '/opt/makaio/test',
+      homedir: '/home/test',
+      dataDir: '/opt/makaio/test/clients-core',
+      identity: stubExtensionIdentity('makaio.clients-core'),
+      hasExtension: (name) => name === clientStoragePackage.name,
+    });
+  }
+
+  it('rejects service creation on a full host without active client storage', () => {
+    const create = createClientsCorePackage().create;
+    expect(() => create?.({ ...makeTestExtensionContext(bus), hasExtension: () => false })).toThrow(
+      /makaio\.clients-core requires active extension.*client-storage/,
+    );
   });
 
   it('rolls back earlier storage registrations when a later registration throws', () => {
@@ -116,13 +138,11 @@ describe('createClientsCorePackage (integration)', () => {
     expect(cleanupRuntime).toHaveBeenCalledOnce();
   });
 
-  afterAll(async () => {
-    await dbCtx.close();
-  });
-
   beforeEach(async () => {
     await dbCtx.clearData();
     bus = createBusInstance();
+    storageCleanup =
+      clientStoragePackage.storage?.registerHandlers?.(bus, dbCtx.db, makeTestExtensionContext(bus)) ?? (() => {});
   });
 
   afterEach(async () => {
@@ -137,12 +157,6 @@ describe('createClientsCorePackage (integration)', () => {
    */
   async function bootService(definitions: ClientsCorePackageOptions['definitions']): Promise<void> {
     const pkg = createClientsCorePackage({ definitions });
-
-    // Register storage handlers the same way the coordinator does.
-    if (pkg.storage?.registerHandlers) {
-      const cleanup = pkg.storage.registerHandlers(bus, dbCtx.db, makeTestExtensionContext(bus));
-      storageCleanup = cleanup ?? (() => {});
-    }
 
     const ctx = makeTestExtensionContext(bus);
     service = (await pkg.create?.(ctx)) as ClientsCoreService;
@@ -206,11 +220,6 @@ describe('createClientsCorePackage (integration)', () => {
         versionCommand: { executable: 'bin/late-added', args: ['--version'] },
       }),
     );
-
-    if (pkg.storage?.registerHandlers) {
-      const cleanup = pkg.storage.registerHandlers(bus, dbCtx.db, makeTestExtensionContext(bus));
-      storageCleanup = cleanup ?? (() => {});
-    }
 
     const ctx = makeTestExtensionContext(bus);
     service = (await pkg.create?.(ctx)) as ClientsCoreService;

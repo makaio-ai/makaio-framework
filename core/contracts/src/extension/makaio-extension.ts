@@ -17,6 +17,7 @@ import type {
   LogImportContribution,
 } from './extension-contributions.js';
 import type { ClientDefinition } from '../client/definition.js';
+import type { AccountResolverContribution, InboundEdgeContribution } from '../journal/edge.js';
 import type { ProviderDefinitionInput } from '../provider/definition.js';
 import type { EntityUIConfig } from '../shared/ui-config.js';
 import type { ExtensionBootstrap } from './contributions/bootstrap-types.js';
@@ -255,7 +256,11 @@ export interface MakaioExtension<THostContext extends ExtensionContext = NodeExt
     readonly mount: (app: unknown) => void;
   };
   /**
-   * Executable storage contribution.
+   * Executable storage contribution. Requires the capability `storage.drizzle`.
+   *
+   * For surface-matching extensions, an unavailable storage capability fails
+   * startup with an `ExtensionStorageCapabilityError` naming the affected
+   * extensions and their required dependents. Storage handlers require a host database.
    *
    * Extends {@link StorageManifest} (migration paths) with a Drizzle handler
    * registration callback invoked by the composition root after migrations
@@ -314,6 +319,25 @@ export interface MakaioExtension<THostContext extends ExtensionContext = NodeExt
    * picker). Only meaningful when {@link configSchema} is also declared.
    */
   readonly uiConfig?: EntityUIConfig;
+
+  // ---------------------------------------------------------------------------
+  // Journal contribution surfaces
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Executable inbound edge contributions installed during activation.
+   *
+   * The core validates at activation that each edge accepts only recorded
+   * subjects owned by the contributing extension.
+   */
+  readonly edges?: readonly InboundEdgeContribution[];
+
+  /**
+   * Executable contribution that maps witnessed accounts to parties of the host.
+   *
+   * At most one account resolver can be active per host.
+   */
+  readonly accountResolver?: AccountResolverContribution;
 
   // ---------------------------------------------------------------------------
   // Client runtime definitions

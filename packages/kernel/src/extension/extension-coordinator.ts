@@ -1,7 +1,6 @@
 /* eslint max-lines: ["error", { "max": 490, "skipBlankLines": true, "skipComments": true }] */
 import type { IMakaioBus } from '@makaio/bus-core';
 import { listOwners, ownerOf, type NamespaceHolder } from '@makaio/bus-core/kernel-api';
-import type { CallContext } from '@makaio/core';
 import type { ExtensionOperatorConfigSource, ExtensionService, ExtensionToken, TrayManifest } from '@makaio/contracts';
 import type { ExtensionWarningAction } from '@makaio/contracts/extension';
 import { createOpenContributionProcessor, OpenContributionIndex } from './open-contribution-index.js';
@@ -30,6 +29,8 @@ import { topoSort } from './topo-sort.js';
 import { resolveBootEnabledNames } from './extension-boot-enablement.js';
 import type {
   ContributionProcessor,
+  ExtensionCoordinatorArguments,
+  KernelHostContext,
   ExtensionCoordinatorOptions,
   ExtensionContextBase,
   ExtensionEntry,
@@ -123,11 +124,12 @@ export interface ExtensionStartOptions {
  * `MakaioExtension.storage.registerHandlers` when a `db` instance is
  * provided to the constructor.
  */
-export class ExtensionCoordinator {
+export class ExtensionCoordinator<THostContext extends KernelHostContext = KernelExtensionContext> {
   private readonly bus: IMakaioBus;
   private readonly surface: ExtensionRuntimeSurface;
   private readonly db: unknown;
-  private readonly extensionContextBase: ExtensionContextBase | undefined;
+  private readonly runInStartScope: NonNullable<ExtensionCoordinatorOptions<THostContext>['runInStartScope']>;
+  private readonly extensionContextBase: ExtensionContextBase<THostContext> | undefined;
   private readonly runtimeEnvironment: RuntimeEnvironment | undefined;
   private readonly defaultStopBudgetMs: number;
 
@@ -140,7 +142,7 @@ export class ExtensionCoordinator {
   private readonly shutdownController = new AbortController();
 
   /** Insertion-ordered map so iteration matches dependency sort order. */
-  private readonly entries: Map<string, ExtensionEntry> = new Map();
+  private readonly entries: Map<string, ExtensionEntry<THostContext>> = new Map();
   private loadOrder: string[] = [];
   private loaded = false;
   private started = false;
@@ -149,7 +151,7 @@ export class ExtensionCoordinator {
   /** FIFO lane for lifecycle transitions that mutate extension entries. */
   private lifecycleTail: Promise<void> = Promise.resolve();
   private rpcCleanups: Array<() => void> = [];
-  private readonly contributionProcessors: ContributionProcessor[] = [];
+  private readonly contributionProcessors: ContributionProcessor<THostContext>[] = [];
   /** Open-slot entries of active extensions; fed by the processor registered in the constructor. */
   private readonly openContributionIndex = new OpenContributionIndex();
 
@@ -182,12 +184,14 @@ export class ExtensionCoordinator {
 
   /**
    * @param bus - Bus instance for emitting lifecycle events and serving the list RPC.
-   * @param options - Coordinator configuration.
+   * @param args - Coordinator options, required for hosts that cannot use the default context.
    */
-  public constructor(bus: IMakaioBus, options: ExtensionCoordinatorOptions = {}) {
+  public constructor(bus: IMakaioBus, ...args: ExtensionCoordinatorArguments<THostContext>) {
+    const [options = {}] = args;
     this.bus = bus;
     this.surface = options.surface ?? 'headless';
     this.db = options.db;
+    this.runInStartScope = options.runInStartScope ?? ((_name, start) => start());
     this.extensionContextBase = options.extensionContextBase;
     this.runtimeEnvironment = options.runtimeEnvironment;
     this.defaultStopBudgetMs = resolveDefaultStopBudgetMs(options.defaultStopBudgetMs);
@@ -199,7 +203,7 @@ export class ExtensionCoordinator {
     this.extensionManagedNames = options.extensionManagedNames;
     this.frameworkPackageNames = options.frameworkPackageNames;
     this.installedCatalog = options.installedCatalog;
-    this.contributionProcessors.push(createOpenContributionProcessor(this.openContributionIndex));
+    this.contributionProcessors.push(createOpenContributionProcessor<THostContext>(this.openContributionIndex));
     this.rpcCleanups.push(
       registerWarningActionHandler(this.bus, this.warningActionMap, options.launcherCommand ?? 'makaio'),
     );
@@ -255,9 +259,10 @@ export class ExtensionCoordinator {
    * `kernel:extension.list`, `kernel:extension.get`, `kernel:extension.setEnabled`,
    * `cli.listContributions`, and `cli.execute` RPC handlers.
    *
-   * Extensions that do not match the coordinator's runtime surface or declared
-   * environment requirements are
-   * silently excluded. Dependents of excluded extensions are transitively pruned.
+   * Extensions that fail surface or environment checks are excluded along with
+   * their required dependents. Missing capabilities that cause exclusion are logged.
+   * Unavailable `storage.drizzle` for a
+   * surface-matching extension is fatal and names the extension and its required dependents.
    *
    * Window manifests are registered into {@link windowRegistry}, tray entries
    * are collected into {@link trayEntries}, CLI contributions are collected
@@ -278,15 +283,16 @@ export class ExtensionCoordinator {
    *   for its name (see {@link ExtensionCoordinatorOptions.frameworkPackageNames}).
    *   Hosts that manage enablement apply their effective enablement filter
    *   before registering boot contributions.
+   * @throws `ExtensionStorageCapabilityError` when the host lacks a required `storage.drizzle`.
    * @throws Error if called more than once, if two registrations collide on a
    *   name that is not an overridable framework package name, if a dependency
    *   cycle is detected, if dependency sorting fails, or if static surface
    *   collection fails. A failed load releases its namespace claims.
    */
   public load(
-    packages: ReadonlyArray<KernelMakaioExtension>,
+    packages: ReadonlyArray<KernelMakaioExtension<THostContext>>,
     configDefaults?: ReadonlyMap<string, Readonly<Record<string, unknown>>>,
-  ): readonly KernelMakaioExtension[] {
+  ): readonly KernelMakaioExtension<THostContext>[] {
     if (this.shutdownRequested) {
       throw new Error('ExtensionCoordinator.load() called after shutdown(). The coordinator is terminal.');
     }
@@ -322,11 +328,11 @@ export class ExtensionCoordinator {
       },
     });
 
-    const orderedEntries: Array<{ readonly name: string; readonly entry: ExtensionEntry }> = [];
+    const orderedEntries: Array<{ readonly name: string; readonly entry: ExtensionEntry<THostContext> }> = [];
     for (const name of this.loadOrder) {
       const pkg = eligible.find((p) => p.name === name)!;
       const warningMessages = softValidationWarnings.get(name);
-      const entry: ExtensionEntry = {
+      const entry: ExtensionEntry<THostContext> = {
         pkg,
         identity: createExtensionIdentity(pkg.name),
         state: 'discovered',
@@ -468,23 +474,20 @@ export class ExtensionCoordinator {
         runMigrations: this.runMigrations,
       });
 
+      const startHost = {
+        bus: this.bus,
+        db: this.db,
+        entries: this.entries,
+        contributionProcessors: this.contributionProcessors,
+        contextHost: this.createExtensionContextHost(),
+        bootProgress,
+        signal,
+      };
       for (const name of this.loadOrder) {
         signal?.throwIfAborted();
         const entry = this.entries.get(name);
         if (!entry) continue;
-        await startExtensionEntry(
-          {
-            bus: this.bus,
-            db: this.db,
-            entries: this.entries,
-            contributionProcessors: this.contributionProcessors,
-            contextHost: this.createExtensionContextHost(),
-            bootProgress,
-            signal,
-          },
-          name,
-          entry,
-        );
+        await this.runInStartScope(name, () => startExtensionEntry(startHost, name, entry));
       }
 
       const healthHost = this.createExtensionHealthHost();
@@ -563,7 +566,7 @@ export class ExtensionCoordinator {
    * {@link totalExtensionStopBudgetMs} work on.
    * @returns The shutdown host view of this coordinator.
    */
-  private createExtensionShutdownHost(): ExtensionShutdownHost {
+  private createExtensionShutdownHost(): ExtensionShutdownHost<THostContext> {
     return {
       entries: this.entries,
       loadOrder: this.loadOrder,
@@ -653,7 +656,7 @@ export class ExtensionCoordinator {
    * @param name - Extension name.
    * @returns The extension, or `undefined` if not loaded.
    */
-  public getExtension(name: string): KernelMakaioExtension | undefined {
+  public getExtension(name: string): KernelMakaioExtension<THostContext> | undefined {
     return this.entries.get(name)?.pkg;
   }
 
@@ -725,7 +728,7 @@ export class ExtensionCoordinator {
    *   and a per-extension `NodeExtensionContext`.
    */
   public forEachActiveExtension(
-    callback: (name: string, pkg: KernelMakaioExtension, ctx: KernelExtensionContext) => void,
+    callback: (name: string, pkg: KernelMakaioExtension<THostContext>, ctx: THostContext) => void,
   ): void {
     const contextHost = this.createExtensionContextHost();
     for (const name of this.loadOrder) {
@@ -750,7 +753,7 @@ export class ExtensionCoordinator {
    */
   public forExtension(
     name: string,
-    callback: (name: string, pkg: KernelMakaioExtension, ctx: KernelExtensionContext) => void,
+    callback: (name: string, pkg: KernelMakaioExtension<THostContext>, ctx: THostContext) => void,
   ): void {
     const entry = this.entries.get(name);
     if (!entry || entry.state !== 'active') return;
@@ -781,7 +784,7 @@ export class ExtensionCoordinator {
    * @param processor - Processor to register.
    * @returns Cleanup function that removes the processor from the registry.
    */
-  public registerContributionProcessor(processor: ContributionProcessor): () => void {
+  public registerContributionProcessor(processor: ContributionProcessor<THostContext>): () => void {
     this.contributionProcessors.push(processor);
     return () => {
       const idx = this.contributionProcessors.indexOf(processor);
@@ -897,21 +900,17 @@ export class ExtensionCoordinator {
    * on which coordinator state the toggle helpers can see.
    * @returns Host surface for the toggle lifecycle helpers.
    */
-  private createToggleHost(): ToggleHost {
+  private createToggleHost(): ToggleHost<THostContext> {
     return {
       ...this.createExtensionContextHost(),
       db: this.db,
       entries: this.entries,
       persistEnabled: this.persistEnabled,
+      runInStartScope: this.runInStartScope,
       contributionProcessors: this.contributionProcessors,
       runHealthCheck: (n: string) => runExtensionHealthCheck(this.createExtensionHealthHost(), n),
-      emitWarningsForEntry: (call: CallContext, n: string, entry: ExtensionEntry) =>
-        emitWarningsForEntry(
-          call,
-          { bus: this.bus, entries: this.entries, warningActionMap: this.warningActionMap },
-          n,
-          entry,
-        ),
+      emitWarningsForEntry: (call, name, entry) =>
+        emitWarningsForEntry(call, { bus: this.bus, warningActionMap: this.warningActionMap }, name, entry),
     };
   }
 
@@ -960,7 +959,7 @@ export class ExtensionCoordinator {
    * Create the shared extension-context helper host without exposing coordinator internals.
    * @returns Helper host for config resolution and ExtensionContext construction.
    */
-  private createExtensionContextHost(): ExtensionContextHost {
+  private createExtensionContextHost(): ExtensionContextHost<THostContext> {
     return {
       bus: this.bus,
       extensionContextBase: this.extensionContextBase,

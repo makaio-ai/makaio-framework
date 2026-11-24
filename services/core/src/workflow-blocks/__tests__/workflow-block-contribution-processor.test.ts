@@ -1,12 +1,15 @@
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import { createBusInstance } from '@makaio/bus-core';
-import { makeStubNodeExtensionContext, stubExtensionIdentity } from '@makaio/test-utils';
+import { stubExtensionIdentity } from '@makaio/test-utils';
 import type { ExtensionToken } from '@makaio/contracts';
 import type { KernelExtensionContext, KernelMakaioExtension } from '@makaio/kernel/extension';
 import { WorkflowBlockRegistryToken } from '../../framework-packages.js';
 import { createWorkflowBlockContributionProcessor } from '../workflow-block-contribution-processor.js';
 import { WorkflowBlockRegistry } from '../workflow-block-registry.js';
+import { useJournalHostFixture } from '@makaio/storage-conformance';
+
+const { makeContext: makeStubNodeExtensionContext } = useJournalHostFixture();
 
 function makeContext(registry?: WorkflowBlockRegistry): KernelExtensionContext {
   const bus = createBusInstance();

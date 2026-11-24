@@ -409,7 +409,19 @@ describe('createDatabaseClient', () => {
     });
 
     it('routes URLs claimed by a registered engine to that engine', async () => {
-      const stubClient: DatabaseClient = { db: {} as MakaioDatabase, dialect: 'postgres', close: () => undefined };
+      // This double stands in for a real engine-created client: it never opens a
+      // connection of any kind, so it has no real signal channel to declare. Of
+      // the 'none' reasons, 'in-memory' is the closest match — unlike
+      // 'sqlite-file'/'remote-libsql' (a real but unreachable channel), it means
+      // "no cross-process target exists at all", which is exactly this double's
+      // situation. The test only asserts dispatch routing (`client` identity and
+      // the config the engine double received); nothing here exercises `signals`.
+      const stubClient: DatabaseClient = {
+        db: {} as MakaioDatabase,
+        dialect: 'postgres',
+        signals: { kind: 'none', reason: 'in-memory' },
+        close: () => undefined,
+      };
       const receivedConfigs: DatabaseClientConfig[] = [];
       const engine = buildPostgresEngineDouble({
         createClient: (config) => {

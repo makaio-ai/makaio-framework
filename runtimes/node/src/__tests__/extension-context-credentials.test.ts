@@ -20,6 +20,9 @@ import { ExtensionCoordinator, type KernelMakaioExtension } from '@makaio/kernel
 import type { NodeExtensionContext } from '@makaio/contracts/extension';
 import { createTestCall } from '@makaio/test-utils';
 import { NodeCredentialProvider, StoredCredentialProvider } from '../credential-provider.js';
+import { useJournalHostFixture } from '@makaio/storage-conformance';
+
+const { constructContext } = useJournalHostFixture();
 
 const TEST_MAKAIO_HOME = '/home/test/.makaio';
 
@@ -59,6 +62,7 @@ describe('NodeExtensionContext.credentials', () => {
 
     const coordinator = new ExtensionCoordinator(bus, {
       extensionContextBase: {
+        constructContext,
         platform: process.platform,
         homedir: '/home/test',
         makaioHome: TEST_MAKAIO_HOME,
@@ -106,6 +110,7 @@ describe('NodeExtensionContext.credentials', () => {
 
     const coordinator = new ExtensionCoordinator(bus, {
       extensionContextBase: {
+        constructContext,
         platform: process.platform,
         homedir: '/home/test',
         makaioHome: TEST_MAKAIO_HOME,

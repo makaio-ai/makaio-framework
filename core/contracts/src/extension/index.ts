@@ -100,6 +100,7 @@ export type {
   NamespaceCapability,
   NamespaceLease,
   NodeExtensionContext,
+  IsolatedNodeExtensionContext,
 } from './extension-context.js';
 export type {
   ExtensionCliBeforeRunContext,

@@ -6,6 +6,7 @@ import {
   WORKER_NAMESPACE_CLAIM_UNAVAILABLE,
 } from '@makaio/contracts/extension';
 import { createBusNamespace } from '@makaio/core';
+import { useJournalHostFixture } from '@makaio/storage-conformance';
 import { afterEach, expect, expectTypeOf, it, vi } from 'vitest';
 import { z } from 'zod';
 import { ExtensionCoordinator } from '../extension/extension-coordinator.js';
@@ -14,11 +15,14 @@ import { createExtensionIdentity } from '../extension/extension-identity-builder
 import { namespaceCapabilityFor, releaseExtensionNamespaces } from '../extension/namespace-capability.js';
 import { NamespaceCapabilityClosedError } from '../index.js';
 
+const { constructContext } = useJournalHostFixture();
+
 const first = createBusNamespace('example:first', { ready: z.object({}) });
 const second = createBusNamespace('example:second', { ready: z.object({}) });
 const third = createBusNamespace('example:third', { ready: z.object({}) });
 
 const extensionContextBase = {
+  constructContext,
   platform: 'linux' as const,
   homedir: '/home/test',
   makaioHome: '/home/test/.makaio',

@@ -4,7 +4,7 @@ import { runContributionProcessors } from './contribution-processor-runner.js';
 import { releaseExtensionCarrierSubscriptions, type ExtensionContextHost } from './extension-context-builder.js';
 import { transitionPackageEntry } from './state-transition.js';
 import type { ExtensionService } from '@makaio/contracts';
-import type { ContributionProcessor, ExtensionEntry } from './types.js';
+import type { ContributionProcessor, ExtensionEntry, KernelHostContext, KernelExtensionContext } from './types.js';
 
 /**
  * Stop window of an extension that declares none, for a host that supplies no
@@ -16,15 +16,15 @@ import type { ContributionProcessor, ExtensionEntry } from './types.js';
 export const DEFAULT_EXTENSION_STOP_BUDGET_MS = 12_000;
 
 /** Coordinator state required to shut down active extensions. */
-export interface ExtensionShutdownHost {
+export interface ExtensionShutdownHost<THostContext extends KernelHostContext = KernelExtensionContext> {
   /** Loaded extension entries keyed by extension name. */
-  readonly entries: ReadonlyMap<string, ExtensionEntry>;
+  readonly entries: ReadonlyMap<string, ExtensionEntry<THostContext>>;
   /** Dependency-sorted extension names from boot-time load. */
   readonly loadOrder: readonly string[];
   /** Awaited contribution processors registered with the coordinator. */
-  readonly contributionProcessors: readonly ContributionProcessor[];
+  readonly contributionProcessors: readonly ContributionProcessor<THostContext>[];
   /** Context host used by contribution processors during deactivation. */
-  readonly contextHost: ExtensionContextHost;
+  readonly contextHost: ExtensionContextHost<THostContext>;
   /**
    * Stop window of an extension whose service declares none
    * (see {@link ExtensionServiceLifecycle.stopBudgetMs}), in milliseconds.
@@ -50,7 +50,11 @@ export interface ExtensionShutdownHost {
  * @param service - The service `create` returned.
  * @throws RangeError when the declared window is not a non-negative finite number.
  */
-export function adoptCreatedService(name: string, entry: ExtensionEntry, service: ExtensionService): void {
+export function adoptCreatedService(
+  name: string,
+  entry: Pick<ExtensionEntry, 'pendingService' | 'service'>,
+  service: ExtensionService,
+): void {
   entry.pendingService = service;
   nonNegativeOption(`Extension "${name}" stopBudgetMs`, service.stopBudgetMs, 0);
 }
@@ -88,10 +92,10 @@ function acceptedStopBudgetMs(service: ExtensionService | undefined): number | u
  * @param signal - Cancellation handed to `init`.
  * @throws Whatever `create` or `init` rejects with, or a RangeError for a refused stop window.
  */
-export async function createAndInitService(
+export async function createAndInitService<THostContext extends KernelHostContext>(
   name: string,
-  entry: ExtensionEntry,
-  pkgCtx: Parameters<NonNullable<ExtensionEntry['pkg']['create']>>[0],
+  entry: ExtensionEntry<THostContext>,
+  pkgCtx: THostContext,
   signal: AbortSignal | undefined,
 ): Promise<void> {
   const service = await entry.pkg.create!(pkgCtx);
@@ -114,7 +118,7 @@ export async function createAndInitService(
  */
 export async function releaseService(
   name: string,
-  entry: ExtensionEntry,
+  entry: Pick<ExtensionEntry, 'pendingService' | 'service'>,
   what: 'start' | 'enable',
 ): Promise<unknown[]> {
   const service = entry.service ?? entry.pendingService;
@@ -149,7 +153,10 @@ export function resolveDefaultStopBudgetMs(defaultStopBudgetMs: number | undefin
  * @param defaultStopBudgetMs - Window of an extension whose service declares none.
  * @returns The window, in milliseconds.
  */
-function extensionStopBudgetMs(entry: ExtensionEntry, defaultStopBudgetMs: number): number {
+function extensionStopBudgetMs(
+  entry: Pick<ExtensionEntry, 'pendingService' | 'service'>,
+  defaultStopBudgetMs: number,
+): number {
   return acceptedStopBudgetMs(entry.service ?? entry.pendingService) ?? defaultStopBudgetMs;
 }
 
@@ -163,7 +170,10 @@ function extensionStopBudgetMs(entry: ExtensionEntry, defaultStopBudgetMs: numbe
  * @param defaultStopBudgetMs - Window of an extension whose service declares none.
  * @returns The window, in milliseconds.
  */
-function extensionStopBoundMs(entry: ExtensionEntry, defaultStopBudgetMs: number): number {
+function extensionStopBoundMs(
+  entry: Pick<ExtensionEntry, 'pendingService' | 'service' | 'state' | 'storageCleanup'>,
+  defaultStopBudgetMs: number,
+): number {
   return outerBoundMs(extensionStopBudgetMs(entry, defaultStopBudgetMs));
 }
 
@@ -175,7 +185,9 @@ function extensionStopBoundMs(entry: ExtensionEntry, defaultStopBudgetMs: number
  * @param host - Coordinator state to shut down.
  * @returns The bound, in milliseconds.
  */
-export function totalExtensionStopBudgetMs(host: ExtensionShutdownHost): number {
+export function totalExtensionStopBudgetMs<THostContext extends KernelHostContext>(
+  host: ExtensionShutdownHost<THostContext>,
+): number {
   let total = 0;
   for (const entry of host.entries.values()) {
     const holdsSomething =
@@ -196,7 +208,11 @@ export function totalExtensionStopBudgetMs(host: ExtensionShutdownHost): number 
  * @param entry - Extension entry to stop.
  * @returns The failures of the stop; empty when it was clean. Never rejects.
  */
-async function stopEntry(host: ExtensionShutdownHost, name: string, entry: ExtensionEntry): Promise<unknown[]> {
+async function stopEntry<THostContext extends KernelHostContext>(
+  host: ExtensionShutdownHost<THostContext>,
+  name: string,
+  entry: ExtensionEntry<THostContext>,
+): Promise<unknown[]> {
   const failures: unknown[] = [];
   if (entry.state === 'active') {
     failures.push(
@@ -235,7 +251,11 @@ async function stopEntry(host: ExtensionShutdownHost, name: string, entry: Exten
  * @param host - Coordinator state required to shut down extensions.
  * @param entry - Extension entry whose stop settled.
  */
-function publishStopped(call: CallContext, host: ExtensionShutdownHost, entry: ExtensionEntry): void {
+function publishStopped<THostContext extends KernelHostContext>(
+  call: CallContext,
+  host: ExtensionShutdownHost<THostContext>,
+  entry: ExtensionEntry<THostContext>,
+): void {
   if (entry.state === 'active') {
     transitionPackageEntry(call, host.contextHost.bus, entry, 'stopped');
   }
@@ -267,7 +287,9 @@ function publishStopped(call: CallContext, host: ExtensionShutdownHost, entry: E
  * @param host - Coordinator state required to shut down extensions.
  * @throws An AggregateError when any contribution stop, service destroy, or storage cleanup failed, or an extension did not finish stopping inside its window.
  */
-export async function shutdownExtensions(host: ExtensionShutdownHost): Promise<void> {
+export async function shutdownExtensions<THostContext extends KernelHostContext>(
+  host: ExtensionShutdownHost<THostContext>,
+): Promise<void> {
   const call = host.contextHost.bus.own('stop');
   const reversed = [...host.loadOrder].reverse();
   const failures: unknown[] = [];

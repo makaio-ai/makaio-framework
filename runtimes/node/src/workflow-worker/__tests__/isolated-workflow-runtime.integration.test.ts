@@ -18,7 +18,6 @@ import {
   type IMakaioSession,
 } from '@makaio/contracts';
 import { createBusNamespace } from '@makaio/core';
-import type { KernelMakaioExtension } from '@makaio/kernel';
 import { readOnlyFilesystemToolset } from '@makaio/extension-filesystem';
 import { defineTool, defineToolset, toolSuccess } from '@makaio/tools-core';
 import { SessionStorageSubjects } from '@makaio/services-core/session/storage/namespace';
@@ -28,7 +27,12 @@ import { registerMemorySessionStorage } from '../../../../../services/core/src/s
 import { closeHttpServer, listenOnLoopback } from '../../__tests__/http-test-helpers.js';
 import { BusServerTransportProvider } from '../../bus-server-transport.js';
 import { CLI_DETECTION_PACKAGE_NAME } from '../../cli-detection/package.js';
-import { createIsolatedWorkflowRuntime } from '../isolated-workflow-runtime.js';
+import {
+  createIsolatedWorkflowRuntime,
+  type CreateIsolatedWorkflowRuntimeOptions,
+} from '../isolated-workflow-runtime.js';
+
+type IsolatedContribution = CreateIsolatedWorkflowRuntimeOptions['contributedPackages'][number];
 
 /** Build the read-only empty adapter repository required by the runtime seam. */
 function createEmptyAdapterRepository() {
@@ -173,7 +177,7 @@ describe('createIsolatedWorkflowRuntime integration', () => {
       outputSchema: z.object({ value: z.string() }),
       execute: async (input) => toolSuccess({ value: input.value }),
     });
-    const contributedClient: KernelMakaioExtension = {
+    const contributedClient: IsolatedContribution = {
       name: 'test-client-contribution',
       displayName: 'Test client contribution',
       version: '1.0.0',
@@ -211,7 +215,7 @@ describe('createIsolatedWorkflowRuntime integration', () => {
     };
     // This runtime is headless, so the coordinator excludes the package and it
     // never activates; its boot contribution must not be configured either.
-    const interactiveOnlyContribution: KernelMakaioExtension = {
+    const interactiveOnlyContribution: IsolatedContribution = {
       name: 'test-interactive-only-contribution',
       displayName: 'Test interactive-only contribution',
       version: '1.0.0',

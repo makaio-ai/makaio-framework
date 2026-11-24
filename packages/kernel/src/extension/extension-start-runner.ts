@@ -18,9 +18,21 @@ import { createAndInitService, releaseService } from './extension-shutdown-runne
 import { releaseExtensionNamespaces } from './namespace-capability.js';
 import { registerPackageTrayMenuEntry } from './tray-menu-entry-bridge.js';
 import { transitionPackageEntry } from './state-transition.js';
-import type { ContributionProcessor, ExtensionEntry } from './types.js';
+import type { ContributionProcessor, ExtensionEntry, KernelHostContext, KernelExtensionContext } from './types.js';
 
-const manifestClaims = new WeakMap<ExtensionEntry, NamespaceLease[] | NamespaceOwnershipError>();
+/** A storage manifest reached activation without its required database. */
+export class StorageDatabaseInvariantError extends Error {
+  /**
+   * Name the extension whose storage capability was misconfigured.
+   * @param extensionName - Extension admitted without a database.
+   */
+  public constructor(extensionName: string) {
+    super(`Extension "${extensionName}" requires the storage.drizzle capability, but the host supplied no database.`);
+    this.name = 'StorageDatabaseInvariantError';
+  }
+}
+
+const manifestClaims = new WeakMap<object, NamespaceLease[] | NamespaceOwnershipError>();
 
 /**
  * Claim all manifest namespaces before collecting static surfaces or retrying activation.
@@ -28,7 +40,12 @@ const manifestClaims = new WeakMap<ExtensionEntry, NamespaceLease[] | NamespaceO
  * @param entry - Extension entry making the claims.
  * @returns The ownership conflict that prevented the claims, if any.
  */
-export function claimManifestNamespaces(bus: IMakaioBus, entry: ExtensionEntry): NamespaceOwnershipError | undefined {
+export function claimManifestNamespaces(
+  bus: IMakaioBus,
+  entry: Pick<ExtensionEntry, 'identity' | 'surfacesCollected'> & {
+    readonly pkg: Pick<ExtensionEntry['pkg'], 'namespaces'>;
+  },
+): NamespaceOwnershipError | undefined {
   const existing = manifestClaims.get(entry);
   if (existing) return existing instanceof NamespaceOwnershipError ? existing : undefined;
 
@@ -51,7 +68,7 @@ export function claimManifestNamespaces(bus: IMakaioBus, entry: ExtensionEntry):
  * Release the manifest and runtime claims after carrier teardown.
  * @param entry - Extension entry whose namespaces are released.
  */
-export function releaseEntryNamespaces(entry: ExtensionEntry): void {
+export function releaseEntryNamespaces(entry: Pick<ExtensionEntry, 'identity'>): void {
   const leases = manifestClaims.get(entry);
   if (Array.isArray(leases)) {
     for (const lease of leases) lease.release();
@@ -64,23 +81,23 @@ export function releaseEntryNamespaces(entry: ExtensionEntry): void {
  * End carrier subscriptions now, retaining namespace claims for pending service teardown.
  * @param entry - Extension entry whose lifecycle has ended.
  */
-export function closeEntryRegistration(entry: ExtensionEntry): void {
+export function closeEntryRegistration(entry: Pick<ExtensionEntry, 'identity' | 'pendingService'>): void {
   releaseExtensionCarrierSubscriptions(entry.identity);
   if (entry.pendingService === undefined) releaseEntryNamespaces(entry);
 }
 
 /** Coordinator state required to start one extension entry. */
-export interface ExtensionStartHost {
+export interface ExtensionStartHost<THostContext extends KernelHostContext = KernelExtensionContext> {
   /** Bus used for lifecycle events, storage registration, and tray bridging. */
   readonly bus: IMakaioBus;
   /** Optional database instance supplied to extension storage handlers. */
   readonly db: unknown;
   /** Loaded extension entries keyed by extension name. */
-  readonly entries: ReadonlyMap<string, ExtensionEntry>;
+  readonly entries: ReadonlyMap<string, ExtensionEntry<THostContext>>;
   /** Awaited contribution processors registered with the coordinator. */
-  readonly contributionProcessors: readonly ContributionProcessor[];
+  readonly contributionProcessors: readonly ContributionProcessor<THostContext>[];
   /** Context host used to resolve config and build extension contexts. */
-  readonly contextHost: ExtensionContextHost;
+  readonly contextHost: ExtensionContextHost<THostContext>;
   /** Boot progress observer updated as the extension settles. */
   readonly bootProgress: BootProgressObserver;
   /**
@@ -98,10 +115,10 @@ export interface ExtensionStartHost {
  * @param entry - Extension entry to start.
  * @throws Error when a critical extension fails.
  */
-export async function startExtensionEntry(
-  host: ExtensionStartHost,
+export async function startExtensionEntry<THostContext extends KernelHostContext>(
+  host: ExtensionStartHost<THostContext>,
   name: string,
-  entry: ExtensionEntry,
+  entry: ExtensionEntry<THostContext>,
 ): Promise<void> {
   // ORIGIN: The coordinator starts an entry as the host.
   const call = host.bus.own('start');
@@ -192,11 +209,11 @@ export async function startExtensionEntry(
  * @param entry - Extension entry to start.
  * @throws Error when a critical extension fails.
  */
-async function startEntryWithoutService(
+async function startEntryWithoutService<THostContext extends KernelHostContext>(
   call: CallContext,
-  host: ExtensionStartHost,
+  host: ExtensionStartHost<THostContext>,
   name: string,
-  entry: ExtensionEntry,
+  entry: ExtensionEntry<THostContext>,
 ): Promise<void> {
   try {
     await runContributionProcessors(host.contributionProcessors, host.contextHost, name, entry, 'activated');
@@ -222,20 +239,17 @@ async function startEntryWithoutService(
  * @param config - Resolved extension configuration.
  * @throws Error when a critical extension fails.
  */
-async function startEntryWithService(
+async function startEntryWithService<THostContext extends KernelHostContext>(
   call: CallContext,
-  host: ExtensionStartHost,
+  host: ExtensionStartHost<THostContext>,
   name: string,
-  entry: ExtensionEntry,
+  entry: ExtensionEntry<THostContext>,
   config: unknown,
 ): Promise<void> {
   try {
-    const pkgCtx = buildExtensionContext(host.contextHost, entry, config);
-    await createAndInitService(name, entry, pkgCtx, host.signal);
-    // Contributions must succeed before the extension can become active.
-    // On failure the catch block below destroys the service and transitions
-    // the entry to failed, exactly the same path as a create/init failure.
-    await runContributionProcessors(host.contributionProcessors, host.contextHost, name, entry, 'activated');
+    await runContributionProcessors(host.contributionProcessors, host.contextHost, name, entry, 'activated', () =>
+      createAndInitService(name, entry, buildExtensionContext(host.contextHost, entry, config), host.signal),
+    );
     transitionPackageEntry(call, host.bus, entry, 'active');
     host.bootProgress.ready(entry.pkg);
     await registerEntryTray(call, host.bus, name, entry);
@@ -272,11 +286,11 @@ async function startEntryWithService(
  * @returns `true` when the error was handled as a skip.
  * @throws Error when a critical extension attempts to skip startup.
  */
-function handleServiceSkipError(
+function handleServiceSkipError<THostContext extends KernelHostContext>(
   call: CallContext,
-  host: ExtensionStartHost,
+  host: ExtensionStartHost<THostContext>,
   name: string,
-  entry: ExtensionEntry,
+  entry: ExtensionEntry<THostContext>,
   err: unknown,
 ): boolean {
   if (!(err instanceof ServiceSkipError)) return false;
@@ -305,15 +319,16 @@ function handleServiceSkipError(
  * @returns `true` when startup should continue.
  * @throws Error when a critical storage registration fails.
  */
-function registerEntryStorage(
+function registerEntryStorage<THostContext extends KernelHostContext>(
   call: CallContext,
-  host: ExtensionStartHost,
+  host: ExtensionStartHost<THostContext>,
   name: string,
-  entry: ExtensionEntry,
+  entry: ExtensionEntry<THostContext>,
   config: unknown,
 ): boolean {
-  if (!entry.pkg.storage?.registerHandlers || host.db === undefined) return true;
+  if (!entry.pkg.storage?.registerHandlers) return true;
   try {
+    if (host.db === undefined) throw new StorageDatabaseInvariantError(name);
     const pkgCtx = buildExtensionContext(host.contextHost, entry, config);
     const cleanup = entry.pkg.storage.registerHandlers(pkgCtx.bus, host.db, pkgCtx);
     if (cleanup) entry.storageCleanup = cleanup;
@@ -335,7 +350,7 @@ function registerEntryStorage(
  * @param entry - Extension entry whose storage should be cleaned up.
  * @returns The failures of the cleanup; empty when it was clean.
  */
-function runStorageCleanup(name: string, entry: ExtensionEntry): unknown[] {
+function runStorageCleanup(name: string, entry: Pick<ExtensionEntry, 'storageCleanup'>): unknown[] {
   if (!entry.storageCleanup) return [];
   try {
     entry.storageCleanup();
@@ -357,11 +372,11 @@ function runStorageCleanup(name: string, entry: ExtensionEntry): unknown[] {
  * @param entry - Extension entry to fail.
  * @param message - Human-readable failure reason.
  */
-function failEntry(
+function failEntry<THostContext extends KernelHostContext>(
   call: CallContext,
-  host: ExtensionStartHost,
+  host: ExtensionStartHost<THostContext>,
   name: string,
-  entry: ExtensionEntry,
+  entry: ExtensionEntry<THostContext>,
   message: string,
 ): void {
   closeEntryRegistration(entry);
@@ -378,11 +393,11 @@ function failEntry(
  * @param name - Extension name used for log messages.
  * @param entry - Extension entry whose tray manifest should be registered.
  */
-async function registerEntryTray(
+async function registerEntryTray<THostContext extends KernelHostContext>(
   call: CallContext,
   bus: IMakaioBus,
   name: string,
-  entry: ExtensionEntry,
+  entry: ExtensionEntry<THostContext>,
 ): Promise<void> {
   try {
     await registerPackageTrayMenuEntry(call, bus, entry.pkg);

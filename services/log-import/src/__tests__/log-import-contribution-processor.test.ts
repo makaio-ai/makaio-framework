@@ -1,12 +1,15 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { createBusInstance } from '@makaio/bus-core';
-import { makeStubNodeExtensionContext, stubExtensionIdentity } from '@makaio/test-utils';
+import { stubExtensionIdentity } from '@makaio/test-utils';
 import type { LogOrchestratorConfig } from '@makaio/ai-adapters-core';
 import type { KernelExtensionContext, KernelMakaioExtension } from '@makaio/kernel/extension';
 import { LogImportRegistry } from '../log-import-registry.js';
 import { LogImportRegistryToken } from '../package.js';
 import { createLogImportContributionProcessor } from '../log-import-contribution-processor.js';
 import { createMockImporter } from './test-helpers.js';
+import { useJournalHostFixture } from '@makaio/storage-conformance';
+
+const { makeContext: makeStubNodeExtensionContext } = useJournalHostFixture();
 
 /**
  * Build a minimal `ExtensionContext` stub for test purposes.

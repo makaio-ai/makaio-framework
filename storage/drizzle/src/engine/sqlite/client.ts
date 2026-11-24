@@ -11,6 +11,8 @@ import { fileURLToPath } from 'node:url';
 import { sql } from 'drizzle-orm';
 import { isBunRuntime } from '@makaio/utils';
 import type { DatabaseClient, DatabaseClientConfig } from '../../client';
+import { bindDatabaseSignals, type DatabaseSignals } from '../../database-signals';
+import { releaseHostDatabaseWake } from '../../host-database-wake';
 import { importRuntimeModule } from '../../import-runtime-module';
 import { brandDatabase, createSqliteRawSqlExecutor, type SqliteRawDatabase } from '../../raw-sql';
 import type { MakaioDatabase } from '../../types';
@@ -164,10 +166,19 @@ async function createBunClient(url: string): Promise<DatabaseClient> {
   // single seam point so that the rest of the codebase sees the shared
   // async-compatible contract exposed by `MakaioDatabase`.
   // Validated against drizzle-orm 0.45.2.
+  const signals = classifySqliteSignals(url);
+  bindDatabaseSignals(db, signals);
   return {
     db: db as unknown as MakaioDatabase,
     dialect: 'sqlite',
-    close: createGatedClose(gate, () => sqlite.close()),
+    signals,
+    // No listener connection or other per-client state was ever opened for a
+    // 'none' signal capability, so close() has nothing of its own to tear down
+    // beyond releasing the handle's wake dispatcher, if one was ever created.
+    close: createGatedClose(gate, () => {
+      releaseHostDatabaseWake(db);
+      sqlite.close();
+    }),
   };
 }
 
@@ -233,12 +244,21 @@ async function createLibsqlClient(url: string, authToken: string | undefined): P
   }
 
   brandDatabase(db, 'sqlite', createSqliteRawSqlExecutor(db, localGate));
+  const signals = classifySqliteSignals(url);
+  bindDatabaseSignals(db, signals);
   return {
     db,
     dialect: 'sqlite',
+    signals,
     // Only the connection the client holds right now: see the release note of
     // `libsql-handle.ts` for connections handed to earlier transactions.
-    close: createGatedClose(localGate, () => db.$client.close()),
+    // No listener connection or other per-client state was ever opened for a
+    // 'none' signal capability, so close() has nothing of its own to tear down
+    // beyond releasing the handle's wake dispatcher, if one was ever created.
+    close: createGatedClose(localGate, () => {
+      releaseHostDatabaseWake(db);
+      db.$client.close();
+    }),
   };
 }
 
@@ -249,6 +269,32 @@ async function createLibsqlClient(url: string, authToken: string | undefined): P
  */
 function isFileDatabase(url: string): boolean {
   return url.startsWith('file:') && !isInMemoryUrl(url);
+}
+
+/**
+ * Classifies a SQLite URL into its signal capability: every SQLite target
+ * declares `{ kind: 'none' }`, naming why no cross-process wake is available.
+ *
+ * Reuses {@link isInMemoryUrl} and {@link isFileDatabase} — the same
+ * predicates that already decide PRAGMA application — so the signal
+ * classification can never disagree with them about what a URL names. Both
+ * {@link createBunClient} and {@link createLibsqlClient} call this one
+ * function; neither re-derives the classification with its own URL check.
+ *
+ * An in-memory URL reaching the libsql driver is rejected before this
+ * function would be reached (see {@link createLibsqlClient}), so the
+ * `'in-memory'` branch here is only ever produced for `bun:sqlite` handles.
+ * @param url - Database URL string.
+ * @returns The `{ kind: 'none' }` signal capability naming the reason.
+ */
+function classifySqliteSignals(url: string): DatabaseSignals {
+  if (isInMemoryUrl(url)) {
+    return { kind: 'none', reason: 'in-memory' };
+  }
+  if (isFileDatabase(url)) {
+    return { kind: 'none', reason: 'sqlite-file' };
+  }
+  return { kind: 'none', reason: 'remote-libsql' };
 }
 
 /**

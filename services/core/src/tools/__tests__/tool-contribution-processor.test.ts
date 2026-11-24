@@ -2,19 +2,17 @@ import assert from 'node:assert/strict';
 import { describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 import { createBusInstance } from '@makaio/bus-core';
-import {
-  createTestCall,
-  makeStubExtensionBus,
-  makeStubNodeExtensionContext,
-  stubExtensionIdentity,
-} from '@makaio/test-utils';
 import { WorkflowSubjects, type ExtensionToken } from '@makaio/contracts';
 import type { KernelExtensionContext, KernelMakaioExtension } from '@makaio/kernel/extension';
+import { useJournalHostFixture } from '@makaio/storage-conformance';
+import { createTestCall, makeStubExtensionBus, stubExtensionIdentity } from '@makaio/test-utils';
 import { defineTool, defineToolset, toolSuccess } from '@makaio/tools-core';
 import type { Toolset } from '@makaio/tools-core';
 import { ToolRegistryToken } from '../../framework-packages.js';
 import { ToolRegistry } from '../tool-registry.js';
 import { createToolContributionProcessor } from '../tool-contribution-processor.js';
+
+const { makeContext: makeNodeContext } = useJournalHostFixture();
 
 /**
  * Build a minimal toolset for test purposes.
@@ -42,10 +40,10 @@ function makeToolset(name: string): Toolset {
  * Build a minimal ExtensionContext for test purposes.
  * @param registry - Optional ToolRegistry to expose via getService.
  * @param bus - Bus context shared by the registry and the contributing extension.
- * @returns Minimal context stub satisfying the ExtensionContext contract.
+ * @returns Node context with real database and journal capabilities.
  */
 function makeContext(registry?: ToolRegistry, bus = createBusInstance()): KernelExtensionContext {
-  return makeStubNodeExtensionContext(makeStubExtensionBus(bus, 'pkg-tools'), {
+  return makeNodeContext(makeStubExtensionBus(bus, 'pkg-tools'), {
     identity: stubExtensionIdentity('pkg-tools'),
     platform: 'linux',
     homedir: '/home/test',

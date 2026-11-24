@@ -9,7 +9,7 @@ export interface ExtensionHealthHost {
   /** Bus used to emit warning snapshots. */
   readonly bus: IMakaioBus;
   /** Loaded extension entries keyed by extension name. */
-  readonly entries: ReadonlyMap<string, ExtensionEntry>;
+  readonly entries: ReadonlyMap<string, Pick<ExtensionEntry, 'state' | 'service' | 'warnings'>>;
 }
 
 /**

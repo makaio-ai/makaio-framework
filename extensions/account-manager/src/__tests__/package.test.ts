@@ -1,28 +1,34 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { describe, it, expect } from 'vitest';
+import { beforeAll, describe, it, expect } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
-import { makeStubNodeExtensionContext, stubExtensionIdentity } from '@makaio/test-utils';
+import { stubExtensionIdentity } from '@makaio/test-utils';
 import { BaseService } from '@makaio/service-base';
 import { ExtensionDescriptorSchema } from '@makaio/contracts';
 import { accountManagerPackage } from '../package.js';
 import { AccountManager } from '../account-manager.js';
 import { hasEnabledAutoActivationSource } from '../account-manager-types.js';
 import type { AutoActivationConfig } from '../account-manager-types.js';
+import { useJournalHostFixture } from '@makaio/storage-conformance';
 
-const baseCtx = makeStubNodeExtensionContext(MakaioBus, {
-  identity: stubExtensionIdentity('account-manager'),
-  homedir: '/tmp/test-home',
-  makaioHome: path.join('/tmp/test-home', '.makaio'),
-  dataDir: path.join('/tmp/test-home', '.makaio', 'data', 'account-manager'),
-  username: 'testuser',
-  machineId: 'test-machine-id',
-  config: { makaioCommand: 'makaio-test' },
-  getService: () => undefined,
-  tryImport: async (_specifier) => null,
-  signal: new AbortController().signal,
-  hasExtension: (_name) => false,
+const { makeContext: makeStubNodeExtensionContext } = useJournalHostFixture();
+
+let baseCtx: ReturnType<typeof makeStubNodeExtensionContext>;
+beforeAll(() => {
+  baseCtx = makeStubNodeExtensionContext(MakaioBus, {
+    identity: stubExtensionIdentity('account-manager'),
+    homedir: '/tmp/test-home',
+    makaioHome: path.join('/tmp/test-home', '.makaio'),
+    dataDir: path.join('/tmp/test-home', '.makaio', 'data', 'account-manager'),
+    username: 'testuser',
+    machineId: 'test-machine-id',
+    config: { makaioCommand: 'makaio-test' },
+    getService: () => undefined,
+    tryImport: async (_specifier) => null,
+    signal: new AbortController().signal,
+    hasExtension: (_name) => false,
+  });
 });
 
 describe('accountManagerPackage', () => {

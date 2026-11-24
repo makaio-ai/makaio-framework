@@ -6,9 +6,13 @@ import { readCancellation } from '../cancellation.js';
 import { ExtensionCoordinator } from '../extension/extension-coordinator.js';
 import { DEFAULT_EXTENSION_STOP_BUDGET_MS } from '../extension/extension-shutdown-runner.js';
 import type { ExtensionContextBase, KernelMakaioExtension } from '../extension/types.js';
+import { useJournalHostFixture } from '@makaio/storage-conformance';
+
+const { constructContext } = useJournalHostFixture();
 
 /** Host fields the coordinator needs to build the context of an extension with a service. */
 const CTX_BASE: ExtensionContextBase = {
+  constructContext,
   platform: 'linux',
   homedir: '/home/test',
   makaioHome: '/home/test/.makaio',

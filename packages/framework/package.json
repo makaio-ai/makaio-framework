@@ -378,6 +378,14 @@
       "types": "./dist/services/cli-detection/namespace.d.mts",
       "default": "./dist/services/cli-detection/namespace.mjs"
     },
+    "./services/journal": {
+      "types": "./dist/services/journal/index.d.mts",
+      "default": "./dist/services/journal/index.mjs"
+    },
+    "./services/journal/storage": {
+      "types": "./dist/services/journal/storage/index.d.mts",
+      "default": "./dist/services/journal/storage/index.mjs"
+    },
     "./services/filesystem": {
       "types": "./dist/services/filesystem/index.d.mts",
       "default": "./dist/services/filesystem/index.mjs"

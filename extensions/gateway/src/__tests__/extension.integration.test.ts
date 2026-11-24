@@ -17,11 +17,14 @@ import type { CallContext, CredentialResolver } from '@makaio/contracts';
 import type { CredentialRef } from '@makaio/contracts/config';
 import type { ExtensionService, ExtensionToken, NodeExtensionContext } from '@makaio/contracts/extension';
 import { KernelSubjects } from '@makaio/kernel/namespace';
-import { createTestCall, makeStubNodeExtensionContext, stubExtensionIdentity } from '@makaio/test-utils';
+import { createTestCall, stubExtensionIdentity } from '@makaio/test-utils';
 import { Hono } from 'hono';
 import { gatewayExtension } from '../index.js';
 import { GatewayNamespace, GatewaySubjects } from '../contracts/index.js';
 import type { RequestRoutedEvent } from '../contracts/schemas.js';
+import { useJournalHostFixture } from '@makaio/storage-conformance';
+
+const { makeContext: makeStubNodeExtensionContext } = useJournalHostFixture();
 
 /** Credential reference used for the gateway access token in this suite. */
 const ACCESS_TOKEN_REF = 'env:GATEWAY_ACCESS_TOKEN';

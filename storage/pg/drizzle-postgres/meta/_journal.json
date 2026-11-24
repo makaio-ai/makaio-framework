@@ -253,6 +253,13 @@
       "when": 1795388652936,
       "tag": "0035_waiting-removal-data",
       "breakpoints": true
+    },
+    {
+      "idx": 36,
+      "version": "7",
+      "when": 1795434295243,
+      "tag": "0036_journal-core",
+      "breakpoints": true
     }
   ]
 }

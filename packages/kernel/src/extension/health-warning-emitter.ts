@@ -14,7 +14,10 @@ import type { ExtensionEntry } from './types.js';
  */
 export interface EmitterHost {
   readonly bus: IMakaioBus;
-  readonly entries: ReadonlyMap<string, ExtensionEntry>;
+  readonly entries: ReadonlyMap<
+    string,
+    Pick<ExtensionEntry, 'state' | 'warnings'> & { readonly pkg: Pick<ExtensionEntry['pkg'], 'displayName'> }
+  >;
   readonly warningActionMap: Map<string, ExtensionWarningAction>;
 }
 
@@ -98,9 +101,9 @@ function pruneWarningActionsForEntry(actionMap: Map<string, ExtensionWarningActi
  */
 export async function emitWarningsForEntry(
   call: CallContext,
-  host: EmitterHost,
+  host: Pick<EmitterHost, 'bus' | 'warningActionMap'>,
   name: string,
-  entry: ExtensionEntry,
+  entry: Pick<ExtensionEntry, 'warnings'> & { readonly pkg: Pick<ExtensionEntry['pkg'], 'displayName'> },
 ): Promise<void> {
   pruneWarningActionsForEntry(host.warningActionMap, name);
 

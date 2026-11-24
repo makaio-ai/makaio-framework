@@ -20,7 +20,7 @@ import type { ExtensionEntry, ExtensionRuntimeSurface, InstalledExtensionCatalog
 /** Coordinator state the catalog assembly reads. */
 export interface CatalogHost {
   /** Loaded runtime entries, keyed by executable package name. */
-  readonly entries: ReadonlyMap<string, ExtensionEntry>;
+  readonly entries: ReadonlyMap<string, Pick<ExtensionEntry, 'extensionManaged'>>;
   /** Durable enablement reader, when this coordinator has one. */
   readonly loadEnabled: ((name: string) => boolean | undefined) | undefined;
   /** Host-supplied installed-package reader, when this coordinator has one. */

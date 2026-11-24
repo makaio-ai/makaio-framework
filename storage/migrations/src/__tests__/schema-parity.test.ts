@@ -59,7 +59,12 @@ import { discoverSchemas } from '../discover-schemas.js';
  */
 const COLUMN_TYPE_IMAGE: Readonly<Record<string, readonly string[]>> = {
   SQLiteText: ['PgText'],
-  SQLiteTextJson: ['PgJsonb'],
+  // jsonCol's Postgres twin is a customType (columnType 'PgCustomColumn'), not
+  // the built-in jsonb() column: it supplies an identity `fromDriver` so
+  // node-postgres's own jsonb decode is not re-parsed (see
+  // framework/storage/drizzle/src/columns/postgres.ts). getSQLType() still
+  // reports 'jsonb' either way, so this is a columnType-only divergence.
+  SQLiteTextJson: ['PgCustomColumn'],
   SQLiteBoolean: ['PgBoolean'],
   SQLiteInteger: ['PgInteger', 'PgBigInt53'],
   SQLiteReal: ['PgDoublePrecision'],

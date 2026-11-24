@@ -1,5 +1,6 @@
 import type { IMakaioBus } from '@makaio/bus-core';
-import type { MakaioNodeExtension } from '@makaio/contracts';
+import type { IsolatedNodeExtensionContext } from '@makaio/contracts/extension';
+import type { MakaioExtension, MakaioNodeExtension } from '@makaio/contracts';
 import { dep, extensionToken } from '@makaio/contracts';
 import { registerDrizzleHandlers } from '@makaio/storage-drizzle';
 import { ArtifactLifecycleHookRegistry } from './artifact/artifact-lifecycle-hook-registry.js';
@@ -179,17 +180,16 @@ export const sessionStoragePackage: MakaioNodeExtension<IMakaioBus> = {
 };
 
 /** Package that bridges agent events into session storage. */
-export const sessionBridgePackage: MakaioNodeExtension<IMakaioBus> = {
+export const sessionBridgePackage = {
   name: SessionBridgeToken.name,
   displayName: 'Session Bridge',
   version: '0.1.0',
-  dependencies: [dep(SessionStorageToken.name)],
   critical: true,
   create: (ctx) => new SessionBridge(ctx.bus),
-};
+} satisfies MakaioExtension<IsolatedNodeExtensionContext<IMakaioBus>>;
 
 /** Package that starts the framework session service. */
-export const sessionPackage: MakaioNodeExtension<IMakaioBus> = {
+export const sessionPackage = {
   name: SessionToken.name,
   displayName: 'Session',
   version: '0.1.0',
@@ -201,10 +201,10 @@ export const sessionPackage: MakaioNodeExtension<IMakaioBus> = {
   // boot order. `'shared-machine'` is the topology this host can prove — relay
   // peers and workflow workers may host adapters on the same machine.
   create: (ctx) => new MakaioSessionService(ctx.bus, { machineId: ctx.machineId, topology: 'shared-machine' }),
-};
+} satisfies MakaioExtension<IsolatedNodeExtensionContext<IMakaioBus>>;
 
 /** Package that registers the framework session.sendMessage orchestrator. */
-export const sessionOrchestratorPackage: MakaioNodeExtension<IMakaioBus> = {
+export const sessionOrchestratorPackage = {
   name: SessionOrchestratorToken.name,
   displayName: 'Session Orchestrator',
   version: '0.1.0',
@@ -212,7 +212,7 @@ export const sessionOrchestratorPackage: MakaioNodeExtension<IMakaioBus> = {
   critical: true,
   runtimeOwnership: { sessionOrchestrator: true },
   create: (ctx) => new SessionOrchestrator(ctx.bus, ctx.machineId),
-};
+} satisfies MakaioExtension<IsolatedNodeExtensionContext<IMakaioBus>>;
 
 /**
  * Package that starts the observed-session ingestion bridge.
@@ -249,7 +249,12 @@ export type FrameworkFileAccessOptions = Pick<ToolApprovalServiceOptions, 'fileA
  * @param options - Optional file-access rule provider for this host.
  * @returns Tool-registry package.
  */
-function createToolRegistryPackage(options: FrameworkFileAccessOptions = {}): MakaioNodeExtension<IMakaioBus> {
+function createToolRegistryPackage(
+  options: FrameworkFileAccessOptions = {},
+): Pick<
+  MakaioExtension<IsolatedNodeExtensionContext<IMakaioBus>>,
+  'name' | 'displayName' | 'version' | 'critical' | 'create'
+> {
   return {
     name: ToolRegistryToken.name,
     displayName: 'Tool Registry',
@@ -260,7 +265,7 @@ function createToolRegistryPackage(options: FrameworkFileAccessOptions = {}): Ma
 }
 
 /** Package that starts the framework tool registry without file-access rules. */
-export const toolRegistryPackage: MakaioNodeExtension<IMakaioBus> = createToolRegistryPackage();
+export const toolRegistryPackage = createToolRegistryPackage();
 
 /**
  * Create the tool-approval package, optionally bound to a file-access rule provider.
@@ -401,7 +406,7 @@ function buildFrameworkCorePackages(
     artifactViewBuilderRegistryPackage,
     artifactViewServicePackage,
     sessionStoragePackage,
-    sessionBridgePackage,
+    { ...sessionBridgePackage, dependencies: [dep(SessionStorageToken.name)] },
     sessionClientAccountLinkingPackage,
     sessionPackage,
     sessionOrchestratorPackage,

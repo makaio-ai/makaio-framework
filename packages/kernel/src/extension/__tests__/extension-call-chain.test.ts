@@ -5,6 +5,9 @@ import { describe, expect, it, onTestFinished } from 'vitest';
 import { z } from 'zod';
 import { CliRpcSubjects } from '../../bus/cli/namespace.js';
 import { ExtensionCoordinator } from '../extension-coordinator.js';
+import { useJournalHostFixture } from '@makaio/storage-conformance';
+
+const { constructContext } = useJournalHostFixture();
 
 const extensionA = { kind: 'makaio.extension', id: 'chain-a' } as const;
 const extensionB = { kind: 'makaio.extension', id: 'chain-b' } as const;
@@ -22,6 +25,7 @@ async function startChain() {
   const { subjects } = host.registerNamespace(relayNamespace);
   const coordinator = new ExtensionCoordinator(host, {
     extensionContextBase: {
+      constructContext,
       platform: 'linux',
       homedir: '/home/test',
       makaioHome: '/home/test/.makaio',

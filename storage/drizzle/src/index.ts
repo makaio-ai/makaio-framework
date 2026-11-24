@@ -132,10 +132,33 @@ export { registerDrizzleHandlers, type DrizzleHandlerRegistration } from './regi
 // Dialect schema variants — twins resolved per handle at registration time
 export { defineDialectSchema, resolveSchema, type DialectSchema, type PostgresTwinSchema, type Equal } from './dialect';
 
-// Host-owned transaction database — the guarded host handle, its query-context reader,
-// and the typed error raised on transaction misuse
-export { createHostDatabase, getTransactionQueryContext } from './host-database';
+// Host-owned transaction database — guarded queries, wake and rollback marking, and errors
+export {
+  createHostDatabase,
+  getHostTransactionQueryContext,
+  getTransactionQueryContext,
+  markTransactionRollbackOnly,
+  markTransactionWakeTopic,
+} from './host-database';
 export { HostTransactionError, type HostTransactionErrorCode, type TransactionQueryContext } from './host-transaction';
+
+// Host-side wake dispatcher — local after-commit delivery and database-signal
+// subscription shared by every facade of one handle; safe-delivery and
+// release-on-close primitives other database clients (e.g. Postgres) reuse
+export {
+  createRegistrationSet,
+  getHostDatabaseWake,
+  invokeListenersSafely,
+  releaseHostDatabaseWake,
+  type HostDatabaseWake,
+  type HostDatabaseWakeCapability,
+  type RegistrationSet,
+  type WakeListener,
+} from './host-database-wake';
+
+// Database signal capability — whether a client can wake other processes at
+// commit time, the handle binding that carries it, and the resolver
+export { bindDatabaseSignals, getDatabaseSignals, type DatabaseSignal, type DatabaseSignals } from './database-signals';
 
 // Dual-table factory — one column definition builds both dialect table objects,
 // replacing hand-written twin schema files

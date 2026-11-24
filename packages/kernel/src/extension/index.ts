@@ -4,6 +4,7 @@ export type {
   ExtensionContextBase,
   ExtensionRuntimeSurface,
   KernelExtensionContext,
+  KernelHostContext,
   KernelMakaioExtension,
   RuntimeCapability,
   RuntimeEnvironment,
@@ -16,5 +17,10 @@ export { ExtensionCoordinator } from './extension-coordinator.js';
 export { NamespaceCapabilityClosedError } from './namespace-capability.js';
 export { ExtensionOperatorConfigError } from './resolve-config.js';
 export type { ExtensionConfigResolution } from './resolve-config.js';
-export { coalesceExtensionOverrides, filterEligibleExtensions } from './extension-selection.js';
+export {
+  ExtensionStorageCapabilityError,
+  assertExtensionStorageCapability,
+  coalesceExtensionOverrides,
+  filterEligibleExtensions,
+} from './extension-selection.js';
 export { resolveInstalledExtensionRecord } from './installed-extension-catalog.js';

@@ -24,10 +24,13 @@ import {
   createDenyEffect,
 } from '@makaio/client-claude-code/runtime';
 import { codexClientRuntimePackage, CODEX_CONTRACT_ID } from '@makaio/client-codex/runtime';
-import { ClientsCoreToken, createClientsCorePackage } from '@makaio/subsystem-client';
+import { ClientsCoreToken, clientStoragePackage, createClientsCorePackage } from '@makaio/subsystem-client';
 import { createTestCall } from '@makaio/test-utils';
 
 import { registerExtensionBootContributions } from '../boot.js';
+import { useJournalHostFixture } from '@makaio/storage-conformance';
+
+const { constructContext, getDatabase } = useJournalHostFixture();
 
 const TEST_MAKAIO_HOME = '/home/test/.makaio';
 const CLAUDE_CLIENT_ID = 'claude-code';
@@ -93,7 +96,9 @@ async function startRuntime(
 }> {
   const bus = createBusInstance();
   const coordinator = new ExtensionCoordinator(bus, {
+    db: getDatabase().db,
     extensionContextBase: {
+      constructContext,
       platform: process.platform,
       homedir: '/home/test',
       makaioHome: TEST_MAKAIO_HOME,
@@ -104,6 +109,7 @@ async function startRuntime(
     },
   });
   const packages = [
+    clientStoragePackage,
     createClientsCorePackage(),
     claudeCodeClientRuntimePackage,
     ...(includeCodex ? [codexClientRuntimePackage] : []),

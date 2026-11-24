@@ -19,6 +19,7 @@ import type {
   ProviderConfigFileSet,
 } from '@makaio/services-core/adapter-subsystem';
 import { AdapterRuntimeSubjects } from '@makaio/services-core/adapter-runtime';
+import { useJournalHostFixture } from '@makaio/storage-conformance';
 import {
   AdapterSubsystemToken,
   createAdapterSubsystemContributionProcessor,
@@ -26,6 +27,8 @@ import {
   orderAfterAdapterSubsystem,
 } from '../index.js';
 import type { AdapterRuntimeInitOptions } from '../adapter-runtime-types.js';
+
+const { constructContext } = useJournalHostFixture();
 
 /** In-memory adapter config fixture for service boot. */
 class TestAdapterConfigRepository implements IAdapterConfigRepository {
@@ -57,6 +60,7 @@ class TestAdapterConfigRepository implements IAdapterConfigRepository {
 }
 
 const EXTENSION_CONTEXT: ExtensionContextBase = {
+  constructContext,
   platform: 'linux',
   homedir: '/tmp',
   makaioHome: '/tmp/.makaio',

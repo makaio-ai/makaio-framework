@@ -23,6 +23,9 @@ import {
   resourceStep,
   resourceStepStopBudgetMs,
 } from './runtime-stop-budget.js';
+import { useJournalHostFixture } from '@makaio/storage-conformance';
+
+const { constructContext } = useJournalHostFixture();
 
 vi.mock('node:fs', async (importOriginal) => ({
   ...(await importOriginal<typeof import('node:fs')>()),
@@ -52,6 +55,7 @@ describe('the windows a runtime boot and its teardown run in', () => {
     };
     const coordinator = new ExtensionCoordinator(createBusInstance(), {
       extensionContextBase: {
+        constructContext,
         platform: 'linux',
         homedir: '/home/test',
         makaioHome: '/home/test/.makaio',

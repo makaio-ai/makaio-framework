@@ -17,6 +17,9 @@ import {
   automationTriggerRegistryPackage,
 } from '../packages.js';
 import { automationTriggerBuiltinsPackage } from '../builtins/package.js';
+import { useJournalHostFixture } from '@makaio/storage-conformance';
+
+const { constructContext } = useJournalHostFixture();
 
 // ---------------------------------------------------------------------------
 // Test constants
@@ -27,6 +30,7 @@ import { automationTriggerBuiltinsPackage } from '../builtins/package.js';
  * and bus-owned fields) for test coordinators.
  */
 const TEST_PKG_CTX_BASE: ExtensionContextBase = {
+  constructContext,
   platform: 'linux',
   homedir: '/home/test',
   makaioHome: '/home/test/.makaio',

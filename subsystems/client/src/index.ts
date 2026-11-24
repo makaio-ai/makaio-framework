@@ -67,13 +67,9 @@ export { createClientNamespace } from './create-client-namespace.js';
 export type { ClientNamespaceResult } from './create-client-namespace.js';
 export { createClientWiringListSubjectDef, createClientWiringSubjectDef } from './create-client-wiring-list-subject.js';
 export type { ClientWiringListSubjectDef, ClientWiringSubjectDefBase } from './create-client-wiring-list-subject.js';
-export {
-  ClientsCoreService,
-  ClientsCoreToken,
-  createClientsCorePackage,
-  registerStorageHandlersWithRollback,
-} from './package.js';
+export { ClientsCoreService, ClientsCoreToken, createClientsCorePackage } from './package.js';
 export type { ClientsCorePackageOptions } from './package.js';
+export { clientStoragePackage, registerStorageHandlersWithRollback } from './client-storage-package.js';
 export {
   ClientBinaryStateRecordSchema,
   ClientBinaryStorageNamespace,

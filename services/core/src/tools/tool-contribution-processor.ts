@@ -1,4 +1,4 @@
-import type { ContributionProcessor } from '@makaio/kernel';
+import type { ContributionProcessor, KernelExtensionContext, KernelHostContext } from '@makaio/kernel';
 import { ToolRegistryToken } from '../framework-packages.js';
 
 /**
@@ -8,7 +8,9 @@ import { ToolRegistryToken } from '../framework-packages.js';
  * Missing ToolRegistry is a hard composition error.
  * @returns Awaited contribution processor for tool contributions.
  */
-export function createToolContributionProcessor(): ContributionProcessor {
+export function createToolContributionProcessor<
+  THostContext extends KernelHostContext = KernelExtensionContext,
+>(): ContributionProcessor<THostContext> {
   const cleanups = new Map<string, Array<() => Promise<void>>>();
 
   return {

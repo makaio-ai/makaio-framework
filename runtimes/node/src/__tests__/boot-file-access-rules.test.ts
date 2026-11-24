@@ -28,6 +28,9 @@ import {
 } from '@makaio/services-core';
 import type { FileAccessRuleProvider } from '@makaio/tools-core';
 import { selectFrameworkCorePackages } from '../boot.js';
+import { useJournalHostFixture } from '@makaio/storage-conformance';
+
+const { constructContext } = useJournalHostFixture();
 
 const AGENT_ID = 'agent-1';
 const SESSION_ID = 'session-1';
@@ -60,6 +63,7 @@ async function startToolRuntime(fileAccessRuleProvider?: FileAccessRuleProvider)
   const bus = createBusInstance();
   coordinator = new ExtensionCoordinator(bus, {
     extensionContextBase: {
+      constructContext,
       platform: process.platform,
       homedir: workspace,
       makaioHome: path.join(workspace, '.makaio'),

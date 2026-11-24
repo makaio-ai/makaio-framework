@@ -28,6 +28,9 @@ import { createExtensionIdentity } from '../extension/extension-identity-builder
 import { ExtensionSubjects } from '../observability/extension-namespace.js';
 import { BootSubjects } from '../boot-namespace.js';
 import { ServiceSkipError } from '../service-skip-error.js';
+import { useJournalHostFixture } from '@makaio/storage-conformance';
+
+const { constructContext, getDatabase } = useJournalHostFixture();
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -149,6 +152,7 @@ function makeCliContribution(name: string): NonNullable<MakaioExtension['cli']> 
  * factory without coupling the test to real OS values.
  */
 const TEST_PKG_CTX_BASE: ExtensionContextBase = {
+  constructContext,
   platform: 'linux',
   homedir: '/home/test',
   makaioHome: '/home/test/.makaio',
@@ -315,7 +319,7 @@ describe('ExtensionCoordinator', () => {
     };
 
     const coordinator = new ExtensionCoordinator(bus, {
-      db: {},
+      db: getDatabase().db,
       extensionContextBase: TEST_PKG_CTX_BASE,
     });
     coordinator.load([
@@ -808,7 +812,7 @@ describe('ExtensionCoordinator', () => {
   it('reports a storage cleanup failure to the host after stopping every extension', async () => {
     const shutdownOrder: string[] = [];
     const coordinator = new ExtensionCoordinator(bus, {
-      db: {},
+      db: getDatabase().db,
       extensionContextBase: TEST_PKG_CTX_BASE,
     });
     coordinator.load([
@@ -847,7 +851,7 @@ describe('ExtensionCoordinator', () => {
     });
 
     const coordinator = new ExtensionCoordinator(bus, {
-      db: {},
+      db: getDatabase().db,
       extensionContextBase: TEST_PKG_CTX_BASE,
     });
     coordinator.load([
@@ -1412,6 +1416,7 @@ describe('ExtensionCoordinator', () => {
       const host: ToggleHost = {
         bus,
         db: undefined,
+        runInStartScope: (_name, start) => start(),
         extensionContextBase: TEST_PKG_CTX_BASE,
         loadConfig: undefined,
         operatorConfig: undefined,
@@ -1684,7 +1689,7 @@ describe('ExtensionCoordinator', () => {
   it('invokes storageCleanup when a package is disabled via setEnabled', async () => {
     const storageCleanup = vi.fn();
     const coordinator = new ExtensionCoordinator(bus, {
-      db: {},
+      db: getDatabase().db,
       extensionContextBase: TEST_PKG_CTX_BASE,
     });
 
@@ -1741,7 +1746,7 @@ describe('ExtensionCoordinator', () => {
   it('re-registers storage handlers when a package is re-enabled', async () => {
     const registerHandlers = vi.fn().mockReturnValue(vi.fn());
     const coordinator = new ExtensionCoordinator(bus, {
-      db: {},
+      db: getDatabase().db,
       extensionContextBase: TEST_PKG_CTX_BASE,
     });
 
@@ -1774,7 +1779,7 @@ describe('ExtensionCoordinator', () => {
     // them for one package in isolation after boot has moved on.
     const createFn = vi.fn((ctx: { bus: IMakaioBus }) => makeMockService(ctx.bus));
     const coordinator = new ExtensionCoordinator(bus, {
-      db: {},
+      db: getDatabase().db,
       extensionContextBase: TEST_PKG_CTX_BASE,
       loadEnabled: () => false,
     });
@@ -1804,7 +1809,7 @@ describe('ExtensionCoordinator', () => {
   it('passes the package context to storage handlers', async () => {
     const registerHandlers = vi.fn();
     const coordinator = new ExtensionCoordinator(bus, {
-      db: {},
+      db: getDatabase().db,
       extensionContextBase: TEST_PKG_CTX_BASE,
     });
 
@@ -1840,7 +1845,7 @@ describe('ExtensionCoordinator', () => {
   it('cleans up re-registered storage handlers when re-enable fails', async () => {
     const storageCleanup = vi.fn();
     const coordinator = new ExtensionCoordinator(bus, {
-      db: {},
+      db: getDatabase().db,
       extensionContextBase: TEST_PKG_CTX_BASE,
     });
 

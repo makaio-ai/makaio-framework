@@ -3,7 +3,7 @@ import {
   type ExtensionContextHost,
   resolveExtensionEntryConfig,
 } from './extension-context-builder.js';
-import type { ContributionProcessor, ExtensionEntry } from './types.js';
+import type { ContributionProcessor, ExtensionEntry, KernelHostContext } from './types.js';
 
 /**
  * Invoke all registered {@link ContributionProcessor} instances for one extension.
@@ -12,11 +12,9 @@ import type { ContributionProcessor, ExtensionEntry } from './types.js';
  * are pre-screened; only matching processors have their
  * {@link ContributionProcessor.processActivated} called.
  *
- * **Error semantics (Q2 decision):** Contribution activation is part of extension
- * activation. Hard failures (thrown errors) propagate to the caller so the
- * coordinator can rollback already-activated contributions, destroy the service,
- * and transition the extension to `failed`. Processors are responsible for
- * internal rollback of their own partial state before re-throwing.
+ * Before service initialization, every processor with a pre-activation hook
+ * can stage static manifest contributions. A failure rolls back processors
+ * that started staging or completed activation, once each in reverse order.
  *
  * For `'stopped'` actions, every processor that implements
  * {@link ContributionProcessor.processStopped} is called regardless of its filter,
@@ -31,17 +29,19 @@ import type { ContributionProcessor, ExtensionEntry } from './types.js';
  * @param name - Extension name used in log messages.
  * @param entry - Extension entry for context resolution.
  * @param action - Whether the extension just became active or was stopped.
+ * @param initialize - Optional service initialization between contribution phases.
  * @returns Collected teardown failures for `stopped`; an empty array for `activated`.
  */
-export async function runContributionProcessors(
-  processors: ReadonlyArray<ContributionProcessor>,
-  contextHost: ExtensionContextHost,
+export async function runContributionProcessors<THostContext extends KernelHostContext>(
+  processors: ReadonlyArray<ContributionProcessor<THostContext>>,
+  contextHost: ExtensionContextHost<THostContext>,
   name: string,
-  entry: ExtensionEntry,
+  entry: ExtensionEntry<THostContext>,
   action: 'activated' | 'stopped',
+  initialize?: () => Promise<void>,
 ): Promise<unknown[]> {
   if (action === 'activated') {
-    await runActivatedProcessors(processors, contextHost, name, entry);
+    await activateContributions(processors, contextHost, name, entry, initialize);
     return [];
   }
 
@@ -49,44 +49,45 @@ export async function runContributionProcessors(
 }
 
 /**
- * Run contribution processors for an activated extension.
- *
- * Processors run in registration order. If a processor throws, all
- * previously-invoked processors for this extension are torn down (via
- * {@link ContributionProcessor.processStopped}) in reverse order before
- * the error is re-thrown. This provides symmetric cleanup — a processor
- * that registered side-effects during `processActivated` gets a chance
- * to undo them even if a later processor fails.
+ * Stage contributions, initialize the service, and run activation processors.
+ * Staging can be rolled back even if its hook throws. An activation hook
+ * still owns its own partial activation work when it throws.
  * @param processors - Registration-ordered list of processors to invoke.
  * @param contextHost - Coordinator surface used to build per-extension contexts.
  * @param name - Extension name used in log messages.
  * @param entry - Extension entry for context resolution.
+ * @param initialize - Optional service initialization between contribution phases.
  */
-async function runActivatedProcessors(
-  processors: ReadonlyArray<ContributionProcessor>,
-  contextHost: ExtensionContextHost,
+async function activateContributions<THostContext extends KernelHostContext>(
+  processors: ReadonlyArray<ContributionProcessor<THostContext>>,
+  contextHost: ExtensionContextHost<THostContext>,
   name: string,
-  entry: ExtensionEntry,
+  entry: ExtensionEntry<THostContext>,
+  initialize?: () => Promise<void>,
 ): Promise<void> {
-  const activated: ContributionProcessor[] = [];
+  const rollback = new Set<ContributionProcessor<THostContext>>();
 
   try {
+    for (const processor of processors) {
+      if (!processor.processActivating) continue;
+      rollback.add(processor);
+      await processor.processActivating(name, entry.pkg);
+    }
+
+    if (initialize) await initialize();
+
     for (const processor of processors) {
       if (processor.filter && !processor.filter(entry.pkg)) continue;
       const config = resolveExtensionEntryConfig(contextHost, name, entry, 'activate');
       const pkgCtx = buildExtensionContext(contextHost, entry, config);
       await processor.processActivated(name, entry.pkg, pkgCtx);
-      activated.push(processor);
+      rollback.delete(processor);
+      rollback.add(processor);
     }
   } catch (err) {
-    // Rollback already-activated processors in reverse order (best-effort).
-    for (const processor of activated.reverse()) {
-      if (!processor.processStopped) continue;
-      try {
-        await processor.processStopped(name);
-      } catch (rollbackErr) {
-        console.error(`[ExtensionCoordinator] Contribution processor rollback error for "${name}":`, rollbackErr);
-      }
+    const failures = await runStoppedProcessors([...rollback], name);
+    for (const failure of failures) {
+      console.error(`[ExtensionCoordinator] Contribution processor rollback error for "${name}":`, failure);
     }
     throw err;
   }
@@ -102,7 +103,7 @@ async function runActivatedProcessors(
  * @returns Failures raised by stopped processors, in invocation order.
  */
 async function runStoppedProcessors(
-  processors: ReadonlyArray<ContributionProcessor>,
+  processors: ReadonlyArray<Pick<ContributionProcessor, 'processStopped'>>,
   name: string,
 ): Promise<unknown[]> {
   const failures: unknown[] = [];

@@ -1,4 +1,5 @@
 import { describeMissingStorageEngine } from './engine/hints';
+import type { DatabaseSignals } from './database-signals';
 import { getStorageEngine, resolveStorageEngineForUrl } from './engine/registry';
 import type { MakaioDatabase, StorageDialect } from './types';
 
@@ -61,6 +62,18 @@ export interface DatabaseClient {
   db: MakaioDatabase;
   /** Storage dialect served by this client. Matches the brand on {@link DatabaseClient.db}. */
   readonly dialect: StorageDialect;
+  /**
+   * Cross-process wake capability of this client: whether the database can
+   * notify other connections at commit time, and if so, how to build the
+   * notify SQL, subscribe, and wait for the listener connection to become
+   * ready. Declared per client because the same storage engine (e.g. the
+   * built-in SQLite engine) produces clients with different capabilities
+   * depending on the resolved target (local file, remote, or in-memory). Also
+   * bound to {@link DatabaseClient.db} itself — see `bindDatabaseSignals` /
+   * `getDatabaseSignals` in `database-signals.ts` — so callers that only hold
+   * the handle can still resolve it.
+   */
+  readonly signals: DatabaseSignals;
   /**
    * Close the database connection. Safe to call multiple times: repeated calls
    * return the first call's result.

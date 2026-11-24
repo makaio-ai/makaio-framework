@@ -4,7 +4,7 @@ import type { KernelMakaioExtension } from './types.js';
 /** Entry fields needed to serialize public extension info. */
 interface ExtensionInfoEntry {
   /** Extension manifest. */
-  readonly pkg: KernelMakaioExtension;
+  readonly pkg: Pick<KernelMakaioExtension, 'name' | 'displayName' | 'surface' | 'critical' | 'browser'>;
   /** Current lifecycle state. */
   readonly state: ComponentState;
   /** Whether the extension is enabled. */

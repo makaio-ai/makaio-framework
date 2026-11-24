@@ -11,9 +11,13 @@ import type {
   KernelExtensionContext,
   KernelMakaioExtension,
 } from '../extension/types.js';
+import { useJournalHostFixture } from '@makaio/storage-conformance';
+
+const { constructContext } = useJournalHostFixture();
 
 /** Host fields the coordinator needs to build the context of an extension. */
 const CTX_BASE: ExtensionContextBase = {
+  constructContext,
   platform: 'linux',
   homedir: '/home/test',
   makaioHome: '/home/test/.makaio',

@@ -14,7 +14,10 @@ import type { ExtensionEntry } from './types.js';
  */
 export interface RpcHost {
   readonly bus: IMakaioBus;
-  readonly entries: ReadonlyMap<string, ExtensionEntry>;
+  readonly entries: ReadonlyMap<
+    string,
+    Pick<ExtensionEntry, 'state' | 'warnings'> & { readonly pkg: Pick<ExtensionEntry['pkg'], 'clients' | 'providers'> }
+  >;
   readonly cliContributions: ReadonlyArray<OwnedCliContribution>;
   /**
    * Return the carrier bus of a loaded extension, whatever its state.

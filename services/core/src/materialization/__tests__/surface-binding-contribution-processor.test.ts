@@ -1,4 +1,4 @@
-import { createTestCall, makeStubNodeExtensionContext, stubExtensionIdentity } from '@makaio/test-utils';
+import { createTestCall, stubExtensionIdentity } from '@makaio/test-utils';
 import { createBusInstance, type IMakaioBus } from '@makaio/bus-core';
 import type { ExtensionToken } from '@makaio/contracts';
 import { defineSurfaceBinding, MaterializationSubjects } from '@makaio/contracts/materialization';
@@ -7,6 +7,9 @@ import { describe, expect, it } from 'vitest';
 import { SurfaceBindingRegistryToken } from '../packages.js';
 import { createSurfaceBindingContributionProcessor } from '../surface-binding-contribution-processor.js';
 import { SurfaceBindingRegistry } from '../surface-binding-registry.js';
+import { useJournalHostFixture } from '@makaio/storage-conformance';
+
+const { makeContext: makeStubNodeExtensionContext } = useJournalHostFixture();
 
 /**
  * Build a minimal extension context that shares the given bus and exposes an

@@ -24,6 +24,7 @@ import {
   type AdapterContribution,
   type ProviderContext,
 } from '@makaio/contracts';
+import type { IsolatedNodeExtensionContext } from '@makaio/contracts/extension';
 import type { KernelMakaioExtension } from '@makaio/kernel';
 import { createMockScopedBus } from '@makaio/test-utils';
 
@@ -189,7 +190,9 @@ class DeterministicAdapter extends AIAdapter<FixtureBus, DeterministicConnector,
   }
 }
 
-export function createDeterministicAdapterContribution(capture: DeterministicAdapterCapture): KernelMakaioExtension {
+export function createDeterministicAdapterContribution(
+  capture: DeterministicAdapterCapture,
+): KernelMakaioExtension<IsolatedNodeExtensionContext<IMakaioBus>> {
   let runtimeBus: IMakaioBus | undefined;
   const providerAuth = defineAdapterProviderAuth({
     bindings: [

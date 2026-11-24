@@ -5,6 +5,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { createBusInstance } from '@makaio/bus-core';
 import { ownerOf } from '@makaio/bus-core/kernel-api';
 import { ToolSubjects, WorkflowSubjects } from '@makaio/contracts';
+import { ExtensionStorageCapabilityError } from '@makaio/kernel';
 import { createTestCall } from '@makaio/test-utils';
 import { bootWorkerBus, bootWorkerRuntime } from '../worker-boot.js';
 import { loadWorkerRuntimeContributions, WorkerNamespaceClaimError } from '../worker-contributions.js';
@@ -46,6 +47,24 @@ describe('loadWorkerRuntimeContributions', () => {
 
   it('accepts an empty verified identity realization', async () => {
     await expect(loadWorkerRuntimeContributions([])).resolves.toEqual({ toolsets: [] });
+  });
+
+  it.each([
+    ['declared-storage', "storage: { migrations: './drizzle' }"],
+    ['required-storage', "requires: [{ type: 'capability', id: 'storage.drizzle' }]"],
+  ])('rejects %s before invoking its toolset factory', async (name, requirement) => {
+    const entrypoint = path.join(root, `${name}.mjs`);
+    await fs.writeFile(
+      entrypoint,
+      `export default { name: '${name}', displayName: '${name}', version: '1.0.0', ${requirement},
+        tools: { createToolsets: () => { throw new Error('toolset factory invoked'); } } };`,
+    );
+
+    await expect(loadWorkerRuntimeContributions([entrypoint])).rejects.toMatchObject({
+      constructor: ExtensionStorageCapabilityError,
+      capability: 'storage.drizzle',
+      extensions: [name],
+    });
   });
 
   it('passes worker-local bus and cancellation to contribution factories', async () => {

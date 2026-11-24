@@ -1,7 +1,15 @@
 import { dep } from '@makaio/contracts';
-import type { ContributionProcessor, KernelMakaioExtension } from '@makaio/kernel';
+import type {
+  ContributionProcessor,
+  KernelExtensionContext,
+  KernelHostContext,
+  KernelMakaioExtension,
+} from '@makaio/kernel';
 import { ADAPTER_SUBSYSTEM_PACKAGE_NAME } from '@makaio/services-core/adapter-subsystem';
 import type { AdapterSubsystemService } from './adapter-subsystem-service.js';
+
+/** Manifest fields processed by the adapter subsystem. */
+export type AdapterContributionManifest = Pick<KernelMakaioExtension, 'adapters' | 'providers'>;
 
 /**
  * Whether a package's contributions are processed by the adapter subsystem.
@@ -12,7 +20,7 @@ import type { AdapterSubsystemService } from './adapter-subsystem-service.js';
  * @param pkg - Package manifest to classify.
  * @returns `true` when the package contributes adapters or providers.
  */
-export function contributesToAdapterSubsystem(pkg: KernelMakaioExtension): boolean {
+export function contributesToAdapterSubsystem(pkg: AdapterContributionManifest): boolean {
   return !!pkg.adapters?.length || !!pkg.providers?.length;
 }
 
@@ -39,7 +47,9 @@ export function contributesToAdapterSubsystem(pkg: KernelMakaioExtension): boole
  * @param packages - Load set to stamp.
  * @returns The same packages, contributors carrying the subsystem dependency.
  */
-export function orderAfterAdapterSubsystem<T extends KernelMakaioExtension>(packages: readonly T[]): T[] {
+export function orderAfterAdapterSubsystem<
+  T extends AdapterContributionManifest & Pick<KernelMakaioExtension, 'name' | 'dependencies'>,
+>(packages: readonly T[]): T[] {
   return packages.map((pkg) => {
     if (!contributesToAdapterSubsystem(pkg)) return pkg;
     const dependencies = pkg.dependencies ?? [];
@@ -72,9 +82,9 @@ export interface AdapterSubsystemContributionProcessorDeps {
  * @param deps - Lazy service resolver supplied by the composition root.
  * @returns Awaited contribution processor for adapter packages.
  */
-export function createAdapterSubsystemContributionProcessor(
-  deps: AdapterSubsystemContributionProcessorDeps,
-): ContributionProcessor {
+export function createAdapterSubsystemContributionProcessor<
+  THostContext extends KernelHostContext = KernelExtensionContext,
+>(deps: AdapterSubsystemContributionProcessorDeps): ContributionProcessor<THostContext> {
   return {
     filter: contributesToAdapterSubsystem,
 

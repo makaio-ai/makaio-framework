@@ -1,4 +1,4 @@
-import { makeStubNodeExtensionContext, stubExtensionIdentity } from '@makaio/test-utils';
+import { stubExtensionIdentity } from '@makaio/test-utils';
 import { describe, expect, it } from 'vitest';
 import { createBusInstance } from '@makaio/bus-core';
 import type { ExtensionArtifactViewBuildersContribution } from '@makaio/contracts/materialization';
@@ -8,6 +8,9 @@ import { ArtifactViewBuilderRegistryToken } from '../packages.js';
 import { ArtifactViewBuilderRegistry } from '../artifact-view-builder-registry.js';
 import { createArtifactViewBuilderContributionProcessor } from '../artifact-view-builder-contribution-processor.js';
 import { makeBuilder } from './helpers.js';
+import { useJournalHostFixture } from '@makaio/storage-conformance';
+
+const { makeContext: makeStubNodeExtensionContext } = useJournalHostFixture();
 
 /**
  * Build a minimal extension context that exposes an optional registry via

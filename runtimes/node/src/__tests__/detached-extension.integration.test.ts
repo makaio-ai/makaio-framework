@@ -30,9 +30,12 @@ import { busContextOf } from '@makaio/bus-core/kernel-api';
 import type { DetachedDescriptor } from '@makaio/contracts/extension';
 import type { NodeExtensionContext, ExtensionServiceLifecycle, ExtensionService } from '@makaio/contracts';
 import { createBusNamespace } from '@makaio/core';
-import { makeStubNodeExtensionContext, stubExtensionIdentity } from '@makaio/test-utils';
+import { stubExtensionIdentity } from '@makaio/test-utils';
 import { createDetachedExtensionPackage } from '../detached-extension-handle.js';
 import { z } from 'zod';
+import { useJournalHostFixture } from '@makaio/storage-conformance';
+
+const { makeContext: makeStubNodeExtensionContext } = useJournalHostFixture();
 
 // ---------------------------------------------------------------------------
 // Fixture path

@@ -12,6 +12,9 @@ import {
 } from '@makaio/subsystem-adapter';
 import { DEFAULT_TIMEOUTS } from '@makaio/utils';
 import { z } from 'zod';
+import { useJournalHostFixture } from '@makaio/storage-conformance';
+
+const { constructContext } = useJournalHostFixture();
 
 const namespace = createAdapterNamespace('adapter:namespace-test', { chunk: z.object({ content: z.string() }) });
 
@@ -89,6 +92,7 @@ describe('adapter contribution namespace lifetime', () => {
     const bus = createBusInstance();
     const coordinator = new ExtensionCoordinator(bus, {
       extensionContextBase: {
+        constructContext,
         platform: 'linux',
         homedir: '/tmp',
         makaioHome: '/tmp/.makaio',

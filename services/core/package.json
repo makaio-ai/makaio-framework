@@ -26,6 +26,8 @@
     "./capability": "./src/capability/index.ts",
     "./harness": "./src/harness/index.ts",
     "./harness/storage/schema": "./src/harness/storage/schema.ts",
+    "./journal": "./src/journal/index.ts",
+    "./journal/storage": "./src/journal/storage/index.ts",
     "./cli-detection/namespace": "./src/cli-detection/namespace.ts",
     "./code-execution": "./src/code-execution/index.ts",
     "./codebase": "./src/codebase/index.ts",
@@ -101,7 +103,8 @@
         "./src/session/messages/schema.ts",
         "./src/session/message-routing/schema.ts",
         "./src/session/import-cursors/schema.ts",
-        "./src/harness/storage/schema.ts"
+        "./src/harness/storage/schema.ts",
+        "./src/journal/storage/schema.ts"
       ],
       "postgres": [
         "./src/session/storage/schema.postgres.ts",
@@ -110,7 +113,8 @@
         "./src/session/messages/schema.postgres.ts",
         "./src/session/message-routing/schema.postgres.ts",
         "./src/session/import-cursors/schema.postgres.ts",
-        "./src/harness/storage/schema.postgres.ts"
+        "./src/harness/storage/schema.postgres.ts",
+        "./src/journal/storage/schema.postgres.ts"
       ]
     }
   },
@@ -155,6 +159,8 @@
       "./capability": "./dist/capability/index.mjs",
       "./harness": "./dist/harness/index.mjs",
       "./harness/storage/schema": "./dist/harness/storage/schema.mjs",
+      "./journal": "./dist/journal/index.mjs",
+      "./journal/storage": "./dist/journal/storage/index.mjs",
       "./cli-detection/namespace": "./dist/cli-detection/namespace.mjs",
       "./code-execution": "./dist/code-execution/index.mjs",
       "./codebase": "./dist/codebase/index.mjs",

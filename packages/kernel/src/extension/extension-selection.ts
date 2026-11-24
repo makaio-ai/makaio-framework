@@ -1,8 +1,17 @@
 import { versionSatisfies } from '@makaio/contracts';
+import { MakaioError } from '@makaio/core';
+import { closeEnabledExtensionEntries } from './extension-entry-closure.js';
 import type { ExtensionRuntimeSurface, KernelMakaioExtension, RuntimeEnvironment } from './types.js';
 
 /** Shared empty set so the default argument allocates nothing per call. */
 const EMPTY_NAME_SET: ReadonlySet<string> = new Set<string>();
+
+const STORAGE_CAPABILITY = 'storage.drizzle';
+
+/** Selection evaluates storage presence without inspecting executable callbacks. */
+type EligibilityManifest = Pick<KernelMakaioExtension, 'name' | 'requires' | 'surface' | 'dependencies'> & {
+  readonly storage?: object;
+};
 
 /**
  * Resolve name collisions across a registration list, allowing exactly one
@@ -37,11 +46,10 @@ const EMPTY_NAME_SET: ReadonlySet<string> = new Set<string>();
  *   overridable framework package name, or when a framework package name is
  *   claimed more than once by an override.
  */
-export function coalesceExtensionOverrides(
-  extensions: ReadonlyArray<KernelMakaioExtension>,
-  frameworkPackageNames: ReadonlySet<string> = EMPTY_NAME_SET,
-): KernelMakaioExtension[] {
-  const byName = new Map<string, KernelMakaioExtension>();
+export function coalesceExtensionOverrides<
+  TManifest extends Pick<KernelMakaioExtension, 'name' | 'displayName' | 'version'>,
+>(extensions: ReadonlyArray<TManifest>, frameworkPackageNames: ReadonlySet<string> = EMPTY_NAME_SET): TManifest[] {
+  const byName = new Map<string, TManifest>();
   const overriddenFrameworkNames = new Set<string>();
   for (const pkg of extensions) {
     const existing = byName.get(pkg.name);
@@ -71,7 +79,11 @@ export function coalesceExtensionOverrides(
  * @param second - Registration that tried to claim it again.
  * @returns Diagnostic message naming both registrations.
  */
-function formatNameCollisionMessage(name: string, first: KernelMakaioExtension, second: KernelMakaioExtension): string {
+function formatNameCollisionMessage(
+  name: string,
+  first: Pick<KernelMakaioExtension, 'displayName' | 'version'>,
+  second: Pick<KernelMakaioExtension, 'displayName' | 'version'>,
+): string {
   return (
     `Extension name collision: "${name}" is registered twice ` +
     `(${describeRegistration(first)} and ${describeRegistration(second)}). ` +
@@ -86,67 +98,114 @@ function formatNameCollisionMessage(name: string, first: KernelMakaioExtension, 
  * @param pkg - Registration to describe.
  * @returns Display name and version of the registration.
  */
-function describeRegistration(pkg: KernelMakaioExtension): string {
+function describeRegistration(pkg: Pick<KernelMakaioExtension, 'displayName' | 'version'>): string {
   return `"${pkg.displayName}" v${pkg.version}`;
 }
 
+/** Storage-dependent manifests cannot load on a host without the required storage capability. */
+export class ExtensionStorageCapabilityError extends MakaioError {
+  /** Host capability that does not satisfy the package requirements. */
+  public readonly capability = STORAGE_CAPABILITY;
+
+  /**
+   * @param extensions - Extensions requiring the missing capability.
+   * @param dependents - Extensions that transitively require one of those extensions.
+   */
+  public constructor(
+    public readonly extensions: readonly string[],
+    public readonly dependents: readonly string[],
+  ) {
+    const affected = dependents.length > 0 ? ` Required dependents: ${dependents.join(', ')}.` : '';
+    super(
+      `Extensions ${extensions.join(', ')} require unavailable host capability "${STORAGE_CAPABILITY}".${affected}`,
+    );
+  }
+}
+
 /**
- * Filter extensions by runtime surface / environment requirements and prune dependents.
+ * Reject a package set that requires storage on a host without that capability.
+ * @param extensions - Manifests in scope for host admission.
+ * @param env - Capabilities and versions advertised by the host.
+ * @throws ExtensionStorageCapabilityError naming the storage extensions and their required dependents.
+ */
+export function assertExtensionStorageCapability(
+  extensions: readonly EligibilityManifest[],
+  env: Pick<RuntimeEnvironment, 'capabilities' | 'capabilityVersions'>,
+): void {
+  const hasStorage = env.capabilities.has(STORAGE_CAPABILITY);
+  const missing = new Set(
+    extensions
+      .filter((pkg) => {
+        if (!hasStorage && pkg.storage !== undefined) return true;
+        return pkg.requires?.some(
+          (req) =>
+            req.type === 'capability' &&
+            req.id === STORAGE_CAPABILITY &&
+            (!hasStorage ||
+              (pkg.storage !== undefined &&
+                req.version !== undefined &&
+                !capabilityVersionSatisfies(env, req.id, req.version))),
+        );
+      })
+      .map((pkg) => pkg.name),
+  );
+  if (missing.size === 0) return;
+  const { exclusions } = closeEnabledExtensionEntries(
+    extensions.map((pkg) => ({ name: pkg.name, entry: { pkg, enabled: !missing.has(pkg.name) } })),
+  );
+  throw new ExtensionStorageCapabilityError(
+    [...missing],
+    exclusions.map(({ name }) => name),
+  );
+}
+
+/**
+ * Filter extensions by runtime surface and environment requirements and prune dependents.
+ * On hosts without `storage.drizzle`, a surface-matching extension with a `storage` declaration
+ * or an explicit `storage.drizzle` requirement fails selection before other environment requirements are evaluated.
  * @param extensions - Full extension set to filter.
  * @param surface - Runtime surface to match.
- * @param env - Host-provided runtime environment, or `undefined` to allow all.
+ * @param env - Host-provided runtime environment, or `undefined` to skip environment checks.
  * @returns Extensions eligible for loading in the current host environment.
+ * @throws ExtensionStorageCapabilityError if a surface-matching extension requires unavailable `storage.drizzle`.
+ *   The error names the storage extensions and their required dependents.
  */
-export function filterEligibleExtensions(
-  extensions: ReadonlyArray<KernelMakaioExtension>,
+export function filterEligibleExtensions<TManifest extends EligibilityManifest>(
+  extensions: ReadonlyArray<TManifest>,
   surface: ExtensionRuntimeSurface,
   env: RuntimeEnvironment | undefined,
-): KernelMakaioExtension[] {
-  const allInputNames = new Set(extensions.map((p) => p.name));
-  const directlyEligible = extensions.filter((pkg) => matchesRequirements(pkg, surface, env));
-  const byName = new Map(directlyEligible.map((pkg) => [pkg.name, pkg]));
-  const eligibleNames = new Set(byName.keys());
+): TManifest[] {
+  const surfaceMatches = extensions.filter((pkg) => matchesSurface(pkg, surface));
+  if (env !== undefined) assertExtensionStorageCapability(surfaceMatches, env);
 
-  let changed = true;
-  while (changed) {
-    changed = false;
-    for (const name of eligibleNames) {
-      const hasFilteredDependency = (byName.get(name)!.dependencies ?? []).some(
-        (dependency) =>
-          !dependency.optional && allInputNames.has(dependency.name) && !eligibleNames.has(dependency.name),
-      );
-      if (hasFilteredDependency) {
-        eligibleNames.delete(name);
-        changed = true;
-      }
-    }
-  }
-
-  return directlyEligible.filter((pkg) => eligibleNames.has(pkg.name));
+  const directlyEligible = surfaceMatches.filter((pkg) => matchesRequirements(pkg, env));
+  const eligibleByName = new Map(directlyEligible.map((pkg) => [pkg.name, pkg]));
+  const { closed } = closeEnabledExtensionEntries(
+    extensions.map((pkg) => {
+      const eligible = eligibleByName.get(pkg.name);
+      return { name: pkg.name, entry: { pkg: eligible ?? pkg, enabled: eligible !== undefined } };
+    }),
+  );
+  return directlyEligible.filter((pkg) => closed.has(pkg.name));
 }
 
 /**
  * Check whether an extension's environment requirements are satisfied.
  * @param pkg - Extension manifest to evaluate.
- * @param surface - Runtime surface to match.
  * @param env - Host-provided runtime environment, or `undefined` to allow all.
  * @returns `true` when the extension is eligible for this runtime.
  */
-function matchesRequirements(
-  pkg: KernelMakaioExtension,
-  surface: ExtensionRuntimeSurface,
-  env: RuntimeEnvironment | undefined,
-): boolean {
-  if (!matchesSurface(pkg, surface)) return false;
-  const requirements = pkg.requires;
-  if (!requirements || requirements.length === 0) return true;
+function matchesRequirements(pkg: EligibilityManifest, env: RuntimeEnvironment | undefined): boolean {
   if (!env) return true;
-  return requirements.every((req) => {
+  return (pkg.requires ?? []).every((req) => {
     switch (req.type) {
       case 'host':
         return env.hosts.has(req.id);
       case 'capability':
-        if (!env.capabilities.has(req.id)) return false;
+        if (!env.capabilities.has(req.id)) {
+          console.warn(`[ExtensionCoordinator] missing-capability: "${pkg.name}" requires "${req.id}"`);
+          return false;
+        }
         if (req.version === undefined) return true;
         return capabilityVersionSatisfies(env, req.id, req.version);
     }
@@ -160,7 +219,11 @@ function matchesRequirements(
  * @param range - Required semver range.
  * @returns `true` when the host declared a satisfying concrete capability version.
  */
-function capabilityVersionSatisfies(env: RuntimeEnvironment, id: string, range: string): boolean {
+function capabilityVersionSatisfies(
+  env: Pick<RuntimeEnvironment, 'capabilityVersions'>,
+  id: string,
+  range: string,
+): boolean {
   const version = env.capabilityVersions?.get(id);
   return version !== undefined && versionSatisfies(version, range);
 }
@@ -171,6 +234,6 @@ function capabilityVersionSatisfies(env: RuntimeEnvironment, id: string, range: 
  * @param surface - Runtime surface to match.
  * @returns `true` when the extension is eligible for this runtime surface.
  */
-function matchesSurface(pkg: KernelMakaioExtension, surface: ExtensionRuntimeSurface): boolean {
+function matchesSurface(pkg: Pick<KernelMakaioExtension, 'surface'>, surface: ExtensionRuntimeSurface): boolean {
   return pkg.surface === undefined || pkg.surface === 'any' || pkg.surface === surface;
 }

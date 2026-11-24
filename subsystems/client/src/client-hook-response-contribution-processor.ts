@@ -13,13 +13,14 @@ import type {
   ContributorDefinition,
   ProviderContractCatalogEntry,
 } from '@makaio/contracts/client';
-import type { ContributionProcessor } from '@makaio/kernel';
-import type { KernelExtensionContext, KernelMakaioExtension } from '@makaio/kernel/extension';
+import type { IMakaioBus } from '@makaio/bus-core';
+import type { ExtensionContributionProcessor, NodeExtensionContext } from '@makaio/contracts';
+import type { IsolatedNodeExtensionContext } from '@makaio/contracts/extension';
 import type { ClientHookProviderContractRegistry } from './client-hook-provider-contract-registry.js';
 import type { ClientHookResponseRegistry } from './client-hook-response-registry.js';
 
 /**
- * Create a {@link ContributionProcessor} that wires
+ * Create a {@link ExtensionContributionProcessor} that wires
  * {@link ExtensionClientHookResponsesContribution} into the
  * {@link ClientHookResponseRegistry} during extension lifecycle events.
  *
@@ -37,25 +38,39 @@ import type { ClientHookResponseRegistry } from './client-hook-response-registry
  * The processor performs its own rollback before throwing: if
  * `createContributors` succeeds but `installContributors` fails, no
  * partial state leaks into the registry.
+ * @typeParam THostContext - Context passed to contributor factories by the host.
  * @param responseRegistry - Registry that stores contributor definitions.
  * @param contractRegistry - Provider contract registry for activation-time
  *   validation and activation context lookups.
  * @returns A `ContributionProcessor` ready for registration with the
  *   extension coordinator.
  */
-export function createClientHookResponseContributionProcessor(
+export function createClientHookResponseContributionProcessor<
+  THostContext extends IsolatedNodeExtensionContext<IMakaioBus> = NodeExtensionContext<IMakaioBus>,
+>(
   responseRegistry: ClientHookResponseRegistry,
   contractRegistry: ClientHookProviderContractRegistry,
-): ContributionProcessor {
+): ExtensionContributionProcessor<THostContext> {
   return {
-    filter: (pkg: KernelMakaioExtension): boolean => !!pkg.clientHookResponses,
+    /**
+     * Match extensions that contribute client hook responses.
+     * @param pkg - Manifest being considered for activation.
+     * @returns Whether the manifest contributes client hook responses.
+     */
+    filter: (pkg): boolean => !!pkg.clientHookResponses,
 
-    async processActivated(name: string, pkg: KernelMakaioExtension, ctx: KernelExtensionContext): Promise<void> {
+    /**
+     * Install the extension's contributors using its activation context.
+     * @param name - Name of the activating extension.
+     * @param pkg - Manifest declaring the contributors.
+     * @param ctx - Context supplied by the extension's host.
+     */
+    async processActivated(name, pkg, ctx): Promise<void> {
       const contribution = pkg.clientHookResponses;
       if (!contribution) return;
 
       // Build the activation context for the factory.
-      const activationCtx: ContributorActivationContext<KernelExtensionContext> = {
+      const activationCtx: ContributorActivationContext<THostContext> = {
         extensionName: name,
         extensionContext: ctx,
         getProviderContract: (clientId: string, contractId: string): ProviderContractCatalogEntry | undefined =>

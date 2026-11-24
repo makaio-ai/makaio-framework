@@ -23,7 +23,8 @@ export type HostTransactionErrorCode =
 /**
  * An operation on a `HostTransaction` could not be executed or interpreted.
  *
- * - `foreign-transaction`: the value was not minted by `createHostDatabase`.
+ * - `foreign-transaction`: the value was not minted by `createHostDatabase`
+ *   or was minted by a different facade than the one required.
  * - `transaction-finished`: the `transaction(fn)` call that minted it already
  *   settled, so nothing may run in it any more.
  * - `transaction-dialect-unsupported`: the host uses a dialect that does not support the operation.

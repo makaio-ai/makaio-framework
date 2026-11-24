@@ -6,13 +6,6 @@
  * needs an extension context — for example when constructing extension
  * packages, wiring lifecycle services, or seeding a
  * {@link NodeExtensionContext}.
- * @example
- * ```ts
- * import { makeStubNodeExtensionContext } from '@makaio/test-utils';
- * import { MakaioBus } from '@makaio/bus-core';
- *
- * const nodeCtx = makeStubNodeExtensionContext(MakaioBus, { username: 'alice' });
- * ```
  */
 
 import type { IMakaioBus } from '@makaio/bus-core';
@@ -135,12 +128,12 @@ export function makeStubExtensionContext(
  * `platform` is the fixed literal `'linux'`, `homedir` and `makaioHome` live
  * under the stub data directory, and `username` is `'test'`.
  * @param bus - Bus instance to place on the context.
- * @param overrides - Fields that replace the defaults.
+ * @param overrides - Real host capabilities and fields that replace the defaults.
  * @returns A stub Node extension context.
  */
 export function makeStubNodeExtensionContext(
   bus: IMakaioBus,
-  overrides: Partial<NodeExtensionContext<IMakaioBus>> = {},
+  overrides: Pick<NodeExtensionContext, 'database' | 'journal'> & Partial<NodeExtensionContext<IMakaioBus>>,
 ): NodeExtensionContext<IMakaioBus> {
   // The base gets only the identity, so its namespace leases name the same extension.
   // Everything else stays out on purpose: `homedir` and `makaioHome` stay in the

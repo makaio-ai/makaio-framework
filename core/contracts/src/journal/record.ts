@@ -7,9 +7,9 @@ import type { WitnessedAccount } from './witnessed-account.js';
  * Outcome for one entry handed to the journal.
  *
  * - `recorded`: a new entry was written.
- * - `known`: an entry with the same key of the same extension already exists;
- *   nothing was written and `entryId` names the existing entry, even when the
- *   payload differs.
+ * - `known`: an entry with the same extension, key, and subject already exists.
+ *   Nothing was written and `entryId` names the existing entry, even when the
+ *   payload differs. A key for a different subject causes `key-subject-mismatch`.
  */
 export type EntryRecordOutcome =
   | { readonly status: 'recorded'; readonly entryId: EntryId }
@@ -23,8 +23,12 @@ export type EntryRecordOutcome =
  * - `name-not-owned`: the subject belongs to another extension.
  * - `payload-invalid`: the payload violates the schema of the subject.
  * - `edge-unknown`: the named edge is not an edge of the recording extension.
- * - `witnessed-not-owned`: the witnessed account names another extension (an
- *   extension only witnesses accounts of its own system).
+ * - `foreign-transaction`: the value does not belong to the journal's host database
+ *   facade. A live transaction from another facade is marked rollback-only.
+ * - `transaction-finished`: the transaction from this host database facade already ended.
+ * - `record-before-active`: the recording extension has yet to become active.
+ * - `key-subject-mismatch`: the extension's key already names an entry for a
+ *   different subject, so the caller's transaction fails.
  */
 export type JournalRecordErrorCode =
   | 'subject-unknown'
@@ -32,15 +36,30 @@ export type JournalRecordErrorCode =
   | 'name-not-owned'
   | 'payload-invalid'
   | 'edge-unknown'
-  | 'witnessed-not-owned';
+  | 'foreign-transaction'
+  | 'transaction-finished'
+  | 'record-before-active'
+  | 'key-subject-mismatch';
 
 /**
- * Why the journal refused to accept a delivery: the codes of recording plus
- * `cursor-moved`, meaning the cursor of the edge for the partition is no
- * longer at the expected value because another process already accepted
- * further.
+ * Why the journal refused to accept a delivery. Includes all
+ * {@link JournalRecordErrorCode} values as well as:
+ *
+ * - `cursor-moved`: the edge's cursor for the partition differs from the expected
+ *   value because another process advanced it.
+ * - `witnessed-not-owned`: the witnessed account names an extension other than
+ *   the edge owner, which can only witness accounts of its own system.
+ * - `accept-during-own-start`: `accept` was awaited during the edge owner's own
+ *   still-running startup. The error names that extension and no transaction opens.
+ * - `accept-startup-timeout`: the host did not finish starting within the delivery's
+ *   configured wait. No transaction opens.
  */
-export type JournalAcceptErrorCode = JournalRecordErrorCode | 'cursor-moved';
+export type JournalAcceptErrorCode =
+  | JournalRecordErrorCode
+  | 'cursor-moved'
+  | 'witnessed-not-owned'
+  | 'accept-during-own-start'
+  | 'accept-startup-timeout';
 
 /** One entry handed to the journal for recording. */
 export interface RecordEntryInput {
@@ -54,12 +73,6 @@ export interface RecordEntryInput {
   readonly orderKey?: string;
   /** The inbound edge of the recording extension that accepted the entry. */
   readonly edge?: EdgeName;
-  /**
-   * The witnessed account the entry stands for. Only valid when the caller of
-   * the handler is an account that a verifier of the recording extension
-   * delivered at its own route.
-   */
-  readonly witnessed?: WitnessedAccount;
 }
 
 /**
@@ -76,11 +89,13 @@ export interface RecordInput {
 }
 
 /**
- * One entry of a delivery accepted through an inbound edge. Like
- * `RecordEntryInput`, but without the edge: the edge is bound to the
- * capability that accepts the delivery.
+ * One entry of a delivery. The inbound edge is bound to the capability that
+ * accepts the delivery.
  */
-export type AcceptEntryInput = Omit<RecordEntryInput, 'edge'>;
+export type AcceptEntryInput = Omit<RecordEntryInput, 'edge'> & {
+  /** The account that acted in the verified delivery, witnessed by the edge owner. */
+  readonly witnessed?: WitnessedAccount;
+};
 
 /**
  * Input of accepting a delivery through an inbound edge.

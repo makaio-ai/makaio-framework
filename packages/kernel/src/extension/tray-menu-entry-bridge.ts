@@ -14,7 +14,7 @@ import type { KernelMakaioExtension } from './types.js';
 export async function registerPackageTrayMenuEntry(
   call: CallContext,
   bus: IMakaioBus,
-  pkg: KernelMakaioExtension,
+  pkg: Pick<KernelMakaioExtension, 'name' | 'tray'>,
 ): Promise<void> {
   if (!pkg.tray) return;
 
@@ -39,7 +39,7 @@ export async function registerPackageTrayMenuEntry(
 export async function unregisterPackageTrayMenuEntry(
   call: CallContext,
   bus: IMakaioBus,
-  pkg: KernelMakaioExtension,
+  pkg: Pick<KernelMakaioExtension, 'name' | 'tray'>,
 ): Promise<void> {
   if (!pkg.tray) return;
 
@@ -51,7 +51,7 @@ export async function unregisterPackageTrayMenuEntry(
  * @param pkg - Extension that declares a tray manifest
  * @returns Tray menu entry for the extension manifest
  */
-function buildTrayMenuEntry(pkg: KernelMakaioExtension): TrayMenuEntry {
+function buildTrayMenuEntry(pkg: Pick<KernelMakaioExtension, 'name' | 'tray'>): TrayMenuEntry {
   const tray = pkg.tray;
   if (!tray) {
     throw new Error(`[tray-menu-entry-bridge] extension "${pkg.name}" does not declare a tray entry`);

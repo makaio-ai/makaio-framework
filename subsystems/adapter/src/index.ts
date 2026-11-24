@@ -12,15 +12,19 @@
  * adapters are initialized.
  */
 
-import type { IMakaioBus } from '@makaio/bus-core';
-import { dep, extensionToken, type CapabilityToken, type MakaioNodeExtension } from '@makaio/contracts';
+import { dep, extensionToken, type CapabilityToken } from '@makaio/contracts';
 // Root barrel by necessity, not by preference: `SessionToken` is declared in the
 // package's own composition module and has no narrower export. Naming a subpath
 // that does not exist would be the change here, and adding one to publish a
 // single token widens the package's public surface for a cosmetic import.
 import { SessionToken } from '@makaio/services-core';
 import { ADAPTER_SUBSYSTEM_PACKAGE_NAME, type IAdapterConfigRepository } from '@makaio/services-core/adapter-subsystem';
-import type { ExtensionCoordinator } from '@makaio/kernel';
+import type {
+  ExtensionCoordinator,
+  KernelExtensionContext,
+  KernelHostContext,
+  KernelMakaioExtension,
+} from '@makaio/kernel';
 import { AdapterSubsystemService } from './adapter-subsystem-service.js';
 import type { PlatformDefaults } from './adapter-runtime-lifecycle.js';
 export { FileAdapterConfigRepository } from './config-repository.js';
@@ -49,20 +53,13 @@ export const AdapterSubsystemToken = extensionToken<AdapterSubsystemService>(ADA
 /**
  * Options for creating the adapter subsystem extension package.
  */
-export interface CreateAdapterSubsystemPackageOptions {
+export interface CreateAdapterSubsystemPackageOptions<THostContext extends KernelHostContext = KernelExtensionContext> {
   /**
    * Repository seam used by the subsystem service for file-backed config storage.
    */
   readonly configRepository: IAdapterConfigRepository;
-  /**
-   * Extension coordinator forwarded to {@link AdapterContributionProcessor}.
-   *
-   * The composition root registers the contribution processor (via
-   * {@link createAdapterSubsystemContributionProcessor}) with this coordinator
-   * before `coordinator.startAll()` so adapter contributions run in a stable
-   * order relative to other contribution processors.
-   */
-  readonly coordinator: ExtensionCoordinator;
+  /** Extension coordinator that supplies the provider definition catalog. */
+  readonly coordinator: ExtensionCoordinator<THostContext>;
   /**
    * Platform-provided defaults forwarded to adapter factories.
    */
@@ -95,9 +92,9 @@ export interface CreateAdapterSubsystemPackageOptions {
  * @param options - Package-scoped dependencies including the coordinator.
  * @returns Critical Makaio extension for the adapter subsystem.
  */
-export function createAdapterSubsystemPackage(
-  options: CreateAdapterSubsystemPackageOptions,
-): MakaioNodeExtension<IMakaioBus> {
+export function createAdapterSubsystemPackage<THostContext extends KernelHostContext = KernelExtensionContext>(
+  options: CreateAdapterSubsystemPackageOptions<THostContext>,
+): KernelMakaioExtension<THostContext> {
   return {
     name: AdapterSubsystemToken.name,
     displayName: 'Adapter Subsystem',

@@ -72,7 +72,10 @@ import { shellPackage } from '@makaio/extension-shell';
 import { subagentPackage } from '@makaio/extension-subagent';
 import { createAppendEffect } from '@makaio/contracts/client';
 import type { ExtensionClientHookResponsesContribution } from '@makaio/contracts/client';
-import { ClientsCoreToken, createClientsCorePackage } from '@makaio/subsystem-client';
+import { ClientsCoreToken, clientStoragePackage, createClientsCorePackage } from '@makaio/subsystem-client';
+import { useJournalHostFixture } from '@makaio/storage-conformance';
+
+const { constructContext, getDatabase } = useJournalHostFixture();
 
 // ---------------------------------------------------------------------------
 // Fixtures
@@ -150,6 +153,7 @@ function setupArtifactViewBuilderCoordinator(extension: KernelMakaioExtension): 
   const bus = createBusInstance();
   const coordinator = new ExtensionCoordinator(bus, {
     extensionContextBase: {
+      constructContext,
       platform: process.platform,
       homedir: '/home/test',
       makaioHome: TEST_MAKAIO_HOME,
@@ -910,6 +914,7 @@ describe('runtime tool extension contributions', () => {
     const bus = createBusInstance();
     const coordinator = new ExtensionCoordinator(bus, {
       extensionContextBase: {
+        constructContext,
         platform: process.platform,
         homedir: '/home/test',
         makaioHome: TEST_MAKAIO_HOME,
@@ -1741,7 +1746,9 @@ describe('client hook response contribution extensibility', () => {
   function setupHookResponseCoordinator(extension: KernelMakaioExtension): ExtensionCoordinator {
     const bus = createBusInstance();
     const coordinator = new ExtensionCoordinator(bus, {
+      db: getDatabase().db,
       extensionContextBase: {
+        constructContext,
         platform: process.platform,
         homedir: '/home/test',
         makaioHome: TEST_MAKAIO_HOME,
@@ -1755,7 +1762,7 @@ describe('client hook response contribution extensibility', () => {
     // Create the clients-core package — its runtimeBoot.configure
     // registers the contribution processor.
     const clientsCorePackage = createClientsCorePackage();
-    coordinator.load([clientsCorePackage, extension]);
+    coordinator.load([clientStoragePackage, clientsCorePackage, extension]);
 
     // Register the contribution processor via the boot wiring path.
     // In production this is done by registerExtensionBootContributions(),

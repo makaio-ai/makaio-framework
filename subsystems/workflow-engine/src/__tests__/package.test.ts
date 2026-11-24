@@ -5,7 +5,7 @@ import { ownerOf } from '@makaio/bus-core/kernel-api';
 import { createBusNamespace } from '@makaio/core';
 import type { ExtensionService, ExtensionToken, NodeExtensionContext } from '@makaio/contracts';
 import { registerDrizzleHandlers } from '@makaio/storage-drizzle';
-import { makeStubNodeExtensionContext, stubExtensionIdentity } from '@makaio/test-utils';
+import { stubExtensionIdentity } from '@makaio/test-utils';
 import { z } from 'zod';
 import {
   BUS_EVENT_AUTOMATION_TRIGGER_KIND,
@@ -28,6 +28,9 @@ import { createWorkflowTestNamespaceCapability } from './workflow-executor.test-
 import { WorkflowStorageNamespace, WorkflowStorageSubjects } from '../storage/namespace.js';
 import { workflowEnginePackage, WorkflowEngineToken } from '../package.js';
 import { createTestDb, createWorkflowDefinition, type TestDbContext } from './shared.js';
+import { useJournalHostFixture } from '@makaio/storage-conformance';
+
+const { makeContext: makeStubNodeExtensionContext } = useJournalHostFixture();
 
 const { subjects: PackageLifecycleSubjects } = MakaioBus.registerNamespace(
   createBusNamespace('workflowEnginePackageLifecycle', {

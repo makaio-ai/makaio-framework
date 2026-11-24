@@ -1,3 +1,4 @@
+import { useJournalHostFixture } from '@makaio/storage-conformance';
 import type { IHostMakaioBus } from '@makaio/bus-core';
 import { busContextOf, ownerOf } from '@makaio/bus-core/kernel-api';
 import { createBusNamespace } from '@makaio/core';
@@ -10,6 +11,8 @@ import {
   makeStubNodeExtensionContext,
   stubExtensionIdentity,
 } from '../stub-extension-context.js';
+
+const { makeContext } = useJournalHostFixture();
 
 describe('makeStubExtensionBus', () => {
   it('binds the context bus to the extension carrier', () => {
@@ -65,12 +68,15 @@ describe('stub context factories', () => {
   it('makeStubNodeExtensionContext places the given bus instance unchanged', () => {
     const bus = makeStubExtensionBus(createTestBusInstance(), 'x');
 
-    expect(makeStubNodeExtensionContext(bus).bus).toBe(bus);
+    const { database, journal } = makeContext(bus);
+    expect(makeStubNodeExtensionContext(bus, { database, journal }).bus).toBe(bus);
   });
 
   it('makeStubNodeExtensionContext leases namespaces for the identity it is given', () => {
     const host = createTestBusInstance();
-    const ctx = makeStubNodeExtensionContext(host, { identity: stubExtensionIdentity('lessee') });
+    const identity = stubExtensionIdentity('lessee');
+    const { database, journal } = makeContext(host, { identity });
+    const ctx = makeStubNodeExtensionContext(host, { database, journal, identity });
 
     const lease = ctx.namespaces.lease(createBusNamespace('stub-lessee', { ready: z.object({}) }));
 
