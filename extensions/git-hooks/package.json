@@ -33,7 +33,7 @@
     "@makaio/service-base": "workspace:*",
     "@makaio/services-core": "workspace:*",
     "@makaio/subprocess": "workspace:*",
-    "zod": "4.4.3"
+    "zod": "4.6.6"
   },
   "devDependencies": {
     "@makaio/build-tooling": "workspace:*",

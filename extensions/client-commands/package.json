@@ -25,7 +25,7 @@
     "@makaio/core": "workspace:*",
     "@makaio/kernel": "workspace:*",
     "@makaio/subsystem-client": "workspace:*",
-    "zod": "4.4.3"
+    "zod": "4.6.6"
   },
   "devDependencies": {
     "@makaio/build-tooling": "workspace:*",

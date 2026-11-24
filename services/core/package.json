@@ -132,7 +132,7 @@
     "ajv-formats": "^3.0.1",
     "croner": "^10.0.1",
     "drizzle-orm": "0.45.4",
-    "zod": "4.4.3"
+    "zod": "4.6.6"
   },
   "inlinedDependencies": {
     "@libsql/core": "0.15.15",

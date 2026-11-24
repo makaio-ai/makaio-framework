@@ -24,7 +24,7 @@
     "glob": "^13.0.0",
     "ignore": "^7.0.6",
     "safe-regex2": "^5.1.1",
-    "zod": "4.4.3"
+    "zod": "4.6.6"
   },
   "devDependencies": {
     "@makaio/build-tooling": "workspace:*",
