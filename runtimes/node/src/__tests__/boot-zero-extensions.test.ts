@@ -945,6 +945,39 @@ export default {
     }
   });
 
+  it('reports a boot abort for operator config when scheduler selection fails before extensions load', async () => {
+    const configured: KernelMakaioExtension = {
+      name: 'configured-extension',
+      displayName: 'Configured Extension',
+      version: '1.0.0',
+      configSchema: z.object({ port: z.number() }),
+    };
+    const filePath = await writeOperatorConfigFile(tempHome, 'configured-extension.json', '{"port":1}');
+    const warning = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    onTestFinished(() => warning.mockRestore());
+
+    await expect(
+      bootMakaioRuntimeCore(new FakeTransportProvider(), 0, '127.0.0.1', {
+        makaioHome: tempHome,
+        discovery: new ExplicitDescriptorDiscovery([preloadedDescriptorFixture(tempHome, configured)]),
+        frameworkVersion: '3.0.0',
+        hostCapabilities: ['node'],
+        automationCronSchedulerPackage: {
+          name: 'misnamed-scheduler',
+          displayName: 'Misnamed Scheduler',
+          version: '1.0.0',
+        },
+      }),
+    ).rejects.toThrow(/does not register the cron scheduler service/);
+
+    const messages = warning.mock.calls
+      .map(([message]) => String(message))
+      .filter((message) => message.includes(filePath));
+    expect(messages).toEqual([
+      expect.stringContaining('boot aborted before extension setup; configuration was not applied'),
+    ]);
+  });
+
   it('uses injected machine identity as the runtime machineId when config provider is defaulted', async () => {
     const transport = new FakeTransportProvider();
     const machineIdentity = await createPersistedMachineIdentity('provisioned-machine-id');
