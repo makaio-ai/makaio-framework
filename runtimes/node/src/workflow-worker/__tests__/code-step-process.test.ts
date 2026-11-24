@@ -1,9 +1,10 @@
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { setTimeout as delay } from 'node:timers/promises';
 import { createLocalLauncher, type LocalExecutionSite } from '@makaio/subprocess';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { runLocalCodeStep } from '../code-step-process.js';
+import { runCodeStepProcess, runLocalCodeStep } from '../code-step-process.js';
 
 let workspace: string;
 let site: LocalExecutionSite;
@@ -112,6 +113,128 @@ describe.skipIf(process.platform === 'win32')('local code step output boundary',
       },
     );
     await expect(result).resolves.toMatchObject({ kind: 'process-failed', reason: 'process-exit' });
+  });
+
+  it('waits for a detached refusal observation after the child exits', async () => {
+    const observerStarted = Promise.withResolvers<void>();
+    const observation = Promise.withResolvers<void>();
+    const exited = Promise.withResolvers<void>();
+    const launcher = site.launcher;
+    const result = runCodeStepProcess(
+      {
+        boundary: launcher.boundary,
+        closeOwner: (owner) => launcher.closeOwner(owner),
+        closeAll: () => launcher.closeAll(),
+        launch: (options) => {
+          const handle = launcher.launch(options);
+          return { ...handle, result: handle.result.finally(() => exited.resolve()) };
+        },
+      },
+      {
+        owner: step,
+        command: process.execPath,
+        args: [
+          '-e',
+          `${submit}
+          (async () => {
+            await lines.next();
+            console.log(JSON.stringify({
+              jsonrpc: '2.0', id: 1, method: 'request.call',
+              params: { subject: 'example.read', payload: null },
+            }));
+            console.log(JSON.stringify({
+              jsonrpc: '2.0', id: 2, method: 'output.submit', params: stepResult(null),
+            }));
+            await lines.next();
+            finish();
+          })();`,
+        ],
+        env: {},
+        timeoutMs: 10_000,
+      },
+      {
+        input: {
+          source: { checkoutRoot: workspace, workflowPath: 'workflow.mjs', workflowId: 'workflow' },
+          step: 'check',
+          workspace,
+          input: { executionId: 'run', workflowId: 'workflow', inputs: null, config: {}, previousSteps: {} },
+        },
+        onRequestRefused: () => {
+          observerStarted.resolve();
+          return observation.promise;
+        },
+      },
+    );
+    try {
+      await Promise.all([observerStarted.promise, exited.promise]);
+      // Give the completed process and stdout drain time to publish any premature outcome.
+      await expect(Promise.race([result.then(() => 'settled'), delay(50, 'pending')])).resolves.toBe('pending');
+    } finally {
+      observation.reject(new Error('private observation failure'));
+    }
+    await expect(result).resolves.toMatchObject({ kind: 'process-failed', reason: 'refusal-observer-failed' });
+  });
+
+  it.each([
+    'cancelled',
+    'timed-out',
+  ] as const)('reports an unobserved refusal when the process is %s', async (status) => {
+    const warning = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const controller = new AbortController();
+    const observerStarted = Promise.withResolvers<void>();
+    const observation = Promise.withResolvers<void>();
+    const result = runCodeStepProcess(
+      site.launcher,
+      {
+        owner: step,
+        command: process.execPath,
+        args: [
+          '-e',
+          `${submit}
+            (async () => {
+              await lines.next();
+              console.log(JSON.stringify({
+                jsonrpc: '2.0', id: 1, method: 'request.call',
+                params: { subject: 'example.read', payload: null },
+              }));
+              await lines.next();
+            })();`,
+        ],
+        env: {},
+        signal: controller.signal,
+        timeoutMs: 1500,
+      },
+      {
+        input: {
+          source: { checkoutRoot: workspace, workflowPath: 'workflow.mjs', workflowId: 'workflow' },
+          step: 'check',
+          workspace,
+          input: { executionId: 'run', workflowId: 'workflow', inputs: null, config: {}, previousSteps: {} },
+        },
+        onRequestRefused: () => {
+          observerStarted.resolve();
+          return observation.promise;
+        },
+      },
+    );
+    try {
+      await observerStarted.promise;
+      if (status === 'cancelled') controller.abort();
+      await expect(result).resolves.toMatchObject({
+        kind: 'process-failed',
+        reason: 'refusal-observer-failed',
+        process: { status },
+      });
+      if (status === 'cancelled') {
+        expect(warning).toHaveBeenCalledWith('[workflow-worker] requestRefusalObserverFailed');
+      } else {
+        expect(warning).not.toHaveBeenCalled();
+      }
+    } finally {
+      observation.reject(new Error('private observation failure'));
+      controller.abort();
+      warning.mockRestore();
+    }
   });
 
   it('accepts a complete result even if the child has already closed its input', async () => {

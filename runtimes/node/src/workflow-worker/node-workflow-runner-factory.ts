@@ -44,6 +44,8 @@ export interface NodeWorkflowRunnerPackageOptions {
    * instead of the in-process DAG scheduler.
    */
   readonly workflowRunner?: IWorkflowRunner;
+  /** CLI files and their reruns use this caller-local runner. */
+  readonly callerLocalFileRunner?: IWorkflowRunner;
   /** Executor config shared by in-process and isolated modes. */
   readonly executorConfig: {
     /** Runtime bus URL exposed to isolated workers. */
@@ -84,7 +86,10 @@ export function createNodeWorkflowRunnerPackageOptions(
     bus: params.bus,
   });
 
+  const callerLocalFileRunner =
+    workflowRunner instanceof ThinWorkflowPiscinaRunner ? workflowRunner.callerLocalFileRunner : workflowRunner;
   return {
+    ...(callerLocalFileRunner !== undefined && { callerLocalFileRunner }),
     ...(workflowRunner !== undefined && { workflowRunner }),
     executorConfig: {
       busUrl: params.busUrl,

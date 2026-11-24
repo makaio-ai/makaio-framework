@@ -24,6 +24,8 @@ export interface WorkflowEngineServiceOptions {
    * When omitted, execution falls back to the in-process DAG scheduler.
    */
   workflowRunner?: IWorkflowRunner;
+  /** Explicit local runner for file starts and their reruns. */
+  callerLocalFileRunner?: IWorkflowRunner;
   /** Partial executor configuration merged with defaults. */
   executorConfig?: Partial<ExecutorConfig>;
   /** Host-owned resolvers that create portable specs for path-backed starts. */
@@ -65,7 +67,13 @@ export class WorkflowEngineService extends BaseService {
     options?: WorkflowEngineServiceOptions,
   ) {
     super(bus);
-    this.workflowExecutor = new WorkflowExecutor(bus, namespaces, options?.executorConfig, options?.workflowRunner);
+    this.workflowExecutor = new WorkflowExecutor(
+      bus,
+      namespaces,
+      options?.executorConfig,
+      options?.workflowRunner,
+      options?.callerLocalFileRunner,
+    );
     for (const resolver of options?.workflowMaterializationSpecResolvers ?? []) {
       this.workflowExecutor.registerWorkflowMaterializationSpecResolver(resolver);
     }

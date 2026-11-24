@@ -3,8 +3,8 @@ import type { IMakaioBus } from '@makaio/bus-core';
 import type { CallContext } from '@makaio/core';
 import {
   WORKFLOW_CANCELLED_REASON,
-  CodeStepHandler,
-  LoopCheckHandler,
+  type CodeStepHandler,
+  type IStepRunner,
   WorkflowZodSchemas,
   WorkflowDefinition,
   WorkflowExecution,
@@ -18,22 +18,23 @@ import { DEFAULT_EXECUTOR_CONFIG, type ActiveExecution, type ActiveRunnerStep } 
 import { WorkflowSubjects } from './namespace.js';
 import { cancelExecution } from './workflow-execution-finalizer.js';
 import { resolveEphemeralPlatformFields, RuntimeContext } from './runtime/runtime-context.js';
+import { createCallerLocalStepRunner } from './runtime/caller-local-step-runner.js';
+import { preflightStepOutputs } from './runtime/step-output-validation.js';
 import { executeSequence } from './runtime/primitive-runtime.js';
 import { resolveWorkflowArtifactBinding } from './artifact-context/artifact-binding.js';
-import { assertLoopCheckHandlersPresent } from './runtime/loop-check-handlers.js';
 import { persistLoadedExecutionStart } from './workflow-execution-start.js';
 import { persistAuthorityLoadedState } from './authority-state-bootstrap.js';
 import { buildWorkflowRunResult, type RuntimeSequenceResult } from './workflow-run-result.js';
+
+export { resolveAgentStepConfig } from './runtime/delegate-execution-policy.js';
+export { assertProcessWorkflowSupported } from './runtime/process-workflow-definition.js';
 
 // ─────────────────────────────────────────────────────────────
 // Public types
 // ─────────────────────────────────────────────────────────────
 
 /**
- * The resolved workflow module produced by a workflow file loader.
- *
- * Contains the serializable workflow definition and the runtime handler map
- * that the worker executor uses to dispatch code step nodes.
+ * Definition and capabilities of a workflow explicitly loaded by the local caller.
  */
 export interface LoadedWorkflow {
   /** Serializable workflow definition (safe to persist or display in the UI). */
@@ -42,11 +43,9 @@ export interface LoadedWorkflow {
   readonly zodSchemas?: WorkflowZodSchemas;
   /**
    * Runtime code step handler functions keyed by node ID.
-   * Used by the orchestrator to dispatch `codeStep`-type nodes.
+   * Only the caller-local runner can access these functions.
    */
   readonly runtimeHandlers: ReadonlyMap<string, CodeStepHandler>;
-  /** Loop check handler functions keyed by handler name. */
-  readonly runtimeLoopChecks?: ReadonlyMap<string, LoopCheckHandler>;
 }
 
 /**
@@ -57,8 +56,10 @@ interface WorkflowOrchestratorParams {
   readonly call: CallContext;
   /** Parsed and validated worker configuration. */
   readonly config: WorkflowWorkerConfig;
-  /** Loaded workflow with definition and runtime handler map. */
-  readonly loaded: LoadedWorkflow;
+  /** The worker's frozen definition and optional parsed schema metadata. */
+  readonly loaded: Pick<LoadedWorkflow, 'definition' | 'zodSchemas'>;
+  /** Required execution port, bound by the worker composition. */
+  readonly stepRunner: IStepRunner;
   /** Worker-local bus instance for emitting and subscribing to events. */
   readonly bus: IMakaioBus;
   /** Cancellation signal for cooperative abort. */
@@ -66,6 +67,14 @@ interface WorkflowOrchestratorParams {
   /** Machine-local workspace root supplied by the trusted execution entry point. */
   readonly workspaceRoot?: string;
 }
+
+type CallerLocalWorkflowParams = Omit<WorkflowOrchestratorParams, 'stepRunner' | 'loaded'> & {
+  readonly loaded: LoadedWorkflow;
+};
+
+type OrchestrationParams = Omit<WorkflowOrchestratorParams, 'stepRunner'> & {
+  readonly stepRunner: ConstructorParameters<typeof RuntimeContext>[4];
+};
 
 // ─────────────────────────────────────────────────────────────
 // Internal helpers
@@ -268,8 +277,7 @@ async function buildPreRuntimeTerminalExecution(
  * @param definition - Workflow definition to execute.
  * @param liveExecution - The live execution record.
  * @param runContext - Durable run-context snapshot for this execution.
- * @param runtimeHandlers - Code step handler map for dispatch.
- * @param runtimeLoopChecks - Loop check handler map for convergence checks.
+ * @param stepRunner - Required execution port for both leaf node kinds.
  * @param bus - Worker-local bus.
  * @param signal - Cancellation signal.
  * @param workspaceRoot - Machine-local workspace root, when supplied by the entry point.
@@ -282,8 +290,7 @@ async function runRuntimeSequence(
   definition: WorkflowDefinition,
   liveExecution: WorkflowExecution,
   runContext: WorkflowRunContext,
-  runtimeHandlers: Map<string, CodeStepHandler>,
-  runtimeLoopChecks: ReadonlyMap<string, LoopCheckHandler>,
+  stepRunner: OrchestrationParams['stepRunner'],
   bus: IMakaioBus,
   signal: AbortSignal,
   workspaceRoot: string | undefined,
@@ -302,7 +309,7 @@ async function runRuntimeSequence(
     config.workflowId,
     definition,
     liveExecution,
-    runtimeHandlers,
+    stepRunner,
     bus,
     signal,
     undefined,
@@ -310,8 +317,8 @@ async function runRuntimeSequence(
     {
       context: resolveEphemeralPlatformFields(workspaceRoot),
       env: config.env,
+      stepTimeoutMs: config.stepTimeoutMs,
     },
-    { runtimeLoopChecks, stepTimeoutMs: config.stepTimeoutMs },
   );
   const expressionCtx = runtimeCtx.buildExpressionContext();
   const outcome = await executeSequence(call, definition.root, runtimeCtx, expressionCtx);
@@ -410,9 +417,8 @@ async function emitTerminalExecutionEvent(
  * primitive runtime ({@link executeSequence}), which handles:
  * - Sequential node execution with `when`/`skip` condition evaluation
  * - Parallel branch execution via `parallel` nodes
- * - Iterate/iterate-chain for collection processing
- * - Loop nodes with convergence checks
- * - Code step nodes dispatched via `runtimeHandlers`
+ * - Iterate/iterate-chain for collection processing and loops for convergence
+ * - Code and agent steps dispatched through the worker-owned runner
  *
  * ### Cancellation
  * When `signal` is already aborted before execution begins, returns a
@@ -428,7 +434,31 @@ async function emitTerminalExecutionEvent(
  * @returns Workflow run result with status `completed`, `failed`, or `cancelled`.
  */
 export async function runWorkflowOrchestrator(params: WorkflowOrchestratorParams): Promise<WorkflowRunResult> {
-  const { call, config, loaded, bus, signal } = params;
+  return runOrchestratedWorkflow(params);
+}
+
+/**
+ * Run a workflow explicitly loaded by the CLI or its file rerun.
+ * @param params - Local workflow and host capabilities.
+ * @returns Terminal workflow result.
+ */
+export async function runCallerLocalWorkflowOrchestrator(
+  params: CallerLocalWorkflowParams,
+): Promise<WorkflowRunResult> {
+  preflightStepOutputs(params.loaded.definition);
+  return runOrchestratedWorkflow({
+    ...params,
+    stepRunner: createCallerLocalStepRunner(params.call, params.loaded.runtimeHandlers),
+  });
+}
+
+/**
+ * Schedule a resolved workflow with the execution port chosen by its entry point.
+ * @param params - Run inputs and the bound step execution port.
+ * @returns Terminal workflow result.
+ */
+async function runOrchestratedWorkflow(params: OrchestrationParams): Promise<WorkflowRunResult> {
+  const { call, config, loaded, bus, signal, stepRunner } = params;
   const { definition } = loaded;
 
   if (signal.aborted) {
@@ -449,8 +479,6 @@ export async function runWorkflowOrchestrator(params: WorkflowOrchestratorParams
     await persistLoadedExecutionStart(call, bus, liveExecution, runContext, definition);
   else await persistAuthorityLoadedState(call, bus, runContext, definition);
 
-  const runtimeHandlers = new Map<string, CodeStepHandler>(loaded.runtimeHandlers);
-  const runtimeLoopChecks = loaded.runtimeLoopChecks ?? new Map<string, LoopCheckHandler>();
   const activeExecutions = new Map<string, ActiveExecution>();
   const shellAbortControllers = new Map<string, AbortController>();
   const activeRunnerSteps = new Map<string, ActiveRunnerStep>();
@@ -462,8 +490,6 @@ export async function runWorkflowOrchestrator(params: WorkflowOrchestratorParams
     execution: liveExecution,
     workflow: definition,
     runContext,
-    runtimeHandlers,
-    runtimeLoopChecks: new Map(runtimeLoopChecks),
   });
 
   const releaseSignalCancellation =
@@ -488,15 +514,13 @@ export async function runWorkflowOrchestrator(params: WorkflowOrchestratorParams
 
   try {
     if (definition.root.nodes.length > 0) {
-      assertLoopCheckHandlersPresent(definition, runtimeLoopChecks);
       result = await runRuntimeSequence(
         call,
         config,
         definition,
         liveExecution,
         runContext,
-        runtimeHandlers,
-        runtimeLoopChecks,
+        stepRunner,
         bus,
         signal,
         params.workspaceRoot,
@@ -505,6 +529,12 @@ export async function runWorkflowOrchestrator(params: WorkflowOrchestratorParams
     }
   } catch (error) {
     result = { status: 'failed', error: error instanceof Error ? error.message : String(error) };
+  }
+
+  try {
+    if (typeof stepRunner !== 'function') await stepRunner.dispose?.();
+  } catch {
+    result = { status: 'failed', error: 'stepRunnerClosureUnconfirmed' };
   } finally {
     signalCancellationFinalized = await releaseSignalCancellation();
     activeExecutions.clear();

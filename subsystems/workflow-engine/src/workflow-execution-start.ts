@@ -51,6 +51,8 @@ export interface StartExecutionDeps {
   executionTasks: Map<string, Promise<void>>;
   /** Optional workflow-level runner for isolated execution. */
   workflowRunner: IWorkflowRunner | undefined;
+  /** Explicit local workflow runner for CLI files and their reruns. */
+  callerLocalFileRunner?: IWorkflowRunner;
   /** Host selection hook for definition-backed execution. */
   workflowRunnerSelector?: WorkflowRunnerSelector;
   /**
@@ -210,13 +212,10 @@ function seedDefinitionExecution(
     scope: resolvedScope,
   };
   // Definition-backed executions have no in-process code step handlers.
-  // Handler-bearing executions (e.g. runFile) supply runtimeHandlers separately.
   activeExecutions.set(executionId, {
     execution,
     workflow,
     runContext,
-    runtimeHandlers: new Map(),
-    runtimeLoopChecks: new Map(),
   });
   return execution;
 }
@@ -262,21 +261,6 @@ async function persistExecutionStart(
  */
 function resolveDefinitionExecutionSource(workflow: WorkflowDefinition, workflowId: string): WorkflowWorkerSource {
   return workflow.executableSource ?? { kind: 'definition', workflowId };
-}
-
-/**
- * Determine whether a runner receives the compiled definition directly.
- * Path-backed current runs reload their materialized source; explicitly
- * snapshot-pinned reruns instead execute the persisted definition.
- * @param source - Execution source selected for the launch.
- * @param definitionSnapshot - Explicit snapshot requested by the caller.
- * @returns Whether the runner config should include `definition`.
- */
-function shouldSendDefinitionToRunner(
-  source: WorkflowWorkerSource,
-  definitionSnapshot: WorkflowDefinition | undefined,
-): boolean {
-  return source.kind === 'definition' || definitionSnapshot !== undefined;
 }
 
 /**
@@ -409,7 +393,7 @@ async function loadAndValidateWorkflow(
 ): Promise<WorkflowDefinition> {
   const { workflow } = await bus.request(call, WorkflowStorageSubjects.get, { id: workflowId });
   if (!workflow) {
-    throw new Error(`Workflow not found: ${workflowId}`);
+    throw new WorkflowError(WorkflowErrorCode.DEFINITION_NOT_FOUND, `Workflow not found: ${workflowId}`);
   }
   // Step DAG validation removed: pipeline-primitive model validates at authoring time
   return workflow;
@@ -452,6 +436,8 @@ export interface ResolvedDefinitionStartOptions extends DefinitionStartOptions {
    * When omitted, defaults to `{ kind: 'definition', workflowId }`.
    */
   readonly executionSource?: WorkflowRunContext['source'];
+  /** Replay a host-owned path through the same runner as an explicit file start. */
+  readonly hostFileReplay?: boolean;
   /**
    * Override for the definition snapshot stored on the run context.
    * When omitted, the Authority-pinned loaded workflow is stored.
@@ -540,7 +526,7 @@ export async function startResolvedDefinitionExecution(
   // that exact immutable definition for every definition launch, including
   // path-backed runners, so remote finalization never trusts worker input.
   const definitionSnapshot = options.definitionSnapshot ?? workflow;
-  const dispatch = selectDefinitionExecutionDispatch(call, deps, { executionId, requirements: workflow.requirements });
+  const dispatch = selectDefinitionExecutionDispatch(call, deps, executionId, options);
   assertRunnerBackedSourceDispatchAvailable(dispatch.runner, executionSource, workflowId);
   const { source: durableSource, materializationSpec } = await resolveDurablePathSource(
     call,
@@ -596,7 +582,7 @@ export async function startResolvedDefinitionExecution(
         executionId,
         workflowId,
         workflow,
-        ...(shouldSendDefinitionToRunner(executionSource, options.definitionSnapshot) ? { definitionSnapshot } : {}),
+        definitionSnapshot: options.definitionSnapshot,
         source: executionSource,
         coordinatorSessionId,
         sanitizedTriggerPayload: sanitizedTriggerPayload ?? {},
@@ -644,8 +630,6 @@ function seedFileExecution(
       root: { id: `${execution.workflowId}-root`, type: 'sequence', nodes: [] },
     },
     runContext,
-    runtimeHandlers: new Map(),
-    runtimeLoopChecks: new Map(),
   });
 }
 
@@ -743,7 +727,7 @@ export async function startFileExecution(
   const resolvedScope: WorkflowExecutionScope = scopeOverride ?? { type: 'global' };
   const workspaceRoot = await deps.resolveExecutionWorkspaceRoot(call, parentSessionId);
 
-  const workflowRunner = requireFileWorkflowRunner(deps.workflowRunner);
+  const workflowRunner = requireFileWorkflowRunner(deps.callerLocalFileRunner ?? deps.workflowRunner);
 
   // Ephemeral execution: use the execution ID as workflowId so storage does
   // not require a persisted file/source workflow definition row.

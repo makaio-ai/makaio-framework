@@ -1,14 +1,14 @@
 import type { RegistrableBusNamespaceDefinition } from '@makaio/core';
 import { waitForSubscriptionPropagation } from '@makaio/bus-core';
 import {
+  WorkflowError,
+  WorkflowErrorCode,
   WorkflowWorkerConfigSchema,
   createWorkflowCancelSubject,
   type WorkerContributionManifest,
   type WorkflowRunResult,
   type WorkflowWorkerConfig,
 } from '@makaio/contracts';
-import { runWorkflowOrchestrator } from '@makaio/subsystem-workflow-engine/workflow-orchestrator';
-import { loadWorkflowFromConfig } from './workflow-loader.js';
 import {
   createWorkerBus,
   bootWorkerRuntime,
@@ -17,7 +17,13 @@ import {
   type WorkerRuntimeHandle,
 } from './runtime/worker-boot.js';
 import { loadWorkerRuntimeContributions } from './runtime/worker-contributions.js';
-import { resolveAwaitTriggerConfig } from './await-trigger.js';
+import {
+  runProcessWorkflow,
+  runRegisteredProcessWorkflow,
+  type ProcessWorkflowRunOptions,
+} from './process-workflow.js';
+import { runLoadedWorkflowLocally } from './in-process-workflow-runner.js';
+import { loadWorkflowFromConfig } from './workflow-loader.js';
 import { bindFileStepRequests } from './file-step-requests.js';
 
 // ─────────────────────────────────────────────────────────────
@@ -77,6 +83,11 @@ export interface UnboundWorkerParams extends WorkflowWorkerRunParamsBase {
   readonly kind: 'unbound';
 }
 
+/** Host-selected local file execution on the existing Piscina task channel. */
+interface CallerLocalFileWorkerParams extends WorkflowWorkerRunParamsBase {
+  readonly kind: 'caller-local-file';
+}
+
 /** Inputs for opening a worker's bus before it loads its workflow. */
 export interface WorkerConnectorContext {
   /** Validated worker configuration. */
@@ -101,6 +112,8 @@ export interface ConnectedWorker {
   readonly connection: WorkerRuntimeBusHandle;
   /** Optional callback released after execution, before the connection closes. */
   readonly release?: () => void;
+  /** Model authority injected locally by the trusted worker composer. */
+  readonly stepModel?: ProcessWorkflowRunOptions['model'];
 }
 
 /** Open the worker bus and perform any host admission before workflow composition. */
@@ -119,9 +132,8 @@ export type WorkerConnector = (context: WorkerConnectorContext) => Promise<Conne
  * 3. Subscribe cancellation routing and run any admission supplied by the host
  * 4. Load worker-local contributions from verified materialization output
  * 5. Boot worker-local tool runtime if toolset contributions exist
- * 6. Load the workflow module from the source descriptor
- * 7. Run the workflow orchestrator
- * 8. Always close the runtime (when booted) and bus in the `finally` block
+ * 6. Run the process workflow orchestrator with the frozen definition
+ * 7. Always close the runtime (when booted) and bus in the `finally` block
  *
  * Registration precedes contribution loading, which is the whole point:
  * readiness must not depend on what the runtime later composes.
@@ -137,12 +149,30 @@ export type WorkerConnector = (context: WorkerConnectorContext) => Promise<Conne
  * @param connector - Host-owned worker connection and admission.
  * @returns The terminal workflow run result.
  */
-export async function runWorkflowInWorker(
+export function runWorkflowInWorker(
   params: UnboundWorkerParams,
   connector: WorkerConnector = connectUnboundWorker,
 ): Promise<WorkflowRunResult> {
-  // Step 1: Validate config eagerly so invalid configs never reach bus/runtime setup.
+  return runWorkerTask(params, connector, 'admitted');
+}
+
+/**
+ * Share bus boot, contribution loading and cleanup for both Piscina task types.
+ * @param params - Configuration and materialized contribution entrypoints.
+ * @param connector - Trusted worker bus connector.
+ * @param taskKind - Execution path selected by the trusted worker entry.
+ * @returns Workflow result for the host executor.
+ */
+async function runWorkerTask(
+  params: WorkflowWorkerRunParamsBase,
+  connector: WorkerConnector,
+  taskKind: 'admitted' | 'unbound' | 'caller-local-file',
+): Promise<WorkflowRunResult> {
   const config = WorkflowWorkerConfigSchema.parse(params.config);
+  const callerLocalFile = taskKind === 'caller-local-file';
+  if (callerLocalFile && (config.source.kind !== 'path' || config.terminalAuthority === 'authority')) {
+    throw new WorkflowError(WorkflowErrorCode.NOT_EXECUTABLE, 'Caller-local execution requires a host-owned file task');
+  }
 
   const abortController = new AbortController();
   const abortFromParent = (): void => abortController.abort();
@@ -182,27 +212,34 @@ export async function runWorkflowInWorker(
       runtime = await bootWorkerRuntime(handle, contributions);
     }
 
-    // Step 6: Load workflow module from source
-    const loaded = await loadWorkflowFromConfig(config);
-
-    const effectiveConfig = await resolveAwaitTriggerConfig(config, loaded, handle.bus, abortController.signal);
-
-    // Step 7: Run orchestrator
     // ORIGIN: The thread starts the run itself; the requester's call does not cross the thread boundary.
     const call = handle.bus.own('root');
-    const fileHostRoute =
-      connector === connectUnboundWorker &&
-      !!config.busUrl &&
-      config.source.kind === 'path' &&
-      config.terminalAuthority !== 'authority';
-    return await runWorkflowOrchestrator({
+    if (callerLocalFile) {
+      const loaded = await loadWorkflowFromConfig(config);
+      const fileHostRoute =
+        connector === connectUnboundWorker &&
+        !!config.busUrl &&
+        config.source.kind === 'path' &&
+        config.terminalAuthority !== 'authority';
+      return await runLoadedWorkflowLocally({
+        call,
+        config,
+        loaded: fileHostRoute ? bindFileStepRequests(loaded, handle.bus, call) : loaded,
+        bus: handle.bus,
+        signal: abortController.signal,
+        workspaceRoot: params.workspaceRoot,
+      });
+    }
+    // Piscina tasks receive the frozen definition and source from their host executor.
+    const processRun = {
       call,
-      config: effectiveConfig,
-      loaded: fileHostRoute ? bindFileStepRequests(loaded, handle.bus, call) : loaded,
+      config,
       bus: handle.bus,
       signal: abortController.signal,
-      workspaceRoot: params.workspaceRoot,
-    });
+      workspace: params.workspaceRoot ?? process.cwd(),
+      ...(connected.stepModel === undefined ? {} : { model: connected.stepModel }),
+    };
+    return await runPiscinaProcessTask(processRun, params.workspaceRoot, taskKind, connector);
   } finally {
     signal.removeEventListener('abort', abortFromParent);
     try {
@@ -215,6 +252,27 @@ export async function runWorkflowInWorker(
       }
     }
   }
+}
+
+/**
+ * Select whether this Piscina route can bind a registered executable source.
+ * @param options - Worker-owned process launch options.
+ * @param workspaceRoot - Host-materialized root for path-backed tasks.
+ * @param taskKind - Lifecycle selected at the worker entry.
+ * @param connector - Worker-local connection and admission implementation.
+ * @returns Workflow result after process teardown.
+ */
+function runPiscinaProcessTask(
+  options: ProcessWorkflowRunOptions,
+  workspaceRoot: string | undefined,
+  taskKind: 'admitted' | 'unbound',
+  connector: WorkerConnector,
+): Promise<WorkflowRunResult> {
+  const admitted = taskKind === 'admitted';
+  const authorityOwned = options.config.terminalAuthority === 'authority';
+  // The default connection only opens a bus. An authority-owned task needs the host's admission connector.
+  const canBindSource = admitted ? authorityOwned && connector !== connectUnboundWorker : !authorityOwned;
+  return canBindSource ? runRegisteredProcessWorkflow(options, workspaceRoot, admitted) : runProcessWorkflow(options);
 }
 
 /**
@@ -292,4 +350,18 @@ function createCancellableWorkerConnection(
 // Piscina entrypoint
 // ─────────────────────────────────────────────────────────────
 
-export default runWorkflowInWorker;
+/**
+ * Bind the connector inside a host-selected Piscina worker entry module.
+ * The host sets the absolute entry module path via `workflowRunner.workerEntry`.
+ * Only the workflow task crosses the thread boundary. The connector and its
+ * optional model authority are constructed in the worker module.
+ * @param connector - Worker-local bus and model composition.
+ * @returns Piscina's task handler, including caller-local file routing.
+ */
+export function createPiscinaWorker(
+  connector: WorkerConnector,
+): (params: UnboundWorkerParams | CallerLocalFileWorkerParams) => Promise<WorkflowRunResult> {
+  return (params) => runWorkerTask(params, connector, params.kind);
+}
+
+export default createPiscinaWorker(connectUnboundWorker);

@@ -13,7 +13,7 @@ import {
 } from '@makaio/contracts';
 import { WorkflowSubjects } from '../namespace.js';
 import { WorkflowStorageSubjects } from '../storage/namespace.js';
-import { runWorkflowOrchestrator } from '../workflow-orchestrator.js';
+import { runCallerLocalWorkflowOrchestrator } from '../workflow-orchestrator.js';
 import {
   setupWorkflowExecutorTest,
   teardownWorkflowExecutorTest,
@@ -241,14 +241,14 @@ describe('workflow public rerun subjects', () => {
     });
     const capturedConfigs: WorkflowWorkerConfig[] = [];
     let runCount = 0;
-    const workflowRunner: IWorkflowRunner = {
+    const callerLocalFileRunner: IWorkflowRunner = {
       async run(call, config, signal): Promise<WorkflowRunnerCompletion> {
         capturedConfigs.push(config);
         runCount += 1;
         if (runCount > 1) {
           return waitForRunnerAbort(config, signal);
         }
-        const result = await runWorkflowOrchestrator({
+        const result = await runCallerLocalWorkflowOrchestrator({
           call,
           config,
           loaded: {
@@ -261,7 +261,10 @@ describe('workflow public rerun subjects', () => {
         return { state: 'uncommitted', result };
       },
     };
-    setup = await setupWorkflowExecutorTest({ workflowRunner });
+    const fallbackRunner: IWorkflowRunner = {
+      run: vi.fn((_call, config, signal) => waitForRunnerAbort(config, signal)),
+    };
+    setup = await setupWorkflowExecutorTest({ workflowRunner: fallbackRunner, callerLocalFileRunner });
 
     const filePath = '/workspace/workflows/public-rerun-file-snapshot.ts';
     const originalCompletedPromise = new Promise<string>((resolve) => {
@@ -297,6 +300,7 @@ describe('workflow public rerun subjects', () => {
       mode: 'snapshot',
     });
 
+    expect(fallbackRunner.run).not.toHaveBeenCalled();
     const rerunConfig = capturedConfigs.at(1);
     expect(rerunConfig?.executionId).toBe(rerunExecutionId);
     expect(rerunConfig?.workflowId).toBe(loadedWorkflow.id);
@@ -315,7 +319,10 @@ describe('workflow public rerun subjects', () => {
     expect(rerunRunContext?.definitionSnapshot).toMatchObject({ id: loadedWorkflow.id });
   });
 
-  it('reruns file-backed executions in current mode from the persisted source', async () => {
+  it.each([
+    true,
+    false,
+  ])('keeps a direct file rerun on the file runner (registered definition: %s)', async (hasDefinition) => {
     if (setup) {
       await teardownWorkflowExecutorTest(setup);
       setup = undefined;
@@ -332,14 +339,14 @@ describe('workflow public rerun subjects', () => {
     });
     const capturedConfigs: WorkflowWorkerConfig[] = [];
     let runCount = 0;
-    const workflowRunner: IWorkflowRunner = {
+    const callerLocalFileRunner: IWorkflowRunner = {
       async run(call, config, signal): Promise<WorkflowRunnerCompletion> {
         capturedConfigs.push(config);
         runCount += 1;
         if (runCount > 1) {
           return waitForRunnerAbort(config, signal);
         }
-        const result = await runWorkflowOrchestrator({
+        const result = await runCallerLocalWorkflowOrchestrator({
           call,
           config,
           loaded: {
@@ -352,7 +359,10 @@ describe('workflow public rerun subjects', () => {
         return { state: 'uncommitted', result };
       },
     };
-    setup = await setupWorkflowExecutorTest({ workflowRunner });
+    const fallbackRunner: IWorkflowRunner = {
+      run: vi.fn((_call, config, signal) => waitForRunnerAbort(config, signal)),
+    };
+    setup = await setupWorkflowExecutorTest({ workflowRunner: fallbackRunner, callerLocalFileRunner });
 
     const filePath = '/workspace/workflows/public-rerun-file-current.ts';
     const originalCompletedPromise = new Promise<string>((resolve) => {
@@ -372,11 +382,18 @@ describe('workflow public rerun subjects', () => {
     });
     await expect(originalCompletedPromise).resolves.toBe(originalExecutionId);
 
+    if (hasDefinition) {
+      await MakaioBus.request(createTestCall(), WorkflowSubjects.setDefinition, {
+        workflow: { ...loadedWorkflow, name: 'Registered workflow with the same ID' },
+      });
+    }
+
     const { executionId: rerunExecutionId } = await MakaioBus.request(createTestCall(), WorkflowSubjects.rerun, {
       executionId: originalExecutionId,
       mode: 'current',
     });
 
+    expect(fallbackRunner.run).not.toHaveBeenCalled();
     const rerunConfig = capturedConfigs.at(1);
     expect(rerunConfig?.executionId).toBe(rerunExecutionId);
     expect(rerunConfig?.workflowId).toBe(loadedWorkflow.id);
@@ -387,6 +404,31 @@ describe('workflow public rerun subjects', () => {
     ).resolves.toMatchObject({
       runContext: { definitionSnapshot: { id: loadedWorkflow.id } },
     });
+
+    const secondReplay = MakaioBus.request(createTestCall(), WorkflowSubjects.rerun, {
+      executionId: rerunExecutionId,
+      mode: 'current',
+    });
+    if (hasDefinition) {
+      const { executionId: secondReplayId } = await secondReplay;
+      expect(fallbackRunner.run).toHaveBeenCalledExactlyOnceWith(
+        expect.anything(),
+        expect.objectContaining({
+          executionId: secondReplayId,
+          workflowId: loadedWorkflow.id,
+          source: { kind: 'definition', workflowId: loadedWorkflow.id },
+          definition: expect.objectContaining({ name: 'Registered workflow with the same ID' }),
+        }),
+        expect.any(AbortSignal),
+        undefined,
+        expect.anything(),
+      );
+    } else {
+      await expect(secondReplay).rejects.toMatchObject({
+        cause: { code: WorkflowErrorCode.DEFINITION_NOT_FOUND, message: `Workflow not found: ${loadedWorkflow.id}` },
+      });
+    }
+    expect(capturedConfigs).toHaveLength(2);
   });
 
   it('reruns failed file-backed executions in current mode without a loaded snapshot', async () => {
@@ -509,6 +551,26 @@ describe('workflow public rerun subjects', () => {
     expect(rerunRunContext?.inputs).toEqual({ value: 'override' });
   });
 
+  it('reports a typed error when the definition for a current replay has been deleted', async () => {
+    const call = createTestCall();
+    const workflow = createWorkflowDefinition({
+      id: 'public-rerun-deleted-definition',
+      root: { id: 'deleted-definition-root', type: 'sequence', nodes: [] },
+    });
+    await MakaioBus.request(call, WorkflowSubjects.setDefinition, { workflow });
+    const { executionId } = await MakaioBus.request(call, WorkflowSubjects.start, { workflowId: workflow.id });
+    await expectExecutionStatus(executionId, 'completed');
+    await expect(MakaioBus.request(call, WorkflowSubjects.deleteDefinition, { id: workflow.id })).resolves.toEqual({
+      deleted: true,
+    });
+
+    await expect(
+      MakaioBus.request(call, WorkflowSubjects.rerun, { executionId, mode: 'current' }),
+    ).rejects.toMatchObject({
+      cause: { code: WorkflowErrorCode.DEFINITION_NOT_FOUND, message: `Workflow not found: ${workflow.id}` },
+    });
+  });
+
   it('rejects source-backed snapshot reruns when no runner-backed dispatch is available', async () => {
     if (!setup) {
       throw new Error('Workflow executor test setup did not initialize.');
@@ -570,6 +632,64 @@ describe('workflow public rerun subjects', () => {
       sourceExecutionId: originalExecutionId,
     });
     expect(links).toEqual([]);
+  });
+
+  it('keeps an Authority-owned path snapshot on its definition runner', async () => {
+    if (setup) await teardownWorkflowExecutorTest(setup);
+    const callerLocalFileRunner: IWorkflowRunner = { run: vi.fn() };
+    const authorityRunner: IWorkflowRunner = {
+      terminalAuthority: 'authority',
+      run: vi.fn((_call, config, signal) => waitForRunnerAbort(config, signal)),
+    };
+    setup = await setupWorkflowExecutorTest({ callerLocalFileRunner });
+    setup.cleanupFns.push(setup.workflowExecutor.registerWorkflowRunnerSelector(() => authorityRunner));
+    const workflow = createWorkflowDefinition({ id: 'authority-path-replay' });
+    const originalExecutionId = 'wfx-authority-path-replay';
+    const source = { kind: 'path', path: 'workflows/authority-replay.mjs' } as const;
+    const runContext: WorkflowRunContext = {
+      executionId: originalExecutionId,
+      workflowId: workflow.id,
+      source,
+      materializationSpec: {
+        kind: 'local-directory',
+        workspaceId: 'repo',
+        rootDigest: 'digest',
+        sourcePath: source.path,
+      },
+      definitionSnapshot: workflow,
+      workerManifest: { contributionRefs: [] },
+      inputs: {},
+      config: {},
+      scope: { type: 'global' },
+      triggerPayload: {},
+      coordinatorSessionId: 'session-authority-path-replay',
+      cancelSubject: `workflow.${originalExecutionId}.cancel`,
+      env: {},
+      createdAt: Date.now(),
+      terminalAuthority: 'authority',
+    };
+    await MakaioBus.request(createTestCall(), WorkflowStorageSubjects.setExecutionStart, {
+      execution: createWorkflowExecution({
+        id: originalExecutionId,
+        workflowId: workflow.id,
+        coordinatorSessionId: runContext.coordinatorSessionId,
+      }),
+      runContext,
+    });
+
+    const { executionId } = await MakaioBus.request(createTestCall(), WorkflowSubjects.rerun, {
+      executionId: originalExecutionId,
+      mode: 'snapshot',
+    });
+
+    expect(callerLocalFileRunner.run).not.toHaveBeenCalled();
+    expect(authorityRunner.run).toHaveBeenCalledExactlyOnceWith(
+      expect.anything(),
+      expect.objectContaining({ executionId, source, definition: workflow, terminalAuthority: 'authority' }),
+      expect.any(AbortSignal),
+      undefined,
+      expect.anything(),
+    );
   });
 
   it('fails snapshot rerun when the original execution has no definition snapshot', async () => {

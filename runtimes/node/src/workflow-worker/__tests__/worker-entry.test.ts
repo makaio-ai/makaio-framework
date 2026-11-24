@@ -10,6 +10,7 @@ const mockCreateWorkerBus = vi.fn();
 const mockBootWorkerRuntime = vi.fn();
 const mockLoadWorkflowModule = vi.fn();
 const mockRunWorkflowOrchestrator = vi.fn();
+const mockRunCallerLocalWorkflowOrchestrator = vi.fn();
 const mockLoadWorkerRuntimeContributions = vi.fn();
 vi.mock('../runtime/worker-boot.js', () => ({
   createWorkerBus: mockCreateWorkerBus,
@@ -24,12 +25,14 @@ vi.mock('../workflow-file-loader.js', () => ({
   loadWorkflowModule: mockLoadWorkflowModule,
 }));
 
-vi.mock('@makaio/subsystem-workflow-engine/workflow-orchestrator', () => ({
+vi.mock('@makaio/subsystem-workflow-engine/workflow-orchestrator', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@makaio/subsystem-workflow-engine/workflow-orchestrator')>()),
   runWorkflowOrchestrator: mockRunWorkflowOrchestrator,
+  runCallerLocalWorkflowOrchestrator: mockRunCallerLocalWorkflowOrchestrator,
 }));
 
 // Import after mocking
-const { runWorkflowInWorker } = await import('../worker-entry.js');
+const { default: runPiscinaWorker, runWorkflowInWorker } = await import('../worker-entry.js');
 
 // ---------------------------------------------------------------------------
 // Test helpers
@@ -43,6 +46,7 @@ const { runWorkflowInWorker } = await import('../worker-entry.js');
 function makeConfig(overrides: Partial<WorkflowWorkerConfig> = {}): WorkflowWorkerConfig {
   return {
     source: { kind: 'path', path: '/tmp/workflow.mjs' },
+    definition: makeWorkflowDefinition(),
     executionId: 'exec-001',
     workflowId: 'wf-001',
     triggerPayload: {},
@@ -53,23 +57,6 @@ function makeConfig(overrides: Partial<WorkflowWorkerConfig> = {}): WorkflowWork
     coordinatorSessionId: 'session-001',
     cancelSubject: 'workflow.cancel.wf-001',
     ...overrides,
-  };
-}
-
-/**
- * Build a minimal LoadedWorkflow stub.
- * @returns A mock LoadedWorkflow object.
- */
-function makeLoadedWorkflow() {
-  return {
-    definition: {
-      id: 'wf-001',
-      name: 'Test Workflow',
-      root: { id: 'wf-001__root', type: 'sequence' as const, nodes: [] },
-      triggers: [],
-      scope: { type: 'global' as const },
-    },
-    runtimeHandlers: new Map(),
   };
 }
 
@@ -122,13 +109,12 @@ function makeWorkflowDefinition(): WorkflowDefinition {
 
 describe('runWorkflowInWorker', () => {
   beforeEach(() => {
-    vi.clearAllMocks();
+    vi.resetAllMocks();
   });
 
-  it('boots bus once, loads contributions once, boots runtime once, loads workflow once, and calls orchestrator once', async () => {
+  it('boots once and calls the process orchestrator without loading the supplied file', async () => {
     const busHandle = makeBusHandle();
     const runtimeHandle = makeRuntimeHandle();
-    const loadedWorkflow = makeLoadedWorkflow();
     // Non-empty contributions so the runtime is booted.
     const contributions = {
       toolsets: [{ name: 'test-toolset', tools: [] }],
@@ -142,7 +128,6 @@ describe('runWorkflowInWorker', () => {
     mockCreateWorkerBus.mockReturnValueOnce(busHandle);
     mockLoadWorkerRuntimeContributions.mockResolvedValueOnce(contributions);
     mockBootWorkerRuntime.mockResolvedValueOnce(runtimeHandle);
-    mockLoadWorkflowModule.mockResolvedValueOnce(loadedWorkflow);
     mockRunWorkflowOrchestrator.mockResolvedValueOnce(expectedResult);
 
     const config = makeConfig();
@@ -160,10 +145,57 @@ describe('runWorkflowInWorker', () => {
     expect(mockCreateWorkerBus).toHaveBeenCalledOnce();
     expect(mockLoadWorkerRuntimeContributions).toHaveBeenCalledOnce();
     expect(mockBootWorkerRuntime).toHaveBeenCalledOnce();
-    expect(mockLoadWorkflowModule).toHaveBeenCalledOnce();
-    expect(mockLoadWorkflowModule).toHaveBeenCalledWith(config.source);
+    expect(mockLoadWorkflowModule).not.toHaveBeenCalled();
     expect(mockRunWorkflowOrchestrator).toHaveBeenCalledOnce();
+    expect(mockRunCallerLocalWorkflowOrchestrator).not.toHaveBeenCalled();
     expect(result).toEqual(expectedResult);
+  });
+
+  it('loads caller-local file tasks through the worker bus', async () => {
+    const busHandle = makeBusHandle();
+    const definition = makeWorkflowDefinition();
+    const loaded = { definition, runtimeHandlers: new Map() };
+    const result = { executionId: 'exec-001', workflowId: 'wf-001', status: 'completed' };
+    mockCreateWorkerBus.mockReturnValueOnce(busHandle);
+    mockLoadWorkerRuntimeContributions.mockResolvedValueOnce({ toolsets: [] });
+    mockLoadWorkflowModule.mockResolvedValueOnce(loaded);
+    mockRunCallerLocalWorkflowOrchestrator.mockResolvedValueOnce(result);
+
+    await expect(
+      runPiscinaWorker({
+        kind: 'caller-local-file',
+        config: makeConfig(),
+        manifest: { contributionRefs: [] },
+        contributionEntrypoints: [],
+      }),
+    ).resolves.toEqual(result);
+
+    expect(mockLoadWorkflowModule).toHaveBeenCalledWith({ kind: 'path', path: '/tmp/workflow.mjs' });
+    expect(mockRunCallerLocalWorkflowOrchestrator).toHaveBeenCalledWith(
+      expect.objectContaining({ loaded, bus: busHandle.bus }),
+    );
+    expect(mockRunWorkflowOrchestrator).not.toHaveBeenCalled();
+  });
+
+  it('refuses the caller-local file task for an Authority-owned run', async () => {
+    mockCreateWorkerBus.mockReturnValueOnce(makeBusHandle());
+    mockLoadWorkerRuntimeContributions.mockResolvedValueOnce({ toolsets: [] });
+    mockRunWorkflowOrchestrator.mockResolvedValueOnce({
+      executionId: 'exec-001',
+      workflowId: 'wf-001',
+      status: 'completed',
+    });
+
+    await expect(
+      runPiscinaWorker({
+        kind: 'caller-local-file',
+        config: makeConfig({ terminalAuthority: 'authority' }),
+        manifest: { contributionRefs: [] },
+        contributionEntrypoints: [],
+      }),
+    ).rejects.toMatchObject({ code: 'WORKFLOW_NOT_EXECUTABLE' });
+    expect(mockCreateWorkerBus).not.toHaveBeenCalled();
+    expect(mockLoadWorkflowModule).not.toHaveBeenCalled();
   });
 
   it('closes runtime and bus in the finally block on success', async () => {
@@ -175,7 +207,6 @@ describe('runWorkflowInWorker', () => {
     mockCreateWorkerBus.mockReturnValueOnce(busHandle);
     mockLoadWorkerRuntimeContributions.mockResolvedValueOnce(contributions);
     mockBootWorkerRuntime.mockResolvedValueOnce(runtimeHandle);
-    mockLoadWorkflowModule.mockResolvedValueOnce(makeLoadedWorkflow());
     mockRunWorkflowOrchestrator.mockResolvedValueOnce({
       executionId: 'exec-001',
       workflowId: 'wf-001',
@@ -202,7 +233,6 @@ describe('runWorkflowInWorker', () => {
     mockCreateWorkerBus.mockReturnValueOnce(busHandle);
     mockLoadWorkerRuntimeContributions.mockResolvedValueOnce(contributions);
     mockBootWorkerRuntime.mockResolvedValueOnce(runtimeHandle);
-    mockLoadWorkflowModule.mockResolvedValueOnce(makeLoadedWorkflow());
     mockRunWorkflowOrchestrator.mockRejectedValueOnce(new Error('Orchestrator exploded'));
 
     await expect(
@@ -220,7 +250,6 @@ describe('runWorkflowInWorker', () => {
 
   it('skips bootWorkerRuntime when contributions are empty', async () => {
     const busHandle = makeBusHandle();
-    const loadedWorkflow = makeLoadedWorkflow();
     const expectedResult = {
       executionId: 'exec-001',
       workflowId: 'wf-001',
@@ -230,7 +259,6 @@ describe('runWorkflowInWorker', () => {
     mockCreateWorkerBus.mockReturnValueOnce(busHandle);
     // No toolsets or adapters
     mockLoadWorkerRuntimeContributions.mockResolvedValueOnce({ toolsets: [] });
-    mockLoadWorkflowModule.mockResolvedValueOnce(loadedWorkflow);
     mockRunWorkflowOrchestrator.mockResolvedValueOnce(expectedResult);
 
     await runWorkflowInWorker({
@@ -250,7 +278,6 @@ describe('runWorkflowInWorker', () => {
 
     mockCreateWorkerBus.mockReturnValueOnce(busHandle);
     mockLoadWorkerRuntimeContributions.mockResolvedValueOnce({ toolsets: [] });
-    mockLoadWorkflowModule.mockResolvedValueOnce(makeLoadedWorkflow());
     mockRunWorkflowOrchestrator.mockResolvedValueOnce({
       executionId: 'exec-001',
       workflowId: 'wf-001',
@@ -315,14 +342,12 @@ describe('runWorkflowInWorker', () => {
 
     // File-loader must never be called for definition-sourced workflows
     expect(mockLoadWorkflowModule).not.toHaveBeenCalled();
-    // Orchestrator receives the definition directly with an empty runtimeHandlers Map
+    // The orchestrator receives frozen data and a required step runner.
     expect(mockRunWorkflowOrchestrator).toHaveBeenCalledOnce();
     expect(mockRunWorkflowOrchestrator).toHaveBeenCalledWith(
       expect.objectContaining({
-        loaded: {
-          definition,
-          runtimeHandlers: new Map(),
-        },
+        loaded: { definition },
+        stepRunner: expect.objectContaining({ run: expect.any(Function) }),
       }),
     );
     expect(result).toEqual(expectedResult);
@@ -336,7 +361,7 @@ describe('runWorkflowInWorker', () => {
 
     const config = makeConfig({
       source: { kind: 'definition', workflowId: 'wf-001' },
-      // definition intentionally omitted
+      definition: undefined,
     });
 
     await expect(
@@ -346,9 +371,7 @@ describe('runWorkflowInWorker', () => {
         manifest: { contributionRefs: [] },
         contributionEntrypoints: [],
       }),
-    ).rejects.toThrow(
-      `Definition-sourced worker config for workflowId "wf-001" is missing the required 'definition' field.`,
-    );
+    ).rejects.toMatchObject({ code: 'WORKFLOW_SNAPSHOT_UNAVAILABLE' });
 
     expect(mockLoadWorkflowModule).not.toHaveBeenCalled();
     expect(mockRunWorkflowOrchestrator).not.toHaveBeenCalled();
@@ -384,7 +407,6 @@ describe('runWorkflowInWorker', () => {
 
     mockCreateWorkerBus.mockReturnValueOnce(busHandle);
     mockLoadWorkerRuntimeContributions.mockResolvedValueOnce({ toolsets: [] });
-    mockLoadWorkflowModule.mockResolvedValueOnce(makeLoadedWorkflow());
     mockRunWorkflowOrchestrator.mockResolvedValueOnce({
       executionId: 'exec-001',
       workflowId: 'wf-001',

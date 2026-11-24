@@ -121,8 +121,6 @@ export async function acceptAuthorityRunnerResult(
       execution,
       workflow,
       runContext,
-      runtimeHandlers: new Map(),
-      runtimeLoopChecks: new Map(),
     });
     adopted = true;
   } else if (existing.execution.workflowId !== result.workflowId) {

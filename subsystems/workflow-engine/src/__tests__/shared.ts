@@ -2,7 +2,7 @@ import { MakaioBus, type IHostMakaioBus, type IMakaioBus } from '@makaio/bus-cor
 import { createTempDb, createDbCleanup, type TestDbContextWithCleanup } from '@makaio/test-utils/drizzle-harness';
 import { readMigrations } from '@makaio/storage-migrations';
 import { applyMigrations } from '@makaio/storage-migrations/apply-migrations';
-import { WorkflowFrameStateSchema } from '@makaio/contracts';
+import { WorkflowFrameStateSchema, type CodeStepHandler } from '@makaio/contracts';
 import type {
   WorkflowDefinition,
   WorkflowFrameState,
@@ -16,6 +16,9 @@ import {
   type WorkflowExecution as StorageWorkflowExecution,
 } from '../storage/namespace.js';
 import { registerDrizzleWorkflowStorage } from '../storage/handler.js';
+import { RuntimeContext } from '../runtime/runtime-context.js';
+import { createCallerLocalStepRunner } from '../runtime/caller-local-step-runner.js';
+import { createTestCall } from '@makaio/test-utils';
 
 const TEST_MIGRATIONS_TABLE = '__drizzle_migrations_test_workflow_engine_storage';
 
@@ -240,4 +243,30 @@ export async function createTestDbForBus(bus: IMakaioBus): Promise<TestDbContext
  */
 export async function createTestDb(): Promise<TestDbContextWithCleanup> {
   return createTestDbForBus(MakaioBus);
+}
+
+type RuntimeParams = ConstructorParameters<typeof RuntimeContext>;
+
+/**
+ * Use the actual caller-local step runner in tests written against local authoring handlers.
+ * @param args - Runtime context arguments with the explicitly loaded caller-local handlers.
+ * @returns Runtime context sharing its runner with derived branch contexts.
+ */
+export function createLocalTestRuntimeContext(
+  ...args: [
+    RuntimeParams[0],
+    RuntimeParams[1],
+    RuntimeParams[2],
+    RuntimeParams[3],
+    ReadonlyMap<string, CodeStepHandler>,
+    RuntimeParams[5],
+    RuntimeParams[6],
+    RuntimeParams[7]?,
+    RuntimeParams[8]?,
+    RuntimeParams[9]?,
+  ]
+): RuntimeContext {
+  const [executionId, workflowId, definition, execution, handlers, ...rest] = args;
+  const runner = createCallerLocalStepRunner(createTestCall(), handlers);
+  return new RuntimeContext(executionId, workflowId, definition, execution, runner, ...rest);
 }

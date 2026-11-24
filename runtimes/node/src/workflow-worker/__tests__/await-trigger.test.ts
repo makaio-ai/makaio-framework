@@ -76,7 +76,7 @@ function makeBus(): IMakaioBus {
  * @returns Loaded workflow stub accepted by `resolveAwaitTriggerConfig`.
  */
 function makeLoaded(triggers: WorkflowDefinition['triggers']): Parameters<typeof resolveAwaitTriggerConfig>[1] {
-  return { definition: makeDefinition({ triggers }), runtimeHandlers: new Map() };
+  return { definition: makeDefinition({ triggers }) };
 }
 
 describe('resolveAwaitTriggerConfig', () => {

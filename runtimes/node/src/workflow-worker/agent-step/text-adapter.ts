@@ -1,28 +1,45 @@
 import { randomUUID } from 'node:crypto';
+import { JsonValueSchema } from '@makaio/contracts';
 import {
   AgentModelReplySchema,
   ModelFailureSchema,
-  AgentModelRequestSchema,
   AgentStepStartSchema,
-  type AgentModelRequest,
+  prepareAgentModelRequest,
   type AgentStepAdapter,
   type AgentStepExecution,
   type AgentStepTurnResult,
 } from './protocol.js';
 
 /**
+ * Decode the reply without passing model text into diagnostic output.
+ * @param body - Parsed HTTP response body.
+ * @returns Structured output, usage, or a fixed failure.
+ */
+function readTurnResult(body: unknown): AgentStepTurnResult {
+  const reply = AgentModelReplySchema.safeParse(body);
+  if (!reply.success) return { kind: 'failed', reason: 'reply-invalid' };
+  try {
+    const output = JsonValueSchema.parse(JSON.parse(reply.data.text));
+    const { usage } = reply.data;
+    return { kind: 'completed', result: { output, ...(usage === undefined ? {} : { usage }) } };
+  } catch {
+    return { kind: 'failed', reason: 'output-invalid' };
+  }
+}
+
+/**
  * Run one model turn using only the scoped address supplied by the worker.
  * @param address - Mediator address for this step.
- * @param input - Text turn.
+ * @param requestBody - Serialized text turn within the wire budget.
  * @param signal - Step cancellation.
  * @returns A typed turn outcome with content-free transport errors.
  */
-async function complete(address: string, input: AgentModelRequest, signal: AbortSignal): Promise<AgentStepTurnResult> {
+async function complete(address: string, requestBody: string, signal: AbortSignal): Promise<AgentStepTurnResult> {
   try {
     const response = await fetch(address, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify(input),
+      body: requestBody,
       redirect: 'error',
       signal,
     });
@@ -32,8 +49,7 @@ async function complete(address: string, input: AgentModelRequest, signal: Abort
     }
     const body: unknown = await response.json().catch(() => undefined);
     if (signal.aborted) return { kind: 'cancelled' };
-    const reply = AgentModelReplySchema.safeParse(body);
-    return reply.success ? { kind: 'completed', result: reply.data } : { kind: 'failed', reason: 'reply-invalid' };
+    return readTurnResult(body);
   } catch {
     return signal.aborted ? { kind: 'cancelled' } : { kind: 'failed', reason: 'model-unreachable' };
   }
@@ -44,6 +60,7 @@ const START_FIELDS = new Set([
   'role',
   'model',
   'initialMessage',
+  'responseSchema',
   'agentId',
   'sessionId',
   'ownerInstanceId',
@@ -63,7 +80,7 @@ function unsupportedField(input: unknown): string | undefined {
 }
 
 /**
- * One-turn text adapter for an isolated step. Provider credentials live behind the worker's mediator.
+ * One-turn structured-output adapter for an isolated step. Provider credentials live behind the worker's mediator.
  * @param adapterId - Identity of this adapter instance.
  * @param ownerInstanceId - Runtime incarnation that owns the adapter.
  * @returns The agent step adapter.
@@ -71,7 +88,7 @@ function unsupportedField(input: unknown): string | undefined {
 export function createTextAgentStepAdapter(adapterId: string, ownerInstanceId: string): AgentStepAdapter {
   return {
     capabilities: {
-      capabilities: [],
+      capabilities: ['structuredOutput'],
       nativeTools: [],
       environment: [{ name: 'MAKAIO_MODEL_ADDRESS', source: 'makaio.model-address' }],
     },
@@ -91,14 +108,23 @@ export function createTextAgentStepAdapter(adapterId: string, ownerInstanceId: s
         return { start: { success: false, dispatch: 'not-dispatched', message: 'Agent step start refused' } };
       }
       const { request, modelAddress } = parsed.data;
-      const turn = AgentModelRequestSchema.safeParse({ model: request.model, prompt: request.initialMessage });
+      const { initialMessage, responseSchema } = request;
+      if (typeof initialMessage !== 'string' || initialMessage.length === 0 || responseSchema === undefined) {
+        return {
+          start: { success: false, dispatch: 'not-dispatched', message: 'Structured agent step input required' },
+        };
+      }
+      const turn = prepareAgentModelRequest(request.model, initialMessage, responseSchema);
       if (
         (request.mode ?? 'create') !== 'create' ||
         request.adapterId !== adapterId ||
         (request.ownerInstanceId !== undefined && request.ownerInstanceId !== ownerInstanceId) ||
-        !turn.success
+        turn.kind !== 'ready'
       ) {
-        return { start: { success: false, dispatch: 'not-dispatched', message: 'Unsupported agent step start' } };
+        return {
+          start: { success: false, dispatch: 'not-dispatched', message: 'Unsupported agent step start' },
+          ...(turn.kind === 'too-large' && { reason: 'prompt-too-large' }),
+        };
       }
       return {
         start: {
@@ -109,7 +135,7 @@ export function createTextAgentStepAdapter(adapterId: string, ownerInstanceId: s
           sessionId: request.sessionId ?? randomUUID(),
           messageId: randomUUID(),
         },
-        turn: complete(modelAddress, turn.data, signal),
+        turn: complete(modelAddress, turn.body, signal),
       };
     },
   };

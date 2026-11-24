@@ -18,8 +18,7 @@ import {
   type PrimitiveExpressionContext,
   type RuntimeContext,
 } from './runtime-context.js';
-import { executeCodeStepNode } from './code-step-node.js';
-import { executeAgentStepNode } from './delegate-node.js';
+import { dispatchStep } from './step-dispatch.js';
 import { executeParallelNode } from './parallel-node.js';
 import { executeIterateNode } from './iterate-node.js';
 import { executeIterateChainNode } from './iterate-chain-node.js';
@@ -39,7 +38,7 @@ export type NodeOutcome =
   | { status: 'completed'; output?: JsonValue }
   | { status: 'skipped' }
   | { status: 'cancelled' }
-  | { status: 'failed'; error: string };
+  | { status: 'failed'; error: string; detail?: string };
 
 // ─────────────────────────────────────────────────────────────
 // Frame lifecycle helpers
@@ -93,21 +92,23 @@ export async function completeFrame(
  * @param call - Call context of the message that drives this execution run.
  * @param frame - The frame to fail (mutated in place).
  * @param ctx - Runtime context used for event emission.
- * @param error - Human-readable failure reason.
+ * @param error - Failure reason published to lifecycle consumers.
+ * @param detail - Optional diagnostic saved in the frame's human-readable error field.
  */
 export async function failFrame(
   call: CallContext,
   frame: WorkflowFrameState,
   ctx: RuntimeContext,
   error: string,
+  detail?: string,
 ): Promise<void> {
   const completedAt = Date.now();
   const durationMs = frame.startedAt !== undefined ? Math.max(0, completedAt - frame.startedAt) : undefined;
   // Direct mutations are sufficient — frame is the same reference stored in frameRegistry.
   frame.status = 'failed';
-  frame.error = error;
+  frame.error = detail ?? error;
   frame.completedAt = completedAt;
-  await ctx.persistFrame(call, frame);
+  await ctx.persistFrame(call, frame, error);
   await ctx.emitFrameFailed(call, frame, error, durationMs);
 }
 
@@ -268,10 +269,8 @@ export async function executeNode(
       return executeSequenceFn(call, node as WorkflowSequenceNode, ctx, expressionCtx, currentFrameId, parentPath);
 
     case 'code-step':
-      return executeCodeStepNode(call, node as WorkflowCodeStepNode, ctx, expressionCtx, currentFrameId);
-
     case 'agent-step':
-      return executeAgentStepNode(call, node as WorkflowAgentStepNode, ctx, expressionCtx, currentFrameId);
+      return dispatchStep(node as WorkflowAgentStepNode | WorkflowCodeStepNode, ctx, expressionCtx, currentFrameId);
 
     case 'parallel':
       // The parallel node's own frame is created by the sequence loop in
@@ -317,7 +316,7 @@ export async function executeNode(
         ctx,
         expressionCtx,
         executeSequenceFn,
-        currentFrameId ?? '',
+        currentFrameId,
         parentPath,
       );
 

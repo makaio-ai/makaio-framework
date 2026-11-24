@@ -10,7 +10,7 @@ import {
 } from '@makaio/contracts';
 import { WorkflowSubjects } from '../namespace.js';
 import type { RuntimeContext } from './runtime-context.js';
-import type { NodeOutcome } from './node-execution.js';
+import type { CallerLocalStepOutcome } from './caller-local-step-runner.js';
 import { buildDelegateEconomics } from './delegate-economics.js';
 
 type ResolvedSubagentAwaitResult = { handled: true; data: AwaitSubagentResponse } | { handled: false };
@@ -80,7 +80,7 @@ export async function executeResolvedSubagentNode(
   call: CallContext,
   params: ExecuteResolvedSubagentNodeParams,
   ctx: RuntimeContext,
-): Promise<NodeOutcome> {
+): Promise<CallerLocalStepOutcome> {
   if (ctx.signal.aborted) {
     return { status: 'cancelled' };
   }
@@ -92,7 +92,7 @@ export async function executeResolvedSubagentNode(
     config: buildSubagentConfig(params.task, params.resolvedConfig, params.outputSchema),
   });
   if (!spawnResult.handled) {
-    return { status: 'failed', error: params.unavailableRuntimeError };
+    return { status: 'failed', error: 'stepExecutionFailed', detail: params.unavailableRuntimeError };
   }
 
   const sessionLinkEmitted = await emitFrameSessionLink(call, params, ctx, spawnResult.data.subagentId, {
@@ -114,7 +114,7 @@ export async function executeResolvedSubagentNode(
       spawnResult.data.subagentId,
       `Workflow execution '${ctx.executionId}' could not await ${params.cancellationLabel} '${params.nodeId}'`,
     );
-    return { status: 'failed', error: params.unavailableAwaitError };
+    return { status: 'failed', error: 'stepExecutionFailed', detail: params.unavailableAwaitError };
   }
 
   if (ctx.signal.aborted || awaitResult.data.status === 'cancelled') {
@@ -147,7 +147,8 @@ export async function executeResolvedSubagentNode(
   }
   return {
     status: 'failed',
-    error: `${params.nodeLabel} '${params.nodeId}' subagent ${awaitResult.data.status}: ${
+    error: awaitResult.data.status === 'timeout' ? 'timeLimit' : 'stepExecutionFailed',
+    detail: `${params.nodeLabel} '${params.nodeId}' subagent ${awaitResult.data.status}: ${
       awaitResult.data.error ?? 'no result'
     }`,
   };

@@ -10,7 +10,7 @@ import {
 } from '@makaio/contracts';
 import { WorkflowSubjects } from '../namespace.js';
 import { WorkflowStorageSubjects } from '../storage/namespace.js';
-import { runWorkflowOrchestrator } from '../workflow-orchestrator.js';
+import { runCallerLocalWorkflowOrchestrator } from '../workflow-orchestrator.js';
 import {
   setupWorkflowExecutorTest,
   teardownWorkflowExecutorTest,
@@ -178,7 +178,7 @@ describe('workflow public subjects', () => {
         if (config.definition === undefined) {
           throw new Error('Definition-backed runner config must include a workflow definition snapshot.');
         }
-        const result = await runWorkflowOrchestrator({
+        const result = await runCallerLocalWorkflowOrchestrator({
           call,
           config,
           loaded: {

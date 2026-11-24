@@ -5,6 +5,7 @@ import {
   CodeStepRequestInputSchema,
   CodeStepRequestResultSchema,
   WorkflowErrorCode,
+  StepRunResultSchema,
 } from '@makaio/contracts';
 import { z } from 'zod';
 
@@ -32,6 +33,7 @@ export const CheckoutCodeStepFailureSchema = z.enum([
   WorkflowErrorCode.SOURCE_MISMATCH,
   WorkflowErrorCode.NOT_EXECUTABLE,
   WorkflowErrorCode.HANDLER_UNAVAILABLE,
+  WorkflowErrorCode.LOOP_CHECK_MULTIPLE,
   STEP_EXECUTION_FAILED,
 ]);
 
@@ -56,3 +58,10 @@ export const StepRequestCallRequestSchema = z.strictObject({
 
 /** Result returned by the worker for an extension request. */
 export const StepRequestCallResultSchema = CodeStepRequestResultSchema;
+
+/** Child-supplied diagnostics are untrusted until classified by the worker. */
+export const StepProcessResultSchema = StepRunResultSchema.omit({ detail: true }).extend({
+  error: z.string().optional(),
+});
+
+export type StepProcessResult = z.infer<typeof StepProcessResultSchema>;

@@ -6,13 +6,15 @@ import { getFullSubjectForSubjectDefinition } from '@makaio/bus-core';
 import { WorkflowSubjects } from '@makaio/contracts';
 import { createBusNamespace } from '@makaio/core';
 import { createTestCall } from '@makaio/test-utils';
-import { expect, it } from 'vitest';
+import { expect, it, vi } from 'vitest';
 import { z } from 'zod';
 import { closeHttpServer, listenOnLoopback } from '../../__tests__/http-test-helpers.js';
 import { BusServerTransportProvider } from '../../bus-server-transport.js';
 import { computeDirectoryDigest } from '../local-directory-materializer.js';
 import { ThinWorkflowPiscinaRunner } from '../thin-workflow-piscina-runner.js';
 import { makeBusWithStorage, makeWorkerConfig } from './fixtures.js';
+
+vi.setConfig({ testTimeout: 30_000 });
 
 const HostRequests = createBusNamespace('workspace-request', {
   echo: { request: z.object({ message: z.string() }), response: z.object({ message: z.string() }) },
@@ -92,7 +94,7 @@ it('routes caller-local file requests through the standard Piscina worker', asyn
       },
     });
 
-    const completion = await runner.run(createTestCall(), config, new AbortController().signal);
+    const completion = await runner.callerLocalFileRunner.run(createTestCall(), config, new AbortController().signal);
     expect(completion, JSON.stringify(completion)).toMatchObject({
       state: 'uncommitted',
       result: { status: 'completed' },

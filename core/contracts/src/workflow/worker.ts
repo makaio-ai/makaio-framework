@@ -72,9 +72,8 @@ export const WorkflowWorkerConfigSchema = z.object({
    * Serialized workflow definition for workers.
    *
    * Definition-sourced workers construct a {@link LoadedWorkflow} directly from
-   * this field. Source-backed workers may also receive it when the executor
-   * must pin execution to a stored snapshot while loading runtime handlers from
-   * the source module.
+   * this field. Source-backed workers also receive it when the executor pins
+   * a snapshot for replay or when the runner requires a frozen definition.
    */
   definition: WorkflowDefinitionSchema.optional(),
   /** Unique execution identifier for this workflow run. */
@@ -374,6 +373,9 @@ export interface IWorkflowRunner {
    * completion protocol. This declaration does not select a compute provider.
    */
   readonly terminalAuthority?: 'authority' | 'worker';
+
+  /** Use the executor's frozen definition for registered runs with an executable source. */
+  readonly requiresDefinitionSnapshot?: boolean;
 
   /**
    * Execute a complete workflow in an isolated worker.

@@ -1,3 +1,4 @@
+import assert from 'node:assert/strict';
 import { setImmediate } from 'node:timers/promises';
 import { describe, expect, it } from 'vitest';
 import { createBusInstance } from '@makaio/bus-core';
@@ -5,7 +6,7 @@ import { codeStep, defineWorkflow, WorkflowNamespace, type BuiltWorkflow } from 
 import { createTestCall } from '@makaio/test-utils';
 import { WorkflowSubjects } from '../namespace.js';
 import { WorkflowStorageSubjects } from '../storage/namespace.js';
-import { runWorkflowOrchestrator } from '../workflow-orchestrator.js';
+import { runCallerLocalWorkflowOrchestrator } from '../workflow-orchestrator.js';
 import { createTestDbForBus } from './shared.js';
 
 const executionId = 'exec-frame-checkpoint';
@@ -18,7 +19,7 @@ const frameError = 'Injected frame storage failure';
  * @returns The worker's terminal result.
  */
 function run(bus: ReturnType<typeof createBusInstance>, workflow: BuiltWorkflow) {
-  return runWorkflowOrchestrator({
+  return runCallerLocalWorkflowOrchestrator({
     call: createTestCall(),
     config: {
       source: { kind: 'definition', workflowId: workflow.id },
@@ -137,35 +138,51 @@ describe('workflow frame storage failures', () => {
     }
   });
 
-  it('keeps the node error when its failed frame needs a replacement write', async () => {
+  it('keeps the node failure code when its failed frame needs a replacement write', async () => {
     const bus = createBusInstance();
     bus.registerNamespace(WorkflowNamespace);
     const storage = await createTestDbForBus(bus);
     const nodeError = 'Original node failure';
-    let rejected = false;
+    const failedWrites: unknown[] = [];
     const offWrite = bus.on(
       WorkflowStorageSubjects.setFrame,
       async (ctx) => {
-        if (ctx.payload.frame.status === 'failed' && !rejected) {
-          rejected = true;
-          throw new Error(frameError);
+        if (ctx.payload.frame.status === 'failed') {
+          failedWrites.push(ctx.payload.frame);
+          if (failedWrites.length === 1) throw new Error(frameError);
         }
         await ctx.next();
       },
       { priority: 100 },
     );
+    const failureEvents: string[] = [];
+    const offFailed = bus.on(WorkflowSubjects.frame.failed, ({ payload }) => {
+      failureEvents.push(payload.error);
+    });
     try {
       const workflow = defineWorkflow('frame-checkpoint').codeStep('first', () => {
         throw new Error(nodeError);
       });
       const result = await run(bus, workflow);
-      expect(result).toMatchObject({ status: 'failed', error: expect.stringContaining(nodeError) });
+      assert(result.status === 'failed');
+      expect(result.error).toContain('stepExecutionFailed');
+      expect(result.error).toContain(frameError);
+      const { execution } = await bus.request(WorkflowStorageSubjects.getExecution, { executionId });
+      expect(execution).toMatchObject({ status: 'failed', error: result.error });
+      expect(failureEvents).toEqual(['stepExecutionFailed']);
+      expect(failedWrites).toHaveLength(2);
+      expect(failedWrites[0]).toMatchObject({ error: nodeError });
+      expect(failedWrites[1]).toEqual(failedWrites[0]);
       const { frames } = await bus.request(WorkflowStorageSubjects.listFrames, { executionId });
       expect(frames).toEqual([
-        expect.objectContaining({ nodeId: 'first', status: 'failed', error: expect.stringContaining(nodeError) }),
+        expect.objectContaining({
+          nodeId: 'first',
+          status: 'failed',
+          error: nodeError,
+        }),
       ]);
-      expect(frames[0]?.error).toContain(frameError);
     } finally {
+      offFailed();
       offWrite();
       storage.cleanup();
     }

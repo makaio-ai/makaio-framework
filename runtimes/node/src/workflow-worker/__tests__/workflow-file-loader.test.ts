@@ -650,137 +650,41 @@ export default {
 });
 
 // ─────────────────────────────────────────────────────────────
-// runtimeLoopChecks round-trip
+// Loop references in authored files
 // ─────────────────────────────────────────────────────────────
 
 /**
- * Build ESM source for a workflow whose root contains a `loop` node with
- * a body sequence and a check, plus a `runtimeLoopChecks` Map carrying the
- * check handler function.
- * @param id - Workflow identifier.
- * @param checkHandlerName - The check handler name registered in the map.
- * @returns ESM module source string.
+ * Build a module with one loop and its serialized check reference.
+ * @param check - Value of the serialized check.
+ * @returns Inline workflow module source.
  */
-function makeLoopWorkflowModuleSource(id: string, checkHandlerName: string): string {
-  return `
-const definition = {
-  id: '${id}',
-  name: '${id}',
-  root: {
-    id: '${id}__root',
-    type: 'sequence',
-    nodes: [
-      {
-        id: '${id}__loop',
-        type: 'loop',
-        maxRounds: 3,
-        body: {
-          id: '${id}__loop__body',
-          type: 'sequence',
-          nodes: [
-            { id: 'step1', type: 'code-step' },
-          ],
-        },
-        check: {
-          handler: '${checkHandlerName}',
-          input: 'frames.step1.output',
-        },
-      },
-    ],
-  },
-  triggers: [],
-  scope: { type: 'global' },
-};
-const runtimeHandlers = new Map([['step1', (ctx) => ctx]]);
-const runtimeLoopChecks = new Map([['${checkHandlerName}', (_input, _config, _ctx) => ({ kind: 'pass' })]]);
-export default { definition, runtimeHandlers, runtimeLoopChecks };
-`;
+function loopModule(check: string | { handler: string }): string {
+  return `export default {
+    definition: {
+      id: 'loop-workflow',
+      root: { id: 'root', type: 'sequence', nodes: [{
+        id: 'rounds', type: 'loop', maxRounds: 2,
+        body: { id: 'body', type: 'sequence', nodes: [{ id: 'review', type: 'code-step' }] },
+        check: ${JSON.stringify(check)}
+      }] },
+      scope: { type: 'global' }
+    },
+    runtimeHandlers: new Map([['review', () => ({ done: true })]])
+  };`;
 }
 
-describe('loadWorkflowModule — runtimeLoopChecks round-trip', () => {
-  it('preserves runtimeLoopChecks through the file-loader round-trip (path source)', async () => {
-    const dir = makeTempDir();
-    tempDirs.push(dir);
-    await mkdir(dir, { recursive: true });
+describe('loadWorkflowModule loop references', () => {
+  it('preserves a loop check step reference', async () => {
+    const loaded = await loadWorkflowModule({ kind: 'source', filename: 'loop.mjs', source: loopModule('review') });
+    expect(loaded.definition.root.nodes).toMatchObject([{ type: 'loop', check: 'review' }]);
+    expect(loaded.runtimeHandlers.get('review')).toBeTypeOf('function');
+  });
 
-    const source = makeLoopWorkflowModuleSource('loop-wf', 'convergence-check');
-    const filePath = join(dir, 'loop-workflow.mjs');
-    await writeFile(filePath, source, 'utf8');
-
-    const loaded = await loadWorkflowModule({ kind: 'path', path: filePath });
-
-    // Definition carries the loop node structure
-    expect(loaded.definition.id).toBe('loop-wf');
-    const rootNodes = loaded.definition.root.nodes;
-    expect(rootNodes).toHaveLength(1);
-    expect(rootNodes[0].type).toBe('loop');
-
-    // Body sequence is preserved inside the loop node
-    expect(rootNodes[0]).toMatchObject({
-      type: 'loop',
-      body: { nodes: [{ id: 'step1', type: 'code-step' }] },
-      check: { handler: 'convergence-check', input: 'frames.step1.output' },
+  it.each([{ handler: 'review' }, 'unknown'])('rejects legacy or missing check references (%j)', async (check) => {
+    await expect(
+      loadWorkflowModule({ kind: 'source', filename: 'loop.mjs', source: loopModule(check) }),
+    ).rejects.toMatchObject({
+      code: WorkflowErrorCode.NOT_EXECUTABLE,
     });
-
-    // runtimeLoopChecks map is carried through
-    expect(loaded.runtimeLoopChecks).toBeDefined();
-    expect(loaded.runtimeLoopChecks).toBeInstanceOf(Map);
-    expect(loaded.runtimeLoopChecks!.size).toBe(1);
-    expect(loaded.runtimeLoopChecks!.has('convergence-check')).toBe(true);
-    expect(loaded.runtimeLoopChecks!.get('convergence-check')).toBeTypeOf('function');
-  });
-
-  it('preserves runtimeLoopChecks through the inline source round-trip', async () => {
-    const source = makeLoopWorkflowModuleSource('inline-loop-wf', 'quality-check');
-
-    const loaded = await loadWorkflowModule({
-      kind: 'source',
-      filename: 'inline-loop.mjs',
-      source,
-    });
-
-    expect(loaded.runtimeLoopChecks).toBeDefined();
-    expect(loaded.runtimeLoopChecks!.has('quality-check')).toBe(true);
-    expect(loaded.runtimeLoopChecks!.get('quality-check')).toBeTypeOf('function');
-  });
-
-  it('omits runtimeLoopChecks when the export does not include one', async () => {
-    const dir = makeTempDir();
-    tempDirs.push(dir);
-    await mkdir(dir, { recursive: true });
-
-    const content = makeWorkflowModuleSource('no-loop-wf', ['step1']);
-    const filePath = join(dir, 'no-loop-workflow.mjs');
-    await writeFile(filePath, content, 'utf8');
-
-    const loaded = await loadWorkflowModule({ kind: 'path', path: filePath });
-
-    expect(loaded.runtimeLoopChecks).toBeUndefined();
-  });
-
-  it('throws when runtimeLoopChecks is defined but not a Map instance', async () => {
-    const dir = makeTempDir();
-    tempDirs.push(dir);
-    await mkdir(dir, { recursive: true });
-
-    // runtimeLoopChecks is a plain object, not a Map.
-    const content = `
-const definition = {
-  id: 'bad-loop-checks',
-  name: 'bad-loop-checks',
-  root: { id: 'root', type: 'sequence', nodes: [] },
-  triggers: [],
-  scope: { type: 'global' },
-};
-const runtimeHandlers = new Map();
-const runtimeLoopChecks = { 'my-check': () => ({ kind: 'pass' }) };
-export default { definition, runtimeHandlers, runtimeLoopChecks };
-`;
-    const filePath = join(dir, 'bad-loop-checks.mjs');
-    await writeFile(filePath, content, 'utf8');
-
-    const promise = loadWorkflowModule({ kind: 'path', path: filePath });
-    await expect(promise).rejects.toThrow(/runtimeLoopChecks/i);
-    await expect(promise).rejects.toMatchObject({ code: WorkflowErrorCode.NOT_EXECUTABLE });
   });
 });

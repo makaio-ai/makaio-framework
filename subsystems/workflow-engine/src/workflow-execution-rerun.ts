@@ -73,7 +73,7 @@ function buildRerunLinkMetadata(mode: 'snapshot' | 'current', reason: string | u
  * Two modes are supported:
  * - `snapshot`: re-executes using the original execution's
  *   {@link WorkflowRunContext.definitionSnapshot}.
- * - `current`: re-executes using the latest stored workflow definition.
+ * - `current`: reloads the persisted source or the latest stored definition.
  *
  * Both modes record provenance via an execution link with `linkType: 'rerun-of'`.
  * Request-level overrides win over original run-context values.
@@ -137,19 +137,33 @@ function resolveSnapshotRerunWorkflowId(
   originalRunContext: StoredWorkflowRunContext,
   workflow: WorkflowDefinition,
 ): string {
-  if (isEphemeralSourceBacked(originalRunContext)) {
-    return workflow.id;
-  }
-  return originalRunContext.workflowId;
+  return isEphemeralSourceBacked(originalRunContext) ? workflow.id : originalRunContext.workflowId;
 }
 
 /**
- * Check whether a run context came from an ephemeral source-backed start.
- * @param runContext - Stored context for the execution being rerun.
- * @returns True when the logical workflow ID was the original execution ID.
+ * Recognize direct ephemeral starts by the identity assigned at creation.
+ *
+ * Registered definitions can also supply a path or source. The trace links
+ * are writable separately, so they cannot establish the origin of a replay
+ * that already stores the logical workflow ID.
+ * @param runContext - Stored context for the execution being replayed.
+ * @returns Whether the execution ID is the ephemeral workflow ID.
  */
 function isEphemeralSourceBacked(runContext: StoredWorkflowRunContext): boolean {
   return runContext.source.kind !== 'definition' && runContext.workflowId === runContext.executionId;
+}
+
+/**
+ * Only a direct host-owned file start selects the caller-local file runner for replay.
+ * @param runContext - Stored context for the execution being replayed.
+ * @returns Whether to use the configured file runner.
+ */
+function isHostFileReplay(runContext: StoredWorkflowRunContext): boolean {
+  return (
+    runContext.source.kind === 'path' &&
+    isEphemeralSourceBacked(runContext) &&
+    runContext.terminalAuthority !== 'authority'
+  );
 }
 
 /**
@@ -191,6 +205,7 @@ async function rerunSnapshot(
   return startResolvedDefinitionExecution(call, deps, resolveSnapshotRerunWorkflowId(originalRunContext, workflow), {
     workflow,
     executionSource: originalRunContext.source,
+    hostFileReplay: isHostFileReplay(originalRunContext),
     definitionSnapshot: workflow,
     input: overrides.input,
     config: overrides.config,
@@ -206,8 +221,7 @@ async function rerunSnapshot(
 }
 
 /**
- * Execute a current-mode rerun for executions that were originally started
- * directly from a source file rather than a stored definition row.
+ * Execute a current-mode rerun using the original execution's durable source.
  *
  * The saved snapshot supplies the Authority-owned finalizer contract and
  * launch-time binding metadata. It is persisted on the rerun context but is
@@ -227,7 +241,11 @@ async function rerunCurrentSourceBacked(
   originalRunContext: StoredWorkflowRunContext,
   overrides: DefinitionStartOptions,
 ): Promise<string> {
-  if (originalRunContext.definitionSnapshot === undefined && originalRunContext.source.kind === 'path') {
+  if (
+    originalRunContext.definitionSnapshot === undefined &&
+    originalRunContext.source.kind === 'path' &&
+    isHostFileReplay(originalRunContext)
+  ) {
     const { materializationSpec } = originalRunContext;
     if (materializationSpec === undefined) {
       throw new Error('Invalid persisted path-backed run context: materializationSpec is required');
@@ -246,6 +264,7 @@ async function rerunCurrentSourceBacked(
   return startResolvedDefinitionExecution(call, deps, workflow.id, {
     workflow,
     executionSource: originalRunContext.source,
+    hostFileReplay: isHostFileReplay(originalRunContext),
     input: overrides.input,
     config: overrides.config,
     parentSessionId: overrides.parentSessionId,

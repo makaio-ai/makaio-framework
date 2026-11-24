@@ -54,8 +54,6 @@ describe('recorded-only runner results', () => {
           execution,
           workflow,
           runContext,
-          runtimeHandlers: new Map(),
-          runtimeLoopChecks: new Map(),
         },
       ],
     ]);

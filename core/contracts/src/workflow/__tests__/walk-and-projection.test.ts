@@ -40,7 +40,7 @@ function mkIterateChain(id: string, body: WorkflowSequenceNode): WorkflowIterate
 }
 
 function mkLoop(id: string, body: WorkflowSequenceNode, maxRounds = 3): WorkflowLoopNode {
-  return { type: 'loop', id, maxRounds, body, check: { handler: 'my-check' } };
+  return { type: 'loop', id, maxRounds, body, check: body.nodes[0]?.id ?? 'unused' };
 }
 
 function mkDefinition(root: WorkflowSequenceNode): WorkflowDefinition {

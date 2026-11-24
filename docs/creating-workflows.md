@@ -241,30 +241,12 @@ workflow.parallel('providers', { mode: 'fail-fast' }, [
 
 ### `.loop(id, bodyNodes, options)`
 
-Runs the body sequence at least once. After each round, the registered `check`
-returns `{ kind: 'pass' }` to complete the loop or `{ kind: 'loop' }` to start another
-round. A thrown check fails the loop. If every check returns `loop` through
-`maxRounds`, the loop fails by default. Set `onExhausted: 'complete'` to continue
-the workflow when the check never passes.
-
-Every completed loop outputs `{ passed, rounds, bodyOutputs }`. Use
-`frames.<loop-id>.output.passed` to branch on the check result. It is `true`
-after a passing check and `false` after completing at the round limit.
-
-```typescript
-import { codeStep } from '@makaio/contracts';
-
-workflow.loop('converge', [
-  codeStep('revise', revisionHandler),
-], {
-  maxRounds: 3,
-  check: {
-    handler: 'revision-ready',
-    evaluate: (input) => ({ kind: input === true ? 'pass' : 'loop' }),
-    input: 'frames.revise.output.ready',
-  },
-});
-```
+A loop definition names an executable step from its body in `check`. Each round
+must complete exactly one occurrence of that step with output `{ done: boolean }`.
+The loop reads that result after the body finishes. It returns
+`{ passed: true, rounds, bodyOutputs }` when the check returns `done: true`.
+If the limit is reached, the default behavior is to fail. Set `onExhausted: 'complete'`
+to return `{ passed: false, rounds, bodyOutputs }` and continue.
 
 ### `.iterate(id, handler, options)`
 
@@ -685,6 +667,8 @@ Options:
   --timeout <ms>       Max wait time in milliseconds
   --verbose            Stream step lifecycle events to stderr
 ```
+
+The CLI and its file reruns execute handlers in the caller's local runtime. A worker runs code steps in separate processes from a prepared checkout.
 
 **Trigger resolution order:**
 

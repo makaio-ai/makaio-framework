@@ -42,7 +42,7 @@ import { startExecution, startFileExecution, type StartExecutionDeps } from './w
 import { rerunExecution } from './workflow-execution-rerun.js';
 import { RuntimeContext, resolveEphemeralPlatformFields } from './runtime/runtime-context.js';
 import { executeSequence } from './runtime/primitive-runtime.js';
-import { assertLoopCheckHandlersPresent } from './runtime/loop-check-handlers.js';
+import { createCallerLocalStepRunner } from './runtime/caller-local-step-runner.js';
 import type { NodeOutcome } from './runtime/node-execution.js';
 import { resolveWorkflowArtifactBinding } from './artifact-context/artifact-binding.js';
 import { normalizeConfig, normalizeStartInput } from './workflow-executor-input-normalization.js';
@@ -94,12 +94,14 @@ export class WorkflowExecutor extends BaseService {
    * @param namespaces - Extension capability for success finalizer registration.
    * @param config - Optional partial configuration (merged with defaults)
    * @param workflowRunner - Optional workflow-level runner for isolated execution
+   * @param callerLocalFileRunner - Explicit local runner for CLI file starts and their reruns.
    */
   public constructor(
     bus: IMakaioBus,
     private readonly namespaces: ExtensionContext['namespaces'],
     config?: Partial<ExecutorConfig>,
     private readonly workflowRunner?: IWorkflowRunner,
+    private readonly callerLocalFileRunner?: IWorkflowRunner,
   ) {
     super(bus);
     this.config = { ...DEFAULT_EXECUTOR_CONFIG, ...config };
@@ -337,6 +339,7 @@ export class WorkflowExecutor extends BaseService {
     }
     this.activeRunnerSteps.clear();
     await this.workflowRunner?.dispose?.();
+    if (this.callerLocalFileRunner !== this.workflowRunner) await this.callerLocalFileRunner?.dispose?.();
     this.activeExecutions.clear();
   }
 
@@ -445,6 +448,7 @@ export class WorkflowExecutor extends BaseService {
       activeExecutions: this.activeExecutions,
       executionTasks: this.executionTasks,
       workflowRunner: this.workflowRunner,
+      callerLocalFileRunner: this.callerLocalFileRunner,
       workflowRunnerSelector: this.runnerSelection?.select,
       buildRunContext: (params) => buildWorkflowRunContext(params, this.config),
       buildRunnerTaskDeps: (runner) => this.buildRunnerTaskDeps(runner),
@@ -508,7 +512,7 @@ export class WorkflowExecutor extends BaseService {
     });
 
     this.registerHandler(WorkflowSubjects.runFile, async (ctx) => {
-      if (this.workflowRunner === undefined) {
+      if (this.callerLocalFileRunner === undefined && this.workflowRunner === undefined) {
         throw new Error(
           'workflow.runFile requires a workflow runner — configure a ThinWorkflowPiscinaRunner or equivalent.',
         );
@@ -568,15 +572,17 @@ export class WorkflowExecutor extends BaseService {
           active.workflow.id,
           active.workflow,
           active.execution,
-          active.runtimeHandlers,
+          createCallerLocalStepRunner(call, new Map()),
           this.bus,
           abortController.signal,
           undefined,
           artifactBinding,
-          { context: this.resolveEphemeralPlatformFields(), env: active.runContext.env },
-          { runtimeLoopChecks: active.runtimeLoopChecks, stepTimeoutMs: this.config.stepTimeoutMs },
+          {
+            context: this.resolveEphemeralPlatformFields(),
+            env: active.runContext.env,
+            stepTimeoutMs: this.config.stepTimeoutMs,
+          },
         );
-        assertLoopCheckHandlersPresent(active.workflow, active.runtimeLoopChecks);
         const expressionCtx = runtimeCtx.buildExpressionContext();
         outcome = await executeSequence(call, active.workflow.root, runtimeCtx, expressionCtx);
       } catch (error) {

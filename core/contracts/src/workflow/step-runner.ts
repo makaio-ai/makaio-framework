@@ -1,8 +1,10 @@
 import { z } from 'zod';
 import type { EventMessagePayload, SubjectDefinition } from '@makaio/core';
 import { splitSubjectKey } from '@makaio/core';
-import { WorkflowCodeStepNodeSchema, WorkflowNodeTypeSchema } from './schemas.js';
-import { JsonObjectContractSchema, JsonValueSchema } from '../shared/json-value.js';
+import { WorkflowAgentStepNodeSchema, WorkflowCodeStepNodeSchema, WorkflowNodeTypeSchema } from './schemas.js';
+import { JsonValueSchema } from '../shared/json-value.js';
+import { CodeStepDataSchema } from './code-step-context.js';
+import { StepIdSchema } from './identifiers.js';
 
 // ─────────────────────────────────────────────────────────────
 // Node Type (lifecycle — observable node types)
@@ -25,9 +27,9 @@ export type WorkflowStepType = z.infer<typeof WorkflowStepTypeSchema>;
 /**
  * Node types that are dispatchable to a {@link IStepRunner}.
  * Derived from {@link WorkflowStepTypeSchema}.
- * The orchestrator handles agent steps directly.
+ * The worker dispatches either step kind through the same runner.
  */
-export const WorkflowRunnerStepTypeSchema = WorkflowStepTypeSchema.extract(['code-step']);
+export const WorkflowRunnerStepTypeSchema = WorkflowStepTypeSchema;
 
 export type WorkflowRunnerStepType = z.infer<typeof WorkflowRunnerStepTypeSchema>;
 
@@ -194,48 +196,34 @@ export function createWorkflowCancelSubject(fullSubject: string): WorkflowCancel
 // Step Run Config (input to the scheduler runStep callback)
 // ─────────────────────────────────────────────────────────────
 
-/**
- * Configuration passed through the scheduler runStep callback to execute a
- * single runner-dispatchable node.
- *
- * Internal API — only the Executor/Bridge creates these from a resolved,
- * runner-executable node.
- *
- * Uses {@link WorkflowRunnerStepTypeSchema} (`code-step`). The orchestrator
- * handles all other node types directly.
- */
+const StepRunBaseSchema = z.strictObject({
+  /** Node identifier within the workflow definition. */
+  stepId: StepIdSchema,
+  /** Execution frame for this occurrence of the step. */
+  frameId: z.string().min(1).optional(),
+  /** Frozen run data and current sequence or iteration context. */
+  data: CodeStepDataSchema,
+  /** Working directory for the step. Launch environment belongs to the runner. */
+  platformDefaults: StepRunnerPlatformDefaultsSchema.pick({ cwd: true }).strict(),
+});
+
+/** One executable step and its data, independent of the worker's transport and lifecycle. */
 export const StepRunConfigSchema = z
-  .object({
-    /** Node (step) identifier within the workflow definition. */
-    stepId: z.string().min(1),
-    /** Execution ID of the running workflow. */
-    executionId: z.string().min(1),
-    /** Workflow definition ID. */
-    workflowId: z.string().min(1),
-    /** Coordinator session ID owning this execution. */
-    coordinatorSessionId: z.string().min(1),
-    /** Node type discriminant (runner-executable types only). */
-    stepType: WorkflowRunnerStepTypeSchema,
-    /** Resolved runner-executable code-step node definition. */
-    stepDefinition: WorkflowCodeStepNodeSchema,
-    /** Expression context values resolved from previous node outputs and workflow inputs. */
-    resolvedInputs: JsonObjectContractSchema,
-    /** Bus server WebSocket URL for the worker to connect to. */
-    busUrl: z.string().optional(),
-    /** Bus authentication strategy. Defaults to `{ kind: 'none' }` when omitted. */
-    busAuth: StepRunnerBusAuthSchema.default({ kind: 'none' }),
-    /** Platform-level defaults inherited from the coordinator session. */
-    platformDefaults: StepRunnerPlatformDefaultsSchema,
-    /** Bus subject the worker subscribes to for cancellation signals. */
-    cancelSubject: z.string().min(1),
-  })
-  .superRefine((config, ctx) => {
-    if (config.stepType === config.stepDefinition.type) return;
-    ctx.addIssue({
-      code: 'custom',
-      path: ['stepDefinition', 'type'],
-      message: `stepDefinition.type must match stepType (${config.stepType})`,
-    });
+  .discriminatedUnion('stepType', [
+    StepRunBaseSchema.extend({
+      stepType: z.literal('code-step'),
+      stepDefinition: WorkflowCodeStepNodeSchema,
+    }),
+    StepRunBaseSchema.extend({
+      stepType: z.literal('agent-step'),
+      stepDefinition: WorkflowAgentStepNodeSchema,
+      /** Prompt rendered in the execution scope before dispatch. */
+      resolvedPrompt: z.string(),
+    }),
+  ])
+  .refine((config) => config.stepId === config.stepDefinition.id, {
+    message: 'The step identifier must match the step definition',
+    path: ['stepId'],
   });
 
 export type StepRunConfig = z.infer<typeof StepRunConfigSchema>;
@@ -257,21 +245,56 @@ export const WORKFLOW_CANCELLED_REASON = 'Workflow cancelled';
 // Step Run Result (output from a workflow step executor)
 // ─────────────────────────────────────────────────────────────
 
+/** Stable failure codes returned across the workflow step runner boundary. */
+export const StepRunErrorCodeSchema = z.enum([
+  'environmentMissing',
+  'unknownRole',
+  'invalidOutput',
+  'timeLimit',
+  'requestRefusalObserverFailed',
+  'agentCapabilitiesUnsupported',
+  'sourceNotPrepared',
+  'promptTooLarge',
+  'agentStartRefused',
+  'agentTurnFailed',
+  'processFailed',
+  'requestInvalid',
+  'requestTooLarge',
+  'modelNotInSession',
+  'upstreamFailed',
+  'replyInvalid',
+  'streamingUnsupported',
+  'modelUnreachable',
+  'requestTimedOut',
+  'sourceMismatch',
+  'notExecutable',
+  'handlerUnavailable',
+  'loopCheckMultiple',
+  'stepExecutionFailed',
+  'stepProcessCleanupFailed',
+  'unexpectedStepOutcome',
+]);
+
+/** Machine-readable Step Runner failure. */
+export type StepRunErrorCode = z.infer<typeof StepRunErrorCodeSchema>;
+
 /**
  * Result produced after executing a workflow step.
  * Contains both the functional output and operational telemetry.
  *
  * No cross-field refinement between status and error: a failed step
- * may lack an error string (OOM-kill, signal termination), and error
+ * may lack an error code (OOM-kill, signal termination), and error
  * is informational — the consumer dispatches on status alone.
  */
 export const StepRunResultSchema = z.object({
   /** Terminal step status. */
-  status: z.enum(['completed', 'failed']),
+  status: z.enum(['completed', 'failed', 'cancelled']),
   /** Functional output of the step (JSON-serializable). */
   output: JsonValueSchema.optional(),
-  /** Error message when status is 'failed'. Absent when no diagnostic is available. */
-  error: z.string().optional(),
+  /** Machine-readable error when execution fails. */
+  error: StepRunErrorCodeSchema.optional(),
+  /** Optional caller-local diagnostic, separate from the failure code. */
+  detail: z.string().optional(),
   /** Operational telemetry collected during step execution. */
   telemetry: StepTelemetrySchema,
 });
@@ -282,36 +305,19 @@ export type StepRunResult = z.infer<typeof StepRunResultSchema>;
 // StepRunner interface (type-only, no Zod)
 // ─────────────────────────────────────────────────────────────
 
-/**
- * Internal execution environment for runner-serializable workflow steps.
- *
- * Workflow-level isolation uses {@link IWorkflowRunner}. This interface remains
- * for the in-process scheduler path, where agent and shell steps still share a
- * uniform run/force-kill contract.
- */
+/** Execution port for code and agent steps, owned by the worker runtime. */
 export interface IStepRunner {
   /**
-   * Whether this runner manages the full workflow lifecycle (bus subscriptions,
-   * session creation, etc.) or delegates that to the orchestrator.
-   *
-   * - `true`: Runner creates its own bus connection, manages session lifecycle
-   *   (e.g., Docker/Lambda runners that are fully self-contained).
-   * - `false`: Orchestrator manages the bus connection and session; runner
-   *   only executes the step process (e.g., Piscina thread pool runner).
-   */
-  readonly managesWorkflowLifecycle: boolean;
-
-  /**
    * Execute a workflow step in an isolated environment.
-   * @param config - Step configuration including definition, inputs, and bus connection info
+   * @param config - Step definition and resolved inputs
    * @param signal - AbortSignal for cooperative cancellation; abort triggers graceful shutdown
    * @returns Step result with functional output and operational telemetry
    */
   run(config: StepRunConfig, signal: AbortSignal): Promise<StepRunResult>;
 
   /**
-   * Force-kill a running step immediately (SIGKILL / container stop).
-   * Called after the AbortSignal grace period expires without the step completing.
+   * Request immediate termination of active instances of this step.
+   * Called after the cancellation grace period expires without the step completing.
    * @param executionId - Execution ID owning the step
    * @param stepId - Identifier of the step to kill
    */

@@ -249,6 +249,7 @@ function registerCommonMockHandlers(cleanupFns: Array<() => void>): void {
 export async function setupWorkflowExecutorTest(
   options: {
     readonly workflowRunner?: IWorkflowRunner;
+    readonly callerLocalFileRunner?: IWorkflowRunner;
     readonly initExecutor?: boolean;
     readonly runCancellationHook?: RunCancellationHook;
   } = {},
@@ -283,6 +284,7 @@ export async function setupWorkflowExecutorTest(
       stepTimeoutMs: 10_000,
     },
     options.workflowRunner,
+    options.callerLocalFileRunner,
   );
   if (options.runCancellationHook !== undefined) {
     cleanupFns.push(workflowExecutor.registerRunCancellationHook(options.runCancellationHook));

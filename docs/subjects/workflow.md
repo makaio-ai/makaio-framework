@@ -95,7 +95,9 @@ Type: Request (RPC)
 
 ### <a id="workflow.artifact.updated"></a>`workflow.artifact.updated` (event)
 
-Frame-scoped artifact update notification. Explicit Code Step artifact
+Frame-scoped artifact update notification.
+
+This event contract is retained for observers. Explicit Code Step artifact
 requests update the artifact without publishing this workflow event.
 
 Subject: `workflow.artifact.updated`
@@ -337,8 +339,8 @@ Type: Event
 
 Ephemeral workflow progress notification.
 
-The event contract is retained for observers. The Code Step authoring
-context exposes only request and process-launch capabilities.
+This event contract is retained for observers. The built-in workflow
+runtime does not publish it.
 
 Subject: `workflow.execution.progress`
 Type: Event

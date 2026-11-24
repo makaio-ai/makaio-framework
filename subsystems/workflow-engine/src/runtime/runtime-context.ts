@@ -5,9 +5,8 @@ import type { ExpressionContext } from '@makaio/expression';
 import {
   WorkflowStepTypeSchema,
   type BuiltWorkflow,
-  type CodeStepHandler,
+  type IStepRunner,
   type JsonValue,
-  type LoopCheckHandler,
   type PreviousStepOutput,
   type SpanRecord,
   type WorkflowDefinition,
@@ -19,6 +18,7 @@ import { WorkflowSubjects } from '../namespace.js';
 import { WorkflowStorageSubjects } from '../storage/namespace.js';
 import { generateId } from '../executor-helpers.js';
 import type { ArtifactBindingState } from '../artifact-context/artifact-binding.js';
+import { createCallerLocalStepRunner } from './caller-local-step-runner.js';
 
 // ─────────────────────────────────────────────────────────────
 // Expression context
@@ -182,22 +182,6 @@ export interface CreateFrameParams {
 }
 
 /**
- * Execution-level options for runtime loop checks.
- *
- * All fields are optional; sensible defaults are applied by {@link RuntimeContext}.
- */
-export interface RuntimeExecutionOptions {
-  /** Executor-configured timeout for managed Code Step launches. */
-  readonly stepTimeoutMs?: number;
-  /**
-   * Loop check handler functions keyed by handler name.
-   * Populated by `.loop()` calls and standalone `loop()` factories.
-   * Defaults to an empty map when absent.
-   */
-  readonly runtimeLoopChecks?: ReadonlyMap<string, LoopCheckHandler>;
-}
-
-/**
  * Ephemeral platform/workspace fields resolved on the executing machine.
  *
  * These values are NEVER persisted. They are derived at runtime from the
@@ -221,6 +205,8 @@ export interface EphemeralPlatformFields {
  * Platform fields made available to code step handlers during runtime.
  */
 export interface RuntimePlatformContext {
+  /** Host-configured timeout for managed Code Step launches. */
+  readonly stepTimeoutMs?: number;
   /** Host/workspace context for code step handlers (ephemeral, worker-local). */
   readonly context: EphemeralPlatformFields;
   /** Extra environment variables injected into this workflow run. */
@@ -351,6 +337,9 @@ export class FramePersistenceError extends Error {
  * public trace/dashboard reads survive refresh.
  */
 export class RuntimeContext {
+  /** One execution port shared by the root and all derived contexts. */
+  public readonly stepRunner: IStepRunner;
+
   /** All frames created during this execution, keyed by frame ID. */
   private readonly frameRegistry: Map<string, WorkflowFrameState>;
   /** Ordered writes per frame. Rejected writes remain until the execution ends. */
@@ -371,33 +360,31 @@ export class RuntimeContext {
    * @param workflowId - Workflow definition identifier.
    * @param definition - Workflow definition containing the node tree.
    * @param execution - Current execution state (inputs, trigger payload).
-   * @param runtimeHandlers - Code step handler functions keyed by node ID.
+   * @param stepRunner - Isolated runner or explicit caller-local runner binding.
    * @param bus - Message bus for event emission.
    * @param signal - Cooperative cancellation signal.
    * @param sharedFrameRegistry - Optional shared frame registry for child contexts.
    * @param artifactBinding - Optional pre-resolved artifact binding state.
    * @param platform - Platform context and environment exposed to code step handlers.
-   * @param options - Execution-level options for loop checks.
    */
   public constructor(
     public readonly executionId: string,
     public readonly workflowId: string,
     public readonly definition: WorkflowDefinition,
     public readonly execution: WorkflowExecution,
-    public readonly runtimeHandlers: ReadonlyMap<string, CodeStepHandler>,
+    stepRunner: IStepRunner | ((runtime: RuntimeContext) => IStepRunner),
     public readonly bus: IMakaioBus,
     public readonly signal: AbortSignal,
     sharedFrameRegistry?: Map<string, WorkflowFrameState>,
     artifactBinding?: ArtifactBindingState,
     platform: RuntimePlatformContext = resolveDefaultPlatformContext(),
-    options: RuntimeExecutionOptions = {},
   ) {
     this.frameRegistry = sharedFrameRegistry ?? new Map<string, WorkflowFrameState>();
     this.artifactBinding = artifactBinding;
     this.platformContext = platform.context;
     this.env = platform.env;
-    this.stepTimeoutMs = options.stepTimeoutMs;
-    this.runtimeLoopChecks = options.runtimeLoopChecks ?? new Map();
+    this.stepTimeoutMs = platform.stepTimeoutMs;
+    this.stepRunner = typeof stepRunner === 'function' ? stepRunner(this) : stepRunner;
   }
 
   /** Platform/workspace context exposed to code step handlers (ephemeral). */
@@ -408,12 +395,6 @@ export class RuntimeContext {
 
   /** Executor-configured timeout for managed Code Step launches. */
   public readonly stepTimeoutMs?: number;
-
-  /**
-   * Loop check handler functions keyed by handler name.
-   * Empty when the workflow has no loop nodes.
-   */
-  public readonly runtimeLoopChecks: ReadonlyMap<string, LoopCheckHandler>;
 
   /**
    * Create a child context that shares this execution's frame registry and
@@ -434,14 +415,14 @@ export class RuntimeContext {
       this.workflowId,
       this.definition,
       this.execution,
-      this.runtimeHandlers,
+      this.stepRunner,
       this.bus,
       signal,
       this.frameRegistry,
       this.artifactBinding,
-      { context: this.platformContext, env: this.env },
       {
-        runtimeLoopChecks: this.runtimeLoopChecks,
+        context: this.platformContext,
+        env: this.env,
         stepTimeoutMs: this.stepTimeoutMs,
       },
     );
@@ -514,11 +495,12 @@ export class RuntimeContext {
    * A failed span mirror is reported without blocking required frame writes.
    * @param call - Call context of the message that drives this execution run.
    * @param frame - Frame state to persist.
+   * @param failureReason - Failure reason published separately from the stored frame diagnostic.
    */
-  public async persistFrame(call: CallContext, frame: WorkflowFrameState): Promise<void> {
+  public async persistFrame(call: CallContext, frame: WorkflowFrameState, failureReason?: string): Promise<void> {
     const snapshot = snapshotFrame(frame);
     const previous = this.framePersistenceTasks.get(frame.frameId) ?? Promise.resolve();
-    const task = previous.then(() => this.writeFrameTransition(call, frame, snapshot));
+    const task = previous.then(() => this.writeFrameTransition(call, frame, snapshot, failureReason));
 
     this.framePersistenceTasks.set(frame.frameId, task);
     await task;
@@ -532,16 +514,18 @@ export class RuntimeContext {
    * @param call - Call context of the execution run.
    * @param frame - Frame in the live registry.
    * @param snapshot - Detached state for this write.
+   * @param failureReason - Failure reason published separately from the stored frame diagnostic.
    */
   private async writeFrameTransition(
     call: CallContext,
     frame: WorkflowFrameState,
     snapshot: WorkflowFrameState,
+    failureReason?: string,
   ): Promise<void> {
     try {
       await this.writeFrame(call, snapshot);
     } catch (error) {
-      const original = snapshot.status === 'failed' ? snapshot.error : undefined;
+      const original = snapshot.status === 'failed' ? (failureReason ?? snapshot.error) : undefined;
       const storageMessage = error instanceof Error ? error.message : String(error);
       const failure = new FramePersistenceError(
         original === undefined
@@ -551,25 +535,17 @@ export class RuntimeContext {
       // A rejected initial checkpoint must stop the body before it runs. No
       // previously confirmed frame exists in that case.
       if (snapshot.status !== 'pending') {
-        const message = failure.message;
-        const completedAt = Date.now();
-        const failed: WorkflowFrameState = {
-          ...snapshot,
-          status: 'failed',
-          error: message,
-          output: undefined,
-          completedAt,
-        };
+        const failed: WorkflowFrameState =
+          snapshot.status === 'failed'
+            ? snapshot
+            : { ...snapshot, status: 'failed', error: failure.message, output: undefined, completedAt: Date.now() };
+        const duration =
+          failed.startedAt === undefined || failed.completedAt === undefined
+            ? undefined
+            : Math.max(0, failed.completedAt - failed.startedAt);
         Object.assign(frame, failed);
         await this.writeFrame(call, failed)
-          .then(() =>
-            this.emitFrameFailed(
-              call,
-              failed,
-              message,
-              failed.startedAt === undefined ? undefined : Math.max(0, completedAt - failed.startedAt),
-            ),
-          )
+          .then(() => this.emitFrameFailed(call, failed, failureReason ?? failure.message, duration))
           .catch((checkpointError: unknown) => {
             console.warn(`[RuntimeContext] Failed to record terminal frame ${frame.frameId}:`, checkpointError);
           });
@@ -737,6 +713,7 @@ export class RuntimeContext {
  * @param execution - Active execution record providing inputs and trigger payload.
  * @param bus - Message bus for event emission.
  * @param signal - Cooperative cancellation signal.
+ * @param call - Call context of the local workflow run.
  * @returns A new {@link RuntimeContext} ready for execution.
  */
 export function createRuntimeContext(
@@ -744,18 +721,18 @@ export function createRuntimeContext(
   execution: WorkflowExecution,
   bus: IMakaioBus,
   signal: AbortSignal,
+  call: CallContext,
 ): RuntimeContext {
   return new RuntimeContext(
     execution.id,
     builtWorkflow.id,
     builtWorkflow.definition,
     execution,
-    builtWorkflow.runtimeHandlers,
+    createCallerLocalStepRunner(call, builtWorkflow.runtimeHandlers),
     bus,
     signal,
     undefined,
     undefined,
     undefined,
-    { runtimeLoopChecks: builtWorkflow.runtimeLoopChecks },
   );
 }

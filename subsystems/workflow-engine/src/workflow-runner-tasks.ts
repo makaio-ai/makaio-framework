@@ -387,9 +387,10 @@ export function buildFileExecutionTask(
  * @returns Fully populated worker configuration.
  */
 function buildDefinitionWorkerConfig(deps: RunnerTaskDeps, params: DefinitionRunnerTaskParams): WorkflowWorkerConfig {
-  const { config } = deps;
+  const { config, workflowRunner } = deps;
   const serializedDefinition =
-    params.definitionSnapshot ?? (params.source.kind === 'definition' ? params.workflow : undefined);
+    params.definitionSnapshot ??
+    (params.source.kind === 'definition' || workflowRunner.requiresDefinitionSnapshot ? params.workflow : undefined);
   return {
     source: params.source,
     ...(serializedDefinition !== undefined ? { definition: serializedDefinition } : {}),

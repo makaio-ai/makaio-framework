@@ -1,4 +1,4 @@
-import { describe, expect, expectTypeOf, it, vi } from 'vitest';
+import { describe, expect, expectTypeOf, it } from 'vitest';
 import { createBusInstance } from '@makaio/bus-core';
 import { createTestCall } from '@makaio/test-utils';
 import {
@@ -7,6 +7,7 @@ import {
   FrameworkContractNamespaces,
   SubagentSubjects,
   WORKFLOW_CANCELLED_REASON,
+  WorkflowErrorCode,
   WorkflowNamespace,
   defineWorkflow,
   codeStep,
@@ -16,7 +17,7 @@ import {
   type WorkflowRunContext,
   type WorkflowWorkerConfig,
 } from '@makaio/contracts';
-import { runWorkflowOrchestrator } from '../workflow-orchestrator.js';
+import { runCallerLocalWorkflowOrchestrator, runWorkflowOrchestrator } from '../workflow-orchestrator.js';
 import { WorkflowStorageNamespace, WorkflowStorageSubjects } from '../storage/namespace.js';
 import { createTestDbForBus, registerInMemoryFrameStore } from './shared.js';
 import { resolveWorkflowArtifactBinding } from '../artifact-context/artifact-binding.js';
@@ -69,7 +70,7 @@ function makeArtifactRevision(
   };
 }
 
-describe('runWorkflowOrchestrator artifact bindings', () => {
+describe('runCallerLocalWorkflowOrchestrator artifact bindings', () => {
   it('returns the artifact revision bound at startup after a Code Step writes a newer revision', async () => {
     const bus = createBusInstance();
     bus.registerNamespace(WorkflowNamespace);
@@ -126,7 +127,7 @@ describe('runWorkflowOrchestrator artifact bindings', () => {
       });
 
     try {
-      const result = await runWorkflowOrchestrator({
+      const result = await runCallerLocalWorkflowOrchestrator({
         call: createTestCall(),
         config: {
           source: { kind: 'path', path: '/workflows/report.ts' },
@@ -263,12 +264,16 @@ describe('runWorkflowOrchestrator artifact bindings', () => {
   });
 });
 
-describe('runWorkflowOrchestrator terminal finalization', () => {
-  it('persists completed step outputs and the execution error when a later step fails', async () => {
+describe('runCallerLocalWorkflowOrchestrator terminal finalization', () => {
+  it('persists a failed step diagnostic separately from its execution error code', async () => {
     const bus = createBusInstance();
     bus.registerNamespace(WorkflowNamespace);
     bus.registerNamespace(WorkflowStorageNamespace);
     const dbContext = await createTestDbForBus(bus);
+    const failureCodes: string[] = [];
+    const offFailed = bus.on(WorkflowSubjects.frame.failed, ({ payload }) => {
+      if (payload.nodeId === 'fail-step') failureCodes.push(payload.error);
+    });
 
     const workflow = defineWorkflow('failed-execution-error-persistence')
       .codeStep('inspect', () => ({ findings: 3 }))
@@ -278,7 +283,7 @@ describe('runWorkflowOrchestrator terminal finalization', () => {
       });
 
     try {
-      const result = await runWorkflowOrchestrator({
+      const result = await runCallerLocalWorkflowOrchestrator({
         call: createTestCall(),
         config: {
           source: { kind: 'path', path: '/workflows/fail.ts' },
@@ -311,16 +316,18 @@ describe('runWorkflowOrchestrator terminal finalization', () => {
         executionId: 'exec-failed-error-persistence',
       });
 
-      expect(result).toMatchObject({ status: 'failed', error: 'code step failed' });
-      expect(execution).toMatchObject({ status: 'failed', error: 'code step failed' });
+      expect(result).toMatchObject({ status: 'failed', error: 'stepExecutionFailed' });
+      expect(execution).toMatchObject({ status: 'failed', error: 'stepExecutionFailed' });
+      expect(failureCodes).toEqual(['stepExecutionFailed']);
       expect(frames).toEqual(
         expect.arrayContaining([
           expect.objectContaining({ nodeId: 'inspect', status: 'completed', output: { findings: 3 } }),
           expect.objectContaining({ nodeId: 'summarize', status: 'completed', output: { summary: 'three findings' } }),
-          expect.objectContaining({ nodeId: 'fail-step', status: 'failed' }),
+          expect.objectContaining({ nodeId: 'fail-step', status: 'failed', error: 'code step failed' }),
         ]),
       );
     } finally {
+      offFailed();
       dbContext.cleanup();
     }
   });
@@ -348,7 +355,7 @@ describe('runWorkflowOrchestrator terminal finalization', () => {
     });
 
     try {
-      const result = await runWorkflowOrchestrator({
+      const result = await runCallerLocalWorkflowOrchestrator({
         call: createTestCall(),
         config: {
           source: { kind: 'path', path: '/workflows/cancel.ts' },
@@ -424,7 +431,7 @@ describe('runWorkflowOrchestrator terminal finalization', () => {
     };
 
     try {
-      const result = await runWorkflowOrchestrator({
+      const result = await runCallerLocalWorkflowOrchestrator({
         call: createTestCall(),
         config: makeWorkerConfig({
           executionId: 'exec-empty-start-checkpoint-abort',
@@ -468,9 +475,79 @@ describe('runWorkflowOrchestrator terminal finalization', () => {
   });
 });
 
-describe('runWorkflowOrchestrator node execution', () => {
+describe('runWorkflowOrchestrator runner admission', () => {
+  it('dispatches tool completion to an injected runner that supports it', async () => {
+    const bus = createBusInstance();
+    bus.registerNamespace(WorkflowNamespace);
+    bus.registerNamespace(WorkflowStorageNamespace);
+    const dbContext = await createTestDbForBus(bus);
+    const workflow = defineWorkflow('tool-completion').agentStep('review', 'reviewer', {
+      completion: 'tool',
+      outputSchema: { type: 'string' },
+    });
+    const call = createTestCall();
+    const config = makeWorkerConfig({ workflowId: workflow.id });
+
+    try {
+      const result = await runWorkflowOrchestrator({
+        call,
+        config,
+        loaded: workflow,
+        bus,
+        signal: new AbortController().signal,
+        stepRunner: {
+          async run(input) {
+            expect(input.stepType).toBe('agent-step');
+            expect(input.stepDefinition).toMatchObject({ completion: 'tool' });
+            return { status: 'completed', output: 'reviewed', telemetry: { duration: 0 } };
+          },
+        },
+      });
+      const { frames } = await bus.request(call, WorkflowStorageSubjects.listFrames, {
+        executionId: config.executionId,
+      });
+      expect(result.status).toBe('completed');
+      expect(frames).toEqual([expect.objectContaining({ status: 'completed', output: 'reviewed' })]);
+    } finally {
+      dbContext.cleanup();
+    }
+  });
+});
+
+describe('runCallerLocalWorkflowOrchestrator node execution', () => {
+  it('rejects invalid output schemas before running any caller-local handler', async () => {
+    const bus = createBusInstance();
+    bus.registerNamespace(WorkflowNamespace);
+    bus.registerNamespace(WorkflowStorageNamespace);
+    const storage = await createTestDbForBus(bus);
+    let invoked = false;
+    const workflow = defineWorkflow('invalid-output-preflight')
+      .codeStep('first', () => {
+        invoked = true;
+        return null;
+      })
+      .agentStep('second', 'reviewer', { outputSchema: { type: 'not-a-json-type' } });
+    try {
+      await expect(
+        runCallerLocalWorkflowOrchestrator({
+          call: createTestCall(),
+          config: makeWorkerConfig({ workflowId: workflow.id }),
+          loaded: workflow,
+          bus,
+          signal: new AbortController().signal,
+        }),
+      ).rejects.toMatchObject({ code: WorkflowErrorCode.STEP_OUTPUT_SCHEMA_INVALID });
+      expect(invoked).toBe(false);
+    } finally {
+      storage.cleanup();
+    }
+  });
+
   it('keeps host fallback out of the public orchestrator options', () => {
     expectTypeOf<Parameters<typeof runWorkflowOrchestrator>[0]>().not.toHaveProperty('allowHostRequestFallback');
+    expectTypeOf<Parameters<typeof runCallerLocalWorkflowOrchestrator>[0]>().not.toHaveProperty(
+      'allowHostRequestFallback',
+    );
   });
 
   it.each([true, { allowed: true }])('requires a registered subject even with an extra option %j', async (option) => {
@@ -490,7 +567,7 @@ describe('runWorkflowOrchestrator node execution', () => {
 
     try {
       const extraOptions: Record<string, unknown> = { allowHostRequestFallback: option };
-      const result = await runWorkflowOrchestrator({
+      const result = await runCallerLocalWorkflowOrchestrator({
         ...extraOptions,
         call: createTestCall(),
         config,
@@ -539,14 +616,11 @@ describe('runWorkflowOrchestrator node execution', () => {
         [codeStep('increment', ({ previous }) => (typeof previous === 'number' ? previous + 1 : 1))],
         { collection: 'inputs.items' },
       )
-      .loop('finish', [codeStep('verify', () => true)], {
-        maxRounds: 2,
-        check: { handler: 'verified', evaluate: () => ({ kind: 'pass' }) },
-      });
+      .codeStep('finish', () => true);
     const config = makeWorkerConfig({ workflowId: workflow.id, inputs: { items: ['first', 'second'] } });
 
     try {
-      const result = await runWorkflowOrchestrator({
+      const result = await runCallerLocalWorkflowOrchestrator({
         call: createTestCall(),
         config,
         loaded: workflow,
@@ -582,127 +656,7 @@ describe('runWorkflowOrchestrator node execution', () => {
   });
 });
 
-describe('runWorkflowOrchestrator loop checks', () => {
-  it('passes runtimeLoopChecks from loaded workflows into loop execution', async () => {
-    const bus = createBusInstance();
-    bus.registerNamespace(WorkflowNamespace);
-    bus.registerNamespace(WorkflowStorageNamespace);
-    const dbContext = await createTestDbForBus(bus);
-    const body = vi.fn(async () => ({ blockers: [] }));
-    const check = vi.fn(() => ({ kind: 'pass' as const }));
-    const workflow = defineWorkflow('orchestrator-loop').loop('converge', [codeStep('aggregate', body)], {
-      maxRounds: 3,
-      check: { handler: 'no-open-blockers', evaluate: check },
-    });
-
-    try {
-      const result = await runWorkflowOrchestrator({
-        call: createTestCall(),
-        config: makeWorkerConfig({
-          executionId: 'wfx-orchestrator-loop',
-          workflowId: workflow.id,
-        }),
-        loaded: workflow,
-        bus,
-        signal: new AbortController().signal,
-      });
-
-      expect(result.status).toBe('completed');
-      expect(body).toHaveBeenCalledOnce();
-      expect(check).toHaveBeenCalledOnce();
-    } finally {
-      dbContext.cleanup();
-    }
-  });
-
-  it.each([
-    { name: 'default exhaustion', onExhausted: undefined, check: 'loop', passed: undefined },
-    { name: 'explicit failure', onExhausted: 'fail', check: 'loop', passed: undefined },
-    { name: 'completion on exhaustion', onExhausted: 'complete', check: 'loop', passed: false },
-    { name: 'passing check', onExhausted: 'fail', check: 'pass', passed: true },
-  ] as const)('projects loop output for $name', async ({ onExhausted, check, passed }) => {
-    const bus = createBusInstance();
-    bus.registerNamespace(WorkflowNamespace);
-    const dbContext = await createTestDbForBus(bus);
-    const afterLoop = vi.fn();
-    const workflow = defineWorkflow('loop-output')
-      .loop('review-loop', [codeStep('review', () => 42)], {
-        maxRounds: 2,
-        onExhausted,
-        check: { handler: 'review-done', evaluate: () => ({ kind: check }) },
-      })
-      .codeStep(
-        'after-loop',
-        ({ previousSteps }) => {
-          afterLoop();
-          return previousSteps['review-loop']?.output ?? null;
-        },
-        { when: `frames['review-loop'].output.passed == ${passed === true}` },
-      );
-    const executionId = 'wfx-loop-output';
-    try {
-      const result = await runWorkflowOrchestrator({
-        call: createTestCall(),
-        config: makeWorkerConfig({ executionId, workflowId: workflow.id }),
-        loaded: workflow,
-        bus,
-        signal: new AbortController().signal,
-      });
-      if (passed === undefined) {
-        expect(result).toMatchObject({
-          status: 'failed',
-          error: "Loop node 'review-loop' exhausted maxRounds (2) without a passing check",
-        });
-        expect(afterLoop).not.toHaveBeenCalled();
-        return;
-      }
-      expect(result.status).toBe('completed');
-      expect(afterLoop).toHaveBeenCalledOnce();
-      const { frames } = await bus.request(WorkflowStorageSubjects.listFrames, { executionId });
-      const output = { passed, rounds: passed ? 1 : 2, bodyOutputs: passed ? [42] : [42, 42] };
-      expect(frames).toContainEqual(expect.objectContaining({ nodeId: 'after-loop', status: 'completed', output }));
-    } finally {
-      dbContext.cleanup();
-    }
-  });
-
-  it('fails clearly when a serialized loop definition has no runtime check handler', async () => {
-    const bus = createBusInstance();
-    bus.registerNamespace(WorkflowNamespace);
-    bus.registerNamespace(WorkflowStorageNamespace);
-    const dbContext = await createTestDbForBus(bus);
-    const workflow = defineWorkflow('orchestrator-loop-missing-check').loop(
-      'converge',
-      [codeStep('aggregate', async () => ({ blockers: [] }))],
-      {
-        maxRounds: 3,
-        check: { handler: 'missing-check', evaluate: () => ({ kind: 'pass' as const }) },
-      },
-    );
-
-    try {
-      const result = await runWorkflowOrchestrator({
-        call: createTestCall(),
-        config: makeWorkerConfig({
-          executionId: 'wfx-orchestrator-loop-missing-check',
-          workflowId: workflow.id,
-        }),
-        loaded: { definition: workflow.definition, runtimeHandlers: workflow.runtimeHandlers },
-        bus,
-        signal: new AbortController().signal,
-      });
-
-      expect(result.status).toBe('failed');
-      if (result.status === 'failed') {
-        expect(result.error).toContain('missing loop check handler(s): missing-check');
-      }
-    } finally {
-      dbContext.cleanup();
-    }
-  });
-});
-
-describe('runWorkflowOrchestrator persisted start timestamps', () => {
+describe('runCallerLocalWorkflowOrchestrator persisted start timestamps', () => {
   it('preserves the original execution start timestamp when starting a worker', async () => {
     const bus = createBusInstance();
     bus.registerNamespace(WorkflowNamespace);
@@ -731,7 +685,7 @@ describe('runWorkflowOrchestrator persisted start timestamps', () => {
     try {
       await bus.request(WorkflowStorageSubjects.setExecution, { execution });
 
-      const result = await runWorkflowOrchestrator({
+      const result = await runCallerLocalWorkflowOrchestrator({
         call: createTestCall(),
         config: makeWorkerConfig({
           executionId,
@@ -780,7 +734,7 @@ describe('runWorkflowOrchestrator persisted start timestamps', () => {
     try {
       await bus.request(WorkflowStorageSubjects.setExecution, { execution });
 
-      const result = await runWorkflowOrchestrator({
+      const result = await runCallerLocalWorkflowOrchestrator({
         call: createTestCall(),
         config: makeWorkerConfig({
           executionId,
