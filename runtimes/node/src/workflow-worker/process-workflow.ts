@@ -65,17 +65,6 @@ function resolveStepCommands(): Pick<ProcessStepRunnerOptions, 'codeCommand' | '
 }
 
 /**
- * Close the launch site before deleting its private homes.
- * @param launcher - Worker-owned execution site.
- * @param home - Private home directory for this run.
- */
-async function closeStepSite(launcher: Launcher, home: string): Promise<void> {
-  const ended = await launcher.closeAll();
-  if (ended.kind !== 'quiescent') throw new Error('Worker step process closure could not be confirmed');
-  await rm(home, { recursive: true, force: true });
-}
-
-/**
  * Revalidate an admitted task's selected path against its frozen materialization spec.
  * @param spec - Authority-owned specification preserved on the Piscina task.
  * @param workspaceRoot - Worker-local root resolved by the host for this task.
@@ -153,7 +142,9 @@ export function runRegisteredProcessWorkflow(
   workspaceRoot: string | undefined,
   verifyPath: boolean,
 ): Promise<WorkflowRunResult> {
-  return runWithStepSite(options, (home) => prepareRegisteredSource(options.config, home, workspaceRoot, verifyPath));
+  return runWithProcessStepSite(options, async ({ home, execute }) =>
+    execute(await prepareRegisteredSource(options.config, home, workspaceRoot, verifyPath)),
+  );
 }
 
 /**
@@ -162,20 +153,28 @@ export function runRegisteredProcessWorkflow(
  * @returns Workflow result after owned processes have stopped.
  */
 export function runProcessWorkflow(options: ProcessWorkflowRunOptions): Promise<WorkflowRunResult> {
-  return runWithStepSite(options);
+  return runWithProcessStepSite(options, ({ execute }) => execute());
+}
+
+interface StepSite {
+  readonly launcher: Launcher;
+  readonly home: string;
+  readonly definition: NonNullable<WorkflowWorkerConfig['definition']>;
+  readonly execute: (source?: CheckoutWorkflowSource, cleanup?: 'after-fixed-operations') => Promise<WorkflowRunResult>;
 }
 
 /**
- * Own the process site and any temporary executable source through workflow disposal.
+ * Own the process site and its temporary source through workflow disposal.
  * @param options - Worker-owned launch configuration.
- * @param prepareSource - Local registered source preparation, when available.
- * @returns Result of the frozen workflow.
+ * @param run - Use the process site to execute the workflow.
+ * @returns The run's result.
+ * @typeParam T - Result of the worker-local workflow invocation.
  */
-async function runWithStepSite(
+export async function runWithProcessStepSite<T>(
   options: ProcessWorkflowRunOptions,
-  prepareSource?: (home: string) => Promise<CheckoutWorkflowSource | undefined>,
-): Promise<WorkflowRunResult> {
-  const { call, bus, config, signal, workspace } = options;
+  run: (site: StepSite) => Promise<T>,
+): Promise<T> {
+  const { bus, config, signal, workspace } = options;
   const definition = config.definition;
   if (definition === undefined) {
     throw new WorkflowError(WorkflowErrorCode.SNAPSHOT_UNAVAILABLE, 'Worker requires a frozen workflow definition');
@@ -187,44 +186,90 @@ async function runWithStepSite(
   const configForTrigger = await resolveAwaitTriggerConfig(config, { definition }, bus, signal);
   const commands = resolveStepCommands();
   const home = await mkdtemp(join(tmpdir(), 'makaio-workflow-'));
-  const { launcher } = createLocalLauncher({
+  const { launcher: siteLauncher } = createLocalLauncher({
     workspaceRoot: workspace,
     stepHomeRoot: join(home, 'steps'),
     runtimeHomeRoot: join(home, 'runtime'),
   });
+  let operationClosureUnconfirmed = false;
+  const launcher: Launcher = {
+    boundary: siteLauncher.boundary,
+    launch: (request) => siteLauncher.launch(request),
+    closeAll: () => siteLauncher.closeAll(),
+    async closeOwner(owner) {
+      const evidence = await siteLauncher.closeOwner(owner);
+      operationClosureUnconfirmed ||= owner.kind === 'runtime' && evidence.kind === 'unproven';
+      return evidence;
+    },
+  };
+  const closeSteps = async (): Promise<void> => {
+    if ((await launcher.closeAll()).kind !== 'quiescent') {
+      throw new Error('Worker step process closure could not be confirmed');
+    }
+  };
+  const removeHome = (): Promise<void> => rm(home, { recursive: true, force: true });
   let disposal: Promise<void> | undefined;
-  const dispose = (): Promise<void> => (disposal ??= closeStepSite(launcher, home));
-  try {
-    const registeredSource = await prepareSource?.(home);
-    if (registeredSource !== undefined) signal.throwIfAborted();
-    const runner = createProcessStepRunner(
-      {
-        ...options,
-        ...commands,
-        launcher,
-        timeoutMs: 300_000,
-        resolveRole: async (received, role, stepSignal) => {
-          const resolved = await bus.requestOptional(
-            received,
-            WorkflowSubjects.resolveRole,
-            { roleId: role },
-            { signal: stepSignal },
-          );
-          return resolved.handled ? resolved.data : undefined;
-        },
-      },
-      registeredSource,
+  const dispose = (): Promise<void> => (disposal ??= closeSteps().then(removeHome));
+  const execute: StepSite['execute'] = (source, cleanup) =>
+    executeProcessSteps(
+      { ...options, config: configForTrigger },
+      { ...commands, launcher },
+      definition,
+      cleanup === 'after-fixed-operations' ? closeSteps : dispose,
+      source,
     );
-    return await runWorkflowOrchestrator({
-      call,
-      bus,
-      config: configForTrigger,
-      loaded: { definition },
-      signal,
-      workspaceRoot: workspace,
-      stepRunner: { ...runner, dispose },
-    });
+  try {
+    return await run({ launcher, definition, home, execute });
   } finally {
-    if (disposal === undefined) await dispose();
+    if (disposal === undefined) {
+      const evidence = await launcher.closeAll();
+      if (evidence.kind === 'quiescent' && !operationClosureUnconfirmed) await removeHome();
+    }
   }
+}
+
+/**
+ * Launch steps with only their workflow input and execution capabilities.
+ * @param options - Frozen workflow invocation.
+ * @param site - Launcher and step commands.
+ * @param definition - Frozen definition.
+ * @param dispose - Close the step processes after execution.
+ * @param registeredSource - Reader input for an explicitly selected source.
+ * @returns The workflow's terminal result.
+ */
+function executeProcessSteps(
+  options: ProcessWorkflowRunOptions,
+  site: Pick<ProcessStepRunnerOptions, 'launcher' | 'codeCommand' | 'agentCommand'>,
+  definition: StepSite['definition'],
+  dispose: () => Promise<void>,
+  registeredSource?: CheckoutWorkflowSource,
+): Promise<WorkflowRunResult> {
+  const { call, bus, config, signal, workspace } = options;
+  if (registeredSource !== undefined) signal.throwIfAborted();
+  const runner = createProcessStepRunner(
+    {
+      ...options,
+      ...site,
+      timeoutMs: 300_000,
+      resolveRole: async (received, role, stepSignal) => {
+        const resolved = await bus.requestOptional(
+          received,
+          WorkflowSubjects.resolveRole,
+          { roleId: role },
+          { signal: stepSignal },
+        );
+        return resolved.handled ? resolved.data : undefined;
+      },
+    },
+    registeredSource,
+  );
+  return runWorkflowOrchestrator({
+    call,
+    bus,
+    config,
+    loaded: { definition },
+    signal,
+    workspaceRoot: workspace,
+    stepRunner: { ...runner, dispose },
+  });
 }
