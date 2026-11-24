@@ -8,14 +8,15 @@ type JournalActivationErrorCode =
   | 'name-not-owned'
   | 'subject-not-recorded'
   | 'duplicate-edge'
+  | 'duplicate-reader'
   | 'duplicate-account-resolver';
 
-/** Invalid inbound edge or account resolver declaration. */
+/** Invalid journal contribution declaration. */
 export class JournalActivationError extends MakaioError {
   /**
    * @param code - Machine-readable activation failure.
    * @param extension - Declaring extension.
-   * @param contribution - Name of the failing edge or resolver.
+   * @param contribution - Name of the failing contribution.
    * @param reason - Details of the failure.
    */
   public constructor(

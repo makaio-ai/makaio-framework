@@ -1,4 +1,5 @@
 import type { BoundaryAccessCheck, IMakaioBus } from '@makaio/bus-core';
+import type { RightAnswer, RightQuestion } from '@makaio/contracts/rights';
 import { createBoundaryAccessCheck, type BoundaryPhase } from './boundary-access.js';
 import { registerRightsHandlers } from './rights-handlers.js';
 import { createRefusedRightsHub, createRightsHub, type RightsHub } from './rights-hub.js';
@@ -15,6 +16,21 @@ export type CoordinatorRights = Pick<RightsHub, 'capabilityFor' | 'beginActivati
   isBoundaryReady(): boolean;
   /** Check an operation at the transport boundary. */
   readonly checkBoundaryAccess: BoundaryAccessCheck;
+  /** Rights operations for callers composing services inside this host. */
+  readonly hostRights: {
+    /**
+     * Resolve a host-local right against the same active sources as the transport.
+     * Stored rows represent work already admitted to the host. Their readers are
+     * governed by the local activation lifecycle and resolve access independently
+     * of the transport's readiness and shutdown gate. Host composition reaches
+     * this resolver only through the extension coordinator.
+     * @param question - The right, minted call, and context to check.
+     * @returns The combined answer from the host resolver.
+     */
+    resolve(question: RightQuestion): Promise<RightAnswer>;
+    /** Announce a host operation's denial through the common denial sink. */
+    readonly deny: RightsHub['deny'];
+  };
 };
 
 /**
@@ -41,5 +57,6 @@ export function createCoordinatorRights(bus: IMakaioBus, mode: 'host' | 'refused
     deactivate: hub.deactivate,
     registerHandlers: () => (ownsRights ? registerRightsHandlers(bus, hub) : []),
     checkBoundaryAccess: createBoundaryAccessCheck(bus, hub, () => phase),
+    hostRights: { resolve: (question) => hub.resolve(question), deny: hub.deny },
   };
 }

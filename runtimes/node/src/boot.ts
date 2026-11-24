@@ -46,7 +46,12 @@ import {
   type KernelExtensionContext,
 } from '@makaio/kernel';
 import { createHostDatabase } from '@makaio/storage-drizzle';
-import { createJournalCapability, JournalContributionProcessor, SubjectDirectory } from '@makaio/services-core/journal';
+import {
+  createJournalCapability,
+  JournalContributionProcessor,
+  JournalReaderService,
+  SubjectDirectory,
+} from '@makaio/services-core/journal';
 import { JournalStartBarrier } from './journal-start-barrier.js';
 import { CliNamespace } from '@makaio/kernel/cli';
 import { RuntimeSubjects, RuntimeNamespace } from './bus/runtime/namespace.js';
@@ -92,7 +97,7 @@ import {
   createNativeSessionSupervisorPackage,
   NATIVE_SESSION_SUPERVISOR_PACKAGE_NAME,
 } from '@makaio/subsystem-native-session-supervisor/package';
-import { busContextOf } from '@makaio/bus-core/kernel-api';
+import { busContextOf, mintCallContext } from '@makaio/bus-core/kernel-api';
 import { createPackageManagerPackage } from '@makaio/services-package-manager/package';
 import { createInstalledExtensionCatalogSource } from './installed-extension-catalog-source.js';
 import { createHttpContributionProcessor } from './http-contribution-processor.js';
@@ -667,6 +672,15 @@ export async function bootMakaioRuntimeCore(
     shutdownSteps.push(resourceStep('subject directory', () => directory.destroy()));
     await directory.init();
     coordinator.registerContributionProcessor(journalContributions);
+    const journalReaders = new JournalReaderService({
+      bus,
+      host: database,
+      directory,
+      ...coordinator.hostRights,
+      bindCall: (caller, { principal, attestedBy }) =>
+        mintCallContext({ caller, principal, ...(attestedBy === undefined ? {} : { attestedBy }) }),
+    });
+    const unregisterJournalReaders = coordinator.registerContributionProcessor(journalReaders);
 
     // Framework-level packages load unconditionally — they provide core
     // infrastructure (e.g. preferences storage) that the shell and framework
@@ -902,6 +916,18 @@ export async function bootMakaioRuntimeCore(
         getAdapterSubsystemService: () => coordinator.getExtensionService(AdapterSubsystemToken),
       }),
     );
+    shutdownSteps.push(resourceStep('journal readers', () => journalReaders.destroy()));
+    // Activation hooks stage a generation before the coordinator publishes its rights and active state.
+    const stopReaderActivationWake = bus.on(ExtensionSubjects.stateChanged, ({ payload, transport }) => {
+      if (transport === undefined && payload.to === 'active') journalReaders.wake();
+    });
+    shutdownSteps.push(
+      localStep('journal reader activation', () => {
+        stopReaderActivationWake();
+        unregisterJournalReaders();
+      }),
+    );
+    await journalReaders.init();
 
     // -----------------------------------------------------------------------
     // 8. ExtensionCoordinator.startAll — storage + services, surface-gated
@@ -915,6 +941,7 @@ export async function bootMakaioRuntimeCore(
     reportOperatorConfig = undefined;
     reportStartedConfig();
     checkpoint();
+    journalReaders.start();
     startGate.open();
     rights.openBoundary();
     await notifySubscriptionAvailability();

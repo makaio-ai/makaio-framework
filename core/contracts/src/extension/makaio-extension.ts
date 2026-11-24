@@ -18,6 +18,7 @@ import type {
 } from './extension-contributions.js';
 import type { ClientDefinition } from '../client/definition.js';
 import type { AccountResolverContribution, InboundEdgeContribution } from '../journal/edge.js';
+import type { ReaderContribution } from '../journal/reader.js';
 import type { ProviderDefinitionInput } from '../provider/definition.js';
 import type { EntityUIConfig } from '../shared/ui-config.js';
 import type { ExtensionBootstrap } from './contributions/bootstrap-types.js';
@@ -332,6 +333,9 @@ export interface MakaioExtension<THostContext extends ExtensionContext = NodeExt
    * subjects owned by the contributing extension.
    */
   readonly edges?: readonly InboundEdgeContribution[];
+
+  /** Journal readers installed and withdrawn with this extension. */
+  readonly readers?: readonly ReaderContribution[];
 
   /**
    * Executable contribution that maps witnessed accounts to parties of the host.

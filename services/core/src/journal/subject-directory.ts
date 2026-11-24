@@ -173,6 +173,18 @@ export class SubjectDirectory extends BaseService implements ContributionProcess
   }
 
   /**
+   * Check whether a pattern can select a declared recorded subject.
+   * @param pattern - The reader's validated subject pattern.
+   * @returns Whether the directory includes a matching recorded subject.
+   */
+  public hasRecordedSubject(pattern: string): boolean {
+    return [...this.entries.values()].some(
+      ({ entry }) =>
+        entry.type === 'event' && entry.retention === 'recorded' && matchesSubscription(entry.subject, pattern),
+    );
+  }
+
+  /**
    * Read an exact declaration, including one staged before the service starts.
    * @param subject - Canonical subject name.
    * @returns An independent copy of the declaration, if present.
