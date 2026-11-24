@@ -9,7 +9,12 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { createBusInstance, MakaioBus, waitForSubscriptionPropagation } from '@makaio/bus-core';
+import {
+  NO_BOUNDARY_ACCESS_CHECK,
+  createBusInstance,
+  MakaioBus,
+  waitForSubscriptionPropagation,
+} from '@makaio/bus-core';
 import {
   HmacAuth,
   MAKAIO_LOCAL_CLI_HMAC_IDENTITY_ID,
@@ -811,6 +816,7 @@ describe('SupervisorService', () => {
       if (address === null || typeof address === 'string') throw new Error('Expected a TCP WebSocket address');
 
       serverTransport = new ServerTransport({
+        checkBoundaryAccess: NO_BOUNDARY_ACCESS_CHECK,
         websocket,
         auth: new HmacAuth({
           secret,
@@ -979,7 +985,7 @@ describe('SupervisorService', () => {
         cleanupSocket: (socket) => contexts.delete(socket),
         cleanup: () => contexts.clear(),
       };
-      serverTransport = new ServerTransport({ websocket, auth });
+      serverTransport = new ServerTransport({ checkBoundaryAccess: NO_BOUNDARY_ACCESS_CHECK, websocket, auth });
       MakaioBus.registerTransport(serverTransport);
       await serverTransport.connect();
 

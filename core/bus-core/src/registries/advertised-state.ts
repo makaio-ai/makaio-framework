@@ -32,6 +32,7 @@ import { matchesSubscription } from '../utils/subscription-matching.js';
  *   exclude its own remote entries to avoid routing loops)
  * @param targetTransport - Transport instance to call subscribe/unsubscribe on
  * @param subject - Full subject key (e.g. `'namespace.subject'`) to advertise
+ * @param onSubscribeResult - Observer for a transport's subscription result.
  * @returns A promise that resolves when the subscribe or unsubscribe call settles.
  *   Always resolves (never rejects) — errors are caught and logged internally.
  */
@@ -40,6 +41,7 @@ export function pushAdvertisedSubject(
   targetTransportName: string,
   targetTransport: BusTransport,
   subject: string,
+  onSubscribeResult?: (accepted: boolean, error?: unknown) => void,
 ): Promise<void> {
   const prioritySet = new Set<number>();
 
@@ -107,8 +109,10 @@ export function pushAdvertisedSubject(
     const deliveryClass: SubscriptionDeliveryClass =
       hasLocalHandlers && isHostLocalRequest ? 'first-hop-only' : 'relayable';
     // Advertise the full priority set (may be empty for event-only subjects).
-    return Promise.resolve(targetTransport.subscribe(subject, undefined, [...prioritySet], deliveryClass)).catch(
+    return Promise.resolve(targetTransport.subscribe(subject, undefined, [...prioritySet], deliveryClass)).then(
+      () => onSubscribeResult?.(true),
       (error: unknown) => {
+        onSubscribeResult?.(false, error);
         context.debugLog(
           formatBusDiagnostic('[AdvertisedState] subscribe propagation failed', {
             transport: targetTransportName,
@@ -133,6 +137,7 @@ export function pushAdvertisedSubject(
  * @param excludeTransportName - Transport to skip (the message source); pass `null`
  *   to push to all registered transports (used by `on.ts` local handler changes)
  * @param affectedSubjects - Subjects whose advertised state may have changed
+ * @param onSubscribeResult - Observer for each transport's subscription result.
  * @returns A promise that resolves when all per-transport advertised-state pushes
  *   have settled. Always resolves (never rejects) — each push catches its own errors
  *   internally. Callers may optionally await this to ensure subscription propagation
@@ -142,6 +147,7 @@ export function pushAdvertisedSubjectsToPeers(
   context: MakaioBusContext,
   excludeTransportName: BusTransportKeys | null,
   affectedSubjects: string[],
+  onSubscribeResult?: (accepted: boolean, error?: unknown) => void,
 ): Promise<void> {
   const promises: Promise<void>[] = [];
   const expandedSubjects = expandHostLocalWildcardSubjects(context, affectedSubjects);
@@ -150,7 +156,7 @@ export function pushAdvertisedSubjectsToPeers(
     const target = context.transportRegistry.getTransport(name);
     if (!target) continue;
     for (const subject of expandedSubjects) {
-      promises.push(pushAdvertisedSubject(context, String(name), target, subject));
+      promises.push(pushAdvertisedSubject(context, String(name), target, subject, onSubscribeResult));
     }
   }
   // allSettled (not .all) enforces the "never rejects" contract documented

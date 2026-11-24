@@ -72,7 +72,7 @@ export async function addSubscription(
   const existingFilter = existing?.filter;
   const resolvedFilter = filter ?? existingFilter;
   const resolvedDeliveryClass = deliveryClass ?? existing?.deliveryClass ?? 'relayable';
-  deps.localSubscriptions.set(subject, { filter: resolvedFilter, priorities, deliveryClass: resolvedDeliveryClass });
+  const entry = { filter: resolvedFilter, priorities, deliveryClass: resolvedDeliveryClass };
 
   if (deps.socket !== null && deps.socket.readyState === 1) {
     const ack = deps.beginSubscriptionAck?.();
@@ -88,6 +88,8 @@ export async function addSubscription(
       throw error;
     }
   }
+
+  deps.localSubscriptions.set(subject, entry);
 
   if (deps.debug) {
     deps.debugLog(
@@ -105,7 +107,6 @@ export async function addSubscription(
  */
 export async function removeSubscription(subject: string, deps: SubscriptionDeps): Promise<void> {
   const existing = deps.localSubscriptions.get(subject);
-  deps.localSubscriptions.delete(subject);
 
   if (deps.socket !== null && deps.socket.readyState === 1) {
     const ack = deps.beginSubscriptionAck?.();
@@ -118,6 +119,8 @@ export async function removeSubscription(subject: string, deps: SubscriptionDeps
       throw error;
     }
   }
+
+  deps.localSubscriptions.delete(subject);
 
   if (deps.debug) {
     deps.debugLog(`[WebSocketClientTransport:${deps.name}] Unsubscribed from ${subject}`);

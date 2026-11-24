@@ -5,6 +5,8 @@
 import type { WebSocketLike, WebSocketServerLike, TransportAuth } from './types.js';
 import {
   DEFAULT_REQUEST_TIMEOUT_MS,
+  NO_BOUNDARY_ACCESS_CHECK,
+  type BoundaryAccessPolicy,
   type BusBroadcastMessage,
   type BusMessage,
   type BusReceiveHandler,
@@ -19,6 +21,7 @@ import {
 import type { PayloadFilter } from '@makaio/core';
 import { BroadcastAggregator } from './broadcast-aggregator.js';
 import { buildSubscribeMessage, buildUnsubscribeMessage, type SubscriptionEntry } from './subscribe-message.js';
+import { authorizedRecipients, projectBoundaryMessage, ServerBoundaryAccess } from './server-boundary-access.js';
 import { ClientRegistry } from './client-registry.js';
 import { setupClientConnection, routeRequestToClients } from './server-client-setup.js';
 import {
@@ -34,6 +37,8 @@ export interface ServerTransportOptions {
    */
   name?: string;
   auth?: TransportAuth;
+  /** Host authorization policy or an explicit opt-out. */
+  checkBoundaryAccess: BoundaryAccessPolicy;
   debug?: boolean;
 }
 
@@ -43,11 +48,14 @@ export interface ServerTransportOptions {
  * Manages multiple client connections and broadcasts messages to all connected clients.
  * @example
  * ```typescript
+ * import { NO_BOUNDARY_ACCESS_CHECK } from '@makaio/bus-core';
  * import { WebSocketServer } from 'ws';
  *
- * const wss = new WebSocketServer({ port: 8080 });
+ * const wss = new WebSocketServer({ host: '127.0.0.1', port: 8080 });
  * const transport = new ServerTransport({
  *   websocket: wss,
+ *   // This example runs a private loopback server without a host rights directory.
+ *   checkBoundaryAccess: NO_BOUNDARY_ACCESS_CHECK,
  * });
  *
  * await transport.connect();
@@ -63,12 +71,13 @@ export class ServerTransport implements BusTransport {
 
   private readonly handlers = new Set<BusReceiveHandler>();
   private readonly registry: ClientRegistry;
+  private readonly access: ServerBoundaryAccess | undefined;
 
   /** Server-local handler subjects + priorities, advertised to connected clients. */
   private readonly serverSubscriptions = new Map<string, SubscriptionEntry>();
 
   private readonly broadcastAggregator: BroadcastAggregator;
-  private readonly correlations = new CorrelationTracker();
+  private readonly correlations = new WeakMap<WebSocketLike, CorrelationTracker>();
   /** Cancellation handles of in-flight server-initiated requests, keyed by the caller's correlation ID. */
   private readonly requestRoutes = new Map<string, AbortController>();
 
@@ -79,11 +88,18 @@ export class ServerTransport implements BusTransport {
    * @param options - Server transport configuration
    */
   public constructor(options: ServerTransportOptions) {
-    const { websocket, name = 'websocket', auth, debug = false } = options;
+    const { websocket, name = 'websocket', auth, debug = false, checkBoundaryAccess } = options;
+    if (checkBoundaryAccess !== NO_BOUNDARY_ACCESS_CHECK && typeof checkBoundaryAccess !== 'function') {
+      throw new TypeError('WebSocket server requires checkBoundaryAccess or NO_BOUNDARY_ACCESS_CHECK');
+    }
     this.wss = websocket;
     this.name = name;
     this.auth = auth;
     this.debug = debug;
+    this.access =
+      checkBoundaryAccess === NO_BOUNDARY_ACCESS_CHECK
+        ? undefined
+        : new ServerBoundaryAccess(name, auth, checkBoundaryAccess);
     const resolveForSocket =
       <T>(resolvePolicy: (identityId: string) => T) =>
       (client: WebSocketLike): T | null => {
@@ -107,14 +123,18 @@ export class ServerTransport implements BusTransport {
    * Send serialized data to a client without letting one socket failure disrupt fan-out.
    * @param client - Target client socket
    * @param data - Serialized message payload
+   * @returns Whether the frame was sent on an open socket.
    */
-  private sendToClientSafely(client: WebSocketLike, data: string): void {
+  private sendToClientSafely(client: WebSocketLike, data: string): boolean {
+    if (client.readyState !== 1) return false;
     try {
       client.send(data);
+      return true;
     } catch (error) {
       if (this.debug) {
         console.warn('[ServerTransport] Failed to send message to client:', error);
       }
+      return false;
     }
   }
 
@@ -128,12 +148,15 @@ export class ServerTransport implements BusTransport {
     }
 
     this.connectionListener = (socket: WebSocketLike): void => {
+      const correlations = new CorrelationTracker();
+      this.correlations.set(socket, correlations);
       void setupClientConnection(socket, {
         registry: this.registry,
-        correlations: this.correlations,
+        correlations,
         broadcastAggregator: this.broadcastAggregator,
         handlers: this.handlers,
         auth: this.auth,
+        access: this.access,
         serverSubscriptions: this.serverSubscriptions,
         sendSafely: (client, data) => this.sendToClientSafely(client, data),
         debug: this.debug,
@@ -170,7 +193,6 @@ export class ServerTransport implements BusTransport {
       this.wss.close((err?: Error) => (err ? reject(err) : resolve()));
     });
 
-    this.correlations.cleanup();
     this.broadcastAggregator.cleanup();
     this.auth?.cleanup();
     this.handlers.clear();
@@ -231,27 +253,35 @@ export class ServerTransport implements BusTransport {
     // Handle server-initiated broadcasts with response aggregation
     if (message.type === 'broadcast') {
       const subject = getSubjectFromBusMessage(message) ?? undefined;
-      const payload = 'payload' in message ? message.payload : undefined;
-
-      // Find interested clients
-      const interestedClients = this.registry.getInterestedClients(subject, payload);
+      const projected = projectBoundaryMessage(message);
+      const interestedClients = await authorizedRecipients(
+        { access: this.access, registry: this.registry },
+        this.registry.getInterestedClients(subject, projected.payload),
+        projected,
+      );
 
       return this.broadcastAggregator.startServerBroadcast(
-        message,
-        interestedClients,
-        (client, data) => {
-          // Keep per-client send failures isolated from the rest of the broadcast.
-          this.sendToClientSafely(client, data);
-        },
+        { ...projected, correlationId: globalThis.crypto.randomUUID() },
+        interestedClients(),
+        (client, data) => this.sendToClientSafely(client, data),
         timeout,
       );
     }
 
     // Handle server-initiated requests with subject-authorized routing.
     if (message.type === 'request') {
-      return this.routeRequest(message, timeout ?? DEFAULT_REQUEST_TIMEOUT_MS);
+      return this.routeRequest(projectBoundaryMessage(message), timeout ?? DEFAULT_REQUEST_TIMEOUT_MS);
     }
 
+    return this.deliverMessage(message);
+  }
+
+  /**
+   * Deliver an unsolicited message to its authorized recipients.
+   * @param message - Outbound event or control message.
+   * @returns Whether a socket received it.
+   */
+  private async deliverMessage(message: BusMessage): Promise<boolean> {
     // Server mode: broadcast to all connected clients (for non-broadcast, non-request messages)
     if (this.registry.size === 0) {
       // Response delivery is best-effort: the requester may have disconnected
@@ -264,10 +294,15 @@ export class ServerTransport implements BusTransport {
     }
 
     const subject = getSubjectFromBusMessage(message) ?? undefined;
-    const payload = 'payload' in message ? message.payload : undefined;
-    const serialized = JSON.stringify(message);
-
-    const interested = this.registry.getInterestedClients(subject, payload);
+    const projected = message.type === 'event' ? projectBoundaryMessage(message) : message;
+    const payload = 'payload' in projected ? projected.payload : undefined;
+    const candidates = this.registry.getInterestedClients(subject, payload);
+    const recipients =
+      projected.type === 'event'
+        ? await authorizedRecipients({ access: this.access, registry: this.registry }, candidates, projected)
+        : () => candidates;
+    const serialized = JSON.stringify(projected);
+    const interested = recipients();
     for (const client of interested) {
       this.sendToClientSafely(client, serialized);
     }
@@ -300,8 +335,9 @@ export class ServerTransport implements BusTransport {
     try {
       return await routeRequestToClients(message, timeout, {
         registry: this.registry,
-        correlations: this.correlations,
+        correlationsFor: (client) => this.correlations.get(client),
         signal: route.signal,
+        access: this.access,
       });
     } finally {
       if (this.requestRoutes.get(message.correlationId) === route) this.requestRoutes.delete(message.correlationId);
@@ -320,8 +356,13 @@ export class ServerTransport implements BusTransport {
   ): Promise<boolean> {
     const client = this.registry.getClientByConnectionId(connectionId);
     if (client === undefined) return false;
-    this.sendToClientSafely(client, JSON.stringify(message));
-    return true;
+    const projected = projectBoundaryMessage(message);
+    const stillConnected = (): boolean => this.registry.getClientByConnectionId(connectionId) === client;
+    const revalidate = this.access
+      ? await this.access.authorizeDelivery(projected, client, stillConnected)
+      : stillConnected;
+    const frame = JSON.stringify(projected);
+    return Boolean(revalidate?.()) && this.sendToClientSafely(client, frame);
   }
 
   /**

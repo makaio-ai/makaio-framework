@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { createBusInstance, MakaioBus } from '@makaio/bus-core';
+import { NO_BOUNDARY_ACCESS_CHECK, createBusInstance, MakaioBus } from '@makaio/bus-core';
 import { busContextOf } from '@makaio/bus-core/kernel-api';
 import { AdapterNamespace, AdapterSubjects } from '@makaio/contracts';
 import { createTestCall } from '@makaio/test-utils';
@@ -341,7 +341,11 @@ describe('registerAdapterRuntimeIdentityHandlers', () => {
     const address = websocket.address();
     if (address === null || typeof address === 'string') throw new Error('Test WebSocket server did not expose a port');
 
-    const hubTransport = new ServerTransport({ websocket, name: 'owner-routing-hub' });
+    const hubTransport = new ServerTransport({
+      checkBoundaryAccess: NO_BOUNDARY_ACCESS_CHECK,
+      websocket,
+      name: 'owner-routing-hub',
+    });
     const callerTransport = new WebSocketClientTransport({
       url: `ws://localhost:${address.port}`,
       name: 'owner-routing-caller',

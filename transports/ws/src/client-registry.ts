@@ -108,6 +108,8 @@ interface RequestOrigin {
 /** Transport-level subscription updates produced after per-client state changes. */
 export type ClientSubscriptionUpdate = BusSubscribeMessage | BusUnsubscribeMessage;
 
+type DeliverySubscription = 'any' | 'handler';
+
 /**
  * Manages the set of connected WebSocket clients and their per-client state.
  *
@@ -423,18 +425,51 @@ export class ClientRegistry {
    * @param subject - The message subject (if any)
    * @param payload - The message payload (if any)
    * @param exclude - Optional client to exclude (e.g. the sender in cross-client event forwarding)
+   * @param subscription - Explicit advertisement required for this delivery.
    * @returns Array of interested, ready clients
    */
-  public getInterestedClients(subject: string | undefined, payload: unknown, exclude?: WebSocketLike): WebSocketLike[] {
+  public getInterestedClients(
+    subject: string | undefined,
+    payload: unknown,
+    exclude?: WebSocketLike,
+    subscription?: DeliverySubscription,
+  ): WebSocketLike[] {
     const result: WebSocketLike[] = [];
     for (const client of this.clients) {
       if (client === exclude || !this.isReadyAndAuthenticated(client)) continue;
-      if (!this.clientWantsMessage(client, subject, payload)) continue;
-      if (!this.isSubjectAllowedForClient(client, subject)) continue;
-      if (!this.isPayloadAllowedForClient(client, subject, payload)) continue;
+      if (!this.matchesDelivery(client, subject, payload, subscription)) continue;
       result.push(client);
     }
     return result;
+  }
+
+  /**
+   * Apply the current subscription and identity restrictions to a delivery candidate.
+   * @param client - Candidate recipient.
+   * @param subject - Concrete subject being delivered, when present.
+   * @param payload - Payload as sent over the wire.
+   * @param subscription - Explicit advertisement required for this delivery.
+   * @returns Whether the live subscription and identity restrictions permit delivery.
+   */
+  public matchesDelivery(
+    client: WebSocketLike,
+    subject: string | undefined,
+    payload: unknown,
+    subscription: DeliverySubscription = 'any',
+  ): boolean {
+    const advertised =
+      subscription === 'any' ||
+      (subject !== undefined &&
+        [...(this.clientSubscriptionState.get(client) ?? [])].some(
+          ([pattern, state]) => state.priorities.length > 0 && matchesSubscription(subject, pattern),
+        ));
+    return (
+      this.clients.has(client) &&
+      advertised &&
+      this.clientWantsMessage(client, subject, payload) &&
+      this.isSubjectAllowedForClient(client, subject) &&
+      this.isPayloadAllowedForClient(client, subject, payload)
+    );
   }
 
   /**
@@ -450,13 +485,7 @@ export class ClientRegistry {
    * @returns Interested, authorized request targets in connection order.
    */
   public getInterestedRequestClients(subject: string, payload: unknown, exclude?: WebSocketLike): WebSocketLike[] {
-    return this.getInterestedClients(subject, payload, exclude).filter((client) => {
-      const subscriptions = this.clientSubscriptionState.get(client);
-      if (!subscriptions) return false;
-      return [...subscriptions].some(
-        ([pattern, state]) => state.priorities.length > 0 && matchesSubscription(subject, pattern),
-      );
-    });
+    return this.getInterestedClients(subject, payload, exclude, 'handler');
   }
 
   // ---------------------------------------------------------------------------

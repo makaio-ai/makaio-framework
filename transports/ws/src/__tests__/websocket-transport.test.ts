@@ -12,7 +12,7 @@
  */
 
 import { describe, it, expect, vi } from 'vitest';
-import { ConnectionLostError } from '@makaio/bus-core';
+import { NO_BOUNDARY_ACCESS_CHECK, ConnectionLostError } from '@makaio/bus-core';
 import { WebSocketClientTransport } from '../ws-client-transport.js';
 import { createWebSocketTransport } from '../index.js';
 import { ServerTransport } from '../server-transport.js';
@@ -270,6 +270,13 @@ describe('Client mode behavior', () => {
   });
 });
 
+it('requires an explicit boundary access decision from server-mode factory callers', () => {
+  const options = { mode: 'server', websocket: new MockWebSocketServer() };
+  expect(() => Reflect.apply(createWebSocketTransport, undefined, [options])).toThrow(
+    'WebSocket server requires checkBoundaryAccess or NO_BOUNDARY_ACCESS_CHECK',
+  );
+});
+
 // ============================================================================
 // HMAC AUTHENTICATION
 // ============================================================================
@@ -304,6 +311,7 @@ describe('HMAC authentication', () => {
     const wss = new MockWebSocketServer();
     const auth = new HmacAuth({ secret: TEST_SECRET });
     const transport = new ServerTransport({
+      checkBoundaryAccess: NO_BOUNDARY_ACCESS_CHECK,
       websocket: wss,
       auth,
     });

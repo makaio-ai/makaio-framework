@@ -1,4 +1,5 @@
 import type { CallContext, MakaioBusLike, RegistrableBusNamespaceDefinition } from '@makaio/core';
+import type { RightsCapability } from '../rights/capability.js';
 import type { CredentialRef } from '../config/credential-ref.js';
 import type { HostDatabase } from '../host-database/host-database.js';
 import type { JournalCapability } from '../journal/capability.js';
@@ -193,6 +194,8 @@ export interface NodeExtensionContextFields {
    * Extensions **must never log resolved values**.
    */
   readonly credentials?: CredentialResolver;
+  /** Rights capability bound to this extension by its coordinator. */
+  readonly rights: RightsCapability;
 }
 
 /** Context supplied by a full Node host. */

@@ -14,6 +14,7 @@ import type {
 } from '@makaio/contracts';
 import type { IMakaioBus } from '@makaio/bus-core';
 import type { ExtensionName, PartyRef } from '@makaio/core';
+import type { CoordinatorRights } from '../rights/coordinator-rights.js';
 import type { ComponentState } from '../observability/index.js';
 import type { InstalledExtensionRecord } from '../observability/installed-extension-catalog-schemas.js';
 
@@ -84,6 +85,7 @@ export type ExtensionContextBase<THostContext extends KernelHostContext = Kernel
   | 'openContributions'
   | 'namespaces'
   | 'credentials'
+  | 'rights'
 > & {
   /**
    * Factory for the per-extension credential resolver.
@@ -174,6 +176,8 @@ export interface RuntimeEnvironment {
 export interface ExtensionCoordinatorOptions<THostContext extends KernelHostContext = KernelExtensionContext> {
   /** Hosted surface category used to apply package gating. Defaults to `'headless'`. */
   surface?: ExtensionRuntimeSurface;
+  /** Shared host rights, or a mode for coordinators that own their capability. */
+  rights?: CoordinatorRights | 'host' | 'refused';
   /**
    * Run one entry’s startup in a host-supplied asynchronous scope.
    * @param extension - Entry being started or re-enabled.

@@ -1,3 +1,4 @@
+import { NO_BOUNDARY_ACCESS_CHECK } from '@makaio/bus-core';
 import { describe, expect, it, vi } from 'vitest';
 import { ServerTransport } from '../server-transport.js';
 import type { TransportAuth } from '../types.js';
@@ -41,7 +42,7 @@ describe('ServerTransport fan-out principal', () => {
         ...(socket === sender && attests ? { attests: 'inbound' } : {}),
       }),
     };
-    const transport = new ServerTransport({ websocket, auth });
+    const transport = new ServerTransport({ checkBoundaryAccess: NO_BOUNDARY_ACCESS_CHECK, websocket, auth });
 
     await transport.connect();
     try {
@@ -71,9 +72,15 @@ describe('ServerTransport fan-out principal', () => {
       };
       sender.receiveMessage(JSON.stringify(message));
 
-      expect(recipient.sentMessages.map((frame) => JSON.parse(frame))).toEqual([
-        { ...message, metadata: { principal } },
-      ]);
+      await vi.waitFor(() => {
+        expect(recipient.sentMessages.map((frame) => JSON.parse(frame))).toEqual([
+          {
+            ...message,
+            correlationId: type === 'broadcast' ? expect.any(String) : message.correlationId,
+            metadata: { principal },
+          },
+        ]);
+      });
     } finally {
       await transport.disconnect();
     }

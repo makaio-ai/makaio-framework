@@ -1,4 +1,5 @@
 import type { CallContext, ContributionName } from '@makaio/core';
+import type { HandlerContext } from './handler-context.js';
 import type { RightAnswer, RightContribution, RightsSourceContribution } from './right.js';
 import type { RightsResolveRequest } from './schemas.js';
 
@@ -18,11 +19,26 @@ export interface RightsCapability {
    * resolves a right; the core builds the question from the arguments. A right
    * that no active extension declares is denied. A declared right without an
    * answer source is granted.
+   *
+   * Asks only: unlike {@link HandlerContext.hasRight}, a "no" here
+   * is neither denied nor announced on `makaio:access.denied` — this method only answers the
+   * question, it never decides what the caller does with a "no" or makes it visible. A handler
+   * serving a message that needs its caller's "no" announced uses `handlerContext(call)`
+   * instead (see {@link handlerContext}).
    * @param call - Context of the call the right is resolved for.
    * @param ask - The right and the context of the question about it.
    * @returns The combined answer.
    */
   resolve(call: CallContext, ask: Readonly<RightsResolveRequest>): Promise<RightAnswer>;
+
+  /**
+   * Builds the handler context of a message this extension serves: `call` is
+   * the `context.call` the handler received. `hasRight` on the result resolves
+   * through this same `resolve`, never a second path.
+   * @param call - Context of the call the handler received.
+   * @returns The handler context, bound to `call`.
+   */
+  handlerContext(call: CallContext): HandlerContext;
 
   /**
    * Reports that an answer source of this extension changed its content. The

@@ -17,7 +17,7 @@ import type { WebSocketServer } from 'ws';
 import { WebSocketClientTransport } from '../ws-client-transport.js';
 import { ServerTransport } from '../server-transport.js';
 import type { BusMessage, BusRequestMessage } from '@makaio/bus-core';
-import { NO_HANDLER_ERROR_CODE, NoHandlerError, TimeoutError } from '@makaio/bus-core';
+import { NO_BOUNDARY_ACCESS_CHECK, NO_HANDLER_ERROR_CODE, NoHandlerError, TimeoutError } from '@makaio/bus-core';
 import { createTestServer, waitForCondition, waitForMessageCount } from './test-utils.js';
 
 // ============================================================================
@@ -27,7 +27,7 @@ import { createTestServer, waitForCondition, waitForMessageCount } from './test-
 describe('Event broadcast E2E', () => {
   it('broadcasts events from server to multiple clients', async () => {
     const { wss, port } = await createTestServer();
-    const serverTransport = new ServerTransport({ websocket: wss });
+    const serverTransport = new ServerTransport({ checkBoundaryAccess: NO_BOUNDARY_ACCESS_CHECK, websocket: wss });
     await serverTransport.connect();
 
     try {
@@ -110,7 +110,7 @@ describe('Event broadcast E2E', () => {
 describe('Request-response E2E', () => {
   it('handles request-response across client-server', async () => {
     const { wss, port } = await createTestServer();
-    const serverTransport = new ServerTransport({ websocket: wss });
+    const serverTransport = new ServerTransport({ checkBoundaryAccess: NO_BOUNDARY_ACCESS_CHECK, websocket: wss });
     await serverTransport.connect();
 
     try {
@@ -158,7 +158,7 @@ describe('Request-response E2E', () => {
 
   it('handles multiple concurrent requests', async () => {
     const { wss, port } = await createTestServer();
-    const serverTransport = new ServerTransport({ websocket: wss });
+    const serverTransport = new ServerTransport({ checkBoundaryAccess: NO_BOUNDARY_ACCESS_CHECK, websocket: wss });
     await serverTransport.connect();
 
     try {
@@ -267,7 +267,7 @@ describe('Server-initiated request routing E2E', () => {
   beforeEach(async () => {
     const server = await createTestServer();
     wss = server.wss;
-    serverTransport = new ServerTransport({ websocket: wss });
+    serverTransport = new ServerTransport({ checkBoundaryAccess: NO_BOUNDARY_ACCESS_CHECK, websocket: wss });
     await serverTransport.connect();
 
     // Two clients advertise the same request handler and record what reaches them.

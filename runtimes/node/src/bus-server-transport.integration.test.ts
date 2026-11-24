@@ -17,7 +17,7 @@ import type { IncomingMessage } from 'node:http';
 import type { Duplex } from 'node:stream';
 import { describe, expect, it } from 'vitest';
 import { WebSocket } from 'ws';
-import { createBusInstance } from '@makaio/bus-core';
+import { NO_BOUNDARY_ACCESS_CHECK, createBusInstance } from '@makaio/bus-core';
 import { closeHttpServer, listenOnLoopback } from './__tests__/http-test-helpers.js';
 import { BusServerTransportProvider } from './bus-server-transport.js';
 
@@ -63,7 +63,7 @@ describe('BusServerTransportProvider — WebSocket upgrade integration', () => {
       httpServer: server,
     });
 
-    await transport.connect(bus, 'machine-integration');
+    await transport.connect(bus, { machineId: 'machine-integration', checkBoundaryAccess: NO_BOUNDARY_ACCESS_CHECK });
 
     let ws: WebSocket | undefined;
     try {
@@ -88,7 +88,7 @@ describe('BusServerTransportProvider — WebSocket upgrade integration', () => {
       httpServer: server,
     });
 
-    await transport.connect(bus, 'machine-integration');
+    await transport.connect(bus, { machineId: 'machine-integration', checkBoundaryAccess: NO_BOUNDARY_ACCESS_CHECK });
 
     // Register a secondary upgrade listener after the bus transport.
     // The bus handler must not consume or destroy the socket for non-bus

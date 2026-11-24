@@ -23,7 +23,7 @@ import { WebSocketServer } from 'ws';
 import { createBusServer } from '@makaio/bus-server';
 
 const wss = new WebSocketServer({ port: 8080 });
-const server = createBusServer({ websocket: wss, debug: true });
+const server = createBusServer({ websocket: wss, bus, checkBoundaryAccess, debug: true });
 
 await server.start();   // Register transport, begin listening
 await server.stop();    // Unregister, disconnect clients
@@ -39,6 +39,8 @@ import { startBusServer } from '@makaio/bus-server/server-lifecycle';
 
 const server = await startBusServer({
   websocket: wss,
+  bus,
+  checkBoundaryAccess,
   secret: process.env.BUS_SECRET, // Omit for no auth (dev mode)
   debug: true,
 });
@@ -52,9 +54,11 @@ The Vite plugin lives in `@makaio/bus-server-vite` (`../bus-server-vite/`).
 
 | Type | Description |
 |------|-------------|
-| `BusServerConfig` | `{ websocket, bus?, auth?, debug? }` |
+| `BusServerConfig` | `{ websocket, bus, checkBoundaryAccess, auth?, debug? }` |
 | `BusServer` | `{ transport, start(), stop(), getConnectionCount() }` |
-| `StartBusServerOptions` | `{ websocket, secret?, debug? }` |
+| `StartBusServerOptions` | `{ websocket, bus, checkBoundaryAccess, secret?, debug? }` |
+
+Supply the host's boundary access check or the explicit `NO_BOUNDARY_ACCESS_CHECK` opt-out from `@makaio/bus-core`.
 | `LoopbackTransportOptions` | Options for the same-server relay proxy |
 | `TransportAuth` | Auth strategy type re-exported from the WebSocket transport |
 | `WebSocketServerLike` | Duck-typed WebSocket server interface re-exported from the WebSocket transport |

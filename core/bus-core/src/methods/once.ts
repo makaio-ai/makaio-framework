@@ -1,7 +1,9 @@
 import type { MakaioBusContext } from '../types/index.js';
+import { AccessDeniedError } from '@makaio/contracts/access';
 import { getFullSubjectForSubjectDefinition } from '../utils/subject-transformation.js';
 import { subscriptionSignal } from '../subscription-lifetime.js';
 import { getOnPropagationPromise, on } from './on.js';
+import { resolveEffectiveTransports } from './resolve-effective-transports.js';
 import type {
   HandlerForSubjectDefinition,
   PartyRef,
@@ -240,21 +242,20 @@ export function once<T extends SubjectDefinition>(
       }
     };
 
+    const fail = (error: Error): void => {
+      cleanup();
+      reject(error);
+    };
+
     // Setup AbortSignal listener if provided
     if (signal) {
-      if (signal.aborted) {
-        cleanup();
-        reject(new OnceAbortError());
-        return;
-      }
-
-      abortHandler = () => {
-        cleanup();
-        reject(new OnceAbortError());
-      };
+      if (signal.aborted) return fail(new OnceAbortError());
+      abortHandler = () => fail(new OnceAbortError());
       signal.addEventListener('abort', abortHandler, { once: true });
     }
 
+    let acceptedByTransport = false;
+    let denial: AccessDeniedError | undefined;
     // Subscribe to event with filter passed to on() for local filtering.
     // The handler is registered synchronously — local delivery works immediately.
     unsubscribe = on(
@@ -267,6 +268,10 @@ export function once<T extends SubjectDefinition>(
         resolve(ctx);
       }) as HandlerForSubjectDefinition<T>,
       options?.filter ? { filter: options.filter as PayloadFilter } : undefined,
+      (accepted, error) => {
+        acceptedByTransport ||= accepted;
+        if (error instanceof AccessDeniedError) denial ??= error;
+      },
     );
 
     // Defer timeout until subscription is propagated to transports.
@@ -274,17 +279,29 @@ export function once<T extends SubjectDefinition>(
     // message being queued and the server processing it.
     // The handler is already registered (local delivery is immediate) —
     // only the timeout timer is deferred.
-    const propagated = getOnPropagationPromise(unsubscribe);
-    const startTimer = (): void => {
-      if (options?.timeoutMs && unsubscribe !== null) {
-        timer = setTimeout(() => {
-          cleanup();
-          reject(new OnceTimeoutError(subject, options.timeoutMs!));
-        }, options.timeoutMs);
+    const finishPropagation = (): void => {
+      if (unsubscribe === null) return;
+      if (denial && !acceptedByTransport && !hasLocalRoute(context, subjectDefinition, subject)) return fail(denial);
+      if (options?.timeoutMs) {
+        timer = setTimeout(() => fail(new OnceTimeoutError(subject, options.timeoutMs!)), options.timeoutMs);
       }
     };
 
-    if (propagated) void propagated.then(startTimer, startTimer);
-    else startTimer();
+    void Promise.resolve(getOnPropagationPromise(unsubscribe)).then(finishPropagation);
   });
+}
+
+/**
+ * Check whether the subject has an explicitly local publication route.
+ * @param context - Bus holding namespace routing defaults.
+ * @param definition - Subject token supplied to once.
+ * @param subject - Fully qualified subject name.
+ * @returns Whether an in-process publisher can be the intended source.
+ */
+function hasLocalRoute(context: MakaioBusContext, definition: SubjectDefinition, subject: string): boolean {
+  return (
+    definition.$meta.local === true ||
+    context.namespaceRegistry.isLocalSubject(subject) ||
+    resolveEffectiveTransports(context, definition, subject, undefined) !== undefined
+  );
 }

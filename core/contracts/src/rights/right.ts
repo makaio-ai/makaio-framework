@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { ContributionNameSchema } from '@makaio/core';
-import type { CallContext, ContributionName, PartyKind } from '@makaio/core';
+import type { CallContext, CallContextRecord, ContributionName, PartyKind } from '@makaio/core';
 import type { JsonSchema, JsonValue } from '../shared/json-value.js';
 
 /**
@@ -61,6 +61,26 @@ export interface RightQuestion {
 }
 
 /**
+ * A question about one right, as an answer source receives it: the call carried
+ * as data, never as the authority to act as any of its parties.
+ *
+ * An answer source decides whether a party holds a right; it must never be handed
+ * authority to act as that party. `CallContextRecord` is plain data that "proves
+ * nothing: no operation accepts a record in place of a `CallContext`" (see its
+ * own TSDoc in `@makaio/core`), so a source cannot send it on the bus or pass it
+ * to `ctx.rights.resolve` as if it were a real call, unlike the minted `CallContext`
+ * `RightQuestion` carries at the one resolution place.
+ */
+export interface RightSourceQuestion {
+  /** Context of the call, as a plain record: caller, principal and attesting party. */
+  readonly call: CallContextRecord;
+  /** The right that is asked about. */
+  readonly right: RightName;
+  /** Context of the question; it follows the schema of the right. */
+  readonly context: JsonValue;
+}
+
+/**
  * An answer source as an extension contributes it: answers questions about the
  * rights its patterns cover.
  */
@@ -78,10 +98,15 @@ export interface RightsSourceContribution {
    */
   readonly payloadIndependent?: readonly string[];
   /**
+   * Right patterns for which this source needs the wire JSON payload of an external
+   * send or delivery. Subscription registration has no payload.
+   */
+  readonly requiresPayload?: readonly string[];
+  /**
    * Answers a question inside the host process from the source's own content.
    * It must not send a message whose check would ask for rights again.
-   * @param question - The question to answer.
+   * @param question - The question to answer, with its call carried as data.
    * @returns The answer of this source.
    */
-  answer(question: RightQuestion): Promise<RightAnswer>;
+  answer(question: RightSourceQuestion): Promise<RightAnswer>;
 }

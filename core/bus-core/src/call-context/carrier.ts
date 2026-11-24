@@ -1,12 +1,6 @@
 import type { CallContext, OwnWorkPurpose, Party, PartyRef } from '@makaio/core';
 import { BusError } from '../errors/bus-error.js';
-import {
-  InvalidCallContextError,
-  isMintedCallContext,
-  mintCallContext,
-  ownBusContextOf,
-  ownCarrierOf,
-} from './mint.js';
+import { assertMintedCallContext, mintCallContext, ownBusContextOf, ownCarrierOf } from './mint.js';
 
 /**
  * Thrown when an own context (`bus.own`) is used through a bus instance, or
@@ -108,9 +102,7 @@ export function implicitOwn(context: object, carrier: PartyRef): CallContext {
  * @throws ForeignOwnContextError When `call` belongs to another carrier or bus context.
  */
 export function assertCallCarrier(call: CallContext, carrier: PartyRef, context: object): void {
-  if (!isMintedCallContext(call)) {
-    throw new InvalidCallContextError('Invalid call context: the value was not minted by the core');
-  }
+  assertMintedCallContext(call);
   const owner = ownCarrierOf(call);
   if (owner !== undefined && (!sameCarrier(owner, carrier) || ownBusContextOf(call) !== context)) {
     throw new ForeignOwnContextError(

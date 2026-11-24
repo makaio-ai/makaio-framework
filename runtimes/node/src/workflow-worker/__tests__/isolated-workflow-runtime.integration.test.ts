@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
-import { createBusInstance } from '@makaio/bus-core';
+import { NO_BOUNDARY_ACCESS_CHECK, createBusInstance } from '@makaio/bus-core';
 import { ownerOf } from '@makaio/bus-core/kernel-api';
 import { WebSocketClientTransport } from '@makaio/bus-transport-websocket';
 import {
@@ -141,7 +141,10 @@ describe('createIsolatedWorkflowRuntime integration', () => {
     const server = createServer();
     const port = await listenOnLoopback(server);
     const serverTransport = new BusServerTransportProvider({ httpServer: server });
-    await serverTransport.connect(authority, 'isolated-workflow-authority');
+    await serverTransport.connect(authority, {
+      machineId: 'isolated-workflow-authority',
+      checkBoundaryAccess: NO_BOUNDARY_ACCESS_CHECK,
+    });
 
     const usageEvents: unknown[] = [];
     const offUsage = authority.on(AgentSubjects.usage, (ctx) => {

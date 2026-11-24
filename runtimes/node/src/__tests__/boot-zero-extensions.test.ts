@@ -17,7 +17,7 @@ import {
 import type { AdapterFile, ProviderConfigFile } from '@makaio/contracts/config';
 import { ClientSubjects } from '@makaio/contracts/client';
 import { createBusNamespace, type IConfigStorage } from '@makaio/core';
-import type { KernelMakaioExtension, TransportProvider } from '@makaio/kernel';
+import type { KernelMakaioExtension } from '@makaio/kernel';
 import { ExtensionSubjects, KernelSubjects } from '@makaio/kernel';
 import type { PersistedMachineIdentity } from '@makaio/machine-identity';
 import { ConfigProvider } from '@makaio/providers';
@@ -46,6 +46,7 @@ import { WorkflowEngineToken } from '@makaio/subsystem-workflow-engine';
 import { createPackageManagerPackage } from '@makaio/services-package-manager/package';
 import { CLIDetectionSubjects } from '@makaio/services-core/cli-detection/namespace';
 import { bootMakaioRuntimeCore, createCompositeWorkspaceRootResolver, type MakaioRuntime } from '../boot.js';
+import type { ServerTransportConnectOptions, ServerTransportProvider } from '../boot-types.js';
 import { CLI_DETECTION_PACKAGE_NAME } from '../cli-detection/package.js';
 import { ExplicitDescriptorDiscovery, type DiscoveredExtension } from '../extension-discovery.js';
 import { RuntimeSubjects } from '../bus/runtime/namespace.js';
@@ -93,11 +94,11 @@ function isHeadlessPackage(pkg: KernelMakaioExtension): boolean {
   return pkg.surface === undefined || pkg.surface === 'any' || pkg.surface === 'headless';
 }
 
-class FakeTransportProvider implements TransportProvider {
+class FakeTransportProvider implements ServerTransportProvider {
   public connectedWith: { readonly bus: IMakaioBus; readonly machineId: string } | undefined;
   public disconnectCount = 0;
 
-  public async connect(bus: IMakaioBus, machineId: string): Promise<void> {
+  public async connect(bus: IMakaioBus, { machineId }: ServerTransportConnectOptions): Promise<void> {
     this.connectedWith = { bus, machineId };
   }
 

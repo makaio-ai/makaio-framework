@@ -15,6 +15,7 @@ import {
 } from '../extension/extension-start-runner.js';
 import { OpenContributionIndex } from '../extension/open-contribution-index.js';
 import type { ExtensionContextBase, ExtensionEntry, KernelMakaioExtension } from '../extension/types.js';
+import { createRightsHub } from '../rights/rights-hub.js';
 import { ServiceSkipError } from '../service-skip-error.js';
 import { useJournalHostFixture } from '@makaio/storage-conformance';
 
@@ -458,6 +459,7 @@ it.each([
       signal: new AbortController().signal,
       hasActiveExtension: () => false,
       openContributionReaderFor: (name: string) => contributions.readerFor(name),
+      rights: createRightsHub({ bus }),
       getExtensionService: () => undefined,
     },
   };

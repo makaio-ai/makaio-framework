@@ -10,7 +10,7 @@ import { describe, it, expect } from 'vitest';
 import { WebSocketClientTransport } from '../ws-client-transport.js';
 import { ServerTransport } from '../server-transport.js';
 import { HmacAuth } from '../auth/hmac-auth.js';
-import type { BusMessage } from '@makaio/bus-core';
+import { NO_BOUNDARY_ACCESS_CHECK, type BusMessage } from '@makaio/bus-core';
 import { createTestServer, waitForMessageCount } from './test-utils.js';
 
 describe('HMAC authentication E2E', () => {
@@ -21,6 +21,7 @@ describe('HMAC authentication E2E', () => {
 
     const serverAuth = new HmacAuth({ secret: TEST_SECRET, challengeTimeout: 5000 });
     const serverTransport = new ServerTransport({
+      checkBoundaryAccess: NO_BOUNDARY_ACCESS_CHECK,
       websocket: wss,
       auth: serverAuth,
     });
@@ -75,6 +76,7 @@ describe('HMAC authentication E2E', () => {
 
     const serverAuth = new HmacAuth({ secret: TEST_SECRET, challengeTimeout: 5000 });
     const serverTransport = new ServerTransport({
+      checkBoundaryAccess: NO_BOUNDARY_ACCESS_CHECK,
       websocket: wss,
       auth: serverAuth,
     });
@@ -102,6 +104,7 @@ describe('HMAC authentication E2E', () => {
 
     const serverAuth = new HmacAuth({ secret: TEST_SECRET, challengeTimeout: 5000 });
     const serverTransport = new ServerTransport({
+      checkBoundaryAccess: NO_BOUNDARY_ACCESS_CHECK,
       websocket: wss,
       auth: serverAuth,
     });

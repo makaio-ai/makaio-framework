@@ -1,5 +1,10 @@
 import type { Server as HttpServer } from 'node:http';
-import type { BusTransport, IMakaioBus, SubjectTelemetryProjectorRegistry } from '@makaio/bus-core';
+import type {
+  BoundaryAccessPolicy,
+  BusTransport,
+  IMakaioBus,
+  SubjectTelemetryProjectorRegistry,
+} from '@makaio/bus-core';
 import type { RegistrableBusNamespaceDefinition } from '@makaio/core';
 import type { FrameworkModuleResolver } from './framework-module-resolver.js';
 import type { DispatchingAuth, TransportAuth } from '@makaio/bus-transport-websocket';
@@ -106,15 +111,25 @@ export interface TransportReadyInfo {
   host: string;
 }
 
+/** Host settings for connecting an external bus server. */
+export interface ServerTransportConnectOptions {
+  /** Identity of the host machine. */
+  readonly machineId: string;
+  /** Host authorization policy or an explicit opt-out. */
+  readonly checkBoundaryAccess: BoundaryAccessPolicy;
+}
+
 /**
- * Extension of {@link TransportProvider} that exposes an optional
+ * Runtime bus server transport with host authorization and an optional
  * {@link DispatchingAuth} handle for E2E auth hot-swap.
- *
- * Both Node and Bun transport providers implement this interface so the core
- * boot sequence can install E2E auth without depending on a concrete provider
- * class.
  */
-export interface ServerTransportProvider extends TransportProvider {
+export interface ServerTransportProvider extends Pick<TransportProvider, 'disconnect'> {
+  /**
+   * Connect with the authorization policy of the host.
+   * @param bus - Host bus.
+   * @param options - Host identity and boundary access policy.
+   */
+  connect(bus: IMakaioBus, options: ServerTransportConnectOptions): Promise<void>;
   /**
    * The {@link DispatchingAuth} instance if the caller passed one.
    *

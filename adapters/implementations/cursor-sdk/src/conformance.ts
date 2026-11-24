@@ -10,7 +10,7 @@ import {
   resolveConformanceTestPreset,
   resolveTestConfig,
 } from '@makaio/ai-adapters-core';
-import { MakaioBus } from '@makaio/bus-core';
+import { MakaioBus, NO_BOUNDARY_ACCESS_CHECK } from '@makaio/bus-core';
 import { startBusServer, type BusServer } from '@makaio/bus-server';
 import { DEFAULT_HOOK_HANDLE_TIMEOUT_MS } from '@makaio/subsystem-client/hook-subjects';
 import { WebSocketServer } from 'ws';
@@ -93,6 +93,8 @@ async function startTestBusTransport(): Promise<TestBusTransportHandle> {
     websocket: wss,
     bus: MakaioBus,
     loopbackName: 'conformance-test',
+    // This loopback conformance harness runs without a host rights directory.
+    checkBoundaryAccess: NO_BOUNDARY_ACCESS_CHECK,
   });
   busReady = true;
 

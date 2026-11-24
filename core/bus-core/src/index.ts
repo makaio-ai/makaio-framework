@@ -193,6 +193,14 @@ export type { IDirectChannel, ChannelEndpoint, ChannelEndpointOptions } from './
 export { SystemChannelSchemas, createChannelEndpoint, openChannel } from './channel/index.js';
 
 export { CorrelationTracker } from './utils/correlation-tracker.js';
+export {
+  NO_BOUNDARY_ACCESS_CHECK,
+  SUBSCRIPTION_DEFERRED,
+  type BoundaryAccessCheck,
+  type BoundaryAccessPolicy,
+  type BoundaryAccessTarget,
+} from './types/boundary-access.js';
+export { assertMintedCallContext } from './call-context/mint.js';
 export type { ConnectedPayload, DisconnectedPayload } from './lifecycle.js';
 export type { ExtensionNamespaceConfig } from './extension-namespace-types.js';
 export {

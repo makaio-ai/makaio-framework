@@ -2,7 +2,7 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { getFullSubjectForSubjectDefinition } from '@makaio/bus-core';
+import { NO_BOUNDARY_ACCESS_CHECK, getFullSubjectForSubjectDefinition } from '@makaio/bus-core';
 import { WorkflowSubjects } from '@makaio/contracts';
 import { createBusNamespace } from '@makaio/core';
 import { createTestCall } from '@makaio/test-utils';
@@ -50,7 +50,10 @@ it('routes caller-local file requests through the standard Piscina worker', asyn
   });
   try {
     const port = await listenOnLoopback(server);
-    await transport.connect(bus, 'workspace-request-test');
+    await transport.connect(bus, {
+      machineId: 'workspace-request-test',
+      checkBoundaryAccess: NO_BOUNDARY_ACCESS_CHECK,
+    });
     await writeFile(
       workerEntry,
       `import { register } from ${JSON.stringify(import.meta.resolve('tsx/esm/api'))};

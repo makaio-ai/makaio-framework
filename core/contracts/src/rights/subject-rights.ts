@@ -13,6 +13,9 @@ export const SUBJECT_SEND_RIGHT = 'makaio.subject.send' satisfies RightName;
  */
 export const SUBJECT_SUBSCRIBE_RIGHT = 'makaio.subject.subscribe' satisfies RightName;
 
+/** The right to advertise a request handler or receive a request to handle. */
+export const SUBJECT_HANDLE_RIGHT = 'makaio.subject.handle' satisfies RightName;
+
 /**
  * The context of a question about the right to send a subject.
  */
@@ -61,3 +64,9 @@ export const SubjectSubscribeRightContextSchema = z.union([
 ]);
 /** The context of a question about the right to subscribe to a subject. */
 export type SubjectSubscribeRightContext = z.infer<typeof SubjectSubscribeRightContextSchema>;
+
+/** The advertised handler pattern or concrete request subject and payload. */
+export const SubjectHandleRightContextSchema = SubjectSubscribeRightContextSchema;
+
+/** The context of a question about the right to handle requests. */
+export type SubjectHandleRightContext = z.infer<typeof SubjectHandleRightContextSchema>;

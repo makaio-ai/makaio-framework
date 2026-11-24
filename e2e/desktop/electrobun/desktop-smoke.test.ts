@@ -4,7 +4,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { createBusInstance, type IMakaioBus } from '@makaio/bus-core';
+import { NO_BOUNDARY_ACCESS_CHECK, createBusInstance, type IMakaioBus } from '@makaio/bus-core';
 import { busContextOf, createBusContext } from '@makaio/bus-core/kernel-api';
 import { createTestCall } from '@makaio/test-utils';
 import { startBusServer, type BusServer } from '@makaio/bus-server';
@@ -101,6 +101,7 @@ describe('connectTestBus close diagnostics', () => {
       if (address === null || typeof address === 'string') throw new Error('Failed to resolve test bus port');
 
       busServer = await startBusServer({
+        checkBoundaryAccess: NO_BOUNDARY_ACCESS_CHECK,
         bus: createBusInstance({ context: createBusContext() }),
         websocket: webSocketServer,
       });

@@ -36,6 +36,8 @@ interface ClientPending extends PendingBroadcastBase {
   kind: 'client';
   /** The WebSocket that originated the broadcast */
   sender: WebSocketLike;
+  /** The sender’s original correlation ID, used only when returning its result. */
+  replyCorrelationId: string;
   /**
    * True once the transport-registry node (local handlers + relay transports)
    * has reported its results via {@link BroadcastAggregator.handleNodeResults}.
@@ -82,6 +84,23 @@ function clearPendingTimer(pending: PendingBroadcast): void {
 }
 
 /**
+ * Send a broadcast and record only sockets that received a frame.
+ * @param message - Broadcast to serialize.
+ * @param clients - Eligible recipients.
+ * @param send - Sends a frame and reports whether the socket accepted it.
+ * @returns Sockets eligible to respond.
+ */
+function deliverBroadcast(
+  message: BusBroadcastMessage,
+  clients: WebSocketLike[],
+  send: (client: WebSocketLike, data: string) => boolean,
+): Set<WebSocketLike> {
+  if (clients.length === 0) return new Set();
+  const frame = JSON.stringify(message);
+  return new Set(clients.filter((client) => send(client, frame)));
+}
+
+/**
  * Aggregates broadcast responses from multiple clients.
  *
  * Supports two modes:
@@ -108,24 +127,26 @@ export class BroadcastAggregator {
    * @param sender - The client that initiated the broadcast
    * @param message - The broadcast message
    * @param targetClients - Clients to forward the broadcast to
-   * @param sendToClient - Function to send serialized message to a client
+   * @param sendToClient - Returns whether a frame was sent to a client
    * @param timeout - Timeout for collecting responses (ms); `0` disables the automatic timeout
+   * @returns Server-generated correlation ID for node results and peer responses.
    */
   public startClientBroadcast(
     sender: WebSocketLike,
     message: BusBroadcastMessage,
     targetClients: WebSocketLike[],
-    sendToClient: (client: WebSocketLike, data: string) => void,
+    sendToClient: (client: WebSocketLike, data: string) => boolean,
     timeout?: number,
-  ): void {
-    const correlationId = message.correlationId;
+  ): string {
+    const correlationId = globalThis.crypto.randomUUID();
     const effectiveTimeout = timeout ?? this.timeout;
 
     const pending: ClientPending = {
       kind: 'client',
       sender,
+      replyCorrelationId: message.correlationId,
       results: [],
-      pendingClients: new Set(targetClients),
+      pendingClients: deliverBroadcast({ ...message, correlationId }, targetClients, sendToClient),
       nodeResultsReceived: false,
       timer:
         effectiveTimeout === 0
@@ -139,36 +160,33 @@ export class BroadcastAggregator {
     };
     this.pendingBroadcasts.set(correlationId, pending);
 
-    // Forward to target clients
-    const serialized = JSON.stringify(message);
-    for (const client of targetClients) {
-      sendToClient(client, serialized);
-    }
-
     if (this.debug) {
-      console.info(`[BroadcastAggregator] Broadcast ${correlationId} forwarded to ${targetClients.length} clients`);
+      console.info(
+        `[BroadcastAggregator] Broadcast ${correlationId} forwarded to ${pending.pendingClients.size} clients`,
+      );
     }
+    return correlationId;
   }
 
   /**
    * Start a server-initiated broadcast.
    * @param message - The broadcast message
    * @param targetClients - Clients to send the broadcast to
-   * @param sendToClient - Function to send serialized message to a client
+   * @param sendToClient - Returns whether a frame was sent to a client
    * @param timeout - Timeout for collecting responses (ms)
    * @returns Promise resolving to aggregated results
    */
   public startServerBroadcast(
     message: BusBroadcastMessage,
     targetClients: WebSocketLike[],
-    sendToClient: (client: WebSocketLike, data: string) => void,
+    sendToClient: (client: WebSocketLike, data: string) => boolean,
     timeout?: number,
   ): Promise<BroadcastResult[]> {
     const correlationId = message.correlationId;
     const effectiveTimeout = timeout ?? this.timeout;
 
-    // If no clients, return empty immediately
-    if (targetClients.length === 0) {
+    const pendingClients = deliverBroadcast(message, targetClients, sendToClient);
+    if (pendingClients.size === 0) {
       if (this.debug) {
         console.info(`[BroadcastAggregator] Server broadcast ${correlationId} - no target clients`);
       }
@@ -179,7 +197,7 @@ export class BroadcastAggregator {
       const pending: ServerPending = {
         kind: 'server',
         results: [],
-        pendingClients: new Set(targetClients),
+        pendingClients,
         timer:
           effectiveTimeout === 0
             ? undefined
@@ -193,14 +211,8 @@ export class BroadcastAggregator {
       };
       this.pendingBroadcasts.set(correlationId, pending);
 
-      // Send to all target clients
-      const serialized = JSON.stringify(message);
-      for (const client of targetClients) {
-        sendToClient(client, serialized);
-      }
-
       if (this.debug) {
-        console.info(`[BroadcastAggregator] Server broadcast ${correlationId} sent to ${targetClients.length} clients`);
+        console.info(`[BroadcastAggregator] Server broadcast ${correlationId} sent to ${pendingClients.size} clients`);
       }
     });
   }
@@ -209,16 +221,15 @@ export class BroadcastAggregator {
    * Handle a broadcast response from a client.
    * @param client - The client that responded
    * @param response - The broadcast response
-   * @returns true if response was handled, false if no pending broadcast found
+   * @returns Whether this socket had a pending broadcast delivery.
    */
   public handleResponse(client: WebSocketLike, response: BusBroadcastResponseMessage): boolean {
     const pending = this.pendingBroadcasts.get(response.correlationId);
-    if (!pending) return false;
+    if (!pending?.pendingClients.delete(client)) return false;
 
     if (response.results) {
       pending.results.push(...response.results);
     }
-    pending.pendingClients.delete(client);
 
     if (this.debug) {
       console.info(
@@ -331,12 +342,12 @@ export class BroadcastAggregator {
     const response: BusBroadcastResponseMessage = pending.nodeError
       ? {
           type: 'broadcast-response',
-          correlationId,
+          correlationId: pending.replyCorrelationId,
           error: pending.nodeError,
         }
       : {
           type: 'broadcast-response',
-          correlationId,
+          correlationId: pending.replyCorrelationId,
           results: pending.results,
         };
 

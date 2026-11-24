@@ -184,6 +184,7 @@ export async function startExtensionEntry<THostContext extends KernelHostContext
   // failure and takes the same criticality path as storage/create/init below.
   let config: unknown;
   try {
+    host.contextHost.rights.beginActivation(name);
     config = resolveExtensionEntryConfig(host.contextHost, name, entry, 'activate');
   } catch (err) {
     failEntry(call, host, name, entry, getErrorString(err));
@@ -301,6 +302,7 @@ function handleServiceSkipError<THostContext extends KernelHostContext>(
     throw new Error(`Critical package "${name}" failed: ${message}`, { cause: err });
   }
 
+  host.contextHost.rights.deactivate(name);
   closeEntryRegistration(entry);
   entry.error = err.reason;
   console.info(`[ExtensionCoordinator] Package "${name}" skipped: ${err.reason}`);
@@ -379,6 +381,7 @@ function failEntry<THostContext extends KernelHostContext>(
   entry: ExtensionEntry<THostContext>,
   message: string,
 ): void {
+  host.contextHost.rights.deactivate(name);
   closeEntryRegistration(entry);
   entry.error = message;
   console.error(`[ExtensionCoordinator] Package "${name}" failed:`, message);

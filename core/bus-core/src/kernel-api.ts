@@ -153,3 +153,5 @@ export function hasNamespace(bus: IMakaioBus, name: string): boolean {
 export function namespaceOf(bus: IMakaioBus, subject: string): string | undefined {
   return busContextOf(bus).namespaceRegistry.namespaceOf(subject);
 }
+
+export { AccessDeniedError, CoreDenialPlace } from '@makaio/contracts/access';

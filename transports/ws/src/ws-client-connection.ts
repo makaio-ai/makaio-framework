@@ -98,8 +98,12 @@ export interface ConnectionDeps {
   resolveReady(): void;
   /** Create and advertise a new ready promise; return its session-bound resolver. */
   resetReadyPromise(): () => void;
-  /** Resolve a pending dynamic subscription acknowledgement. */
-  resolveSubscriptionAck(ackId: string): void;
+  /**
+   * Settle a pending dynamic subscription acknowledgement.
+   * @param ackId - Acknowledgement identifier from the wire.
+   * @param error - Refusal supplied by the peer, when the change was rejected.
+   */
+  settleSubscriptionAck(ackId: string, error?: Error): void;
   /** Reject all pending dynamic subscription acknowledgements for a closed session. */
   rejectPendingSubscriptionAcks(error: Error): void;
 
@@ -171,8 +175,8 @@ function attachMessageListener(ws: WebSocketLike, deps: ConnectionDeps): void {
         // settle `ready` ahead of the milestone this transport actually promises.
         if (deps.readiness === 'peer-sync') deps.resolveReady();
       },
-      onSubscriptionAck: (ackId) => {
-        deps.resolveSubscriptionAck(ackId);
+      onSubscriptionAck: (ackId, error) => {
+        deps.settleSubscriptionAck(ackId, error);
       },
       sendSubscriptionAck: async (ackId) => {
         if (deps.getSocket() !== ws || ws.readyState !== 1) return;

@@ -32,13 +32,17 @@ export interface SchemaViolationReport {
  * Canonical owner: `@makaio/core`. `@makaio/bus-core` imports this type from core,
  * not the other way around. Single source of truth — no mirroring.
  */
-export type NamespaceRegistrationOptions =
+export type NamespaceRegistrationOptions = {
+  /** Host-only startup observation. Subjects must be read-only, and each request must be declared by key. */
+  startupObservable?: { readonly readOnlyRequests: readonly string[] };
+} & (
   | { busValidationMode?: 'strict' }
   | {
       busValidationMode: 'lenient';
       onSchemaViolation: (report: SchemaViolationReport) => void;
     }
-  | { busValidationMode: 'skip' };
+  | { busValidationMode: 'skip' }
+);
 
 /**
  * A declarative bus namespace definition.

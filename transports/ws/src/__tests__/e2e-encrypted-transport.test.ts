@@ -17,7 +17,7 @@ import { createE2EClientTransport } from '../e2e-client-transport.js';
 import { E2EAuth } from '../auth/e2e-auth.js';
 import { generateSigningKeyPair, exportSigningPublicKey, importSigningPublicKey } from '../crypto/ecdsa.js';
 import { encryptMessage, decryptMessage, type MaybeEncryptedMessage } from '../e2e-message-crypto.js';
-import type { BusMessage, BusRequestMessage } from '@makaio/bus-core';
+import { NO_BOUNDARY_ACCESS_CHECK, type BusMessage, type BusRequestMessage } from '@makaio/bus-core';
 import { createTestServer, waitForMessageCount, waitForOpen } from './test-utils.js';
 
 /**
@@ -90,7 +90,11 @@ async function withE2EFixture(
 ): Promise<void> {
   const { serverAuth, clientAuth } = await createE2EAuthPair();
   const { wss, port } = await createTestServer();
-  const serverTransport = new ServerTransport({ websocket: wss, auth: serverAuth });
+  const serverTransport = new ServerTransport({
+    checkBoundaryAccess: NO_BOUNDARY_ACCESS_CHECK,
+    websocket: wss,
+    auth: serverAuth,
+  });
   await serverTransport.connect();
   await new Promise((resolve) => setTimeout(resolve, 50));
 
@@ -118,7 +122,11 @@ describe('E2E encrypted transport', () => {
     const { serverAuth, clientAuth } = await createE2EAuthPair();
 
     const { wss, port } = await createTestServer();
-    const serverTransport = new ServerTransport({ websocket: wss, auth: serverAuth });
+    const serverTransport = new ServerTransport({
+      checkBoundaryAccess: NO_BOUNDARY_ACCESS_CHECK,
+      websocket: wss,
+      auth: serverAuth,
+    });
     await serverTransport.connect();
     await new Promise((resolve) => setTimeout(resolve, 50));
 
@@ -188,7 +196,11 @@ describe('E2E encrypted transport', () => {
     const { serverAuth, clientAuth } = await createE2EAuthPair();
 
     const { wss, port } = await createTestServer();
-    const serverTransport = new ServerTransport({ websocket: wss, auth: serverAuth });
+    const serverTransport = new ServerTransport({
+      checkBoundaryAccess: NO_BOUNDARY_ACCESS_CHECK,
+      websocket: wss,
+      auth: serverAuth,
+    });
     await serverTransport.connect();
     await new Promise((resolve) => setTimeout(resolve, 50));
 
@@ -265,7 +277,11 @@ describe('E2E encrypted transport', () => {
     });
 
     const { wss, port } = await createTestServer();
-    const serverTransport = new ServerTransport({ websocket: wss, auth: serverAuth });
+    const serverTransport = new ServerTransport({
+      checkBoundaryAccess: NO_BOUNDARY_ACCESS_CHECK,
+      websocket: wss,
+      auth: serverAuth,
+    });
     await serverTransport.connect();
 
     try {
@@ -288,7 +304,11 @@ describe('E2E encrypted transport', () => {
     const { serverAuth, clientAuth } = await createE2EAuthPair();
 
     const { wss, port } = await createTestServer();
-    const serverTransport = new ServerTransport({ websocket: wss, auth: serverAuth });
+    const serverTransport = new ServerTransport({
+      checkBoundaryAccess: NO_BOUNDARY_ACCESS_CHECK,
+      websocket: wss,
+      auth: serverAuth,
+    });
     await serverTransport.connect();
     await new Promise((resolve) => setTimeout(resolve, 50));
 

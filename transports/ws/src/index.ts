@@ -32,13 +32,15 @@
  * ### Server Mode
  * ```typescript
  * import { createWebSocketTransport } from '@makaio/bus-transport-websocket';
- * import { MakaioBus } from '@makaio/bus-core';
+ * import { MakaioBus, NO_BOUNDARY_ACCESS_CHECK } from '@makaio/bus-core';
  * import { WebSocketServer } from 'ws';
  *
- * const wss = new WebSocketServer({ port: 8080 });
+ * const wss = new WebSocketServer({ host: '127.0.0.1', port: 8080 });
  * const transport = createWebSocketTransport({
  *   mode: 'server',
  *   websocket: wss,
+ *   // This example uses a private server without a host rights directory.
+ *   checkBoundaryAccess: NO_BOUNDARY_ACCESS_CHECK,
  * });
  *
  * MakaioBus.registerTransport(transport);
@@ -160,9 +162,11 @@ export function createWebSocketTransport(options: import('./types.js').WebSocket
     });
   } else {
     return new ServerTransport({
-      websocket: options.websocket as import('./types.js').WebSocketServerLike,
+      websocket: options.websocket,
       auth: options.auth,
       debug: options.debug,
+      // The socket owner supplies the host policy or explicitly opts out for a private server.
+      checkBoundaryAccess: options.checkBoundaryAccess,
     });
   }
 }

@@ -1,4 +1,4 @@
-import { createBusInstance } from '@makaio/bus-core';
+import { NO_BOUNDARY_ACCESS_CHECK, createBusInstance } from '@makaio/bus-core';
 import { startBusServer, type BusServer } from '@makaio/bus-server';
 import { HostSubjects } from '@makaio/contracts';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -34,6 +34,7 @@ async function startFocusBusServer(focused: boolean): Promise<FocusBusServer> {
     ctx.setResult({ focused, windowId: focused ? 1 : null });
   });
   const busServer = await startBusServer({
+    checkBoundaryAccess: NO_BOUNDARY_ACCESS_CHECK,
     websocket: webSocketServer,
     bus,
     loopbackName: 'second-instance-test-loopback',

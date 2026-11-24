@@ -11,6 +11,7 @@
 
 import type { TransportAuth, ClientTransportCodec } from './types.js';
 import {
+  deserializeTransportError,
   handleCorrelationResponse,
   type BusMessage,
   type BusReceiveHandler,
@@ -68,8 +69,9 @@ export interface InboundMessageHandlerDeps {
   /**
    * Called when a dynamic subscription acknowledgement is received.
    * @param ackId - Acknowledgement identifier from the wire message.
+   * @param error - Refusal supplied by the peer, when the change was rejected.
    */
-  onSubscriptionAck(ackId: string): void;
+  onSubscriptionAck(ackId: string, error?: Error): void;
   /**
    * Send an acknowledgement for an inbound dynamic subscription update after
    * application handlers have applied it to local routing state.
@@ -203,7 +205,10 @@ async function processCorrelationFrame(
 
   if (decoded.type === 'subscription-ack') {
     if (typeof decoded.ackId === 'string') {
-      deps.onSubscriptionAck(decoded.ackId);
+      deps.onSubscriptionAck(
+        decoded.ackId,
+        decoded.error === undefined ? undefined : deserializeTransportError(decoded.error),
+      );
     }
     return null;
   }

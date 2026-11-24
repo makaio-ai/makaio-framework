@@ -138,6 +138,7 @@ function createIsolatedCoordinator(
   runtimeEnvironment: ReturnType<typeof buildRuntimeEnvironment>,
 ): ExtensionCoordinator<IsolatedWorkflowExtensionContext> {
   return new ExtensionCoordinator<IsolatedWorkflowExtensionContext>(bus, {
+    rights: 'refused',
     surface: 'headless',
     runtimeEnvironment,
     extensionContextBase: {

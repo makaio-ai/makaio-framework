@@ -31,7 +31,7 @@
  */
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { createBusInstance } from '@makaio/bus-core';
+import { NO_BOUNDARY_ACCESS_CHECK, createBusInstance } from '@makaio/bus-core';
 import type { WebSocketCloseEvent } from '@makaio/bus-transport-websocket';
 import {
   BunBusServerTransportProvider,
@@ -39,6 +39,8 @@ import {
   RawServerWebSocket,
   BunWebSocketHandler,
 } from '../bus-server-transport.js';
+
+const testConnectionOptions = { machineId: 'machine-1', checkBoundaryAccess: NO_BOUNDARY_ACCESS_CHECK } as const;
 
 // ---------------------------------------------------------------------------
 // Hoisted mocks
@@ -174,7 +176,7 @@ async function connectAndCapture(opts?: {
   const transport = createTrackedTransport({ ...opts });
   const handler = transport.createWebSocketHandler();
 
-  await transport.connect(createBusInstance(), 'machine-1');
+  await transport.connect(createBusInstance(), testConnectionOptions);
 
   if (!capturedBridge) throw new Error('bridge was not captured — mockImplementationOnce did not fire');
 
@@ -460,7 +462,7 @@ describe('BunBusServerTransportProvider', () => {
       const bus = createBusInstance();
       const transport = createTrackedTransport();
 
-      await expect(transport.connect(bus, 'machine-1')).resolves.toBeUndefined();
+      await expect(transport.connect(bus, testConnectionOptions)).resolves.toBeUndefined();
       expect(startBusServer).toHaveBeenCalledOnce();
 
       await transport.disconnect();
@@ -473,7 +475,7 @@ describe('BunBusServerTransportProvider', () => {
       const bus = createBusInstance();
       const transport = createTrackedTransport({ auth });
 
-      await transport.connect(bus, 'machine-1');
+      await transport.connect(bus, testConnectionOptions);
 
       expect(startBusServer).toHaveBeenCalledWith(expect.objectContaining({ auth }));
 
@@ -486,9 +488,9 @@ describe('BunBusServerTransportProvider', () => {
       const bus = createBusInstance();
       const transport = createTrackedTransport();
 
-      await transport.connect(bus, 'machine-1');
+      await transport.connect(bus, testConnectionOptions);
 
-      await expect(transport.connect(bus, 'machine-2')).rejects.toThrow(
+      await expect(transport.connect(bus, { ...testConnectionOptions, machineId: 'machine-2' })).rejects.toThrow(
         '[BunBusServerTransport] connect() called while transport is already connected or connecting',
       );
 
@@ -510,9 +512,9 @@ describe('BunBusServerTransportProvider', () => {
       const transport = createTrackedTransport();
 
       // Start first connect but do NOT await — `connecting` is now true.
-      const firstConnect = transport.connect(bus, 'machine-1');
+      const firstConnect = transport.connect(bus, testConnectionOptions);
 
-      await expect(transport.connect(bus, 'machine-2')).rejects.toThrow(
+      await expect(transport.connect(bus, { ...testConnectionOptions, machineId: 'machine-2' })).rejects.toThrow(
         '[BunBusServerTransport] connect() called while transport is already connected or connecting',
       );
 
@@ -530,7 +532,7 @@ describe('BunBusServerTransportProvider', () => {
   describe('disconnect()', () => {
     it('stops the bus server when disconnecting', async () => {
       const transport = createTrackedTransport();
-      await transport.connect(createBusInstance(), 'machine-1');
+      await transport.connect(createBusInstance(), testConnectionOptions);
 
       await transport.disconnect();
 
@@ -543,7 +545,7 @@ describe('BunBusServerTransportProvider', () => {
 
       try {
         const transport = createTrackedTransport();
-        await transport.connect(createBusInstance(), 'machine-1');
+        await transport.connect(createBusInstance(), testConnectionOptions);
 
         await transport.disconnect();
 
@@ -567,10 +569,12 @@ describe('BunBusServerTransportProvider', () => {
         const transport = createTrackedTransport();
         const handler = transport.createWebSocketHandler();
 
-        await transport.connect(bus, 'machine-1');
+        await transport.connect(bus, testConnectionOptions);
         await transport.disconnect();
 
-        await expect(transport.connect(bus, 'machine-2')).resolves.toBeUndefined();
+        await expect(
+          transport.connect(bus, { ...testConnectionOptions, machineId: 'machine-2' }),
+        ).resolves.toBeUndefined();
 
         const rawSocket = makeRawSocket();
         handler.open(rawSocket as RawServerWebSocket);
@@ -697,7 +701,9 @@ describe('BunBusServerTransportProvider', () => {
 
       const transport = createTrackedTransport();
 
-      await expect(transport.connect(createBusInstance(), 'machine-fail')).rejects.toThrow('bus startup failed');
+      await expect(
+        transport.connect(createBusInstance(), { ...testConnectionOptions, machineId: 'machine-fail' }),
+      ).rejects.toThrow('bus startup failed');
     });
 
     it('allows reconnect after a failed connect()', async () => {
@@ -707,8 +713,12 @@ describe('BunBusServerTransportProvider', () => {
       const bus = createBusInstance();
       const transport = createTrackedTransport();
 
-      await expect(transport.connect(bus, 'machine-fail')).rejects.toThrow('bus startup failed');
-      await expect(transport.connect(bus, 'machine-retry')).resolves.toBeUndefined();
+      await expect(transport.connect(bus, { ...testConnectionOptions, machineId: 'machine-fail' })).rejects.toThrow(
+        'bus startup failed',
+      );
+      await expect(
+        transport.connect(bus, { ...testConnectionOptions, machineId: 'machine-retry' }),
+      ).resolves.toBeUndefined();
       await transport.disconnect();
     });
 
@@ -719,7 +729,9 @@ describe('BunBusServerTransportProvider', () => {
       const transport = createTrackedTransport();
       const handler = transport.createWebSocketHandler();
 
-      await expect(transport.connect(createBusInstance(), 'machine-fail')).rejects.toThrow('bus startup failed');
+      await expect(
+        transport.connect(createBusInstance(), { ...testConnectionOptions, machineId: 'machine-fail' }),
+      ).rejects.toThrow('bus startup failed');
 
       const rawSocket = makeRawSocket();
       handler.open(rawSocket as RawServerWebSocket);
@@ -757,7 +769,7 @@ describe('BunBusServerTransportProvider', () => {
       const { startBusServer } = await import('@makaio/bus-server');
       const transport = createTrackedTransport({ loopbackAuthorityHost: '127.0.0.1' });
 
-      await transport.connect(createBusInstance(), 'machine-1');
+      await transport.connect(createBusInstance(), testConnectionOptions);
 
       expect(startBusServer).toHaveBeenCalledWith(expect.objectContaining({ auth: expect.any(Object) }));
       await transport.disconnect();
@@ -767,7 +779,7 @@ describe('BunBusServerTransportProvider', () => {
       const { startBusServer } = await import('@makaio/bus-server');
       const transport = createTrackedTransport({ loopbackAuthorityHost: '0.0.0.0' });
 
-      await transport.connect(createBusInstance(), 'machine-1');
+      await transport.connect(createBusInstance(), testConnectionOptions);
 
       expect(startBusServer).toHaveBeenCalledWith(expect.objectContaining({ auth: undefined }));
       await transport.disconnect();
@@ -777,7 +789,7 @@ describe('BunBusServerTransportProvider', () => {
       const { startBusServer } = await import('@makaio/bus-server');
       const transport = createTrackedTransport();
 
-      await transport.connect(createBusInstance(), 'machine-1');
+      await transport.connect(createBusInstance(), testConnectionOptions);
 
       expect(startBusServer).toHaveBeenCalledWith(expect.objectContaining({ loopbackName: 'bun' }));
       await transport.disconnect();
@@ -787,7 +799,7 @@ describe('BunBusServerTransportProvider', () => {
       const { startBusServer } = await import('@makaio/bus-server');
       const transport = createTrackedTransport({ loopbackName: 'custom-relay' });
 
-      await transport.connect(createBusInstance(), 'machine-1');
+      await transport.connect(createBusInstance(), testConnectionOptions);
 
       expect(startBusServer).toHaveBeenCalledWith(expect.objectContaining({ loopbackName: 'custom-relay' }));
       await transport.disconnect();

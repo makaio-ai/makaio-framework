@@ -21,7 +21,7 @@ type ServerEventListener = ((socket: WebSocketLike) => void) | ((error: Error) =
  * @example
  * ```typescript
  * const bridge = new HonoWebSocketBridge();
- * const busServer = createBusServer({ websocket: bridge, auth, debug });
+ * const busServer = createBusServer({ websocket: bridge, bus, checkBoundaryAccess, auth, debug });
  * await busServer.start();
  *
  * app.get('/bus', upgradeWebSocket(() => ({

@@ -25,6 +25,8 @@
  * const wss = new WebSocketServer({ port: 8080 });
  * const server = createBusServer({
  *   websocket: wss,
+ *   bus,
+ *   checkBoundaryAccess,
  *   auth: new HmacAuth({ secret: process.env.BUS_SECRET! }),
  *   debug: true,
  * });

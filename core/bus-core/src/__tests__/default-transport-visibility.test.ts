@@ -390,6 +390,16 @@ describe('createBusNamespace — defaultTransports carried through definition', 
   });
 });
 
+it('requires every request in a startup-observable namespace to be declared read-only', () => {
+  const bus = createBusInstance();
+  const definition = createBusNamespace(
+    'startup-observation',
+    { update: { request: z.object({}), response: z.object({}) } },
+    { startupObservable: { readOnlyRequests: [] } },
+  );
+  expect(() => bus.registerNamespace(definition)).toThrow(/declare every read-only request/);
+});
+
 describe('namespace-registry getDefaultTransports', () => {
   it('returns local-only for a registered namespace with local-only default', () => {
     const bus = createBusInstance();

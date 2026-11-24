@@ -6,9 +6,11 @@ import * as packageIndex from '../index.js';
 // Expected lists (explicit and sorted, so a later change shows up as a diff)
 // ---------------------------------------------------------------------------
 
-/** The kernel names (call contexts, carrier buses, namespace ownership), exported by `kernel-api.ts` only. */
+/** Names for boundary policy, call contexts, carrier buses, and namespace ownership. */
 const KERNEL_NAMES = [
+  'AccessDeniedError',
   'CORE_NAMESPACE_PREFIXES',
+  'CoreDenialPlace',
   'HOST_NAMESPACE_HOLDER',
   'NamespaceOwnershipError',
   'assertCallCarrier',
@@ -44,6 +46,7 @@ const AUTHOR_NAMES = [
   'ForeignOwnContextError',
   'InvalidCallContextError',
   'MakaioBus',
+  'assertMintedCallContext',
   'createBusInstance',
   'isMintedCallContext',
 ] as const;

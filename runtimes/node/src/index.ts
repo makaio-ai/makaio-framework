@@ -61,7 +61,11 @@ export {
   type MakaioRuntime,
   type TransportReadyInfo,
 } from './boot.js';
-export type { UpstreamTelemetryBootOptions, WorkflowRunnerBootOptions } from './boot-types.js';
+export type {
+  ServerTransportConnectOptions,
+  UpstreamTelemetryBootOptions,
+  WorkflowRunnerBootOptions,
+} from './boot-types.js';
 export { filterConfigDefaultsForLoadedPackages, mergePackageConfigDefaults } from './boot-config.js';
 export {
   MAX_OPERATOR_CONFIG_BYTES,
