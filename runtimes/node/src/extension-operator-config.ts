@@ -25,6 +25,7 @@ import {
   type ExtensionOperatorConfigSource,
   type JsonValue,
 } from '@makaio/contracts';
+import { ExtensionOperatorConfigError, type ExtensionInfo } from '@makaio/kernel';
 import { summarizeDiagnosticText } from '@makaio/utils';
 
 /** Path, relative to the Makaio home, of the directory that holds operator config files. */
@@ -88,6 +89,9 @@ export interface ExtensionOperatorConfigConsumer {
   /** The package's config schema, or `undefined` when it declares no configuration surface. */
   readonly configSchema?: unknown;
 }
+
+/** A config consumer with its startup result, when available. */
+type ExtensionOperatorConfigStatus = ExtensionOperatorConfigConsumer & Partial<Pick<ExtensionInfo, 'state' | 'error'>>;
 
 /** One operator config file accepted by the directory scan. */
 interface OperatorConfigFile {
@@ -207,43 +211,47 @@ export async function loadExtensionOperatorConfig(
 }
 
 /**
- * Report operator entries that no extension will ever read.
+ * Report operator entries for absent, unreached, failed, skipped, or schemaless extensions.
  *
- * Three shapes are silent without this: a file naming an extension that is not
- * loaded, a file whose name differs in case from the extension it was meant for
- * — which decodes to a name the coordinator's exact, case-sensitive keys never
- * match, so it lands in the same "not loaded" case — and a usable file for an
- * extension that declares no config schema, where config resolution has nothing
- * to parse it into and drops it. All three are operator mistakes that otherwise
- * look exactly like success.
+ * Names are matched exactly, so a case mismatch is reported as an absent
+ * extension. For an extension that failed or was skipped, include its startup
+ * state and any recorded error. Otherwise leave unusable files to the config
+ * resolver and report usable files for extensions that declare no config schema.
  *
  * Never fatal. An operator who prepares a file for an extension they have not
  * installed yet, or who disables one temporarily, must still be able to boot.
- *
- * Unusable entries for loaded extensions are deliberately not reported here:
- * they are raised when that extension activates, so reporting them twice would
- * only make the activation failure harder to find.
  * @param snapshot - Operator config snapshot built for this process.
- * @param retainedPackages - Packages the coordinator retained for this boot.
+ * @param extensions - Coordinator entries with their startup states and config schemas, or undefined if boot aborted before extension setup.
  */
 export function warnOnUnappliedExtensionOperatorConfig(
   snapshot: ExtensionOperatorConfigSnapshot,
-  retainedPackages: readonly ExtensionOperatorConfigConsumer[],
+  extensions: readonly ExtensionOperatorConfigStatus[] | undefined,
 ): void {
-  const configSchemaByName = new Map(retainedPackages.map((pkg) => [pkg.name, pkg.configSchema]));
+  const extensionsByName = extensions && new Map(extensions.map((extension) => [extension.name, extension]));
 
   for (const [extensionName, entry] of snapshot.entries) {
-    const displayName = summarizeDiagnosticText(extensionName);
-    if (!configSchemaByName.has(extensionName)) {
-      console.warn(
-        `[boot] Operator config ${entry.source} names extension "${displayName}", which is not loaded; it has no effect`,
-      );
-      continue;
-    }
-    if (entry.kind === 'config' && configSchemaByName.get(extensionName) === undefined) {
-      console.warn(
-        `[boot] Operator config ${entry.source} names extension "${displayName}", which declares no config schema; it has no effect`,
-      );
+    const extension = extensionsByName?.get(extensionName);
+    const message = `[boot] Operator config ${entry.source} names extension "${summarizeDiagnosticText(extensionName)}"`;
+    if (!extensionsByName) {
+      console.warn(`${message}, but boot aborted before extension setup; configuration was not applied`);
+    } else if (!extension) {
+      console.warn(`${message}, which is not loaded; it has no effect`);
+    } else if (extension.state === 'discovered') {
+      console.warn(`${message}, but startup did not reach it; it has no effect`);
+    } else if (extension.state === 'failed' || extension.state === 'skipped') {
+      // The coordinator has already logged an activation error that names this exact input.
+      if (
+        extension.state === 'failed' &&
+        extension.error?.startsWith(
+          new ExtensionOperatorConfigError({ extensionName, source: entry.source, summary: '' }).message,
+        )
+      )
+        continue;
+      const diagnosis = extension.state === 'failed' ? 'failed to start' : 'was skipped';
+      const detail = extension.error ? `: ${summarizeDiagnosticText(extension.error)}` : '';
+      console.warn(`${message}, which ${diagnosis}${detail}`);
+    } else if (entry.kind === 'config' && extension.configSchema === undefined) {
+      console.warn(`${message}, which declares no config schema; it has no effect`);
     }
   }
 }

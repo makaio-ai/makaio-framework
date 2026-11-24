@@ -1,4 +1,6 @@
 import path from 'node:path';
+import { createBusInstance } from '@makaio/bus-core';
+import { ExtensionCoordinator } from '../extension/extension-coordinator.js';
 import { describe, expect, it, vi } from 'vitest';
 import type { ExtensionDependency } from '@makaio/contracts';
 import { createExtensionIdentity } from '../extension/extension-identity-builder.js';
@@ -17,6 +19,7 @@ function makeEntry(pkg: KernelMakaioExtension, enabled = true): ExtensionEntry {
     identity: createExtensionIdentity(pkg.name),
     state: 'discovered',
     enabled,
+    surfacesCollected: enabled,
     extensionManaged: true,
     warnings: [],
   };
@@ -257,14 +260,16 @@ describe('runExtensionMigrations', () => {
       },
     };
 
-    await runExtensionMigrations({
-      loadOrder: [dependencyPkg.name, dependentPkg.name],
-      entries: new Map([
-        [dependencyPkg.name, makeEntry(dependencyPkg, false)],
-        [dependentPkg.name, makeEntry(dependentPkg, true)],
-      ]),
+    const coordinator = new ExtensionCoordinator(createBusInstance(), {
+      loadEnabled: (name) => name !== dependencyPkg.name,
       runMigrations,
     });
+    coordinator.load([dependencyPkg, dependentPkg]);
+    try {
+      await coordinator.startAll();
+    } finally {
+      await coordinator.shutdown();
+    }
 
     // `github-materialization` is preference-enabled, but its required
     // dependency `github` is disabled, so `startExtensionEntry` will never
@@ -298,15 +303,16 @@ describe('runExtensionMigrations', () => {
       },
     };
 
-    await runExtensionMigrations({
-      loadOrder: [rootPkg.name, middlePkg.name, leafPkg.name],
-      entries: new Map([
-        [rootPkg.name, makeEntry(rootPkg, false)],
-        [middlePkg.name, makeEntry(middlePkg, true)],
-        [leafPkg.name, makeEntry(leafPkg, true)],
-      ]),
+    const coordinator = new ExtensionCoordinator(createBusInstance(), {
+      loadEnabled: (name) => name !== rootPkg.name,
       runMigrations,
     });
+    coordinator.load([rootPkg, middlePkg, leafPkg]);
+    try {
+      await coordinator.startAll();
+    } finally {
+      await coordinator.shutdown();
+    }
 
     // `middle-extension` is excluded by the direct disable of
     // `root-extension`, which then transitively excludes `leaf-extension`

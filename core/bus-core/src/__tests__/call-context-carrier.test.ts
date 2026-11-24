@@ -1,9 +1,12 @@
 import type { CallContext, OwnWorkPurpose, Party, PartyRef, TransportReceiveContext } from '@makaio/core';
 import { createBusNamespace } from '@makaio/core';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
-import { createCarrierBus } from '../bus-instance.js';
+import { createCarrierBus } from '../kernel-api.js';
 import { createBusInstance } from '../bus.js';
+import { OnceAbortError } from '../methods/once.js';
+import { createChannelEndpoint, openChannel } from '../channel/channel-endpoint.js';
+import { MockTransport } from './helpers/transport-fixtures.js';
 import {
   assertCallCarrier,
   deriveSent,
@@ -523,4 +526,97 @@ describe('callFromReceive', () => {
     expect(ownCarrierOf(call)).toBeUndefined();
     expect(() => assertCallCarrier(call, CARRIER_A, BUS_CONTEXT)).not.toThrow();
   });
+});
+
+it('releases carrier registrations and preserves host subscriptions', async () => {
+  const host = createBusInstance();
+  const lifetime = new AbortController();
+  const carrier = createCarrierBus(host, CARRIER_A, undefined, lifetime.signal);
+  const { subjects } = host.registerNamespace(createBusNamespace('carrierSubscriptions', { changed: z.object({}) }));
+  const shared = vi.fn();
+  const intercept = vi.fn();
+  const once = vi.fn();
+  const observe = vi.fn();
+  const debug = vi.fn();
+  host.on(subjects.changed, shared);
+  const unsubscribe = carrier.on(subjects.changed, shared);
+  carrier.intercept(subjects.changed, intercept);
+  carrier.once(subjects.changed, once);
+  carrier.observeMessages(observe);
+  carrier.__onAny(debug);
+  const pending = carrier.once(subjects.changed, { timeoutMs: 1000 }).then(
+    () => undefined,
+    (error: unknown) => error,
+  );
+
+  lifetime.abort();
+  unsubscribe();
+  // ORIGIN: The host checks which registrations remain after the carrier is released.
+  await host.emit(host.own('start'), subjects.changed, {});
+  expect(shared).toHaveBeenCalledOnce();
+  expect.soft(intercept).not.toHaveBeenCalled();
+  expect.soft(once).not.toHaveBeenCalled();
+  expect.soft(observe).not.toHaveBeenCalled();
+  expect.soft(debug).not.toHaveBeenCalled();
+  expect.soft(await pending).toBeInstanceOf(OnceAbortError);
+});
+
+it('closes channel endpoint registration when the carrier lifetime ends', async () => {
+  const host = createBusInstance();
+  const lifetime = new AbortController();
+  const carrier = createCarrierBus(host, CARRIER_A, undefined, lifetime.signal);
+  const callback = vi.fn();
+  const endpoint = createChannelEndpoint(carrier, 'carrier-endpoint', callback, { token: 'endpoint-token' });
+  try {
+    const active = await openChannel(host, endpoint.name, { token: endpoint.token });
+    active.close();
+    expect(callback).toHaveBeenCalledOnce();
+    lifetime.abort();
+    await expect(openChannel(host, endpoint.name, { token: endpoint.token })).rejects.toThrow(/No handler/i);
+    expect(callback).toHaveBeenCalledOnce();
+  } finally {
+    endpoint.close();
+  }
+});
+
+it('ignores registrations after carrier teardown without throwing or advertising and logs once per carrier', async () => {
+  const debugLog = vi.fn();
+  const host = createBusInstance({ debugLog });
+  const peer = new MockTransport();
+  const subscribe = vi.spyOn(peer, 'subscribe');
+  const unsubscribe = vi.spyOn(peer, 'unsubscribe');
+  host.registerTransport(peer);
+  const lifetime = new AbortController();
+  const carrier = createCarrierBus(host, CARRIER_A, undefined, lifetime.signal);
+  const { subjects } = host.registerNamespace(createBusNamespace('retiredCarrier', { changed: z.object({}) }));
+  lifetime.abort();
+  const handler = vi.fn();
+  for (const register of [
+    () => carrier.on(subjects.changed, handler),
+    () => carrier.once(subjects.changed, handler),
+    () => carrier.intercept(subjects.changed, handler),
+    () => carrier.observeMessages(handler),
+    () => carrier.__onAny(handler),
+  ]) {
+    expect.soft(() => register()()).not.toThrow();
+  }
+  await expect(carrier.once(subjects.changed)).rejects.toBeInstanceOf(OnceAbortError);
+  expect(debugLog).toHaveBeenCalledTimes(1);
+  expect(debugLog).toHaveBeenCalledWith(expect.stringContaining('makaio.extension:carrier-a'));
+  expect(debugLog).toHaveBeenCalledWith(expect.stringContaining('retiredCarrier.changed'));
+  expect(debugLog).toHaveBeenCalledWith(expect.stringContaining('registration after carrier teardown ignored'));
+  expect(subscribe).not.toHaveBeenCalled();
+  expect(unsubscribe).not.toHaveBeenCalled();
+
+  const sibling = createCarrierBus(host, CARRIER_A, undefined, lifetime.signal);
+  expect(() => sibling.on(subjects.changed, handler)()).not.toThrow();
+  expect(debugLog).toHaveBeenCalledTimes(1);
+
+  const laterLifetime = new AbortController();
+  laterLifetime.abort();
+  const laterCarrier = createCarrierBus(host, CARRIER_A, undefined, laterLifetime.signal);
+  await expect(laterCarrier.once(subjects.changed)).rejects.toBeInstanceOf(OnceAbortError);
+  expect(debugLog).toHaveBeenCalledTimes(2);
+  await host.emit(host.own('start'), subjects.changed, {});
+  expect(handler).not.toHaveBeenCalled();
 });

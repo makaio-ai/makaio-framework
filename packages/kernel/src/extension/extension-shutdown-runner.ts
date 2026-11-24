@@ -1,7 +1,7 @@
 import type { CallContext } from '@makaio/core';
 import { boundedWait, isNonNegativeFinite, nonNegativeOption, outerBoundMs } from '@makaio/utils';
 import { runContributionProcessors } from './contribution-processor-runner.js';
-import type { ExtensionContextHost } from './extension-context-builder.js';
+import { releaseExtensionCarrierSubscriptions, type ExtensionContextHost } from './extension-context-builder.js';
 import { transitionPackageEntry } from './state-transition.js';
 import type { ExtensionService } from '@makaio/contracts';
 import type { ContributionProcessor, ExtensionEntry } from './types.js';
@@ -254,8 +254,9 @@ function publishStopped(call: CallContext, host: ExtensionShutdownHost, entry: E
  * default. An extension that does not finish inside its window is logged,
  * recorded as not stopped under its name, and left behind: the next extension
  * is stopped regardless, so one stuck extension cannot consume the time of the
- * others. The stop it was running is not cancelled, and neither is what it
- * still holds released. Such an extension keeps its state (`active`) rather than
+ * others. The stop it was running is not cancelled. Its carrier closes when
+ * the window ends, and its namespace claims follow the host release schedule.
+ * Such an extension keeps its state (`active`) rather than
  * being published as `stopped`: it becomes `stopped` when its stop does settle.
  *
  * A teardown failure never stops the run: every remaining extension is still
@@ -279,6 +280,7 @@ export async function shutdownExtensions(host: ExtensionShutdownHost): Promise<v
     const windowMs = extensionStopBoundMs(entry, host.defaultStopBudgetMs);
     const stopping = stopEntry(host, name, entry);
     const outcome = await boundedWait(stopping, windowMs);
+    releaseExtensionCarrierSubscriptions(entry.identity);
     if (!outcome.settled) {
       const message = `Extension "${name}" did not finish stopping within ${windowMs} ms; continuing with the next one`;
       console.error(`[ExtensionCoordinator] ${message}`);

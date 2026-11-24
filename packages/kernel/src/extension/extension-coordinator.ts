@@ -52,7 +52,7 @@ import { closeEnabledExtensionEntries } from './extension-entry-closure.js';
 import { runExtensionMigrations, type ExtensionMigrationRunner } from './extension-migration-runner.js';
 import { runExtensionHealthCheck, type ExtensionHealthHost } from './extension-health-runner.js';
 import {
-  collectExtensionSurfaces,
+  collectBootExtensionSurfaces,
   extensionsWithHttp,
   type OwnedCliContribution,
 } from './extension-surface-collector.js';
@@ -62,7 +62,7 @@ import {
   totalExtensionStopBudgetMs,
   type ExtensionShutdownHost,
 } from './extension-shutdown-runner.js';
-import { claimManifestNamespaces, releaseEntryNamespaces, startExtensionEntry } from './extension-start-runner.js';
+import { closeEntryRegistration, releaseEntryNamespaces, startExtensionEntry } from './extension-start-runner.js';
 
 /** Live namespace holder queries for the coordinator's bus. */
 interface NamespaceOwners {
@@ -264,9 +264,9 @@ export class ExtensionCoordinator {
    * into {@link cliContributions}, and package bus namespaces are registered
    * -- all before any services are started, and all gated by the same
    * dependency closure (see the class-level doc comment above).
-   * An ownership conflict prevents that entry's surface collection and boot
-   * contributions. The entry remains visible through {@link getInfo}, and
-   * {@link startAll} reports its activation failure.
+   * An ownership conflict prevents surface collection and boot contributions
+   * for the entry and its required dependents. The entries remain visible
+   * through {@link getInfo}, and {@link startAll} reports their activation failures.
    *
    * Single-use: calling this method twice on the same instance throws.
    * @param packages - Extension manifests to register.
@@ -280,7 +280,8 @@ export class ExtensionCoordinator {
    *   before registering boot contributions.
    * @throws Error if called more than once, if two registrations collide on a
    *   name that is not an overridable framework package name, if a dependency
-   *   cycle is detected, or if dependency sorting fails.
+   *   cycle is detected, if dependency sorting fails, or if static surface
+   *   collection fails. A failed load releases its namespace claims.
    */
   public load(
     packages: ReadonlyArray<KernelMakaioExtension>,
@@ -291,8 +292,7 @@ export class ExtensionCoordinator {
     }
     if (this.loaded) {
       throw new Error(
-        'ExtensionCoordinator.load() called twice. ' +
-          'The coordinator is single-use; create a new instance if needed.',
+        'ExtensionCoordinator.load() called twice. The coordinator is single-use; create a new instance if needed.',
       );
     }
 
@@ -322,7 +322,6 @@ export class ExtensionCoordinator {
       },
     });
 
-    const retained: KernelMakaioExtension[] = [];
     const orderedEntries: Array<{ readonly name: string; readonly entry: ExtensionEntry }> = [];
     for (const name of this.loadOrder) {
       const pkg = eligible.find((p) => p.name === name)!;
@@ -340,10 +339,8 @@ export class ExtensionCoordinator {
         // `startAll()`. See `ExtensionEntry.error`'s own TSDoc.
         ...(warningMessages ? { error: warningMessages.join('; ') } : {}),
       };
-      if (configDefaults) {
-        const defaults = configDefaults.get(name);
-        if (defaults) entry.configDefaults = defaults;
-      }
+      const defaults = configDefaults?.get(name);
+      if (defaults) entry.configDefaults = defaults;
       this.entries.set(name, entry);
       orderedEntries.push({ name, entry });
     }
@@ -373,25 +370,20 @@ export class ExtensionCoordinator {
         missingDependencies.join(', '),
       );
     }
-    for (const { name, entry } of orderedEntries) {
-      if (surfaceEligibleNames.has(name)) {
-        if (claimManifestNamespaces(this.bus, entry)) continue;
-        collectExtensionSurfaces(
-          {
-            windowRegistry: this.windowRegistry,
-            trayEntries: this._trayEntries,
-            cliContributions: this._cliContributions,
-          },
-          entry.pkg,
-        );
-        entry.surfacesCollected = true;
-      }
-      retained.push(entry.pkg);
+    const collections = {
+      windowRegistry: this.windowRegistry,
+      trayEntries: this._trayEntries,
+      cliContributions: this._cliContributions,
+    };
+    try {
+      const retained = collectBootExtensionSurfaces(this.bus, collections, this.entries.values(), surfaceEligibleNames);
+      this.registerRpcHandlers();
+      this.loaded = true;
+      return retained;
+    } catch (error) {
+      for (const { entry } of orderedEntries) closeEntryRegistration(entry);
+      throw error;
     }
-
-    this.registerRpcHandlers();
-    this.loaded = true;
-    return retained;
   }
 
   /**
@@ -711,7 +703,7 @@ export class ExtensionCoordinator {
   public getLoadedProviderDefinitionIds(): ReadonlySet<string> {
     const ids = new Set<string>();
     for (const entry of this.entries.values()) {
-      if (!entry.enabled) continue;
+      if (!entry.enabled || !entry.surfacesCollected) continue;
       if (entry.state === 'failed' || entry.state === 'skipped' || entry.state === 'stopped') continue;
       for (const provider of entry.pkg.providers ?? []) {
         ids.add(provider.id);

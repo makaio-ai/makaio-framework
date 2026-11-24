@@ -1,6 +1,8 @@
+import type { IMakaioBus } from '@makaio/bus-core';
 import type { TrayManifest } from '@makaio/contracts';
 import type { CliContribution } from '../cli/types.js';
 import type { WindowRegistry } from '../window/window-registry.js';
+import { claimManifestNamespaces } from './extension-start-runner.js';
 import type { ExtensionEntry, KernelMakaioExtension } from './types.js';
 
 /** A CLI contribution paired with the extension that contributes it. */
@@ -44,6 +46,40 @@ export function collectExtensionSurfaces(collections: ExtensionSurfaceCollection
 }
 
 /**
+ * Claim namespaces and collect static surfaces in dependency-first order.
+ * @param bus - Bus receiving manifest claims.
+ * @param collections - Surface registries owned by the coordinator.
+ * @param entries - Loaded entries in dependency-first order.
+ * @param surfaceEligibleNames - Entries eligible under the enablement policy.
+ * @returns Manifests retained for boot contributions.
+ */
+export function collectBootExtensionSurfaces(
+  bus: IMakaioBus,
+  collections: ExtensionSurfaceCollections,
+  entries: Iterable<ExtensionEntry>,
+  surfaceEligibleNames: ReadonlySet<string>,
+): readonly KernelMakaioExtension[] {
+  const ownershipExcluded = new Set<string>();
+  const retained: KernelMakaioExtension[] = [];
+  for (const entry of entries) {
+    const { name, dependencies } = entry.pkg;
+    const blocked = dependencies?.some((dep) => !dep.optional && ownershipExcluded.has(dep.name));
+    const eligible = surfaceEligibleNames.has(name);
+    // Required dependents are blocked before their first claim because load walks dependency-first.
+    if (blocked || (eligible && claimManifestNamespaces(bus, entry))) {
+      ownershipExcluded.add(name);
+      continue;
+    }
+    if (eligible) {
+      collectExtensionSurfaces(collections, entry.pkg);
+      entry.surfacesCollected = true;
+    }
+    retained.push(entry.pkg);
+  }
+  return retained;
+}
+
+/**
  * Return enabled loaded extensions that declare HTTP routes.
  * @param entries - Loaded coordinator entries keyed by extension name.
  * @returns Extensions with HTTP route manifests.
@@ -52,7 +88,7 @@ export function extensionsWithHttp(
   entries: ReadonlyMap<string, ExtensionEntry>,
 ): ReadonlyArray<KernelMakaioExtension & { readonly http: NonNullable<KernelMakaioExtension['http']> }> {
   return Array.from(entries.values())
-    .filter((entry) => entry.enabled)
+    .filter((entry) => entry.enabled && entry.surfacesCollected)
     .map((entry) => entry.pkg)
     .filter(
       (pkg): pkg is KernelMakaioExtension & { readonly http: NonNullable<KernelMakaioExtension['http']> } => !!pkg.http,
