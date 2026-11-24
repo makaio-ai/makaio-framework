@@ -330,6 +330,13 @@
       "when": 1795434292960,
       "tag": "0046_journal-core",
       "breakpoints": true
+    },
+    {
+      "idx": 47,
+      "version": "6",
+      "when": 1795530658894,
+      "tag": "0047_worker-dispatch",
+      "breakpoints": true
     }
   ]
 }

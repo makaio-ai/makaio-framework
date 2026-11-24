@@ -66,6 +66,14 @@ describe('allocation scope and observations', () => {
     expect(AllocationObservationPageSchema.safeParse({ observations: [] }).success).toBe(false);
   });
 
+  it('accepts an optional UTC provisioning search boundary', () => {
+    const request = { allocationScope: 'test-scope', provisioningStartedAt: '2026-11-23T11:00:00.000Z' };
+    expect(AllocationListingRequestSchema.parse(request)).toEqual(request);
+    expect(AllocationListingRequestSchema.safeParse({ ...request, provisioningStartedAt: '2026-11-23' }).success).toBe(
+      false,
+    );
+  });
+
   it('requires valid provider IDs in the scope block', () => {
     const block = {
       owner: 'worker',
