@@ -1,11 +1,13 @@
 import assert from 'node:assert/strict';
 import { setImmediate } from 'node:timers/promises';
 import { describe, expect, it } from 'vitest';
+import { eq } from 'drizzle-orm';
 import { createBusInstance } from '@makaio/bus-core';
 import { codeStep, defineWorkflow, WorkflowNamespace, type BuiltWorkflow } from '@makaio/contracts';
 import { createTestCall } from '@makaio/test-utils';
 import { WorkflowSubjects } from '../namespace.js';
 import { WorkflowStorageSubjects } from '../storage/namespace.js';
+import { workflowExecutionFrames } from '../storage/schema.js';
 import { runCallerLocalWorkflowOrchestrator } from '../workflow-orchestrator.js';
 import { createTestDbForBus } from './shared.js';
 
@@ -251,6 +253,43 @@ describe('workflow frame storage failures', () => {
     } finally {
       offFailed();
       offWrite();
+      storage.cleanup();
+    }
+  });
+});
+
+describe('workflow frame execution identity', () => {
+  it('preserves completed frames under the worker execution identity when a later step fails', async () => {
+    const bus = createBusInstance();
+    bus.registerNamespace(WorkflowNamespace);
+    const storage = await createTestDbForBus(bus);
+    const completedFrames: { executionId: string; frameId: string }[] = [];
+    const offCompleted = bus.on(WorkflowSubjects.frame.completed, ({ payload: { executionId, frameId } }) => {
+      completedFrames.push({ executionId, frameId });
+    });
+
+    try {
+      const workflow = defineWorkflow('frame-checkpoint')
+        .codeStep('first', () => 'kept')
+        .codeStep('second', () => {
+          throw new Error('Second step failed');
+        });
+      await expect(run(bus, workflow)).resolves.toMatchObject({ executionId, status: 'failed' });
+
+      const { frames } = await bus.request(WorkflowStorageSubjects.listFrames, { executionId });
+      const first = frames.find(({ nodeId }) => nodeId === 'first');
+      assert(first);
+      expect(first).toMatchObject({ status: 'completed', output: 'kept' });
+      expect(completedFrames).toEqual([{ executionId, frameId: first.frameId }]);
+      expect(frames.find(({ nodeId }) => nodeId === 'second')).toMatchObject({ status: 'failed' });
+
+      const persisted = await storage.db
+        .select({ executionId: workflowExecutionFrames.executionId })
+        .from(workflowExecutionFrames)
+        .where(eq(workflowExecutionFrames.frameId, first.frameId));
+      expect(persisted).toEqual([{ executionId }]);
+    } finally {
+      offCompleted();
       storage.cleanup();
     }
   });
