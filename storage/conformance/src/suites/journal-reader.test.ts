@@ -50,6 +50,7 @@ import type { StorageDatabaseContext } from '../harness/config.js';
 import { describeStorageConformance } from '../harness/env.js';
 import { fixtureKv, fixtureKvDdl } from '../harness/fixture-table.js';
 import { useSuiteDatabaseContext } from '../harness/suite-context.js';
+import { waitForWakeFence } from '../harness/wake-fence.js';
 import { contributions, read, ruleFor } from './rules-evaluation-support.js';
 
 const extension = 'reader-conformance';
@@ -461,7 +462,7 @@ function testRetry(getDatabase: () => StorageDatabaseContext): void {
   it('recovers the persisted due time after a transient selection failure', async () => {
     const reader = `${extension}.selection-retry`;
     const database = getDatabase();
-    const { store, edge, readers } = await setup(
+    const { host, store, edge, readers } = await setup(
       database,
       {
         readers: [
@@ -486,7 +487,8 @@ function testRetry(getDatabase: () => StorageDatabaseContext): void {
           if (signal.kind === 'topic') notifications++;
         }),
       );
-      await signals.ready();
+      await waitForWakeFence(host, signals);
+      notifications = 0;
     }
     await store.initialize(extension, [{ reader, startAt: 'now' }]);
     await edge.accept({ entries: [entry('selection-retry')] });

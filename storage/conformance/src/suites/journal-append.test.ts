@@ -5,11 +5,9 @@ import {
   getDatabaseSignals,
   getHostDatabaseWake,
   getTransactionQueryContext,
-  markTransactionWakeTopic,
   resolveSchema,
 } from '@makaio/storage-drizzle';
 import { eq, inArray, sql } from 'drizzle-orm';
-import { randomUUID } from 'node:crypto';
 import { setTimeout as delay } from 'node:timers/promises';
 import { afterEach, beforeAll, beforeEach, expect, it } from 'vitest';
 import { z } from 'zod';
@@ -24,6 +22,7 @@ import type { StorageConformanceConfig, StorageDatabaseContext } from '../harnes
 import { describeStorageConformance } from '../harness/env.js';
 import { fixtureKv, fixtureKvDdl } from '../harness/fixture-table.js';
 import { useSuiteDatabaseContext } from '../harness/suite-context.js';
+import { waitForWakeFence } from '../harness/wake-fence.js';
 
 const extension = 'journal-append-suite';
 const subject = 'journal-append-suite.event';
@@ -114,12 +113,12 @@ function useAppendFixture(config: StorageConformanceConfig) {
   });
 
   beforeEach(async () => {
-    wakes = 0;
     const wake = getHostDatabaseWake(host);
     unsubscribe = wake.subscribe(JOURNAL_ENTRIES_WAKE_TOPIC, () => {
       wakes++;
     });
-    await wake.ready();
+    await waitForWakeFence(host, getDatabaseSignals(getCtx().db));
+    wakes = 0;
   });
 
   afterEach(() => {
@@ -143,31 +142,8 @@ function useAppendFixture(config: StorageConformanceConfig) {
    */
   async function expectWakes(commits: number): Promise<void> {
     const signals = getDatabaseSignals(getCtx().db);
-    if (signals.kind === 'database-notify') {
-      // Listen directly for the fence so local delivery cannot resolve it.
-      // PostgreSQL delivers notifications in commit order.
-      const fence = randomUUID();
-      const delivered = Promise.withResolvers<void>();
-      const stop = signals.subscribe((event) => {
-        if (event.kind === 'topic' && event.topic === fence) delivered.resolve();
-      });
-      const abort = new AbortController();
-      try {
-        await host.transaction(async (tx) => markTransactionWakeTopic(tx, fence));
-        await Promise.race([
-          delivered.promise,
-          delay(2000, undefined, { signal: abort.signal }).then(() => {
-            throw new Error('Postgres notification fence was not delivered.');
-          }),
-        ]);
-      } finally {
-        abort.abort();
-        stop();
-      }
-      expect(wakes).toBe(commits * 2);
-    } else {
-      expect(wakes).toBe(commits);
-    }
+    await waitForWakeFence(host, signals);
+    expect(wakes).toBe(signals.kind === 'database-notify' ? commits * 2 : commits);
   }
 
   return {
