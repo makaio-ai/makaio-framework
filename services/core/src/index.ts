@@ -465,6 +465,7 @@ export {
   type SubagentTemplateSpawnRequest,
 } from './subagent-template/index.js';
 
+export { createRuleJournalReader, startRuleJournalEvaluation } from './rules/rule-journal.js';
 export { RuleEvaluator } from './rules/rule-evaluator.js';
 export { storeRuleOccasion } from './rules/storage/store-occasion.js';
-export type { PreparedOccasion, RuleOccasion, RuleSnapshot } from './rules/types.js';
+export type { PreparedOccasion, RuleOccasion, RuleOccasionPreparation, RuleSnapshot } from './rules/types.js';

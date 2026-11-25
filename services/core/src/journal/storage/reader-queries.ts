@@ -13,7 +13,7 @@ import {
   type SubjectPattern,
 } from '@makaio/contracts/journal';
 import { getTransactionQueryContext, resolveSchema } from '@makaio/storage-drizzle';
-import { and, asc, eq, gt, gte, lte, or, sql, type SQL, type SQLWrapper } from 'drizzle-orm';
+import { and, asc, eq, getTableColumns, gt, gte, lte, or, sql, type SQL, type SQLWrapper } from 'drizzle-orm';
 import type { JournalEntryRow, JournalReaderStateRow } from './schema.js';
 import { journalStorageSchema } from './schema.variants.js';
 
@@ -116,30 +116,37 @@ export async function queryReaderStates(host: HostDatabase, input: ReaderStatesR
     limit = JOURNAL_PAGE_DEFAULT_LIMIT,
   } = ReaderStatesRequestSchema.parse(input);
   const after = cursor === undefined || entryId !== undefined ? undefined : decodeCursor('states', cursor);
-  const rows = await host.transaction(async (tx) => {
+  const page = await host.transaction(async (tx) => {
     const q = getTransactionQueryContext(tx);
-    const { journalReaderStates: states } = resolveSchema(q, journalStorageSchema);
+    const { journalReaderStates: states, journalReaderCursors: cursors } = resolveSchema(q, journalStorageSchema);
     const positionFilter =
       after === undefined ? since !== undefined && gte(states.position, since) : gt(states.position, after);
-    return q
-      .select()
-      .from(states)
-      .where(
+    // Read the frontier and the page from one statement snapshot, even when no state matches.
+    return await q
+      .select({ readerPosition: cursors.position, state: getTableColumns(states) })
+      .from(cursors)
+      .leftJoin(
+        states,
         and(
-          eq(states.reader, reader),
+          eq(states.reader, cursors.reader),
           state === undefined ? undefined : eq(states.state, state),
           entryId === undefined ? positionFilter || undefined : eq(states.entryId, entryId),
         ),
       )
+      .where(eq(cursors.reader, reader))
       .orderBy(asc(states.position))
       .limit(limit + 1);
   });
 
+  const readerPosition = page[0]?.readerPosition;
+  const rows = page.flatMap(({ state }) => (state === null ? [] : [state]));
   const states = rows.slice(0, limit).map(toReaderState);
   const last = states.at(-1);
-  return rows.length > limit && last !== undefined
-    ? { states, nextCursor: encodeCursor('states', last.position) }
-    : { states };
+  return {
+    states,
+    ...(readerPosition === undefined ? {} : { readerPosition }),
+    ...(rows.length > limit && last !== undefined ? { nextCursor: encodeCursor('states', last.position) } : {}),
+  };
 }
 
 /**
@@ -157,7 +164,7 @@ async function readOneEntry(
   const [row] = await host.transaction(async (tx) => {
     const q = getTransactionQueryContext(tx);
     const { journalEntries: entries } = resolveSchema(q, journalStorageSchema);
-    return q.select().from(entries).where(eq(entries.entryId, entryId));
+    return await q.select().from(entries).where(eq(entries.entryId, entryId));
   });
   const entry = row === undefined ? undefined : toJournalEntry(row);
   return { entries: entry !== undefined && (await mayRead(entry)) ? [entry] : [] };
@@ -181,7 +188,7 @@ function readEntryBatch(host: HostDatabase, scan: EntryScan): Promise<JournalEnt
   return host.transaction(async (tx) => {
     const q = getTransactionQueryContext(tx);
     const { journalEntries: entries } = resolveSchema(q, journalStorageSchema);
-    return q
+    return await q
       .select()
       .from(entries)
       .where(

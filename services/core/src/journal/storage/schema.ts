@@ -126,6 +126,10 @@ export type InsertJournalPositionCounterRow = typeof journalPositionCounter.$inf
 export const journalReaderCursorsDual = defineDualTable('journal_reader_cursors', (c) => ({
   /** Name of the reader this cursor belongs to. */
   reader: c.text('reader').primaryKey(),
+  /** Declaring extension; null identifies a cursor created before ownership was recorded. */
+  owner: c.text('owner'),
+  /** Exclusive rollback token for a cursor created or adopted during activation. */
+  reservationToken: c.text('reservation_token'),
   /** Highest journal position already taken into this reader's reading states. */
   position: c.int8('position').notNull(),
 }));

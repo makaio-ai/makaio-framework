@@ -12,6 +12,26 @@ import { contributions, enqueue, occasion, principal, read, ruleFor, witness } f
 describeStorageConformance('rule evaluation', (config) => {
   const context = useSuiteDatabaseContext(config);
 
+  it('reports an unavailable source when reading its reply throws', async () => {
+    const db = createHostDatabase(context().db);
+    const { service, invoke } = contributions();
+    const registration = {
+      contribution: {
+        async rulesFor() {
+          return {
+            get set(): never {
+              throw new Error('Rule set could not be read');
+            },
+          };
+        },
+        ruleTriggers: () => [],
+        onTriggersChanged: () => () => {},
+      },
+    };
+    const evaluator = new RuleEvaluator(db, service, invoke, () => registration);
+    await expect(evaluator.prepare(occasion([ruleFor()]))).resolves.toEqual({ state: 'source-unavailable' });
+  });
+
   it('commits decisions, resolved each inputs and a start marker before a single invocation per part', async () => {
     const db = createHostDatabase(context().db);
     const sibling = config.dialect === 'postgres' ? await context().createSiblingClient() : undefined;
@@ -250,7 +270,10 @@ describeStorageConformance('rule evaluation', (config) => {
         result: null,
         callDeadline: null,
       });
+      const restarted = new RuleEvaluator(createHostDatabase(context().db), service, invoke, () => undefined);
+      await restarted.evaluate(input.id);
       expect(keys).toHaveLength(1);
+      expect((await read(db, input.id)).parts[0]).toEqual(first);
       return;
     }
     expect(first).toMatchObject({
@@ -368,6 +391,42 @@ describeStorageConformance('rule evaluation', (config) => {
       parts: [],
     });
   });
+  it.each(['ref', 'template', 'literal'])('treats the single lookup argument %s as a record key', async (name) => {
+    const db = createHostDatabase(context().db);
+    const argsSeen: unknown[] = [];
+    const { service, invoke } = contributions(
+      defineReaction({
+        kind: 'rule-suite.notify',
+        description: 'Accept the rule after the lookup',
+        parameterSchema: z.object({}),
+        keyed: false,
+        handler: async () => ({ state: 'accepted' }),
+      }),
+    );
+    service.lookups.register('rule-suite', [
+      {
+        kind: 'rule-suite.named',
+        description: 'Accept one named parameter',
+        args: z.strictObject({ [name]: z.literal('fixed') }),
+        answer: () => ({ type: 'boolean' }),
+        async resolve(_call, args) {
+          argsSeen.push(args);
+          return true;
+        },
+      },
+    ]);
+    const args = { [name]: 'fixed' };
+    const rule = ruleFor({ lookups: [{ lookup: 'rule-suite.named', name: 'named', args }] });
+    const rights = { listRights: () => [], canSubscribe: async () => true, canSend: async () => true };
+    const findings = await service.validate(rights, { rules: [rule], groups: [] });
+    expect(findings.filter(({ severity }) => severity === 'error')).toEqual([]);
+    const input = occasion([rule]);
+    await enqueue(db, service, invoke, input);
+    await new RuleEvaluator(db, service, invoke, () => undefined).evaluate(input.id);
+    expect(argsSeen).toEqual([args]);
+    expect((await read(db, input.id)).rules).toMatchObject([{ state: 'accepted' }]);
+  });
+
   it('binds earlier lookup values, applies the full where filter and accepts an empty each', async () => {
     const db = createHostDatabase(context().db);
     const seen: string[] = [];

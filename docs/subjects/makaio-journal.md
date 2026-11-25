@@ -73,6 +73,7 @@ Type: Request (RPC)
 | Field | Type | Required |
 |-------|------|----------|
 | `nextCursor` | `string \| undefined` | no |
+| `readerPosition` | `number \| undefined` | no |
 | `states` | `{ entryId: string; position: number; state: "open" \| "failed" \| "done"; retries: number; reason?: string \| undefined; notBefore?: string \| undefined; }[]` | yes |
 
 ### <a id="makaio:journal.reprocess"></a>`makaio:journal.reprocess` (rpc)

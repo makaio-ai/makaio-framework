@@ -40,7 +40,7 @@ export interface ReactionInvocationInput {
    * `(ruleId, occasion, location of the element)`. A reaction may refine it.
    */
   readonly key: string;
-  /** Key guarantee recorded when the host prepared the effect. */
+  /** Key guarantee recorded for a durable effect. An absent registration is retryable for that effect. */
   readonly expectedKeyed?: boolean;
   /** What caused this invocation to run. */
   readonly cause: ReactionCause;
@@ -312,6 +312,7 @@ export class ReactionRegistry extends BaseService {
 
     const registered = this.core.get(kind);
     if (!registered) {
+      if (input.expectedKeyed !== undefined) return { state: 'retry', reason: 'contribution-unavailable' };
       return this.failure(
         kind,
         invocationId,

@@ -54,6 +54,8 @@ export interface SiblingClient {
  * Per-suite isolated database with lifecycle. Create in beforeAll, cleanup in afterAll.
  */
 export interface StorageDatabaseContext {
+  /** Connect another runtime to this suite's isolated database. */
+  readonly url: string;
   /** Branded handle over the isolated database (sqlite temp file / pg schema with search_path pinned). */
   readonly db: MakaioDatabase;
   /** Dialect of the handle; matches the active config. */

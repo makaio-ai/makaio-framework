@@ -9,9 +9,9 @@ import { unsupportedRules } from './supported-rules.js';
 import type {
   BlockedRule,
   PinnedRuleOccasion,
-  PreparedOccasion,
   PreparedRule,
   RuleOccasion,
+  RuleOccasionPreparation,
   RuleSourceBlockReason,
 } from './types.js';
 
@@ -19,15 +19,15 @@ import type {
  * @param service - Active contribution directory.
  * @param input - Incoming occasion supplied by the host.
  * @param source - Effective rule set returned by the live source.
- * @returns Work for the commit, null for an unusable set, or undefined when no rule applies.
+ * @returns Work for the commit, no match, or an unavailable source.
  */
 export async function prepareRuleOccasion(
   service: RuleContributionsService,
   input: Omit<RuleOccasion, 'snapshot'>,
   source: unknown,
-): Promise<PreparedOccasion | null | undefined> {
+): Promise<RuleOccasionPreparation> {
   const pinned = pinRuleSource(source);
-  if (!pinned) return null;
+  if (pinned.state !== 'pinned') return pinned;
   const { snapshot, entries } = pinned;
   const occasion = { ...structuredClone(input), snapshot };
   const entriesById = Map.groupBy(entries, ({ id }) => id);
@@ -57,9 +57,10 @@ export async function prepareRuleOccasion(
   const unsupported =
     unsupportedRules({ ...snapshot, rules: usableRules }).size > 0 || 'message' in occasion.event.cause;
   const excludedMatches = await matchesExclusion(service, occasion);
-  if (rules.length === 0 && blockedRules.length === 0 && !excludedMatches) return undefined;
+  if (rules.length === 0 && blockedRules.length === 0 && !excludedMatches) return { state: 'no-match' };
   const blockedReason = unsupported ? 'not-implemented' : undefined;
-  return { occasion, rules, blockedRules, blockedReason, groups: prepareGroups(rules, snapshot.groups) };
+  const groups = prepareGroups(rules, snapshot.groups);
+  return { state: 'prepared', work: { occasion, rules, blockedRules, blockedReason, groups } };
 }
 
 /** @param rule - Structurally valid source rule.

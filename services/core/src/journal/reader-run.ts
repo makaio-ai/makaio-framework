@@ -2,8 +2,8 @@ import { SubjectPatternSchema, type ReaderContribution, type ReaderOutcome } fro
 import { RightDenialReason } from '@makaio/contracts/rights';
 import type { CallContext } from '@makaio/core';
 import { resolveReadAccess, type JournalReaderAuthority } from './reader-access.js';
-import { READER_INITIAL_RETRY_DELAY_MS } from './storage/reader-claims.js';
-import type { JournalReaderStore, ReaderClaim } from './storage/reader-store.js';
+import { READER_INITIAL_RETRY_DELAY_MS, ReaderCursorLostError } from './storage/reader-claims.js';
+import type { JournalReaderStore, ReaderClaim, ReaderCursorReservation } from './storage/reader-store.js';
 import type { SubjectDirectory } from './subject-directory.js';
 
 const LEASE_MS = 30_000;
@@ -14,11 +14,12 @@ type ReaderHost = JournalReaderAuthority & { readonly directory: SubjectDirector
 
 type AttemptOutcome = ReaderOutcome | { state: 'denied' };
 
-/** Trusted context and proposed frontier for a staged activation. */
+/** Trusted context for a staged activation. */
 interface ReaderActivation {
   readonly call: CallContext;
-  readonly position: number;
   readonly isActive: () => boolean;
+  readonly canSelect?: () => boolean;
+  readonly cursor: ReaderCursorReservation;
 }
 
 /** Snapshot the patterns for one selection.
@@ -69,14 +70,13 @@ export class JournalReaderRun {
   private selection?: Promise<void>;
   private timer?: ReturnType<typeof setTimeout>;
   private pending = false;
-  private initialized = false;
   private lastPatterns?: readonly string[];
 
   /**
    * @param contribution - Reader contributed by this activation.
    * @param store - Host-backed reader storage.
    * @param authority - Host authority for stored rows.
-   * @param activation - Generation's own call, proposed frontier and activation predicate.
+   * @param activation - Generation's own call and activation predicate.
    */
   public constructor(
     private readonly contribution: ReaderContribution,
@@ -87,13 +87,15 @@ export class JournalReaderRun {
 
   private readonly isCurrent = (): boolean => !this.stop.signal.aborted && this.activation.isActive();
 
+  private readonly canSelect = (): boolean => this.isCurrent() && (this.activation.canSelect?.() ?? true);
+
   /** Start or request another database selection, coalescing concurrent wakes. */
   public wake(): void {
-    if (!this.isCurrent()) return;
+    if (!this.canSelect()) return;
     this.pending = true;
     clearTimeout(this.timer);
     if (this.selection) return;
-    this.selection = this.select()
+    this.selection = this.selectWithRecovery()
       .catch(() => {
         console.error('[Journal] Reader selection failed');
         this.scheduleWake(Date.now() + READER_INITIAL_RETRY_DELAY_MS);
@@ -117,8 +119,21 @@ export class JournalReaderRun {
    * @param due - Desired wake time in epoch milliseconds.
    */
   private scheduleWake(due: number): void {
-    if (!this.isCurrent() || this.pending) return;
+    if (!this.canSelect() || this.pending) return;
     this.timer = setTimeout(() => this.wake(), Math.min(MAX_TIMER_MS, Math.max(0, due - Date.now())));
+  }
+
+  /** Recover a lost cursor by exact name before taking any more work. */
+  private async selectWithRecovery(): Promise<void> {
+    try {
+      await this.select();
+    } catch (error) {
+      if (!(error instanceof ReaderCursorLostError)) throw error;
+      console.error('[Journal] Active reader lost its cursor (reader-cursor-lost)');
+      if (!this.canSelect()) return;
+      await this.store.restoreCursor(this.activation.cursor);
+      this.wake();
+    }
   }
 
   /**
@@ -127,16 +142,13 @@ export class JournalReaderRun {
    */
   private async select(): Promise<void> {
     this.pending = false;
-    const { reader, startAt = 'now' } = this.contribution;
-    if (!this.initialized) {
-      await this.store.initialize(reader, startAt, this.activation.position);
-      this.initialized = true;
-    }
-    if (!this.isCurrent()) return;
-    await this.store.admit(reader, this.patterns(), this.isCurrent);
-    while (this.isCurrent() && this.attempts.size < CONCURRENCY) {
+    const { reader } = this.contribution;
+    if (!this.canSelect()) return;
+    const { owner } = this.activation.cursor;
+    await this.store.admit(reader, this.patterns(), this.canSelect, owner);
+    while (this.canSelect() && this.attempts.size < CONCURRENCY) {
       const patterns = this.patterns();
-      const claim = await this.store.claim(reader, LEASE_MS, patterns);
+      const claim = await this.store.claim(reader, LEASE_MS, patterns, this.canSelect, owner);
       if (!this.isCurrent()) return;
       if (!claim) {
         const due = await this.store.nextDue(reader, patterns);

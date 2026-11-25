@@ -9,6 +9,7 @@ type JournalActivationErrorCode =
   | 'subject-not-recorded'
   | 'duplicate-edge'
   | 'duplicate-reader'
+  | 'reader-owner-conflict'
   | 'duplicate-account-resolver';
 
 /** Invalid journal contribution declaration. */

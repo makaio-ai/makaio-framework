@@ -65,6 +65,12 @@ export interface PreparedOccasion {
   readonly blockedReason?: 'not-implemented';
 }
 
+/** Result of selecting rules for one journal entry. */
+export type RuleOccasionPreparation =
+  | { readonly state: 'prepared'; readonly work: PreparedOccasion }
+  | { readonly state: 'no-match' }
+  | { readonly state: 'source-unavailable' };
+
 /** Materialized input of one effect. */
 export interface PreparedPart {
   /** Zero-based item position, or zero for a rule without each. */

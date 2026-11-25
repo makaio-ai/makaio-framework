@@ -1,0 +1,1 @@
+ALTER TABLE "journal_reader_cursors" ADD COLUMN "reservation_token" text;

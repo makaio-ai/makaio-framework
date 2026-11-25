@@ -1,5 +1,6 @@
 import { CoreDenialPlace, type AccessDeniedError, type DenialPlace } from '@makaio/contracts/access';
-import type { JournalEntry, JournalReprocessRequest, Origin, SubjectName } from '@makaio/contracts/journal';
+import type { JournalEntry, Origin, SubjectName } from '@makaio/contracts/journal';
+import type { JsonValue } from '@makaio/contracts';
 import {
   RightDenialReason,
   SUBJECT_SEND_RIGHT,
@@ -58,17 +59,17 @@ export async function resolveReadAccess(
 }
 
 /**
- * Authorize an operator's request to reopen a failed reading state.
+ * Authorize a reader-state query or reprocess request.
  * @param authority - Shared host resolver and diagnostic sink.
- * @param call - Caller of the reprocess request.
- * @param subject - Canonical reprocess request subject.
- * @param payload - Reader and entry requested for reprocessing.
+ * @param call - Caller of the request.
+ * @param subject - Canonical request subject.
+ * @param payload - Reader selection or entry requested for reprocessing.
  */
-export async function requireReprocess(
+export async function requireReaderRequest(
   authority: JournalReaderAuthority,
   call: CallContext,
   subject: SubjectName,
-  payload: JournalReprocessRequest,
+  payload: JsonValue,
 ): Promise<void> {
   const right = SUBJECT_SEND_RIGHT;
   const answer = await resolve(authority, { call, right, context: { subject, payload } });

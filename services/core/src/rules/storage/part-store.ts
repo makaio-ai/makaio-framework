@@ -1,4 +1,4 @@
-import { and, asc, eq, isNull } from 'drizzle-orm';
+import { and, asc, eq, isNull, lte, or } from 'drizzle-orm';
 import type { HostDatabase, ReactionOutcome } from '@makaio/contracts';
 import { getTransactionQueryContext, resolveSchema } from '@makaio/storage-drizzle';
 import { retryDelay } from './decision-store.js';
@@ -14,7 +14,7 @@ export function loadParts(database: HostDatabase, evaluationId: string): Promise
   return database.transaction(async (tx) => {
     const query = getTransactionQueryContext(tx);
     const { ruleEvaluationParts: parts } = resolveSchema(query, ruleStorageSchema);
-    return query
+    return await query
       .select()
       .from(parts)
       .where(and(eq(parts.evaluationId, evaluationId), eq(parts.state, 'pending')))
@@ -47,6 +47,7 @@ export function startPart(database: HostDatabase, part: RulePartRow, now: number
           eq(parts.attempt, part.attempt),
           eq(parts.state, 'pending'),
           isNull(parts.callDeadline),
+          or(isNull(parts.notBefore), lte(parts.notBefore, now)),
         ),
       )
       .returning();
@@ -56,7 +57,7 @@ export function startPart(database: HostDatabase, part: RulePartRow, now: number
 
 /** Record an outcome or its retry schedule, fencing stale responses from earlier attempts.
  * @param database - Evaluation database.
- * @param part - Attempt that produced the outcome.
+ * @param part - Attempt that produced the outcome, or the unstarted part when dispatch was deferred.
  * @param outcome - Reaction response, or recovery's uncertain result.
  * @param now - Time the outcome was recorded.
  * @returns Completion of the outcome transaction.
@@ -72,10 +73,12 @@ export function finishPart(
     const { ruleEvaluationParts: parts, ruleEvaluations: rules } = resolveSchema(query, ruleStorageSchema);
     // Lock the parent first, serializing aggregation even when distinct parts settle concurrently.
     await query.update(rules).set({ updatedAt: now }).where(eq(rules.id, part.evaluationId));
+    const attempt = part.callDeadline === null ? part.attempt + 1 : part.attempt;
     const updated = await query
       .update(parts)
       .set({
-        ...outcomeValues(outcome, now, part.attempt),
+        ...outcomeValues(outcome, now, attempt),
+        attempt,
         callDeadline: null,
       })
       .where(

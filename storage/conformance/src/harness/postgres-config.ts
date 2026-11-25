@@ -203,6 +203,7 @@ async function createPostgresDatabaseContext(
   };
 
   return {
+    url: primaryUrl,
     db: primary.db,
     dialect: 'postgres',
     capabilities: POSTGRES_CAPABILITIES,

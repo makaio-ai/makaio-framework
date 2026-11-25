@@ -1,11 +1,12 @@
 import { createBusInstance } from '@makaio/bus-core';
 import { defineReaction } from '@makaio/contracts/reaction';
-import type { ConditionTemplate, ReactionRule } from '@makaio/contracts/rules';
+import type { ConditionTemplate, ReactionRule, RuleFinding } from '@makaio/contracts/rules';
 import { expect, it } from 'vitest';
 import { z } from 'zod';
 import { ReactionRegistry } from '../../reaction/reaction-registry.js';
 import { busMessageTrigger } from '../../rule-contributions/builtins/bus-message-trigger.js';
 import { RuleContributionsService } from '../../rule-contributions/rule-contributions-service.js';
+import { checkParameterSchema } from '../validate-rule-inputs.js';
 
 it('checks each comparison against every admitted type of a referenced fact', async () => {
   const bus = createBusInstance();
@@ -76,4 +77,35 @@ it('checks each comparison against every admitted type of a referenced fact', as
     { ruleId: 'invalid', code: 'params-invalid', path: 'lookups.1.where' },
     { ruleId: 'incompatible', code: 'type-mismatch', path: 'lookups.1.where.operator' },
   ]);
+});
+
+it('checks definite key errors in mixed inputs and accepts optional or defaulted fields', async () => {
+  const schema = z.strictObject({
+    value: z.string(),
+    required: z.number(),
+    fallback: z.string().default('default'),
+    optional: z.string().optional(),
+  });
+  const findings: RuleFinding[] = [];
+  const value = { ref: '$event.facts.payload' };
+  await checkParameterSchema({ value, extra: true }, schema, 'params', findings, 'record');
+  expect(findings).toMatchObject([
+    { code: 'params-invalid', path: 'params.required' },
+    { code: 'params-invalid', path: 'params.extra' },
+  ]);
+  const valid: RuleFinding[] = [];
+  await checkParameterSchema({ value, required: 1 }, schema, 'params', valid, 'record');
+  expect(valid).toEqual([]);
+});
+
+it('reports a missing required unknown field alongside a reference', async () => {
+  const schema = z.strictObject({ value: z.string(), required: z.unknown() });
+  const value = { ref: '$event.facts.payload' };
+  const findings: RuleFinding[] = [];
+  await checkParameterSchema({ value }, schema, 'params', findings, 'record');
+  expect(findings).toMatchObject([{ code: 'params-invalid', path: 'params.required' }]);
+  expect(schema.safeParse({ value: 'resolved' }).success).toBe(false);
+  const valid: RuleFinding[] = [];
+  await checkParameterSchema({ value, required: null }, schema, 'params', valid, 'record');
+  expect(valid).toEqual([]);
 });

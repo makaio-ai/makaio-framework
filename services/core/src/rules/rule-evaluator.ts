@@ -10,7 +10,9 @@ import { ruleCall } from './rule-call.js';
 import { claimDecision, loadOccasion, persistDecisions } from './storage/decision-store.js';
 import { finishPart, loadParts, startPart } from './storage/part-store.js';
 import type { RuleCauseRow, RuleEvaluationRow, RulePartRow } from './storage/schema.js';
-import type { PreparedOccasion, RuleOccasion } from './types.js';
+import type { RuleOccasion, RuleOccasionPreparation } from './types.js';
+
+type RuleSourceRegistration = { readonly contribution: RuleSourceContribution };
 
 /** One pass over committed rule work. The reader and scheduler may wake this repeatedly. */
 export class RuleEvaluator {
@@ -18,14 +20,14 @@ export class RuleEvaluator {
    * @param database - Host database where the reader committed the occasion.
    * @param contributions - Active rule contributions.
    * @param invokeReaction - Dispatcher supplied by the host's live reaction registry.
-   * @param getRuleSource - Reads the active contribution for each new occasion.
+   * @param getRuleSourceRegistration - Reads the active registration, whose identity is stable only for its activation.
    * @param budget - Time allowed for a decision attempt or one reaction call.
    */
   public constructor(
     private readonly database: HostDatabase,
     private readonly contributions: RuleContributionsService,
     private readonly invokeReaction: ReactionRegistry['invoke'],
-    private readonly getRuleSource: () => RuleSourceContribution | undefined,
+    private readonly getRuleSourceRegistration: () => RuleSourceRegistration | undefined,
     private readonly budget = DEFAULT_REQUEST_TIMEOUT_MS,
   ) {}
 
@@ -33,11 +35,19 @@ export class RuleEvaluator {
    * Read and project the effective rule set before opening the commit transaction.
    * Resuming committed work uses the stored snapshot.
    * @param input - New occasion whose rules have yet to be selected.
-   * @returns Prepared work, `null` when no rule set is available, or `undefined` when no trigger matches.
+   * @returns Prepared work, no match, or an unavailable source.
    */
-  public async prepare(input: Omit<RuleOccasion, 'snapshot'>): Promise<PreparedOccasion | null | undefined> {
-    const snapshot = await this.getRuleSource()?.rulesFor({ cause: structuredClone(input.event) });
-    return prepareRuleOccasion(this.contributions, input, snapshot);
+  public async prepare(input: Omit<RuleOccasion, 'snapshot'>): Promise<RuleOccasionPreparation> {
+    const occasion = structuredClone(input);
+    try {
+      const registration = this.getRuleSourceRegistration();
+      if (!registration) return { state: 'source-unavailable' };
+      const snapshot = await registration.contribution.rulesFor({ cause: structuredClone(occasion.event) });
+      if (registration !== this.getRuleSourceRegistration()) return { state: 'source-unavailable' };
+      return await prepareRuleOccasion(this.contributions, occasion, snapshot);
+    } catch {
+      return { state: 'source-unavailable' };
+    }
   }
 
   /** Evaluate or resume one persisted occasion from its pinned snapshot.
@@ -88,7 +98,10 @@ export class RuleEvaluator {
       return;
     }
     const definition = this.contributions.reaction(part.reaction);
-    if (!definition || part.keyed !== definition.keyed) return;
+    if (!definition || part.keyed !== definition.keyed) {
+      await finishPart(this.database, part, { state: 'retry', reason: 'contribution-unavailable' }, now);
+      return;
+    }
     const deadline = now + this.budget;
     const started = await startPart(this.database, part, now, deadline);
     if (!started) return;

@@ -305,6 +305,19 @@ describe('ReactionRegistry', () => {
       expect(console.error).toHaveBeenCalledWith(expect.stringContaining('(correlationId: corr-1)'));
     });
 
+    it.each([
+      false,
+      true,
+    ])('retries a durable dispatch whose registration was withdrawn (keyed: %s)', async (expectedKeyed) => {
+      registry.register('alpha', [makeNotifyReaction('alpha')]);
+      expect(registry.ruleDefinition('alpha.notify')).toBeDefined();
+      registry.deregister('alpha');
+      await expect(registry.invoke('alpha.notify', {}, makeInput(bus, { expectedKeyed }))).resolves.toEqual({
+        state: 'retry',
+        reason: 'contribution-unavailable',
+      });
+    });
+
     it('validates parameters before handler entry and fails without invoking it', async () => {
       const handler = vi.fn(async () => undefined);
       registry.register('alpha', [makeNotifyReaction('alpha', handler)]);
