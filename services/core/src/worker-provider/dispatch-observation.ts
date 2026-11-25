@@ -13,6 +13,7 @@ import {
   type WorkerHandle,
 } from '@makaio/contracts';
 import type { CallContext } from '@makaio/core';
+import { abortableWait } from '@makaio/utils';
 import { z } from 'zod';
 import { correlateAllocation } from './allocation-correlation.js';
 import { hasOpenDeadline } from './start-claim.js';
@@ -164,19 +165,23 @@ async function readSeal(
 }
 
 /**
- * Identify a unique allocation from a durable binding or a complete scoped discovery.
+ * Identify a unique allocation from a durable binding, a sender reference or a complete scoped discovery.
  * @param claim - Claim containing any binding already established.
  * @param observation - Latest scoped observation.
  * @param candidates - Combined durable and observed references.
- * @returns The positively assigned reference, if unique.
+ * @param useSenderReference - Whether atomic redemption may use the reference recorded by the sender.
+ * @returns The correlated reference, if unique.
  */
 export function trustedObservationReference(
   claim: DispatchClaim,
   observation: ManagedObservation,
   candidates: readonly ProviderAllocationRef[],
+  useSenderReference = false,
 ): ProviderAllocationRef | undefined {
   if (observation.foreignDiscovery || candidates.length !== 1) return undefined;
-  return claim.boundAllocation ?? observation.firstPageCandidate;
+  return (
+    claim.boundAllocation ?? (useSenderReference ? claim.senderReference : undefined) ?? observation.firstPageCandidate
+  );
 }
 
 /** Attach status from this pass and, when independently proven, its liveness deadline. */
@@ -202,13 +207,20 @@ async function attachAndInspect(
   signal: AbortSignal,
 ): Promise<{ live: boolean; lastAttachFailure: WorkerAttachFailure | null }> {
   let handle: WorkerHandle;
+  if (signal.aborted) return { live: false, lastAttachFailure: null };
   try {
     handle = await recovery.attach(call, claim.binding, ref, signal);
   } catch {
     return { live: false, lastAttachFailure: { observedAt: new Date().toISOString(), reason: 'attach-failed' } };
   }
   try {
-    const inspection = AllocationInspectionSchema.parse(await recovery.inspect(call, claim.binding, ref, signal));
+    // A provider may return an attached handle after it has been canceled.
+    signal.throwIfAborted();
+    const pending = Promise.resolve().then(() => {
+      signal.throwIfAborted();
+      return recovery.inspect(call, claim.binding, ref, signal);
+    });
+    const inspection = AllocationInspectionSchema.parse(await abortableWait(pending, signal));
     return {
       live:
         (inspection.state === 'running' || inspection.state === 'ready') &&
@@ -231,7 +243,7 @@ async function attachAndInspect(
  * @param call - Current observation or redemption call.
  * @param recovery - Bound recovery operations.
  * @param claim - Current dispatch claim.
- * @param ref - Previously bound reference or sole complete first-page match.
+ * @param ref - Identified allocation reference.
  * @param signal - Provider operation lifetime.
  * @param requireProof - Whether liveness must authorize a new binding or redemption.
  * @returns Attach status and any independently proven liveness deadline.

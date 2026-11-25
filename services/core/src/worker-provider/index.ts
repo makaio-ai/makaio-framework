@@ -17,4 +17,12 @@ export type {
   SealedAllocationSet,
   UniqueLiveAllocation,
 } from '@makaio/contracts/extension';
-export type { CommittedWorkerOrder, WorkerOrderSource } from './start-order.js';
+export type {
+  AtomicRedemptionWorkerOrderSource,
+  CommittedWorkerOrder,
+  LockedWorkerRedemption,
+  SeparateBindingWorkerOrderSource,
+  StoredWorkerRedemption,
+  WorkerOrderSource,
+  WorkerRedemptionCredentials,
+} from './start-order.js';

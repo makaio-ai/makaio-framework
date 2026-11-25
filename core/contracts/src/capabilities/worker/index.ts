@@ -94,6 +94,7 @@ export type {
 
 export { AllocationTerminationSchema, MaxRuntimeAssuranceSchema } from './allocation-lifecycle.js';
 export type { AllocationTermination, MaxRuntimeAssurance } from './allocation-lifecycle.js';
+export { AllocationBindingRequiresRedemptionError } from './ordered-dispatch.js';
 export type {
   PreparedAllocationBinding,
   StartOrder,

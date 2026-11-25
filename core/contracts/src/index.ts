@@ -1663,6 +1663,7 @@ export type {
   BoundaryKind,
   BoundaryKindContribution,
   ConnectionExchangeAccepted,
+  ConnectionExchangeCommit,
   ConnectionExchangeContribution,
   ConnectionExchangeRejected,
   ConnectionExchangeResult,

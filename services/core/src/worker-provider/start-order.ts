@@ -2,17 +2,54 @@ import type {
   HostDatabase,
   HostTransaction,
   JobRunId,
+  JsonValue,
   ProviderAllocationRef,
   WorkerRuntimeConnection,
   WorkerRuntimeInputs,
 } from '@makaio/contracts';
 import type { StartOrder, StartWorkerResult } from '@makaio/contracts/capabilities';
+import type { ConnectionExchangeAccepted } from '@makaio/contracts/boundary';
 import type { PartyRef } from '@makaio/core';
 import type { AllocationScopeSetting } from './allocation-scope-source.js';
 import type { LocalWorkerControl } from './local-worker-control.js';
 import type { WorkerProviderRegistry } from './provider-registry.js';
 
 export type { StartOrder, StartWorkerResult } from '@makaio/contracts/capabilities';
+
+/** Durable result stored on the run by its owner. */
+export interface StoredWorkerRedemption {
+  readonly runtimeDigest: string;
+  readonly redeemedAt: string;
+  readonly requiresPlatformProof: boolean;
+  readonly accepted: ConnectionExchangeAccepted & {
+    readonly expiresAt: string;
+    readonly revocationKey: string;
+  };
+}
+
+/** Redemption fields and storage operation belonging to the locked owner row. */
+export interface LockedWorkerRedemption {
+  /** Active acceptance generation; checked again when committing prepared work. */
+  readonly generation: string;
+  /** SHA-256 of the redeem-purpose credential booked for this run and provider. */
+  readonly tokenDigest: string;
+  readonly tokenRevoked: boolean;
+  /** Current issuer standing for first use. */
+  readonly issuerActive: boolean;
+  readonly maxRuntimeMs: number;
+  readonly cancellationWindowMs: number;
+  /** Credential-free exchange response pinned at booking. */
+  readonly payload: JsonValue;
+  readonly stored?: StoredWorkerRedemption;
+  /**
+   * Conditionally consume the token and persist the identity and reply on the
+   * ordered row for this generation. Only repository queries may run here.
+   * @param tx - The transaction holding this row's lock.
+   * @param result - Identity digest, policy and reply to persist.
+   * @returns The persisted result, or undefined if the row failed the update condition.
+   */
+  accept(tx: HostTransaction, result: StoredWorkerRedemption): Promise<StoredWorkerRedemption | undefined>;
+}
 
 /** Host-owned order snapshot joined to its original token deadline in the same transaction. */
 export interface CommittedWorkerOrder {
@@ -24,18 +61,30 @@ export interface CommittedWorkerOrder {
   readonly runtimeInputs: WorkerRuntimeInputs;
   readonly preserveWorkspace?: boolean;
   readonly continues?: ProviderAllocationRef;
+  /**
+   * Present throughout the lifetime of a booking that requires atomic redemption,
+   * including after revocation or closure. This selects the only path allowed to
+   * assign the allocation to the run.
+   */
+  readonly redemption?: LockedWorkerRedemption;
 }
 
-/** Adapter supplied by the host that owns the committed order and the volatile token. */
-export interface WorkerOrderSource {
+/** Credential digests for an advisory read before acquiring the owner lock. */
+export interface WorkerRedemptionCredentials {
+  readonly tokenDigest: string;
+  readonly runtimeDigest?: string;
+}
+
+interface WorkerOrderMaterialSource<Order extends CommittedWorkerOrder = CommittedWorkerOrder> {
   /**
    * Lock the run using the same serialization point as redeem, cancel and expiry.
    * Return a snapshot only when order and admission consumption committed together.
+   * Loading the locked snapshot of an atomic redemption booking must leave storage unchanged.
    * Keep closed orders readable while their dispatches may still be supervised.
    * @param tx - The shared host transaction.
    * @param jobRunId - Order to lock and read.
    */
-  lockOrder(tx: HostTransaction, jobRunId: JobRunId): Promise<CommittedWorkerOrder | undefined>;
+  lockOrder(tx: HostTransaction, jobRunId: JobRunId): Promise<Order | undefined>;
   /**
    * Check local start material availability without reading its plaintext.
    * @param order - Locked order awaiting a start claim.
@@ -47,6 +96,27 @@ export interface WorkerOrderSource {
    */
   readStartToken(order: CommittedWorkerOrder): string | undefined;
 }
+
+/** Owner whose bookings continue to use separate allocation binding. */
+export interface SeparateBindingWorkerOrderSource
+  extends WorkerOrderMaterialSource<CommittedWorkerOrder & { readonly redemption?: never }> {
+  readonly readRedemptionCredentials?: never;
+}
+
+/** Owner that can book orders for atomic redemption. */
+export interface AtomicRedemptionWorkerOrderSource extends WorkerOrderMaterialSource {
+  /**
+   * Read booked digests without acquiring a row lock or starting a write
+   * transaction. This screens presentations before the authoritative check
+   * through `lockOrder` and is mandatory for an owner offering atomic redemption.
+   * @param jobRunId - Run whose credential digests are requested.
+   * @returns The digests from the owner row for an atomic redemption booking.
+   */
+  readRedemptionCredentials(jobRunId: JobRunId): Promise<WorkerRedemptionCredentials | undefined>;
+}
+
+/** Adapter supplied by the host that owns the committed order and the volatile token. */
+export type WorkerOrderSource = SeparateBindingWorkerOrderSource | AtomicRedemptionWorkerOrderSource;
 
 /** Host-owned drain for work that can outlive the caller's wait. */
 export interface ProvisionDrain {

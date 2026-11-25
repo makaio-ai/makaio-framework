@@ -1,5 +1,11 @@
 import type { JobRunId, ProviderAllocationRef, WorkerHandle } from '@makaio/contracts';
-import { type DispatchClaim, recordLateAllocation, sameReference, updateDispatch } from './dispatch-store.js';
+import {
+  type DispatchClaim,
+  recordLateAllocation,
+  recordShutdownTeardown,
+  sameReference,
+  updateDispatch,
+} from './dispatch-store.js';
 import { lockDispatch } from './start-claim.js';
 import type { WorkerStartOptions } from './start-order.js';
 
@@ -110,7 +116,7 @@ export async function finishLateProvisionHandle(
 /**
  * Correlate teardown with the durable binding or, for an unbound late reply, its run identity.
  * @param claim - Dispatch read under the run lock.
- * @param managed - Managed binding awaiting handoff, when applicable.
+ * @param managed - Managed allocation awaiting handoff, when applicable.
  * @param returned - Late reply identity, when supplied.
  * @param hostIncarnation - Current host process identity for unbound late replies.
  * @returns Whether the control represents the claim's allocation.
@@ -144,7 +150,7 @@ function matchesTeardownAllocation(
  * Persist confirmed local teardown for a held handle or a correlated late reply.
  * @param host - Dispatch host.
  * @param jobRunId - Run whose allocation was terminated.
- * @param managed - Managed binding awaiting handoff, when applicable.
+ * @param managed - Managed allocation awaiting handoff, when applicable.
  * @param returned - Late reply identity to check against the claim.
  * @returns Whether the recording phase completed.
  */
@@ -161,6 +167,13 @@ async function recordLocalTeardown(
     const current = await lockDispatch(tx, host, jobRunId);
     if (current === undefined || fence?.aborted) return false;
     const { claim } = current;
+    // A managed handle confirms exactly its allocation. Only the provider can fence further discovery.
+    if (managed !== undefined && current.order.redemption !== undefined && claim.settled === null) {
+      if (claim.sendSettled && claim.candidates.some((candidate) => sameReference(candidate, managed))) {
+        await recordShutdownTeardown(tx, claim, managed);
+      }
+      return true;
+    }
     if (!matchesTeardownAllocation(claim, managed, returned, host.processIncarnation)) return true;
     const unboundProcessReply = claim.boundAllocation === null && returned?.managed === false;
     const late = claim.settled?.lateAllocation;

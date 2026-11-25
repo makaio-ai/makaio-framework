@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { ExternalObjectRef } from '../external-object-ref.js';
 import type { FindExistingOutcome, WriterOutcome } from '../writer.js';
+import type { ConnectionExchangeCommit } from '../../index.js';
 import type {
   ConnectionExchangeAccepted,
   ConnectionExchangeRejected,
@@ -62,9 +63,11 @@ function connectionExchangeAssertions(): void {
   const party = { kind: 'acme.party', id: 'p1' };
   const accepted: ConnectionExchangeAccepted = { party, payload: null };
   const rejected: ConnectionExchangeRejected = { reject: 'denied' };
+  const prepared: ConnectionExchangeCommit = { commit: async () => accepted };
   const acceptedResult: ConnectionExchangeResult = accepted;
   const rejectedResult: ConnectionExchangeResult = rejected;
-  void [accepted, rejected, acceptedResult, rejectedResult];
+  const preparedResult: ConnectionExchangeResult = prepared;
+  void [accepted, rejected, acceptedResult, rejectedResult, preparedResult];
 
   // @ts-expect-error an accepted result may not also carry reject
   const acceptedWithReject: ConnectionExchangeAccepted = { party, payload: null, reject: 'denied' };
