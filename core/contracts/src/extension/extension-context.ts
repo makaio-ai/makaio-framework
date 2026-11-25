@@ -1,3 +1,4 @@
+import type { WritesCapability } from '../journal/write.js';
 import type { CallContext, MakaioBusLike, RegistrableBusNamespaceDefinition } from '@makaio/core';
 import type { RightsCapability } from '../rights/capability.js';
 import type { CredentialRef } from '../config/credential-ref.js';
@@ -215,6 +216,8 @@ export interface NodeExtensionContext<TBus extends MakaioBusLike = MakaioBusLike
   readonly database: HostDatabase;
   /** Journal operations bound to this extension. */
   readonly journal: JournalCapability;
+  /** External write journal, when the host configures authorization and deadlines. */
+  readonly writes?: WritesCapability;
 }
 
 /** Context supplied by an isolated Node host, without full-host capabilities. */

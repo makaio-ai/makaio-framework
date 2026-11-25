@@ -4,6 +4,7 @@ import {
   EXTERNAL_OBJECT_REF_MAX_DEPTH,
   ExternalObjectRefSchema,
   IntentIdSchema,
+  JournalResolveWriteRequestSchema,
   WriteRecordViewSchema,
   WriteRequestSchema,
 } from '../index.js';
@@ -399,5 +400,15 @@ describe('IntentIdSchema', () => {
 
   it('is nullable where the record schema exposes it', () => {
     expect(WriteRecordViewSchema.shape.intentId.safeParse(null).success).toBe(true);
+  });
+});
+
+describe('JournalResolveWriteRequestSchema', () => {
+  it('requires the reviewed intent ID alongside the record ID', () => {
+    const request = { writeRecordId: 'record-1', resolution: { notWritten: true } };
+
+    expect(JournalResolveWriteRequestSchema.safeParse(request).success).toBe(false);
+    expect(JournalResolveWriteRequestSchema.safeParse({ ...request, intentId: null }).success).toBe(false);
+    expect(JournalResolveWriteRequestSchema.safeParse({ ...request, intentId: 'intent-1' }).success).toBe(true);
   });
 });

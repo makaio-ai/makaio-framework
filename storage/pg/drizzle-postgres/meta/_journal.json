@@ -274,6 +274,13 @@
       "when": 1795561739161,
       "tag": "0038_rule-evaluation",
       "breakpoints": true
+    },
+    {
+      "idx": 39,
+      "version": "7",
+      "when": 1795570104768,
+      "tag": "0039_journal-writes",
+      "breakpoints": true
     }
   ]
 }

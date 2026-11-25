@@ -17,6 +17,9 @@ import type {
   LogImportContribution,
 } from './extension-contributions.js';
 import type { ClientDefinition } from '../client/definition.js';
+import type { CredentialResolverContribution } from '../credential/resolver-contribution.js';
+import type { WriteParticipantContribution } from '../journal/write-participant.js';
+import type { WriterContribution } from '../journal/writer.js';
 import type { AccountResolverContribution, InboundEdgeContribution } from '../journal/edge.js';
 import type { ReaderContribution } from '../journal/reader.js';
 import type { ProviderDefinitionInput } from '../provider/definition.js';
@@ -350,6 +353,15 @@ export interface MakaioExtension<THostContext extends ExtensionContext = NodeExt
    * At most one account resolver can be active per host.
    */
   readonly accountResolver?: AccountResolverContribution;
+
+  /** External writers published while this extension is active. */
+  readonly writers?: readonly WriterContribution[];
+
+  /** Participants in the state transitions of this extension's write intents. */
+  readonly writeParticipants?: readonly WriteParticipantContribution[];
+
+  /** Singleton host provider for purpose-based credential resolution. */
+  readonly credentialResolver?: CredentialResolverContribution;
 
   // ---------------------------------------------------------------------------
   // Client runtime definitions

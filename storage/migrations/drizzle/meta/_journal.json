@@ -344,6 +344,13 @@
       "when": 1795561738243,
       "tag": "0048_rule-evaluation",
       "breakpoints": true
+    },
+    {
+      "idx": 49,
+      "version": "6",
+      "when": 1795570103536,
+      "tag": "0049_journal-writes",
+      "breakpoints": true
     }
   ]
 }

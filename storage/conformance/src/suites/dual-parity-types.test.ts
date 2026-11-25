@@ -69,7 +69,8 @@ import {
   sessionsDual,
   turnsDual,
 } from '@makaio/services-core/session';
-import { journalEntriesDual, journalReaderStatesDual } from '@makaio/services-core/journal/storage';
+import { journalEntriesDual, journalReaderStatesDual, journalWritesDual } from '@makaio/services-core/journal/storage';
+import type { WriteState } from '@makaio/contracts/journal';
 import type {
   ruleCausesDual,
   ruleEvaluationsDual,
@@ -463,6 +464,16 @@ type _RulePartState = Expect<Equal<RulePartSqlite['state'], 'pending' | 'accepte
 type _RulePartParameters = Expect<Equal<RulePartSqlite['parameters'], Record<string, JsonValue>>>;
 
 // ─────────────────────────────────────────────────────────────────────────────
+// journal_writes — the durable write record keeps its state narrowed on both dialects.
+// ─────────────────────────────────────────────────────────────────────────────
+
+type JournalWriteSqliteSelect = typeof journalWritesDual.sqlite.$inferSelect;
+type JournalWritePgSelect = typeof journalWritesDual.postgres.$inferSelect;
+type _JournalWriteCongruent = Expect<Equal<JournalWriteSqliteSelect, JournalWritePgSelect>>;
+type _JournalWriteStateSqlite = Expect<Equal<JournalWriteSqliteSelect['state'], WriteState>>;
+type _JournalWriteStatePg = Expect<Equal<JournalWritePgSelect['state'], WriteState>>;
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Runtime completeness guard
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -492,6 +503,7 @@ const PINNED_DUAL_TABLES: ReadonlySet<string> = new Set([
   'rule_causes',
   'rule_evaluations',
   'rule_evaluation_parts',
+  'journal_writes',
 ]);
 
 /**

@@ -104,6 +104,7 @@ Type: Request (RPC)
 
 | Field | Type | Required |
 |-------|------|----------|
+| `intentId` | `string` | yes |
 | `resolution` | `{ found: ExternalObjectRef; } \| { notWritten: true; }` | yes |
 | `writeRecordId` | `string` | yes |
 
@@ -111,7 +112,7 @@ Type: Request (RPC)
 
 | Field | Type | Required |
 |-------|------|----------|
-| `code` | `"not-found" \| "not-unresolved" \| "participant-unavailable" \| undefined` | no |
+| `code` | `"not-found" \| "stale-intent" \| "not-unresolved" \| "participant-unavailable" \| undefined` | no |
 | `record` | `{ writeRecordId: string; key: string; writer: string; state: "resolved" \| "unresolved" \| "released" \| "intended" \| "written" \| "not-written"; object: ExternalObjectRef \| null; parent: ExternalObjectRef \| null; intentId: string \| null; checksum: string \| null; appliedOrder: number \| null; intendedSince: string \| null; ctx: { caller: { kind: string; id: string; claims?: { readonly [key: string]: CallClaim; } \| undefined; }; principal: { kind: string; id: string; claims?: { readonly [key: string]: CallClaim; } \| undefined; }; attestedBy?: { kind: string; id: string; claims?: { readonly [key: string]: CallClaim; } \| undefined; } \| undefined; }; } \| undefined` | no |
 | `success` | `true \| false` | yes |
 

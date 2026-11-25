@@ -23,7 +23,8 @@ import {
  * - `reprocess` sets a failed reading state back to open.
  * - `writes` reads records of the write log in pages, read-only. It is local to the host process because a record
  *   carries the call context of its write, including claims.
- * - `resolve-write` settles an unresolved write by hand. It is local to the host process for the same reason.
+ * - `resolve-write` settles an unresolved or expired intent by the intent ID returned by `writes`.
+ *   It is local to the host process for the same reason.
  */
 export const JournalSchemas = {
   entries: localSubject({ request: JournalEntriesRequestSchema, response: JournalEntriesPageSchema }),

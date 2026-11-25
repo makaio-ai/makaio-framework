@@ -236,3 +236,5 @@ export const journalEdgeCursors = journalEdgeCursorsDual.sqlite;
 export type JournalEdgeCursorRow = typeof journalEdgeCursors.$inferSelect;
 /** Row to insert into the `journal_edge_cursors` table. */
 export type InsertJournalEdgeCursorRow = typeof journalEdgeCursors.$inferInsert;
+
+export { journalWrites, journalWritesDual } from './write-schema.js';

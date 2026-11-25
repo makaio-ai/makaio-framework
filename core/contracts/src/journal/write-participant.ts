@@ -40,8 +40,9 @@ export type WriteParticipantCommit = {
  * leaves the state unchanged. The participant is called only on state changes:
  * `intended` when the intent is created, `written` on a confirmed or found
  * write, `not-written` on a definitive refusal, `unresolved` when the lookup
- * cannot decide, `resolved` on a manual "found", `released` on a manual "not
- * written". A write that returns `unchanged` because the checksum already
+ * cannot decide or the participant rejects a confirmed write, `resolved` on a
+ * manual "found", and `released` on automatic release or manual "not written".
+ * A write that returns `unchanged` because the checksum already
  * matches changes no state and does not call it; a recovery that finds the
  * object and moves the record to `written` calls it, even though that write
  * also returns `unchanged`.
