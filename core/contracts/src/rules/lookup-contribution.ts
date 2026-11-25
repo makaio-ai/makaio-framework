@@ -52,6 +52,7 @@ export interface LookupContribution {
    * @param where - The condition without its parts containing `$expr`; a
    *   lookup kind that accepts `where` answers with a list.
    * @param deadline - ISO date-time the lookup must answer by.
+   * @param signal - Cancels active lookup work when its decision expires or fails.
    * @returns The lookup's answer, or `null`.
    */
   resolve(
@@ -59,5 +60,6 @@ export interface LookupContribution {
     args: Record<string, JsonValue>,
     where: Condition | undefined,
     deadline: string,
+    signal: AbortSignal,
   ): Promise<JsonValue | null>;
 }

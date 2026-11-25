@@ -30,6 +30,7 @@ import {
   ModelRegistryToken,
   type ReactionRegistry,
   ReactionRegistryToken,
+  RuleContributionsToken,
   SessionOrchestratorToken,
 } from '@makaio/services-core';
 import {
@@ -77,6 +78,7 @@ const EXPECTED_FRAMEWORK_BOOT_PACKAGE_NAMES = new Set([
   AdapterSubsystemToken.name,
   NATIVE_SESSION_SUPERVISOR_PACKAGE_NAME,
   ...frameworkCorePackages.filter(isHeadlessPackage).map((pkg) => pkg.name),
+  RuleContributionsToken.name,
   // Framework-only boot has no host-supplied cron provider, so `makaio.cron`
   // bindings fall back to the framework's local in-process scheduler.
   localAutomationCronSchedulerPackage.name,

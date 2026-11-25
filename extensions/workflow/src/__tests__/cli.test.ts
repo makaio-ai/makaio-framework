@@ -26,6 +26,7 @@ const shutdownMock = vi.fn<() => Promise<void>>(() => Promise.resolve());
 const resolveUpstreamTelemetryMock = vi.fn<() => CoreBootOptions['upstreamTelemetry']>(() => undefined);
 
 const mockBus: IMakaioBus = {} as IMakaioBus;
+const mockRuleEvaluator = {} as MakaioRuntime['ruleEvaluator'];
 
 const bootMock = vi.fn<
   (transport: ServerTransportProvider, port: number, host: string, options: CoreBootOptions) => Promise<MakaioRuntime>
@@ -40,6 +41,7 @@ const bootMock = vi.fn<
     trayEntries: [],
     windowRegistry: {} as MakaioRuntime['windowRegistry'],
     coordinator: {} as MakaioRuntime['coordinator'],
+    ruleEvaluator: mockRuleEvaluator,
   }),
 );
 
@@ -287,6 +289,7 @@ describe('bootEmbeddedWorkflowRuntime', () => {
         trayEntries: [],
         windowRegistry: {} as MakaioRuntime['windowRegistry'],
         coordinator: {} as MakaioRuntime['coordinator'],
+        ruleEvaluator: mockRuleEvaluator,
       };
     });
 

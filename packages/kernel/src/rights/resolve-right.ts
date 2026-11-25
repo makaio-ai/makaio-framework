@@ -60,6 +60,8 @@ interface ExternalPayloadContext {
 
 /** Options of {@link resolveRight}. */
 export interface ResolveRightOptions {
+  /** Candidate checks always ask sources using the proposed catalog context. */
+  readonly bypassCache?: boolean;
   /** Connection the question travels on; absent means the question was asked in-process (its own key space). */
   readonly connection?: ResolveRightConnection;
   /** JSON projected by the transport, supplied only to sources that request it. */
@@ -301,6 +303,7 @@ export async function resolveRight(
   }
 
   const cacheable =
+    !options?.bypassCache &&
     sources.every(
       (source) =>
         matchesAnySubscription(question.right, source.payloadIndependent ?? []) &&

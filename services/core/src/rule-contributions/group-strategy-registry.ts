@@ -55,6 +55,11 @@ export class GroupStrategyRegistry {
     return this.core.list();
   }
 
+  /** @returns Active registration candidates paired with their owners. */
+  public listOwned(): ReadonlyArray<{ extension: string; entry: GroupStrategyContribution }> {
+    return this.core.listOwned();
+  }
+
   /** Removes every registered group strategy, from every owner. */
   public clear(): void {
     this.core.clear();

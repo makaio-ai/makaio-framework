@@ -2,7 +2,7 @@
 import type { IMakaioBus } from '@makaio/bus-core';
 import { listOwners, ownerOf, type NamespaceHolder } from '@makaio/bus-core/kernel-api';
 import type { ExtensionOperatorConfigSource, ExtensionService, ExtensionToken, TrayManifest } from '@makaio/contracts';
-import type { ExtensionWarningAction } from '@makaio/contracts/extension';
+import type { ExtensionIdentity, ExtensionWarningAction } from '@makaio/contracts/extension';
 import type { RuleSourceContribution } from '@makaio/contracts/rules';
 import { RuleSourceRegistry } from './rule-source-registry.js';
 import { createOpenContributionProcessor, OpenContributionIndex } from './open-contribution-index.js';
@@ -153,7 +153,7 @@ export class ExtensionCoordinator<THostContext extends KernelHostContext = Kerne
   private readonly rights: CoordinatorRights;
   /** Resolve rights and report denials for services composed inside this host. */
   public readonly hostRights: CoordinatorRights['hostRights'];
-  private readonly rules = new RuleSourceRegistry();
+  private readonly rules: RuleSourceRegistry;
   private shutdownRequested = false;
   private shutdownPromise: Promise<void> | undefined;
   /** FIFO lane for lifecycle transitions that mutate extension entries. */
@@ -197,6 +197,7 @@ export class ExtensionCoordinator<THostContext extends KernelHostContext = Kerne
   public constructor(bus: IMakaioBus, ...args: ExtensionCoordinatorArguments<THostContext>) {
     const [options = {}] = args;
     this.bus = bus;
+    this.rules = new RuleSourceRegistry(options.validateRules);
     this.rights = typeof options.rights === 'object' ? options.rights : createCoordinatorRights(bus, options.rights);
     this.hostRights = this.rights.hostRights;
     this.surface = options.surface ?? 'headless';
@@ -699,8 +700,7 @@ export class ExtensionCoordinator<THostContext extends KernelHostContext = Kerne
    */
   public getResolvedConfig(name: string): ExtensionConfigResolution | undefined {
     const entry = this.entries.get(name);
-    if (!entry) return undefined;
-    return resolveExtensionEntryConfigOutcome(this.createExtensionContextHost(), name, entry, 'observe');
+    return entry && resolveExtensionEntryConfigOutcome(this.createExtensionContextHost(), name, entry, 'observe');
   }
 
   /**
@@ -981,9 +981,9 @@ export class ExtensionCoordinator<THostContext extends KernelHostContext = Kerne
       signal: this.shutdownController.signal,
       hasActiveExtension: (name) => this.entries.get(name)?.state === 'active',
       openContributionReaderFor: (name: string) => this.openContributionIndex.readerFor(name),
-      getExtensionService: <T>(name: string): T | undefined => {
+      getExtensionService: <T>(name: string, identity: ExtensionIdentity, lifetime: AbortSignal): T | undefined => {
         const service = this.getExtensionService(name);
-        return (service?.extensionServiceView ?? service) as T | undefined;
+        return (service?.extensionServiceView?.(identity, lifetime) ?? service) as T | undefined;
       },
     };
   }

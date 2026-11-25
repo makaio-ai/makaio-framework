@@ -116,6 +116,9 @@ export interface EmitOptions {
  * Extends EmitOptions with request-specific settings like timeout.
  */
 export interface RequestOptions extends Omit<EmitOptions, 'connectionId'> {
+  /** Stable operation key forwarded to responders as metadata. The bus does not deduplicate by this key. */
+  idempotencyKey?: string;
+
   /**
    * Timeout in milliseconds. Defaults to DEFAULT_REQUEST_TIMEOUT_MS (60 seconds) if not specified.
    * Use `0` for no automatic timeout — the request stays open until resolved,

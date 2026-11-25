@@ -37,3 +37,4 @@ export {
   type ValidateConditionInput,
   validateCondition,
 } from './validate.js';
+export { describeSchemaValue, resolveSchemaPath } from './schema-path.js';

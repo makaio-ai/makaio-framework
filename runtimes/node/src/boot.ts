@@ -75,15 +75,19 @@ import {
   createFacetNamespaceContributionProcessor,
   createReactionContributionProcessor,
   createRuleContributionProcessor,
+  createRuleContributionsPackage,
   createRuleContributionsBuiltinsPackage,
+  ReactionRegistry,
+  ReactionRegistryToken,
+  type RuleContributionsService,
+  RuleContributionsToken,
+  RuleEvaluator,
   createToolContributionProcessor,
   createTransitionContributionProcessor,
   createWorkflowBlockContributionProcessor,
   frameworkCorePackages,
   FrameworkServicesCoreNamespaces,
   ModelRegistryToken,
-  RuleContributionsToken,
-  type RuleContributionsService,
 } from '@makaio/services-core';
 import {
   AutomationCronSchedulerToken,
@@ -570,6 +574,7 @@ export async function bootMakaioRuntimeCore(
       AdapterSubsystemToken.name,
       NATIVE_SESSION_SUPERVISOR_PACKAGE_NAME,
       ...frameworkCorePackages.map((pkg) => pkg.name),
+      RuleContributionsToken.name,
       WorkflowEngineToken.name,
       ModelRegistryToken.name,
       logImportRegistryPackage.name,
@@ -596,7 +601,18 @@ export async function bootMakaioRuntimeCore(
 
     const credentialBinder = createCredentialBinder();
 
-    const coordinator = new ExtensionCoordinator<KernelExtensionContext>(bus, {
+    const getRuleContributions = () =>
+      coordinator.getExtensionService<RuleContributionsService>(RuleContributionsToken.name);
+    const getReactionRegistry = () => {
+      const service = coordinator.getExtensionService(ReactionRegistryToken.name);
+      return service instanceof ReactionRegistry ? service : undefined;
+    };
+    const coordinator: ExtensionCoordinator<KernelExtensionContext> = new ExtensionCoordinator(bus, {
+      validateRules: async (input) => {
+        const service = getRuleContributions();
+        if (!service) throw new Error('Rule contributions are unavailable');
+        return service.validate(coordinator.ruleRights, input);
+      },
       rights,
       surface: options.surface ?? 'headless',
       // An extension that declares no stop window of its own may own a child
@@ -760,6 +776,7 @@ export async function bootMakaioRuntimeCore(
       ...selectFrameworkCorePackages(effectiveEnabledBootPackages, {
         fileAccessRuleProvider: options.fileAccessRuleProvider,
       }),
+      createRuleContributionsPackage(getReactionRegistry),
       createWorkflowEnginePackage(workflowRunnerPackageOptions),
       createModelRegistryPackage(modelRegistryFetcher),
       logImportRegistryPackage,
@@ -873,11 +890,7 @@ export async function bootMakaioRuntimeCore(
         forEachActiveExtension: (callback) => coordinator.forEachActiveExtension(callback),
       }),
     );
-    coordinator.registerContributionProcessor(
-      createRuleContributionProcessor(() =>
-        coordinator.getExtensionService<RuleContributionsService>(RuleContributionsToken.name),
-      ),
-    );
+    coordinator.registerContributionProcessor(createRuleContributionProcessor(getRuleContributions));
     coordinator.registerContributionProcessor(
       createAutomationTriggerContributionProcessor({
         forEachActiveExtension: (callback) => coordinator.forEachActiveExtension(callback),
@@ -950,6 +963,17 @@ export async function bootMakaioRuntimeCore(
     // dynamically as extensions activate/deactivate, so no imperative mount loop
     // is needed here.
     await coordinator.startAll({ signal: options.signal });
+    const contributions = getRuleContributions();
+    const reactions = getReactionRegistry();
+    if (!contributions || !reactions) {
+      throw new Error('Rule evaluation requires the host rule contributions and reaction registry');
+    }
+    const ruleEvaluator = new RuleEvaluator(
+      database,
+      contributions,
+      reactions.invoke.bind(reactions),
+      coordinator.getRuleSource,
+    );
     const reportStartedConfig = reportOperatorConfig;
     reportOperatorConfig = undefined;
     reportStartedConfig();
@@ -1038,6 +1062,7 @@ export async function bootMakaioRuntimeCore(
       machineId,
       bus,
       coordinator,
+      ruleEvaluator,
       trayEntries: coordinator.trayEntries,
       windowRegistry: coordinator.windowRegistry,
       /**

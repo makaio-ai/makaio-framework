@@ -40,8 +40,11 @@ export interface ExtensionServiceLifecycle {
   /**
    * Optional service API returned by extension contexts in place of this instance.
    * The host retains the full instance for lifecycle and host-only operations.
+   * @param identity - Identity of the extension requesting the service.
+   * @param lifetime - Lifetime of the requesting extension's activation.
+   * @returns The extension-facing API.
    */
-  readonly extensionServiceView?: object;
+  extensionServiceView?(identity: ExtensionIdentity, lifetime: AbortSignal): object;
   /**
    * Initialize the service when startup work is not constructor-owned.
    *

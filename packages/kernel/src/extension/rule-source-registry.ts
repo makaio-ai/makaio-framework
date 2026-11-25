@@ -41,6 +41,9 @@ export class RuleSourceRegistry {
   /** Refresh callbacks and their lifetime cleanup, independent of the source's lifetime. */
   private readonly readers = new Map<() => void, () => void>();
 
+  /** @param validate - Host validator, when this composition provides rule evaluation. */
+  public constructor(private readonly validate?: RulesCapability['validate']) {}
+
   /**
    * Installs the declared rule source for a live activation.
    * The kernel generation owns both the registration and its removal.
@@ -142,8 +145,12 @@ export class RuleSourceRegistry {
    */
   public capabilityFor(owner: ExtensionName, lifetime: AbortSignal): RulesCapability {
     return {
-      validate: async () => {
-        throw new Error('Rule-set validation is not implemented');
+      validate: async (input) => {
+        lifetime.throwIfAborted();
+        if (!this.validate) throw new Error('Rule-set validation is unavailable on this host');
+        const findings = await this.validate(input);
+        lifetime.throwIfAborted();
+        return findings;
       },
       triggers: () => this.triggersFor(owner, lifetime),
     };

@@ -70,6 +70,12 @@ import {
   turnsDual,
 } from '@makaio/services-core/session';
 import { journalEntriesDual, journalReaderStatesDual } from '@makaio/services-core/journal/storage';
+import type {
+  ruleCausesDual,
+  ruleEvaluationsDual,
+  ruleEvaluationPartsDual,
+} from '../../../../services/core/src/rules/storage/schema.js';
+import type { EvaluationState } from '@makaio/contracts/rules';
 import { discoverSchemas } from '@makaio/storage-migrations/discover-schemas';
 import type {
   AdapterSessionClaimStatus,
@@ -438,6 +444,24 @@ type _JournalReaderStateCongruent = Expect<Equal<JournalReaderStateSqliteSelect,
 type _JournalReaderStateStateSqlite = Expect<Equal<JournalReaderStateSqliteSelect['state'], ReaderEntryState['state']>>;
 type _JournalReaderStateStatePg = Expect<Equal<JournalReaderStatePgSelect['state'], ReaderEntryState['state']>>;
 
+// Rule decision and effect stores use the same row types on both dialects.
+// State pins also detect widening on both faces at once.
+type RuleCauseSqlite = typeof ruleCausesDual.sqlite.$inferSelect;
+type RuleCausePg = typeof ruleCausesDual.postgres.$inferSelect;
+type _RuleCauseCongruent = Expect<Equal<RuleCauseSqlite, RuleCausePg>>;
+type _RuleCauseState = Expect<Equal<RuleCauseSqlite['state'], 'pending' | 'decided'>>;
+
+type RuleEvaluationSqlite = typeof ruleEvaluationsDual.sqlite.$inferSelect;
+type RuleEvaluationPg = typeof ruleEvaluationsDual.postgres.$inferSelect;
+type _RuleEvaluationCongruent = Expect<Equal<RuleEvaluationSqlite, RuleEvaluationPg>>;
+type _RuleEvaluationState = Expect<Equal<RuleEvaluationSqlite['state'], EvaluationState>>;
+
+type RulePartSqlite = typeof ruleEvaluationPartsDual.sqlite.$inferSelect;
+type RulePartPg = typeof ruleEvaluationPartsDual.postgres.$inferSelect;
+type _RulePartCongruent = Expect<Equal<RulePartSqlite, RulePartPg>>;
+type _RulePartState = Expect<Equal<RulePartSqlite['state'], 'pending' | 'accepted' | 'rejected' | 'failed'>>;
+type _RulePartParameters = Expect<Equal<RulePartSqlite['parameters'], Record<string, JsonValue>>>;
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Runtime completeness guard
 // ─────────────────────────────────────────────────────────────────────────────
@@ -465,6 +489,9 @@ const PINNED_DUAL_TABLES: ReadonlySet<string> = new Set([
   'session_events',
   'journal_entries',
   'journal_reader_states',
+  'rule_causes',
+  'rule_evaluations',
+  'rule_evaluation_parts',
 ]);
 
 /**

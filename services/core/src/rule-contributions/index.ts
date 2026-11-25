@@ -5,7 +5,7 @@ export { RuleBlockRegistry } from './rule-block-registry.js';
 export { RuleContributionsService } from './rule-contributions-service.js';
 export type { RuleContributionsView } from './rule-contributions-service.js';
 export { createRuleContributionProcessor } from './rule-contribution-processor.js';
-export { RuleContributionsToken, ruleContributionsPackage } from './packages.js';
+export { RuleContributionsToken, createRuleContributionsPackage } from './packages.js';
 export { ALL_GROUP_STRATEGY_KIND, allGroupStrategy } from './builtins/all-group-strategy.js';
 export {
   BUS_MESSAGE_TRIGGER_KIND,

@@ -99,6 +99,7 @@ export type ReactionCatalogEntries = z.infer<typeof ReactionCatalogEntriesSchema
 /** Response of `getReactionCatalog`. */
 export const ReactionCatalogResponseSchema = z.object({
   entries: ReactionCatalogEntriesSchema,
+  findings: z.array(RuleCatalogFindingSchema),
 });
 /** @see {@link ReactionCatalogResponseSchema} */
 export type ReactionCatalogResponse = z.infer<typeof ReactionCatalogResponseSchema>;

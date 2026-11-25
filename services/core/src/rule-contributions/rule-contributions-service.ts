@@ -4,6 +4,7 @@ import type { JsonValue } from '@makaio/contracts';
 import {
   LookupCatalogEntrySchema,
   LookupCatalogRequestSchema,
+  ReactionCatalogEntrySchema,
   ReactionCatalogRequestSchema,
   RulesSubjects,
   TriggerCatalogEntrySchema,
@@ -12,13 +13,22 @@ import {
   type ReactionRule,
   type RuleCatalogFinding,
   type RuleCheckContext,
+  type RuleFinding,
   type RuleValidationFinding,
   type TriggerCatalogEntry,
+  type ValidateRulesInput,
 } from '@makaio/contracts/rules';
+import type { RuleValidationRights } from '../rules/validation-types.js';
+import { validateRuleSet } from '../rules/validate-rule-set.js';
 import { zodSchemaToJsonRecord } from '@makaio/contracts/shared';
-import type { ReactionRegistryView } from '../reaction/reaction-registry.js';
+import type { ReactionRegistry } from '../reaction/reaction-registry.js';
 import { BaseService } from '@makaio/service-base';
-import { DEFAULT_CONTRIBUTION_VALIDATION_TIMEOUT_MS, validateRuleContributions } from './contribution-validation.js';
+import {
+  DEFAULT_CONTRIBUTION_VALIDATION_TIMEOUT_MS,
+  runContributionCheck,
+  validateRuleContributions,
+  type CheckLocation,
+} from './contribution-validation.js';
 import { GroupStrategyRegistry } from './group-strategy-registry.js';
 import { LookupRegistry } from './lookup-registry.js';
 import { RuleBlockRegistry } from './rule-block-registry.js';
@@ -26,6 +36,9 @@ import { TriggerRegistry } from './trigger-registry.js';
 
 /** Catalog entries and projection failures for active contributions. */
 type CatalogResult<TEntry> = { entries: TEntry[]; findings: RuleCatalogFinding[] };
+
+/** Host registry ports used to discover and check reactions. */
+export type RuleReactionRegistry = Pick<ReactionRegistry, 'listCatalog' | 'ruleDefinition'>;
 
 /** Rule discovery and contribution checks available to extension contexts. */
 export type RuleContributionsView = Readonly<
@@ -40,8 +53,8 @@ export type RuleContributionsView = Readonly<
  * their catalogs and runs their custom checks for the host's rule validator.
  */
 export class RuleContributionsService extends BaseService {
-  /** Exposes detached catalogs and checks while keeping the registries host-owned. */
-  public readonly extensionServiceView: RuleContributionsView = Object.freeze({
+  /** Frozen catalog and check methods shared by extension contexts. */
+  private readonly view: RuleContributionsView = Object.freeze({
     listTriggers: this.listTriggers.bind(this),
     listLookups: this.listLookups.bind(this),
     validateRuleContributions: this.validateRuleContributions.bind(this),
@@ -64,7 +77,7 @@ export class RuleContributionsService extends BaseService {
    */
   public constructor(
     bus: IMakaioBus,
-    private readonly reactions: () => ReactionRegistryView | undefined,
+    private readonly reactions: () => RuleReactionRegistry | undefined,
     private readonly isActive: (extension: string) => boolean,
     private readonly validationTimeoutMs = DEFAULT_CONTRIBUTION_VALIDATION_TIMEOUT_MS,
   ) {
@@ -73,6 +86,11 @@ export class RuleContributionsService extends BaseService {
     this.lookups = new LookupRegistry();
     this.groupStrategies = new GroupStrategyRegistry();
     this.ruleBlocks = new RuleBlockRegistry();
+  }
+
+  /** @returns Detached catalogs and checks available to extension contexts. */
+  public extensionServiceView(): RuleContributionsView {
+    return this.view;
   }
 
   /**
@@ -85,9 +103,74 @@ export class RuleContributionsService extends BaseService {
     return validateRuleContributions(
       rule,
       ctx,
-      { reaction: (kind) => this.reactions()?.getValidator(kind), lookups: this.lookups, blocks: this.ruleBlocks },
+      { reaction: (kind) => this.reaction(kind)?.validate, lookups: this.lookups, blocks: this.ruleBlocks },
       this.validationTimeoutMs,
     );
+  }
+
+  /** Runs a custom check in the fact scope established for that contribution.
+   * @param location - Rule identity and contribution location.
+   * @param check - The contributed check.
+   * @returns Findings with attribution, including timeout and exception findings.
+   */
+  public checkContribution(
+    location: CheckLocation,
+    check: () => RuleFinding[] | Promise<RuleFinding[]>,
+  ): Promise<RuleValidationFinding[]> {
+    return runContributionCheck(location, this.validationTimeoutMs, check);
+  }
+
+  /** @returns The host bus whose subject directory rules are checked against. */
+  public get validationBus(): IMakaioBus {
+    return this.bus;
+  }
+
+  /** @param kind - Trigger kind.
+   * @returns Active trigger.
+   */
+  public trigger(kind: string) {
+    return this.triggers.listOwned().find(({ extension, entry }) => entry.kind === kind && this.isActive(extension))
+      ?.entry;
+  }
+
+  /** @param kind - Lookup kind.
+   * @returns Active lookup.
+   */
+  public lookup(kind: string) {
+    return this.lookups.listOwned().find(({ extension, entry }) => entry.kind === kind && this.isActive(extension))
+      ?.entry;
+  }
+
+  /** @param kind - Strategy kind.
+   * @returns Active strategy.
+   */
+  public strategy(kind: string) {
+    return this.groupStrategies
+      .listOwned()
+      .find(({ extension, entry }) => entry.strategy === kind && this.isActive(extension))?.entry;
+  }
+
+  /** @param owner - Extension declaring the block.
+   * @returns Active rule block.
+   */
+  public ruleBlock(owner: string) {
+    return this.isActive(owner) ? this.ruleBlocks.get(owner) : undefined;
+  }
+
+  /** @param kind - Reaction kind.
+   * @returns Active reaction's validation and execution metadata.
+   */
+  public reaction(kind: string) {
+    const definition = this.reactions()?.ruleDefinition(kind);
+    return definition && this.isActive(definition.extension) ? definition : undefined;
+  }
+
+  /** @param rights - Host authorization for validation.
+   * @param input - Candidate rule set.
+   * @returns Findings for the candidate.
+   */
+  public validate(rights: RuleValidationRights, input: ValidateRulesInput) {
+    return validateRuleSet(this, rights, input);
   }
 
   /** Binds the catalogs to the bus for the lifetime of the service. */
@@ -102,11 +185,11 @@ export class RuleContributionsService extends BaseService {
     });
     this.registerHandler(RulesSubjects.reactions, (ctx) => {
       ReactionCatalogRequestSchema.parse(ctx.payload);
-      const entries =
+      const owned =
         this.reactions()
           ?.listCatalog()
-          .filter(({ extension }) => this.isActive(extension)) ?? [];
-      ctx.setResult({ entries });
+          .map((entry) => ({ extension: entry.extension, entry })) ?? [];
+      ctx.setResult(this.projectCatalog(owned, ReactionCatalogEntrySchema, (_extension, entry) => entry));
     });
   }
 

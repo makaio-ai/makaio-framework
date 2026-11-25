@@ -6,11 +6,11 @@ import type { LookupKind, ReactionKind, RuleId } from './identifiers.js';
 import type { ReactionRule, RuleExclusion, RuleGroup } from './rule.js';
 
 /**
- * Output of checking one rule, extended with the rule it concerns.
+ * Finding from checking an effective rule set.
  */
 export interface RuleValidationFinding extends RuleFinding {
-  /** Rule the finding concerns. */
-  readonly ruleId: RuleId;
+  /** Rule the finding concerns, when the path is relative to a rule. */
+  readonly ruleId?: RuleId;
   /** The hook that produced the finding or failed, when applicable. */
   readonly contribution?: RuleValidationContribution;
 }
@@ -23,6 +23,8 @@ export type RuleValidationContribution =
 
 /** A host finding for a custom contribution check that could not complete. */
 export interface RuleContributionValidationFailure extends RuleValidationFinding {
+  /** Rule the contribution checked. */
+  readonly ruleId: RuleId;
   /** Custom checks must complete successfully before the rule can take effect. */
   readonly severity: 'error';
   /** Whether the check ran out of time or threw. */

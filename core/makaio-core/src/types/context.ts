@@ -36,6 +36,9 @@ export interface RequestContext<Payload, Response> extends BaseMessageContext {
   /** Discriminator - always true for requests */
   isRequest: true;
 
+  /** Sender-provided operation key, when supplied. The value is not an authorization credential. */
+  readonly idempotencyKey?: string;
+
   /** The request payload */
   payload: Payload;
 

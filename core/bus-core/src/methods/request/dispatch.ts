@@ -46,6 +46,8 @@ export interface DispatchOptions extends WithReceiveContext {
   correlationId: string;
   /** Message identifier. */
   messageId: string;
+  /** Stable operation key carried across dispatch hops. */
+  idempotencyKey?: string;
   /** Timeout in milliseconds. `0` means no automatic timeout. */
   timeout: number;
   /**
@@ -195,6 +197,7 @@ async function executeLocalEntry(
     },
     messageId: options.messageId,
     correlationId: options.correlationId,
+    ...(options.idempotencyKey !== undefined && { idempotencyKey: options.idempotencyKey }),
     transport: options.transport,
     call: options.call,
     ...(options.deadline !== undefined && { deadline: options.deadline }),
@@ -361,6 +364,7 @@ async function executeRemoteEntry(
     payload,
     correlationId: options.correlationId,
     messageId: options.messageId,
+    ...(options.idempotencyKey !== undefined && { idempotencyKey: options.idempotencyKey }),
     timeout: remainingTimeout,
     // The cursor tells the remote node "start from handlers strictly below
     // this value". It is normally the priority of the entry the walk passed
