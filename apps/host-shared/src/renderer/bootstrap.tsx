@@ -2,7 +2,7 @@
 
 import { StrictMode, type ReactNode } from 'react';
 import { createRoot } from 'react-dom/client';
-import { MakaioBus } from '@makaio/bus-core';
+import { MakaioBus, waitForSubscriptionPropagation } from '@makaio/bus-core';
 import type { IMakaioBus } from '@makaio/bus-core';
 import { WebSocketClientTransport } from '@makaio/bus-transport-websocket';
 import type { WebSocketLike } from '@makaio/bus-transport-websocket';
@@ -149,6 +149,8 @@ function createBrowserWebSocket(url: string): WebSocketLike {
 interface BootPromiseHandle {
   readonly promise: Promise<void>;
   readonly resolve: () => void;
+  readonly unsubscribeComplete: () => void;
+  readonly isSettled: () => boolean;
 }
 
 /**
@@ -182,28 +184,19 @@ function createBootPromise(bus: IMakaioBus, logPrefix: string, signal?: AbortSig
     resolvePromise = resolve;
   });
 
-  const abortHandler = (): void => {
+  const finish = (): void => {
     settle();
     resolvePromise();
   };
 
-  if (signal?.aborted) {
-    abortHandler();
-    return {
-      promise,
-      resolve: abortHandler,
-    };
-  }
-
   if (signal) {
-    signal.addEventListener('abort', abortHandler, { once: true });
-    cleanups.push(() => signal.removeEventListener('abort', abortHandler));
+    signal.addEventListener('abort', finish, { once: true });
+    cleanups.push(() => signal.removeEventListener('abort', finish));
   }
 
   const timer = setTimeout(() => {
     console.warn(`[${logPrefix}] Boot timeout - mounting React`);
-    settle();
-    resolvePromise();
+    finish();
   }, BOOT_TIMEOUT_MS);
   cleanups.push(() => clearTimeout(timer));
 
@@ -229,20 +222,10 @@ function createBootPromise(bus: IMakaioBus, logPrefix: string, signal?: AbortSig
     }),
   );
 
-  cleanups.push(
-    bus.on(BootSubjects.complete, () => {
-      settle();
-      resolvePromise();
-    }),
-  );
+  const unsubscribeComplete = bus.on(BootSubjects.complete, finish);
+  cleanups.push(unsubscribeComplete);
 
-  return {
-    promise,
-    resolve: () => {
-      settle();
-      resolvePromise();
-    },
-  };
+  return { promise, resolve: finish, unsubscribeComplete, isSettled: () => settled };
 }
 
 /**
@@ -253,12 +236,15 @@ function createBootPromise(bus: IMakaioBus, logPrefix: string, signal?: AbortSig
  * @returns Promise that resolves when service boot completes or times out.
  */
 async function waitForServiceBoot(bus: IMakaioBus, logPrefix: string, signal?: AbortSignal): Promise<void> {
-  const { promise, resolve } = createBootPromise(bus, logPrefix, signal);
+  if (signal?.aborted) return;
+  const { promise, resolve, unsubscribeComplete, isSettled } = createBootPromise(bus, logPrefix, signal);
 
-  void bus
-    .request(bus.own('start'), BootSubjects.getState, {})
+  // Subscribe, wait for admission, then read state.
+  // Completion before admission is visible in the state; later completion can reach the listener.
+  void waitForSubscriptionPropagation(unsubscribeComplete)
+    .then(() => (isSettled() ? undefined : bus.request(bus.own('start'), BootSubjects.getState, {})))
     .then((state) => {
-      if (signal?.aborted) {
+      if (state === undefined || isSettled()) {
         return;
       }
 

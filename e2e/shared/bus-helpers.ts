@@ -9,7 +9,7 @@
  * - `e2e/desktop/desktop-smoke.test.ts`
  */
 
-import { createBusInstance, OnceAbortError } from '@makaio/bus-core';
+import { createBusInstance, waitForSubscriptionPropagation } from '@makaio/bus-core';
 import type { IMakaioBus } from '@makaio/bus-core';
 import { WebSocketClientTransport } from '@makaio/bus-transport-websocket';
 import type {
@@ -19,7 +19,6 @@ import type {
 } from '@makaio/bus-transport-websocket';
 import { BootSubjects, KernelSubjects } from '@makaio/kernel';
 import { UiSubjects, type UiReadyEvent } from '@makaio/ui-kernel';
-import type { ContextForSubjectDefinition, ExtractSubjectResponse, SubjectDefinition } from '@makaio/core';
 import { WebSocket } from 'ws';
 import type { SpawnedProcess } from './spawn-helpers.js';
 
@@ -117,18 +116,6 @@ export interface RuntimeReadyPayload {
 export type UiReadyPayload = UiReadyEvent;
 
 /**
- * A non-request, non-channel subject definition — safe for use as an event subject
- * in {@link raceEventAndProbe}.
- */
-type EventSubjectDefinition = SubjectDefinition & { $meta: { isRequest: false; channel: false } };
-
-/**
- * A request, non-channel subject definition — safe for use as a probe subject
- * in {@link raceEventAndProbe}.
- */
-type RequestSubjectDefinition = SubjectDefinition & { $meta: { isRequest: true; channel: false } };
-
-/**
  * Options for {@link raceEventAndProbe}.
  */
 interface RaceEventAndProbeOptions {
@@ -139,139 +126,106 @@ interface RaceEventAndProbeOptions {
 }
 
 /**
- * Race-safe subscribe / probe / abort helper.
+ * Wait for a readiness event backed by a queryable state.
  *
  * Implements the canonical pattern for waiting on a bus event that may already
  * have fired before the caller connected:
  *
- * 1. Subscribe to `eventSubject` first (prevents the race).
- * 2. Probe `probeSubject` via RPC; if the probe indicates the condition is already
- *    met, abort the pending listener and return the fast-path result immediately.
+ * 1. Subscribe to the event and wait for subscription propagation.
+ * 2. Probe via RPC and return the fast-path result if the condition is already met.
  * 3. Otherwise wait for the event and return the slow-path result.
- * @param bus - Connected bus instance
- * @param eventSubject - Subject to listen on for the slow path
- * @param probeSubject - Request subject to probe for the fast path
- * @param probePayload - Payload forwarded to the probe request
+ * @param subscribe - Installs the event listener and returns its disposer
+ * @param probe - Reads the current state
  * @param options - Timeout and logging label
  * @param fastPathCheck - Receives the probe response; return `TPayload` if the
  *   condition is already met, or `null` to fall through to the slow path
- * @param slowPathExtract - Receives the event context; extracts and returns `TPayload`
  * @returns Resolved payload, either from the fast path or the slow path
  */
-async function raceEventAndProbe<
-  TEventSubject extends EventSubjectDefinition,
-  TProbeSubject extends RequestSubjectDefinition,
-  TPayload,
->(
-  bus: IMakaioBus,
-  eventSubject: TEventSubject,
-  probeSubject: TProbeSubject,
-  probePayload: TProbeSubject['$meta']['payload']['request'],
+async function raceEventAndProbe<TState, TPayload>(
+  subscribe: (resolve: (payload: TPayload) => void) => () => void,
+  probe: () => Promise<TState>,
   options: RaceEventAndProbeOptions,
-  fastPathCheck: (probeResult: ExtractSubjectResponse<TProbeSubject>) => TPayload | null,
-  slowPathExtract: (eventCtx: ContextForSubjectDefinition<TEventSubject>) => TPayload,
+  fastPathCheck: (probeResult: TState) => TPayload | null,
 ): Promise<TPayload> {
   const { timeoutMs, label } = options;
-  const abort = new AbortController();
   const t0 = Date.now();
   console.info('[%s] Subscribing to event (timeout=%dms)', label, timeoutMs);
 
-  // Subscribe FIRST to prevent a race where the event fires between the probe
-  // request and the listener registration.
-  // The double-cast is required because IMakaioBus.once() constrains its Subject
-  // generic to the bus's own Subjects type variable, which is not visible from
-  // an external generic helper. Fixing this properly requires a looser overload
-  // on the IMakaioBus interface.
-  const eventPromise = (
-    bus.once(eventSubject as never, { timeoutMs, signal: abort.signal } as never) as unknown as Promise<
-      ContextForSubjectDefinition<TEventSubject>
-    >
-  ).catch((error: unknown) => {
-    if (abort.signal.aborted && error instanceof OnceAbortError) {
-      return null;
-    }
-    throw error;
-  });
-
-  // Probe to check whether the condition is already satisfied.
-  let probeResult: ExtractSubjectResponse<TProbeSubject> | null = null;
+  const event = Promise.withResolvers<TPayload>();
+  const unsubscribe = subscribe(event.resolve);
+  const deadline = Promise.withResolvers<never>();
+  const timer = timeoutMs
+    ? setTimeout(
+        () => deadline.reject(new Error(`[${label}] Timed out after ${timeoutMs}ms waiting for the event`)),
+        timeoutMs,
+      )
+    : undefined;
   try {
-    probeResult = (await bus.request(bus.own('root'), probeSubject as never, probePayload as never, {
-      timeout: timeoutMs,
-    })) as ExtractSubjectResponse<TProbeSubject>;
-  } catch (err: unknown) {
-    const errName = err instanceof Error ? err.constructor.name : err === null ? 'null' : typeof err;
-    console.info('[%s] probe not available (%s), waiting for event (waited=%dms)', label, errName, Date.now() - t0);
-  }
+    // Completion before admission is visible in the state; later completion can reach the listener.
+    await Promise.race([waitForSubscriptionPropagation(unsubscribe), deadline.promise]);
+    const state = Promise.resolve()
+      .then(probe)
+      .catch((err: unknown) => {
+        const errName = err instanceof Error ? err.constructor.name : err === null ? 'null' : typeof err;
+        console.info('[%s] probe not available (%s), waiting for event (waited=%dms)', label, errName, Date.now() - t0);
+        return null;
+      });
+    const probeResult = await Promise.race([state, deadline.promise]);
 
-  if (probeResult !== null) {
-    const fastResult = fastPathCheck(probeResult);
-    if (fastResult !== null) {
-      // Fast path: condition already met — discard the pending listener.
-      abort.abort();
-      void eventPromise;
-      console.info('[%s] Fast-path: condition already met (waited=%dms)', label, Date.now() - t0);
-      return fastResult;
+    if (probeResult !== null) {
+      const fastResult = fastPathCheck(probeResult);
+      if (fastResult !== null) {
+        console.info('[%s] Fast-path: condition already met (waited=%dms)', label, Date.now() - t0);
+        return fastResult;
+      }
+      console.info('[%s] probe returned not-ready, waiting for event (waited=%dms)', label, Date.now() - t0);
     }
-    console.info('[%s] probe returned not-ready, waiting for event (waited=%dms)', label, Date.now() - t0);
-  }
 
-  // Slow path: wait for the event.
-  const eventCtx = await eventPromise;
-  if (eventCtx === null) {
-    throw new Error(`[${label}] Event wait was aborted before the slow path completed`);
+    const result = await Promise.race([event.promise, deadline.promise]);
+    console.info('[%s] event received (waited=%dms)', label, Date.now() - t0);
+    return result;
+  } finally {
+    clearTimeout(timer);
+    unsubscribe();
   }
-  const result = slowPathExtract(eventCtx);
-  console.info('[%s] event received (waited=%dms)', label, Date.now() - t0);
-  return result;
 }
 
 /**
  * Wait for full boot completion using the race-safe probe pattern.
  *
- * Subscribes to the `boot.complete` event first, then checks
- * `boot.getState` in case boot already finished before the
- * listener was registered. Resolves immediately if boot is already done.
+ * Waits for the `boot.complete` subscription to propagate, then checks
+ * `boot.getState` for completion during or before subscription admission.
  * @param bus - Connected bus instance
  * @param timeoutMs - Maximum wait time in milliseconds
  * @returns Boot payload containing duration and any failed services
  */
 export async function waitForBoot(bus: IMakaioBus, timeoutMs = 30_000): Promise<BootPayload> {
   return raceEventAndProbe(
-    bus,
-    BootSubjects.complete,
-    BootSubjects.getState,
-    {},
+    (resolve: (payload: BootPayload) => void) => bus.on(BootSubjects.complete, ({ payload }) => resolve(payload)),
+    () => bus.request(bus.own('root'), BootSubjects.getState, {}, { timeout: timeoutMs }),
     { timeoutMs, label: 'waitForBoot' },
     (state) =>
       state.complete ? { totalDurationMs: state.totalDurationMs ?? 0, failedServices: state.failedServices } : null,
-    (ctx) => ({
-      totalDurationMs: ctx.payload.totalDurationMs,
-      failedServices: ctx.payload.failedServices,
-    }),
   );
 }
 
 /**
  * Wait for the kernel to be fully initialized using the race-safe probe pattern.
  *
- * Subscribes to the `kernel.ready` event first, then probes `kernel.isReady`
- * via RPC. If the event already fired before the listener was registered, the
- * probe returns `ready=true` and the pending listener is discarded. Otherwise
- * the function awaits the event before returning.
+ * Waits for the `kernel.ready` subscription to propagate, then probes
+ * `kernel.isReady`. When the probe returns `ready=true`, the listener is
+ * discarded. Otherwise the function awaits the event before returning.
  * @param bus - Connected bus instance
  * @param timeoutMs - Maximum wait time in milliseconds
  * @returns Runtime ready payload containing `ready` flag and `machineId`
  */
 export async function waitForRuntimeReady(bus: IMakaioBus, timeoutMs = 30_000): Promise<RuntimeReadyPayload> {
   return raceEventAndProbe(
-    bus,
-    KernelSubjects.ready,
-    KernelSubjects.isReady,
-    {},
+    (resolve: (payload: RuntimeReadyPayload) => void) =>
+      bus.on(KernelSubjects.ready, ({ payload }) => resolve({ ready: true, machineId: payload.machineId })),
+    () => bus.request(bus.own('root'), KernelSubjects.isReady, {}, { timeout: timeoutMs }),
     { timeoutMs, label: 'waitForRuntimeReady' },
     (probeResult) => (probeResult.ready ? { ready: true, machineId: probeResult.machineId } : null),
-    (ctx) => ({ ready: true, machineId: ctx.payload.machineId }),
   );
 }
 
