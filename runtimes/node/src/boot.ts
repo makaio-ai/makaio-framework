@@ -53,6 +53,7 @@ import {
   SubjectDirectory,
 } from '@makaio/services-core/journal';
 import { JournalStartBarrier } from './journal-start-barrier.js';
+import { setupWriteJournal } from './write-journal-boot.js';
 import { CliNamespace } from '@makaio/kernel/cli';
 import { RuntimeSubjects, RuntimeNamespace } from './bus/runtime/namespace.js';
 import { BusServerTransportProvider } from './bus-server-transport.js';
@@ -600,6 +601,8 @@ export async function bootMakaioRuntimeCore(
     const busUrl = buildLocalBusUrl(boundHost, boundPort);
 
     const credentialBinder = createCredentialBinder();
+    const writeJournal = setupWriteJournal(database, bus, rights.hostRights, options.writeJournal);
+    if (writeJournal) shutdownSteps.push(resourceStep('write journal', () => writeJournal.destroy()));
 
     const getRuleContributions = () =>
       coordinator.getExtensionService<RuleContributionsService>(RuleContributionsToken.name);
@@ -639,6 +642,9 @@ export async function bootMakaioRuntimeCore(
           return {
             ...context,
             database,
+            ...(writeJournal && {
+              writes: writeJournal.bind(extension, context.bus, () => context.hasExtension(extension)),
+            }),
             journal: createJournalCapability({
               extension,
               bus: context.bus,
@@ -701,6 +707,7 @@ export async function bootMakaioRuntimeCore(
         mintCallContext({ caller, principal, ...(attestedBy === undefined ? {} : { attestedBy }) }),
     });
     const unregisterJournalReaders = coordinator.registerContributionProcessor(journalReaders);
+    if (writeJournal) coordinator.registerContributionProcessor(writeJournal.contributions);
 
     // Framework-level packages load unconditionally — they provide core
     // infrastructure (e.g. preferences storage) that the shell and framework

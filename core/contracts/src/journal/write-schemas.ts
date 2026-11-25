@@ -109,7 +109,7 @@ export const WriteRecordViewSchema = z
     object: ExternalObjectRefSchema.nullable(),
     /** Parent of the written object; null when there is none or none is known. */
     parent: ExternalObjectRefSchema.nullable(),
-    /** Identifier of the write intent; null when none exists. */
+    /** Identifier of the write intent to supply when resolving it; null when none exists. */
     intentId: IntentIdSchema.nullable(),
     /** Checksum of the applied content; null when none was given. */
     checksum: z.string().nullable(),
@@ -173,11 +173,13 @@ export const JournalWritesPageSchema = z
 /** One page of write records. */
 export type JournalWritesPage = z.infer<typeof JournalWritesPageSchema>;
 
-/** Request to resolve an unresolved write manually. */
+/** Request to resolve an unresolved or expired write intent manually. */
 export const JournalResolveWriteRequestSchema = z
   .object({
-    /** The unresolved write record. */
+    /** The write record with an unresolved or expired intent. */
     writeRecordId: WriteRecordIdSchema,
+    /** The intent ID from the write record that was reviewed. */
+    intentId: IntentIdSchema,
     /** Decision: the object exists, or it was not written. */
     resolution: z.union([
       z
@@ -195,7 +197,7 @@ export const JournalResolveWriteRequestSchema = z
     ]),
   })
   .strict();
-/** Request to resolve an unresolved write manually. */
+/** Request to resolve an unresolved or expired write intent manually. */
 export type JournalResolveWriteRequest = z.infer<typeof JournalResolveWriteRequestSchema>;
 
 /** Response to a manual resolution of a write. */
@@ -212,8 +214,11 @@ export const JournalResolveWriteResponseSchema = z.discriminatedUnion('success',
     .object({
       /** The resolution was not applied. */
       success: z.literal(false),
-      /** Why it was not applied. */
-      code: z.enum(['not-found', 'not-unresolved', 'participant-unavailable']),
+      /**
+       * `stale-intent` means the intent differs or the record changed before the decision could commit.
+       * `not-unresolved` means the current intent is neither unresolved nor expired and active.
+       */
+      code: z.enum(['not-found', 'stale-intent', 'not-unresolved', 'participant-unavailable']),
     })
     .strict(),
 ]);

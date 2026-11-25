@@ -15,7 +15,7 @@ export type WriterInput = {
   readonly intentId: IntentId;
   /** The resolved credential for the write. */
   readonly credential: Secret;
-  /** Point in time by which the writer must have finished. */
+  /** Deadline for the callback and its external effects. A late `written` or `notWritten` is still recorded. */
   readonly deadline: string;
 } & (
   | {
@@ -75,7 +75,7 @@ export type FindExistingInput = {
   readonly content: JsonValue;
   /** The resolved credential for the lookup. */
   readonly credential: Secret;
-  /** Point in time by which the lookup must have finished. */
+  /** Deadline for the callback and its external effects. Late `found` and `undecidable` are recorded. Late `absent` leaves the intent open. */
   readonly deadline: string;
 };
 
@@ -92,7 +92,7 @@ export type FindExistingOutcome =
     }
   | {
       readonly found?: never;
-      /** The write of the intent is certainly not present. */
+      /** The object or content is absent and cannot result from the earlier attempt. */
       readonly absent: true;
       readonly undecidable?: never;
     }
@@ -106,6 +106,10 @@ export type FindExistingOutcome =
 /**
  * Contribution of a writer: the code that writes content to one kind of
  * external object. Its callbacks take no call context.
+ * Both callbacks must return or throw by the supplied deadline. The journal
+ * awaits the callback without interrupting it. External effects must stop
+ * by the deadline. The journal records late `written`, `notWritten`, `found`
+ * and explicit `undecidable` responses. A late `absent` leaves the intent open.
  */
 export interface WriterContribution {
   /** Name of the writer. */
@@ -126,6 +130,8 @@ export interface WriterContribution {
 
   /**
    * Looks for an earlier write of the same intent.
+   * Return `absent` only if the object or content is absent and the earlier attempt can no longer produce it.
+   * Return `undecidable` if a request already sent could still take effect.
    * @param input - The intent, the target, the content, the credential and the deadline.
    * @returns Whether the earlier write was found, is absent, or cannot be decided.
    */

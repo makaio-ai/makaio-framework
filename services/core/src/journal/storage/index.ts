@@ -10,11 +10,13 @@
 export {
   journalEntriesDual,
   journalReaderStatesDual,
+  journalWritesDual,
   journalEntries,
   journalPositionCounter,
   journalReaderCursors,
   journalReaderStates,
   journalEdgeCursors,
+  journalWrites,
   type JournalEntryRow,
   type InsertJournalEntryRow,
   type JournalPositionCounterRow,

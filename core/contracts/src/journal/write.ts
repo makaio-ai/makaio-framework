@@ -59,7 +59,7 @@ export type WriteError =
       readonly writeRecordId: WriteRecordId;
     }
   | {
-      /** The request names a write participant that is not active; nothing is recorded and no state changes. */
+      /** A required write participant is inactive. An earlier intent may already have been reconciled. */
       readonly error: 'participant-unavailable';
       /** Name of the write participant that is not active. */
       readonly participant: ContributionName;
@@ -77,10 +77,14 @@ export type ReadWritesInput = JournalWritesRequest & {
 
 /**
  * Capability of the journal writes as seen by an extension.
+ * Reading and manual resolution use the right for their respective subject, regardless of who owns the record.
  */
 export interface WritesCapability {
   /**
    * Performs one write through the writer the request names.
+   * Order and checksum are evaluated per writer and key, even when different keys address the same object.
+   * An equal order is current and can be applied or returned as unchanged when the checksum matches.
+   * A credential resolution failure returns `transient` with reason `credential-unavailable` while the deadline is active.
    * @param call - Context of the calling extension.
    * @param request - The write to perform.
    * @returns The result of the write, or the error; failures are resolved, not thrown.
@@ -89,6 +93,7 @@ export interface WritesCapability {
 
   /**
    * Reads write records, one page at a time.
+   * Use the returned intent ID when submitting a manual resolution for a record.
    * @param call - Context of the calling extension.
    * @param input - What to read, the paging bounds and optionally the transaction to read in.
    * @returns One page of write records.

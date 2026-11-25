@@ -1,3 +1,4 @@
+import type { WriteJournalPolicy } from '@makaio/services-core/journal';
 import type { Server as HttpServer } from 'node:http';
 import type {
   BoundaryAccessPolicy,
@@ -603,6 +604,9 @@ export interface CoreBootOptions {
    * @defaultValue 30000
    */
   readonly journalStartupWaitTimeoutMs?: number;
+
+  /** Enables the external write journal with host-owned authorization and deadlines. */
+  readonly writeJournal?: WriteJournalPolicy;
 
   /**
    * Receives, before the boot does any work, the bound on how long cancelling
