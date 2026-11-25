@@ -1,8 +1,8 @@
 /**
  * Postgres dialect implementation of the conformance config.
  *
- * Provisions a fresh isolated schema per suite using a dedicated `search_path`
- * so every pooled connection lands in the schema automatically.
+ * Provisions a fresh schema per suite, or an exclusive database when tests
+ * observe database-wide signals. Both modes pin the clients' `search_path`.
  * @packageDocumentation
  */
 import { sql } from 'drizzle-orm';
@@ -80,34 +80,77 @@ export function buildPostgresOptionsUrl(baseUrl: string, settings: Readonly<Reco
 }
 
 /**
- * Drop a conformance isolation schema via a fresh short-lived admin client.
- *
- * `sql.identifier` performs proper identifier quoting (quote-doubling),
- * matching how the migration runner renders dynamic identifiers.
+ * Provision a Postgres isolation unit and transfer its ownership to the context.
  * @param baseUrl - Base Postgres connection URL.
- * @param schemaName - Name of the isolation schema to drop.
+ * @param options - Provisioning options.
+ * @returns Initialized database context.
  */
-async function dropIsolationSchema(baseUrl: string, schemaName: string): Promise<void> {
+async function provisionPostgresContext(
+  baseUrl: string,
+  options: CreateDatabaseContextOptions,
+): Promise<StorageDatabaseContext> {
   ensurePostgresEngineRegistered();
+  const name = 'conformance_' + crypto.randomUUID().replaceAll('-', '').slice(0, 12);
+  const identifier = sql.identifier(name);
+  const exclusive = options.postgresIsolation === 'database';
+  const url = new URL(baseUrl);
+  if (exclusive) url.pathname = `/${name}`;
+
+  const dropIsolation = async (): Promise<void> => {
+    const admin = await createDatabaseClient({ url: baseUrl });
+    try {
+      const ddl = exclusive ? sql`DROP DATABASE ${identifier} WITH (FORCE)` : sql`DROP SCHEMA ${identifier} CASCADE`;
+      await getRawSqlExecutor(admin.db).run(ddl);
+    } finally {
+      await admin.close();
+    }
+  };
+
   const admin = await createDatabaseClient({ url: baseUrl });
   try {
-    await getRawSqlExecutor(admin.db).run(sql`DROP SCHEMA ${sql.identifier(schemaName)} CASCADE`);
-  } finally {
+    const ddl = exclusive ? sql`CREATE DATABASE ${identifier} TEMPLATE template0` : sql`CREATE SCHEMA ${identifier}`;
+    await getRawSqlExecutor(admin.db).run(ddl);
+  } catch (error) {
+    try {
+      await admin.close();
+    } catch {
+      // Preserve the provisioning error.
+    }
+    throw error;
+  }
+
+  try {
     await admin.close();
+    return await createPostgresDatabaseContext(
+      exclusive ? url.href : baseUrl,
+      exclusive ? 'public' : name,
+      options,
+      dropIsolation,
+    );
+  } catch (error) {
+    // Ownership never reached the suite's teardown hook.
+    try {
+      await dropIsolation();
+    } catch (cleanupError) {
+      throw new AggregateError([error, cleanupError], 'Postgres isolation setup and cleanup both failed');
+    }
+    throw error;
   }
 }
 
 /**
- * Create a fresh Postgres conformance context isolated to a dedicated schema.
- * @param baseUrl - Base Postgres connection URL.
- * @param schemaName - Name of the freshly created schema to isolate this context.
+ * Open the clients over the provisioned isolation unit.
+ * @param baseUrl - Connection URL for the context's database.
+ * @param schemaName - Schema pinned on each client.
  * @param options - Provisioning options.
+ * @param dropIsolation - Releases the owned schema or database after closing clients.
  * @returns Initialized database context.
  */
 async function createPostgresDatabaseContext(
   baseUrl: string,
   schemaName: string,
   options: CreateDatabaseContextOptions,
+  dropIsolation: () => Promise<void>,
 ): Promise<StorageDatabaseContext> {
   ensurePostgresEngineRegistered();
   // The harness-owned schema pin is spread LAST so it always supersedes
@@ -131,7 +174,7 @@ async function createPostgresDatabaseContext(
       // Provisioning failed before the context (and its cleanup contract)
       // reached the caller: close the pool here so the process can shut down
       // cleanly. Best-effort — a close error must not mask the migration
-      // error. The schema itself is dropped by createDatabaseContext.
+      // error. The isolation unit is dropped by provisionPostgresContext.
       try {
         await primary.close();
       } catch {
@@ -175,7 +218,7 @@ async function createPostgresDatabaseContext(
   const cleanup = async (): Promise<void> => {
     // Every resource the context owns gets a release attempt: failures are
     // collected instead of aborting teardown, so one failing close can never
-    // skip the schema drop (no-orphaned-schema invariant). Collected failures
+    // skip removal of the isolation unit. Collected failures
     // are rethrown once teardown has reached the end (loud leak detection).
     const failures: unknown[] = [];
 
@@ -189,17 +232,13 @@ async function createPostgresDatabaseContext(
       failures.push(error);
     }
 
-    // Drop the schema via a fresh short-lived admin client.
     try {
-      await dropIsolationSchema(baseUrl, schemaName);
+      await dropIsolation();
     } catch (error) {
       failures.push(error);
     }
 
-    rethrowCleanupFailures(
-      failures,
-      `Postgres conformance cleanup for schema '${schemaName}' failed; resources may have leaked`,
-    );
+    rethrowCleanupFailures(failures, 'Postgres conformance cleanup failed; resources may have leaked');
   };
 
   return {
@@ -217,8 +256,8 @@ async function createPostgresDatabaseContext(
  * Build a Postgres conformance config for a given base connection URL.
  *
  * Each call to {@link StorageConformanceConfig.createDatabaseContext} provisions a
- * fresh isolated schema (`conformance_<12 lowercase hex chars>`) on the database
- * at `baseUrl`.
+ * fresh isolation unit (`conformance_<12 lowercase hex chars>`) using the
+ * connection at `baseUrl`.
  * @param baseUrl - Postgres connection URL for the target database.
  * @returns Postgres conformance config.
  */
@@ -227,35 +266,8 @@ export function createPostgresConfig(baseUrl: string): StorageConformanceConfig 
     name: 'postgres',
     dialect: 'postgres',
     capabilities: POSTGRES_CAPABILITIES,
-    async createDatabaseContext(options: CreateDatabaseContextOptions = {}): Promise<StorageDatabaseContext> {
-      ensurePostgresEngineRegistered();
-      // Generate a unique schema name: conformance_ + 12 lowercase hex chars from UUID.
-      const schemaName = 'conformance_' + crypto.randomUUID().replaceAll('-', '').slice(0, 12);
-
-      // Create the schema via a short-lived admin client.
-      const admin = await createDatabaseClient({ url: baseUrl });
-      try {
-        // sql.identifier performs proper identifier quoting (quote-doubling),
-        // matching how the migration runner renders dynamic identifiers.
-        await getRawSqlExecutor(admin.db).run(sql`CREATE SCHEMA ${sql.identifier(schemaName)}`);
-      } finally {
-        await admin.close();
-      }
-
-      try {
-        return await createPostgresDatabaseContext(baseUrl, schemaName, options);
-      } catch (error) {
-        // The context never reached the caller, so its cleanup() can never
-        // run. Drop the freshly created schema best-effort so failed
-        // provisioning does not accumulate orphaned conformance_* schemas on
-        // a long-lived database; the provisioning error stays the signal.
-        try {
-          await dropIsolationSchema(baseUrl, schemaName);
-        } catch {
-          // Best-effort only: a failed drop must not mask the original error.
-        }
-        throw error;
-      }
+    createDatabaseContext(options = {}) {
+      return provisionPostgresContext(baseUrl, options);
     },
   };
 }

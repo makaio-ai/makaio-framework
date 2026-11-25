@@ -43,9 +43,8 @@ import {
 } from '@makaio/storage-drizzle';
 import { createDatabaseClient } from '@makaio/storage-drizzle/client';
 import type { HostTransaction } from '@makaio/contracts/host-database';
-import { describeStorageConformance, STORAGE_TEST_URL_ENV } from '../harness/env.js';
+import { describeStorageConformance } from '../harness/env.js';
 import { useSuiteDatabaseContext } from '../harness/suite-context.js';
-import { ensurePostgresEngineRegistered } from '../harness/postgres-config.js';
 import { fixtureKvDdl, fixtureKv, type conformanceKvSqlite } from '../harness/fixture-table.js';
 import type { StorageDatabaseContext } from '../harness/config.js';
 
@@ -212,7 +211,8 @@ function expectHostTransactionErrorCode(run: () => void, code: HostTransactionEr
 // ---------------------------------------------------------------------------
 
 describeStorageConformance('database wake', (config) => {
-  const getCtx = useSuiteDatabaseContext(config, { applyCentralChain: false });
+  // The unmarked-commit assertion observes every event on the database channel.
+  const getCtx = useSuiteDatabaseContext(config, { applyCentralChain: false, postgresIsolation: 'database' });
 
   beforeAll(async () => {
     const ctx = getCtx();
@@ -620,11 +620,8 @@ describeStorageConformance('database wake', (config) => {
      * listener's `LISTEN` statement — it stays the connection's last query
      * while the connection sits idle waiting for notifications.
      *
-     * The listener sets no `application_name` and the capability reports no
-     * backend pid to its caller, so this can only identify "the most
-     * recently started `LISTEN` backend", not "this specific client's"
-     * unambiguously — safe only because this suite's cases run sequentially,
-     * never two listener connections mid-setup at once.
+     * This suite owns the database and runs its cases sequentially, so its
+     * active listener is the most recently started `LISTEN` backend here.
      * @param ctx - Conformance database context used for the lookup.
      * @returns The listener backend's process id.
      */
@@ -750,13 +747,7 @@ describeStorageConformance('database wake', (config) => {
     });
 
     it.skipIf(config.dialect !== 'postgres')('repeated close() of the signal capability is safe', async () => {
-      ensurePostgresEngineRegistered();
-      const baseUrl = process.env[STORAGE_TEST_URL_ENV];
-      if (baseUrl === undefined) {
-        throw new Error(`${STORAGE_TEST_URL_ENV} must be set while the postgres dialect is active.`);
-      }
-
-      const client = await createDatabaseClient({ url: baseUrl });
+      const client = await createDatabaseClient({ url: getCtx().url });
       const signals = getDatabaseSignals(client.db);
       if (signals.kind !== 'database-notify') {
         throw new Error('Postgres client unexpectedly declared no database-notify capability.');
@@ -947,13 +938,7 @@ describeStorageConformance('database wake', (config) => {
     it.skipIf(config.dialect !== 'postgres')(
       'ready() rejects a connection attempt in flight once close() starts, and every later call too',
       async () => {
-        ensurePostgresEngineRegistered();
-        const baseUrl = process.env[STORAGE_TEST_URL_ENV];
-        if (baseUrl === undefined) {
-          throw new Error(`${STORAGE_TEST_URL_ENV} must be set while the postgres dialect is active.`);
-        }
-
-        const client = await createDatabaseClient({ url: baseUrl });
+        const client = await createDatabaseClient({ url: getCtx().url });
         const signals = getDatabaseSignals(client.db);
         if (signals.kind !== 'database-notify') {
           throw new Error('Postgres client unexpectedly declared no database-notify capability.');
