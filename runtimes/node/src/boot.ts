@@ -39,6 +39,7 @@ import {
   cancellationRejection,
   readCancellation,
   BootNamespace,
+  DuplicateCredentialResolverError,
   ExtensionNamespace,
   ExtensionSubjects,
   KernelNamespace,
@@ -1119,7 +1120,9 @@ export async function bootMakaioRuntimeCore(
     if (cancelled) {
       console.info('[boot] Startup cancelled — rolling back started resources');
     } else {
-      console.error('[boot] Startup failed — rolling back started resources');
+      const code =
+        err instanceof DuplicateCredentialResolverError ? 'DuplicateCredentialResolverError' : 'BOOT_STARTUP_FAILED';
+      console.error('[boot] Startup failed (%s) — rolling back started resources', code);
     }
     // Roll back in reverse order, collecting what fails to unwind.
     const rollbackFailures = await runBoundedShutdownSteps([...shutdownSteps].reverse());

@@ -1,6 +1,10 @@
 import type { WorkerModelInvocation, WorkerModelPort, WorkerModelResult } from './model-mediator.js';
 import { AgentModelReplySchema, MODEL_MESSAGE_LIMIT_BYTES, serializeModelMessage } from './protocol.js';
 
+// Short strings, even when encoded, are likely to occur in ordinary model output.
+const MIN_MODEL_CREDENTIAL_BYTES = 16;
+const BASE64URL_ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_';
+
 /**
  * Decode an upstream reply only if its streamed body fits the wire limit.
  * @param response - Reply from the explicitly configured upstream.
@@ -31,26 +35,91 @@ async function readReply(response: Response): Promise<unknown> {
 }
 
 /**
- * Check the serialized reply and its text for the authorization used on this attempt.
- * @param body - Serialized body that would cross the process boundary.
- * @param text - Decoded model text, including characters escaped by JSON.
- * @param credential - Plaintext used in the authorization header.
- * @returns Whether the reply contains the credential in a recognized encoding.
+ * Search the stable base64 core and validate the boundary bits at each match.
+ * @param text - Normalized base64 reply text.
+ * @param core - Encoded characters independent of neighboring bytes.
+ * @param matchesEdges - Check the shared sextets immediately outside the core.
+ * @returns Whether an exact match exists.
  */
-function reflectsCredential(body: string, text: string, credential: string): boolean {
-  if (credential.length === 0) return false;
-  const bytes = Buffer.from(credential, 'utf8');
-  const uri = encodeURIComponent(credential);
-  const base64 = bytes.toString('base64');
-  const encodings = [
-    credential,
-    uri,
-    uri.replace(/%[A-F0-9]{2}/g, (byte) => byte.toLowerCase()),
-    base64,
-    base64.replace(/=+$/, ''),
-    bytes.toString('base64url'),
-  ];
-  return encodings.some((value) => body.includes(value) || text.includes(value));
+function hasMatchingCore(text: string, core: string, matchesEdges: (start: number, end: number) => boolean): boolean {
+  if (core.length > text.length) return false;
+  // Reuse matching prefixes so overlapping cores cannot make the search quadratic.
+  const prefixes = new Uint32Array(core.length);
+  for (let index = 1, length = 0; index < core.length; index += 1) {
+    while (length > 0 && core[index] !== core[length]) length = prefixes[length - 1] ?? 0;
+    if (core[index] === core[length]) length += 1;
+    prefixes[index] = length;
+  }
+  for (let index = 0, length = 0; index < text.length; index += 1) {
+    while (length > 0 && text[index] !== core[length]) length = prefixes[length - 1] ?? 0;
+    if (text[index] === core[length]) length += 1;
+    if (length === core.length) {
+      if (matchesEdges(index + 1 - length, index + 1)) return true;
+      length = prefixes[length - 1] ?? 0;
+    }
+  }
+  return false;
+}
+
+/**
+ * Search a base64 representation for credential bytes at any position in a three-byte group.
+ * @param text - Reply with both base64 alphabets normalized and ASCII whitespace removed.
+ * @param credential - Bytes of one representation of the authorization value.
+ * @returns Whether every credential bit matches, including the bits shared with neighboring bytes.
+ */
+function containsBase64Credential(text: string, credential: Buffer): boolean {
+  for (const prefixBytes of [0, 1, 2]) {
+    const encoded = Buffer.concat([Buffer.alloc(prefixBytes), credential]).toString('base64url');
+    const startBit = prefixBytes * 8;
+    const endBit = startBit + credential.length * 8;
+    const start = Math.ceil(startBit / 6);
+    const end = Math.floor(endBit / 6);
+    const core = encoded.slice(start, end);
+    const leadingBits = start * 6 - startBit;
+    const trailingBits = endBit - end * 6;
+    const leadingMask = (1 << leadingBits) - 1;
+    const trailingMask = 63 ^ ((1 << (6 - trailingBits)) - 1);
+    const leading = BASE64URL_ALPHABET.indexOf(encoded.charAt(start - 1)) & leadingMask;
+    const trailing = BASE64URL_ALPHABET.indexOf(encoded.charAt(end)) & trailingMask;
+    const matches = hasMatchingCore(text, core, (coreStart, coreEnd) => {
+      const before = BASE64URL_ALPHABET.indexOf(text[coreStart - 1] ?? '\0');
+      const after = BASE64URL_ALPHABET.indexOf(text[coreEnd] ?? '\0');
+      return (
+        (leadingMask === 0 || (before >= 0 && (before & leadingMask) === leading)) &&
+        (trailingMask === 0 || (after >= 0 && (after & trailingMask) === trailing))
+      );
+    });
+    if (matches) return true;
+  }
+  return false;
+}
+
+/**
+ * Check reply text for any credential used during the invocation.
+ * @param text - A serialized reply or its decoded model text.
+ * @param credentials - Authorization values already sent to the model upstream.
+ * @returns Whether the reply contains a credential in a recognized representation.
+ */
+function reflectsCredential(text: string, credentials: ReadonlySet<string>): boolean {
+  const escaped = Buffer.from(text)
+    .toString('latin1')
+    .replace(/%[\da-f]{2}/gi, (byte) => String.fromCharCode(Number.parseInt(byte.slice(1), 16)));
+  const base64 = text
+    .replaceAll('+', '-')
+    .replaceAll('/', '_')
+    .replace(/[ \t\r\n\f\v]/g, '');
+  for (const credential of credentials) {
+    const bytes = Buffer.from(credential);
+    if (text.includes(credential)) return true;
+    // HTTP headers carry Latin-1 bytes. A provider may encode either those bytes or the decoded text.
+    const representations = bytes.length === credential.length ? [bytes] : [bytes, Buffer.from(credential, 'latin1')];
+    for (const representation of representations) {
+      if (escaped.includes(representation.toString('latin1')) || containsBase64Credential(base64, representation)) {
+        return true;
+      }
+    }
+  }
+  return false;
 }
 
 /**
@@ -59,7 +128,7 @@ function reflectsCredential(body: string, text: string, credential: string): boo
  * @param body - Snapshot of the serialized request.
  * @param credential - In-memory authorization for this attempt.
  * @param signal - Lifetime of the authorized effect.
- * @param checkReflection - Reject reflected authorization for a run-scoped attempt.
+ * @param credentials - Authorization values shared by the attempts of this invocation.
  * @returns The turn outcome, or a request to refresh on HTTP 401.
  */
 async function send(
@@ -67,12 +136,18 @@ async function send(
   body: string,
   credential: string,
   signal: AbortSignal,
-  checkReflection = false,
+  credentials: Set<string>,
 ): Promise<WorkerModelResult | 'refresh'> {
   signal.throwIfAborted();
+  const headers = new Headers({ authorization: `Bearer ${credential}`, 'content-type': 'application/json' });
+  const sent = headers.get('authorization')?.replace(/^Bearer[ \t]*/, '') ?? '';
+  if (sent.length < MIN_MODEL_CREDENTIAL_BYTES) {
+    return { kind: 'failed', code: 'environmentMissing' };
+  }
+  credentials.add(sent);
   const response = await fetch(url, {
     method: 'POST',
-    headers: { authorization: `Bearer ${credential}`, 'content-type': 'application/json' },
+    headers,
     body,
     redirect: 'error',
     signal,
@@ -80,14 +155,19 @@ async function send(
   if (response.ok) {
     const decoded = await readReply(response).catch(() => undefined);
     const reply = AgentModelReplySchema.safeParse(decoded);
-    if (checkReflection && reply.success) {
-      const body = serializeModelMessage(reply.data);
-      if (body === undefined || reflectsCredential(body, reply.data.text, credential)) {
-        return { kind: 'failed', code: 'reply-invalid' };
+    if (reply.success) {
+      const serialized = serializeModelMessage(reply.data);
+      if (
+        serialized !== undefined &&
+        !reflectsCredential(serialized, credentials) &&
+        !reflectsCredential(reply.data.text, credentials)
+      ) {
+        return { kind: 'completed', reply: reply.data };
       }
     }
-    return reply.success ? { kind: 'completed', reply: reply.data } : { kind: 'failed', code: 'reply-invalid' };
+    return { kind: 'failed', code: 'reply-invalid' };
   }
+  // Error bodies stay upstream. Only fixed failure codes can cross the step boundary.
   await response.body?.cancel();
   return response.status === 401 ? 'refresh' : { kind: 'failed', code: 'upstream-failed' };
 }
@@ -103,13 +183,14 @@ async function complete(input: WorkerModelInvocation, url: URL): Promise<WorkerM
   const body = JSON.stringify(input.request);
   const scope = Object.freeze({ purpose: 'model.use', target } as const);
   const refused = { kind: 'failed', code: 'environmentMissing' } as const;
+  const credentials = new Set<string>();
   for (const reason of ['initial', 'refresh'] as const) {
     signal.throwIfAborted();
     if ('withCredential' in credentialSource) {
       const upstreamScope = credentialSource.modelScope(url.href);
       if (upstreamScope === undefined) return refused;
       const attempt = await credentialSource.withCredential(call, upstreamScope, signal, (credential, effectSignal) =>
-        send(url, body, credential.reveal(), effectSignal, true).catch(
+        send(url, body, credential.reveal(), effectSignal, credentials).catch(
           () => ({ kind: 'failed', code: 'upstream-failed' }) as const,
         ),
       );
@@ -120,7 +201,7 @@ async function complete(input: WorkerModelInvocation, url: URL): Promise<WorkerM
     } else {
       const grant = await credentialSource.request(call, Object.freeze({ ...scope, signal, reason }));
       if (grant.kind === 'purpose-not-granted') return refused;
-      const result = await send(url, body, grant.credential, signal);
+      const result = await send(url, body, grant.credential, signal, credentials);
       if (result !== 'refresh') return result;
     }
   }
