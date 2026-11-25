@@ -6,15 +6,15 @@ import type {
   AllocationTermination,
   BoundedRecoveryEvidence,
   IsolationLevel,
-  JobRunId,
   MaxRuntimeAssurance,
   ProviderAllocationRef,
   WorkerCapabilities,
   WorkerHandle,
   WorkerProviderId,
   WorkerRuntimeConnection,
-  WorkerRuntimeInputs,
-} from '@makaio/contracts';
+} from '../../capabilities/index.js';
+import type { JobRunId } from '../../workflow/index.js';
+import type { WorkerRuntimeInputs } from '../../worker/index.js';
 import type { CallContext, ContributionName } from '@makaio/core';
 
 /**
@@ -95,6 +95,17 @@ export interface OrderedWorkerRecovery {
     ref: ProviderAllocationRef,
     signal: AbortSignal,
   ): Promise<AllocationInspection>;
+  /**
+   * Repeat-safe: the host may call this more than once for the same reference,
+   * for example when the sender and recovery both end a late allocation.
+   * Repeating termination after a confirmed end returns `ended` with its
+   * evidence again. See {@link AllocationTermination} for when a provider
+   * rejects.
+   * @param call - Authorized supervision caller.
+   * @param binding - Frozen dispatch identity.
+   * @param ref - Exact allocation reference to terminate.
+   * @param signal - Provider operation lifetime.
+   */
   terminateAllocation(
     call: CallContext,
     binding: DispatchBinding,
@@ -140,6 +151,11 @@ export type OrderedWorkerProvider = Readonly<
   } & (
     | { allocationLifetime: 'provider-managed'; recovery: OrderedWorkerRecovery }
     | {
+        /**
+         * The provider must tie the worker's lifetime to the host process.
+         * After a host crash, later process incarnations cannot control those allocations.
+         * Closing cleanup obligations for allocations no longer controllable requires separate reconciliation.
+         */
         allocationLifetime: 'provisioner-process-bound';
         recovery?: never;
         /** A live allocation already registered in the bound process incarnation. */

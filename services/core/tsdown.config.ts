@@ -26,6 +26,8 @@ export default defineConfig({
     './src/session/storage/schema.ts',
     './src/journal/index.ts',
     './src/journal/storage/index.ts',
+    './src/worker-provider/index.ts',
+    './src/internal/worker-provider-host-binding.ts',
     './src/session/testing/index.ts',
     './src/session/testing/orchestrator-shared.ts',
     './src/subagent/index.ts',

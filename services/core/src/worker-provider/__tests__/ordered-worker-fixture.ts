@@ -10,7 +10,7 @@ import { DeferredPromise } from '@makaio/utils';
 import { eq, sql } from 'drizzle-orm';
 import type { StorageDatabaseContext } from '@makaio/storage-conformance';
 import { readAllocationScopeSetting } from '../allocation-scope-source.js';
-import type { OrderedProvisionOutcome, OrderedWorkerProvider, SealedAllocationSet } from '../ordered-provider.js';
+import type { OrderedProvisionOutcome, OrderedWorkerProvider, SealedAllocationSet } from '@makaio/contracts/extension';
 import { decideAllocationScope } from '../scope-decision.js';
 import { confirmAllocationScope } from '../scope-confirmation.js';
 import { WorkerProviderRegistry } from '../provider-registry.js';
@@ -162,21 +162,25 @@ export function processBoundProvider(provider = controllableProvider().provider)
 }
 
 /**
- * Compose and initialize a start service against the real database and test provider.
+ * Set up committed orders and their scope in the real database.
  * @param database - Host transaction facade on the fixture database.
- * @param provider - Worker provider contributed by the extension.
+ * @param allocationLifetime - Lifetime of the ordered provider.
  * @param jobRunId - Unique run for this test.
  */
-export async function orderFixture(database: HostDatabase, provider: OrderedWorkerProvider, jobRunId: JobRunId) {
+export async function orderSourceFixture(
+  database: HostDatabase,
+  allocationLifetime: OrderedWorkerProvider['allocationLifetime'],
+  jobRunId: JobRunId,
+) {
   const common = {
     jobRunId,
     workerProviderId: providerId,
     bootstrapDeadlineAt: new Date(Date.now() + 60_000).toISOString(),
   };
   const order: StartOrder =
-    provider.allocationLifetime === 'provider-managed'
-      ? { ...common, allocationLifetime: provider.allocationLifetime, allocationScope }
-      : { ...common, allocationLifetime: provider.allocationLifetime };
+    allocationLifetime === 'provider-managed'
+      ? { ...common, allocationLifetime, allocationScope }
+      : { ...common, allocationLifetime };
   const tokensInMemory = new Map<JobRunId, string>();
   const source: WorkerOrderSource = {
     async lockOrder(tx, id): Promise<CommittedWorkerOrder | undefined> {
@@ -206,25 +210,14 @@ export async function orderFixture(database: HostDatabase, provider: OrderedWork
     },
   };
   await confirmAllocationScope(database, setting, allocationScope.value, call);
-  const providers = new WorkerProviderRegistry();
-  const operationSignal = new AbortController().signal;
-  await providers.replace(
-    call,
-    { owner: 'example', key: 'primary', managedScopeConfirmed: true, providers: [provider] },
-    operationSignal,
-  );
-  const host: WorkerStartOptions = {
-    database,
+  const options = {
     source,
-    providers,
     scopeSetting: setting,
-    operationSignal,
-    processIncarnation: 'initial-incarnation',
-    connection: () => ({ busAuth: { kind: 'none' } }),
+    connection: () => ({ busAuth: { kind: 'none' as const } }),
   };
   return {
     order,
-    host,
+    options,
     async orderIn(tx: HostTransaction) {
       const query = getTransactionQueryContext(tx);
       const table = resolveSchema(query, schema);
@@ -241,4 +234,30 @@ export async function orderFixture(database: HostDatabase, provider: OrderedWork
       tokensInMemory.delete(jobRunId);
     },
   };
+}
+
+/**
+ * Compose and initialize a start service against the real database and test provider.
+ * @param database - Host transaction facade on the fixture database.
+ * @param provider - Worker provider contributed by the extension.
+ * @param jobRunId - Unique run for this test.
+ */
+export async function orderFixture(database: HostDatabase, provider: OrderedWorkerProvider, jobRunId: JobRunId) {
+  const { options, ...fixture } = await orderSourceFixture(database, provider.allocationLifetime, jobRunId);
+  const providers = new WorkerProviderRegistry();
+  const operationSignal = new AbortController().signal;
+  await providers.replace(
+    call,
+    { owner: 'example', key: 'primary', managedScopeConfirmed: true, providers: [provider] },
+    operationSignal,
+  );
+  const host: WorkerStartOptions = {
+    database,
+    ...options,
+    providers,
+    operationSignal,
+    processIncarnation: 'initial-incarnation',
+    handles: new Map(),
+  };
+  return { ...fixture, host };
 }

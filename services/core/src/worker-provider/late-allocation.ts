@@ -1,85 +1,68 @@
-import {
-  AllocationTerminationSchema,
-  type JobRunId,
-  type ProviderAllocationRef,
-  type WorkerHandle,
-} from '@makaio/contracts';
+import { AllocationTerminationSchema, type ProviderAllocationRef, type WorkerHandle } from '@makaio/contracts';
 import type { CallContext } from '@makaio/core';
 import { recordLateAllocation, sameReference, type DispatchClaim } from './dispatch-store.js';
+import { finishLocalAllocation, localWorkerControl, releaseProvisionHandle } from './local-worker-control.js';
 import { isScopeApproved, lockDispatch } from './start-claim.js';
 import type { WorkerStartOptions } from './start-order.js';
 
 /**
  * Dispose of returned local control only after teardown or durable managed handoff.
  * @param host - Composed host.
- * @param handles - Local control retained when teardown cannot be handed off.
  * @param call - Current supervision call.
  * @param claim - Settled dispatch.
  * @param returnedHandle - Control from the original provisioning invocation, if this is the sender.
  */
 export async function finishLateAllocation(
   host: WorkerStartOptions,
-  handles: Map<JobRunId, WorkerHandle>,
   call: CallContext,
   claim: DispatchClaim,
   returnedHandle?: WorkerHandle,
 ): Promise<void> {
   const { jobRunId } = claim;
-  const handle = returnedHandle ?? handles.get(jobRunId);
   const late = claim.settled?.lateAllocation;
-  if (handle === undefined && late?.state !== 'pending') return;
-  handles.delete(jobRunId);
-  const recoverable = claim.binding.allocationLifetime === 'provider-managed' && late !== undefined;
-  try {
-    if ((await endLateAllocation(host, call, claim, handle)) || recoverable) {
-      if (typeof handle?.release === 'function') await handle.release().catch(() => undefined);
-    } else if (typeof handle?.terminate === 'function') {
-      handles.set(jobRunId, handle);
+  if (claim.binding.allocationLifetime === 'provider-managed' && late !== undefined) {
+    try {
+      // Shutdown cancels provisioning, but a returned allocation still needs teardown.
+      const signal =
+        returnedHandle !== undefined && host.operationSignal.aborted
+          ? new AbortController().signal
+          : host.operationSignal;
+      // Sender and recovery can overlap, so both use the repeat-safe termination operation.
+      if (
+        late.state === 'pending' &&
+        (await endByReference(host, call, claim, late.reference, signal).catch(() => false))
+      ) {
+        await recordLateTeardown(host, claim, late.reference);
+      }
+    } finally {
+      await releaseProvisionHandle(returnedHandle);
     }
-  } catch (error) {
-    if (typeof handle?.terminate === 'function') handles.set(jobRunId, handle);
-    throw error;
+    return;
   }
+  if (typeof returnedHandle?.terminate === 'function' && !host.handles.has(jobRunId)) {
+    host.handles.set(jobRunId, localWorkerControl(returnedHandle));
+  }
+  await finishLocalAllocation(host, jobRunId);
 }
 
 /**
- * End an allocation returned after settlement, independently of the run's result.
- * The returned handle owns the allocation. A later observer can instead recover
- * a persisted reference under the installation's confirmed scope.
+ * Record teardown alongside the original dispatch settlement.
  * @param host - Composed host.
- * @param call - Current supervision call.
- * @param claim - Dispatch with its original settlement and optional late reference.
- * @param handle - Control returned by the original provisioning invocation.
- * @returns Whether teardown was confirmed.
+ * @param claim - Dispatch with the pending late reference.
+ * @param reference - The late allocation whose teardown was confirmed.
  */
-async function endLateAllocation(
+async function recordLateTeardown(
   host: WorkerStartOptions,
-  call: CallContext,
   claim: DispatchClaim,
-  handle?: WorkerHandle,
-): Promise<boolean> {
-  const late = claim.settled?.lateAllocation;
-  try {
-    if (typeof handle?.terminate === 'function') {
-      await handle.terminate();
-    } else if (late?.state === 'pending') {
-      if (!(await endByReference(host, call, claim, late.reference))) return false;
-    } else {
-      return false;
+  reference: ProviderAllocationRef,
+): Promise<void> {
+  await host.database.transaction(async (tx) => {
+    const current = await lockDispatch(tx, host, claim.jobRunId);
+    const pending = current?.claim.settled?.lateAllocation;
+    if (current !== undefined && pending?.state === 'pending' && sameReference(pending.reference, reference)) {
+      await recordLateAllocation(tx, current.claim, { ...pending, state: 'ended' });
     }
-  } catch {
-    return false;
-  }
-  if (late !== undefined) {
-    await host.database.transaction(async (tx) => {
-      const current = await lockDispatch(tx, host, claim.jobRunId);
-      const pending = current?.claim.settled?.lateAllocation;
-      if (current !== undefined && pending?.state === 'pending' && sameReference(pending.reference, late.reference)) {
-        await recordLateAllocation(tx, current.claim, { ...late, state: 'ended' });
-      }
-    });
-  }
-  return true;
+  });
 }
 
 /**
@@ -88,6 +71,7 @@ async function endLateAllocation(
  * @param call - Current supervision call.
  * @param claim - Dispatch that owns the late allocation.
  * @param ref - Recorded candidate.
+ * @param signal - Termination operation lifetime.
  * @returns Whether the provider confirmed teardown.
  */
 async function endByReference(
@@ -95,6 +79,7 @@ async function endByReference(
   call: CallContext,
   claim: DispatchClaim,
   ref: ProviderAllocationRef,
+  signal: AbortSignal,
 ): Promise<boolean> {
   const { binding } = claim;
   const provider = host.providers.get(binding.providerId);
@@ -108,7 +93,7 @@ async function endByReference(
   });
   if (!approved) return false;
   const termination = AllocationTerminationSchema.parse(
-    await provider.recovery.terminateAllocation(call, binding, ref, host.operationSignal),
+    await provider.recovery.terminateAllocation(call, binding, ref, signal),
   );
   return termination.state === 'ended';
 }

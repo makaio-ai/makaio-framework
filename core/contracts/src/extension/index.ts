@@ -269,3 +269,16 @@ export type {
   WidgetSize,
   ExtensionWorkflowBlocksContribution,
 } from './contributions/index.js';
+export type {
+  DispatchBinding,
+  OrderedProvisionOutcome,
+  OrderedProvisionRequest,
+  OrderedWorkerProvider,
+  OrderedWorkerRecovery,
+  SealedAllocationSet,
+  UniqueLiveAllocation,
+} from './contributions/ordered-worker-provider.js';
+export type {
+  ExtensionWorkerProvidersContribution,
+  WorkerProviderContribution,
+} from './contributions/worker-provider-types.js';

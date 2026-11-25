@@ -3,6 +3,22 @@ import { WorkerProviderRegistry } from '../provider-registry.js';
 import { call, processBoundProvider, providerId } from './ordered-worker-fixture.js';
 
 describe('process-bound provider registration', () => {
+  it('withdraws only the matching generation and keeps the last provider resolvable', async () => {
+    const registry = new WorkerProviderRegistry();
+    const activation = { owner: 'example', key: 'primary', managedScopeConfirmed: false };
+    const signal = new AbortController().signal;
+    const provider = processBoundProvider();
+    const withdrawFirst = await registry.replace(call, { ...activation, providers: [provider] }, signal);
+    const second = { ...provider, capabilities: { ...provider.capabilities, maxRuntimeMs: 2000 } };
+    const withdrawSecond = await registry.replace(call, { ...activation, providers: [second] }, signal);
+
+    withdrawFirst();
+    expect(registry.selectForProvisioning(providerId)?.capabilities.maxRuntimeMs).toBe(2000);
+    withdrawSecond();
+    expect(registry.selectForProvisioning(providerId)).toBeUndefined();
+    expect(registry.get(providerId)?.capabilities.maxRuntimeMs).toBe(2000);
+  });
+
   it('rejects a dynamic contribution without local live proof', async () => {
     const registry = new WorkerProviderRegistry();
     const provider = processBoundProvider();

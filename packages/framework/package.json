@@ -414,6 +414,14 @@
       "types": "./dist/services/log-import/log-import.d.mts",
       "default": "./dist/services/log-import/log-import.mjs"
     },
+    "./services/internal/worker-provider-host-binding": {
+      "types": "./dist/services/internal/worker-provider-host-binding.d.mts",
+      "default": "./dist/services/internal/worker-provider-host-binding.mjs"
+    },
+    "./services/worker-provider": {
+      "types": "./dist/services/worker-provider/index.d.mts",
+      "default": "./dist/services/worker-provider/index.mjs"
+    },
     "./services/tools": {
       "types": "./dist/services/tools/index.d.mts",
       "default": "./dist/services/tools/index.mjs"

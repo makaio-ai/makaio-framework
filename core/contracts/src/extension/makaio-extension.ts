@@ -25,6 +25,7 @@ import type { ReaderContribution } from '../journal/reader.js';
 import type { ProviderDefinitionInput } from '../provider/definition.js';
 import type { EntityUIConfig } from '../shared/ui-config.js';
 import type { ExtensionBootstrap } from './contributions/bootstrap-types.js';
+import type { ExtensionWorkerProvidersContribution } from './contributions/worker-provider-types.js';
 import type { ExtensionWorkflowBlocksContribution } from './contributions/workflow-block-types.js';
 import type { AnyArtifactKindDefinition } from '../artifact/index.js';
 import type { ArtifactLifecycleHookRegistration } from '../artifact/lifecycle-hooks.js';
@@ -531,6 +532,13 @@ export interface MakaioExtension<THostContext extends ExtensionContext = NodeExt
    * service must be started before any extension that declares builders.
    */
   readonly artifactViewBuilders?: ExtensionArtifactViewBuildersContribution;
+
+  /**
+   * Worker providers built during extension activation for the host's ordered
+   * dispatch capability. Stopping the extension withdraws its providers from
+   * selection while preserving resolution for outstanding allocations.
+   */
+  readonly workerProviders?: ExtensionWorkerProvidersContribution<THostContext>;
 
   /**
    * Facet namespace definitions contributed by this extension.

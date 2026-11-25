@@ -628,6 +628,7 @@ export interface WorkerHandle {
   cancel(reason?: string): Promise<void>;
   /**
    * Forcibly terminate the execution environment without waiting for completion.
+   * Providers must tolerate another call after a failed termination attempt.
    * @returns Promise that resolves when the environment has been torn down.
    */
   terminate(): Promise<void>;

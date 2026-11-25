@@ -1,3 +1,5 @@
+import { spawn } from 'node:child_process';
+import { once } from 'node:events';
 import type { HostDatabase } from '@makaio/contracts';
 import { createHostDatabase, getTransactionQueryContext } from '@makaio/storage-drizzle';
 import { resolveStorageConformanceConfig, useSuiteDatabaseContext } from '@makaio/storage-conformance';
@@ -6,7 +8,14 @@ import { readDispatch } from '../dispatch-store.js';
 import { prepareAllocationBinding } from '../redemption-binding.js';
 import { decideStart } from '../start-claim.js';
 import { createWorkerDispatch } from '../start-ordered-worker.js';
-import { call, controllableProvider, handleFor, installOrderFixture, orderFixture } from './ordered-worker-fixture.js';
+import {
+  call,
+  controllableProvider,
+  handleFor,
+  installOrderFixture,
+  orderFixture,
+  processBoundProvider,
+} from './ordered-worker-fixture.js';
 import {
   type AllocationListingRequest,
   type AllocationObservation,
@@ -137,6 +146,40 @@ describe(`ordered worker dispatch through the host database (${config.dialect})`
 
   const signal = new AbortController().signal;
 
+  it('settles an open managed allocation through the next activation of its provider', async () => {
+    const database = createHostDatabase(getContext().db);
+    const first = controllableProvider();
+    const next = controllableProvider();
+    const { host, order, orderIn, setState } = await orderFixture(database, first.provider, 'provider-reactivation');
+    await database.transaction(orderIn);
+    const dispatch = createWorkerDispatch(host);
+    const pending = dispatch.startOrderedWorker(call, order, signal);
+    await first.exposed.getPromise();
+    first.allocations.push(observed.allocationRef);
+    const read = () => database.transaction((tx) => readDispatch(tx, order.jobRunId));
+    await expect(read()).resolves.toMatchObject({ sendSettled: false, settled: null });
+
+    // Both generations can find the allocation created in the same backend.
+    next.allocations.push(...first.allocations);
+    next.finishTermination();
+    await host.providers.replace(
+      call,
+      { owner: 'example', key: 'primary', managedScopeConfirmed: true, providers: [next.provider] },
+      signal,
+    );
+    first.answer.reject(new Error('Provider reply lost'));
+    await pending;
+    await expect(read()).resolves.toMatchObject({ sendSettled: true, settled: null });
+
+    await database.transaction((tx) => setState(tx, 'closed'));
+    await dispatch.superviseOrderedWorker(call, order.jobRunId, signal);
+    expect(first.sends).toHaveLength(1);
+    expect(next.sends).toEqual([]);
+    expect(first.terminated).toEqual([]);
+    expect(next.terminated).toEqual([observed.allocationRef]);
+    await expect(read()).resolves.toMatchObject({ settled: next.evidence });
+  });
+
   it('dispatches once after commit and isolates the winning operation from caller abort', async () => {
     const database = createHostDatabase(getContext().db);
     const worker = controllableProvider();
@@ -169,7 +212,7 @@ describe(`ordered worker dispatch through the host database (${config.dialect})`
     await expect
       .poll(() => database.transaction((tx) => readDispatch(tx, fixture.order.jobRunId)))
       .toMatchObject({ boundAllocation: allocationRef });
-    await expect(restart(call, fixture.order, signal)).resolves.toEqual({ kind: 'allocated', allocationRef });
+    await expect(restart(call, fixture.order, signal)).resolves.toMatchObject({ kind: 'allocated', allocationRef });
   });
 
   it('admits at most one contender from independent port instances', async () => {
@@ -302,7 +345,7 @@ describe(`ordered worker dispatch through the host database (${config.dialect})`
       await expect(supervise()).resolves.toEqual(unresolved);
       if (outcome === 'allocated') {
         worker.proveUniqueness();
-        await expect(supervise()).resolves.toEqual({ kind: 'allocated', allocationRef: observed.allocationRef });
+        await expect(supervise()).resolves.toMatchObject({ kind: 'allocated', allocationRef: observed.allocationRef });
       }
       await sibling.transaction((tx) => fixture.setState(tx, 'closed'));
       worker.finishTermination();
@@ -393,6 +436,57 @@ describe(`ordered worker dispatch through the host database (${config.dialect})`
     await expect(pending).resolves.toEqual({ kind: 'allocated', allocationRef: binding.allocationRef });
   });
 
+  it.each([
+    'wrong-execution',
+    'missing-cancel',
+  ])('records late teardown after process-bound redemption with %s', async (problem) => {
+    const database = createHostDatabase(getContext().db);
+    const worker = controllableProvider();
+    const { allocationRef } = observed;
+    const provider = {
+      ...processBoundProvider(worker.provider),
+      async proveLocalLive() {
+        return { allocationRef, expiresAt: new Date(Date.now() + 60_000).toISOString() };
+      },
+    };
+    const fixture = await orderFixture(database, provider, `late-redeemed-${problem}`);
+    const { order } = fixture;
+    const operations = new AbortController();
+    const drain = new AbortController();
+    const host = {
+      ...fixture.host,
+      operationSignal: operations.signal,
+      provisionDrain: { closed: drain.signal, track() {} },
+    };
+    const { startOrderedWorker } = createWorkerDispatch(host);
+    await database.transaction(fixture.orderIn);
+    const pending = startOrderedWorker(call, order, signal);
+    await worker.exposed.getPromise();
+    const prepared = await prepareAllocationBinding(host, call, order.jobRunId, { kind: 'allocation-only' });
+    if (prepared === undefined) throw new Error('Expected a prepared binding');
+    await database.transaction(async (tx) => {
+      await prepared.bind(tx);
+      await fixture.setState(tx, 'redeemed');
+    });
+
+    operations.abort();
+    drain.abort();
+    const handle = handleFor(problem === 'wrong-execution' ? 'other-run' : order.jobRunId);
+    if (problem === 'missing-cancel') Reflect.deleteProperty(handle, 'cancel');
+    const terminate = vi.spyOn(handle, 'terminate');
+    const release = vi.spyOn(handle, 'release');
+    worker.answer.resolve({ kind: 'allocated', allocationRef, handle });
+
+    await expect(pending).resolves.toEqual({ kind: 'unknown', reason: 'dispatch-unresolved' });
+    expect(terminate).toHaveBeenCalledTimes(1);
+    expect(release).toHaveBeenCalledTimes(1);
+    await expect(database.transaction((tx) => readDispatch(tx, order.jobRunId))).resolves.toMatchObject({
+      boundAllocation: allocationRef,
+      sendSettled: true,
+      settled: { summary: 'Process-bound allocation terminated' },
+    });
+  });
+
   it('treats a refined inspection reference as a conflict (known limitation)', async () => {
     const database = createHostDatabase(getContext().db);
     const worker = controllableProvider();
@@ -410,6 +504,129 @@ describe(`ordered worker dispatch through the host database (${config.dialect})`
     const prepare = () => prepareAllocationBinding(host, call, order.jobRunId, { kind: 'allocation-only' });
     await expect(prepare()).resolves.toBeUndefined();
     await expect(prepare()).resolves.toMatchObject({ allocationRef });
+  });
+
+  it('reports an attach failure safely, retries, and then stops the allocation it recovered', async () => {
+    const database = createHostDatabase(getContext().db);
+    const worker = controllableProvider();
+    const child = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 60_000)'], { stdio: 'ignore' });
+    const exited = once(child, 'close');
+    try {
+      await once(child, 'spawn');
+      let attachReady = false;
+      let foreign = true;
+      const provider = {
+        ...worker.provider,
+        recovery: {
+          ...worker.provider.recovery,
+          async listAllocations(
+            call: Parameters<typeof worker.provider.recovery.listAllocations>[0],
+            request: AllocationListingRequest,
+            signal: AbortSignal,
+          ) {
+            if (!foreign) return worker.provider.recovery.listAllocations(call, request, signal);
+            return {
+              observations: [{ ...sibling, jobRunId: 'different-order' }],
+              completeness: complete,
+            };
+          },
+          async attach() {
+            if (!attachReady) throw new Error('Internal provider detail');
+            return handleFor('supervised-child');
+          },
+          async terminateAllocation() {
+            child.kill();
+            await exited;
+            return { state: 'ended' as const, evidence: worker.evidence };
+          },
+        },
+      };
+      const { host, order, orderIn, setState } = await orderFixture(database, provider, 'supervised-child');
+      await database.transaction(orderIn);
+      const dispatch = createWorkerDispatch(host);
+      const started = dispatch.startOrderedWorker(call, order, signal);
+      await worker.exposed.getPromise();
+      worker.answer.reject(new Error('Provision reply lost'));
+      await started;
+      const supervise = () => dispatch.superviseOrderedWorker(call, order.jobRunId, signal);
+      await expect(supervise()).resolves.toEqual({
+        kind: 'unknown',
+        reason: 'allocation-conflict',
+        cleanupRequired: true,
+      });
+      expect(child.exitCode).toBeNull();
+      foreign = false;
+      worker.allocations.push(observed.allocationRef);
+      worker.proveUniqueness();
+      await expect(supervise()).resolves.toEqual({
+        kind: 'unknown',
+        reason: 'dispatch-unresolved',
+        lastAttachFailure: { observedAt: expect.any(String), reason: 'attach-failed' },
+      });
+      attachReady = true;
+      await expect(supervise()).resolves.toEqual({
+        kind: 'allocated',
+        allocationRef: observed.allocationRef,
+        lastAttachFailure: null,
+      });
+      await database.transaction((tx) => setState(tx, 'closed'));
+      foreign = true;
+      await expect(supervise()).resolves.toMatchObject({ kind: 'unknown', cleanupRequired: true });
+      expect(child.signalCode).toBe('SIGTERM');
+      await expect(database.transaction((tx) => readDispatch(tx, order.jobRunId))).resolves.toMatchObject({
+        settled: null,
+      });
+      foreign = false;
+      worker.finishTermination();
+      await expect(supervise()).resolves.toEqual({ kind: 'allocated', allocationRef: observed.allocationRef });
+      expect(child.signalCode).toBe('SIGTERM');
+    } finally {
+      child.kill();
+      await exited;
+    }
+  });
+
+  it.each([
+    'foreign',
+    'unmarked',
+  ])('cleans proven candidates and retains the duty with a %s discovery', async (kind) => {
+    const database = createHostDatabase(getContext().db);
+    const worker = controllableProvider();
+    const list = worker.provider.recovery.listAllocations;
+    vi.spyOn(worker.provider.recovery, 'listAllocations').mockImplementation(async (...args) => {
+      const page = await list(...args);
+      const foreign = {
+        ...observed,
+        jobRunId: 'different-order',
+        allocationRef: {
+          ...observed.allocationRef,
+          providerData: { allocation: 'foreign' },
+        },
+      };
+      if (kind === 'unmarked') Reflect.deleteProperty(foreign, 'jobRunId');
+      return { ...page, observations: [...page.observations, foreign] };
+    });
+    const { host, order, orderIn, setState } = await orderFixture(database, worker.provider, `mixed-${kind}`);
+    await database.transaction(orderIn);
+    const dispatch = createWorkerDispatch(host);
+    const pending = dispatch.startOrderedWorker(call, order, signal);
+    await worker.exposed.getPromise();
+    worker.answer.reject(new Error('Provision reply lost'));
+    await pending;
+    await database.transaction((tx) => setState(tx, 'closed'));
+    worker.allocations.push(observed.allocationRef, sibling.allocationRef);
+    worker.finishTermination();
+
+    await expect(dispatch.superviseOrderedWorker(call, order.jobRunId, signal)).resolves.toEqual({
+      kind: 'unknown',
+      reason: 'allocation-conflict',
+      cleanupRequired: true,
+    });
+    expect(worker.terminated).toEqual(worker.allocations);
+    await expect(database.transaction((tx) => readDispatch(tx, order.jobRunId))).resolves.toMatchObject({
+      candidates: worker.allocations,
+      settled: null,
+    });
   });
 
   it('keeps late conflicting allocations open across restart and cleans each confirmed candidate', async () => {

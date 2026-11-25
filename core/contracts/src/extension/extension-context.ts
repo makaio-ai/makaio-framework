@@ -1,6 +1,7 @@
 import type { WritesCapability } from '../journal/write.js';
 import type { CallContext, MakaioBusLike, RegistrableBusNamespaceDefinition } from '@makaio/core';
 import type { RightsCapability } from '../rights/capability.js';
+import type { WorkerDispatchCapability } from '../capabilities/worker/ordered-dispatch.js';
 import type { CredentialRef } from '../config/credential-ref.js';
 import type { HostDatabase } from '../host-database/host-database.js';
 import type { JournalCapability } from '../journal/capability.js';
@@ -216,6 +217,8 @@ export interface NodeExtensionContext<TBus extends MakaioBusLike = MakaioBusLike
   readonly database: HostDatabase;
   /** Journal operations bound to this extension. */
   readonly journal: JournalCapability;
+  /** Ordered dispatch when the host supplies a committed order source. */
+  readonly workerDispatch?: WorkerDispatchCapability;
   /** External write journal, when the host configures authorization and deadlines. */
   readonly writes?: WritesCapability;
 }

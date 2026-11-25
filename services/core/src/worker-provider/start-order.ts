@@ -1,59 +1,18 @@
 import type {
-  AllocationScope,
-  BoundedRecoveryEvidence,
   HostDatabase,
   HostTransaction,
   JobRunId,
   ProviderAllocationRef,
-  WorkerProviderId,
   WorkerRuntimeConnection,
   WorkerRuntimeInputs,
 } from '@makaio/contracts';
-import type { CallContext, PartyRef } from '@makaio/core';
+import type { StartOrder, StartWorkerResult } from '@makaio/contracts/capabilities';
+import type { PartyRef } from '@makaio/core';
 import type { AllocationScopeSetting } from './allocation-scope-source.js';
+import type { LocalWorkerControl } from './local-worker-control.js';
 import type { WorkerProviderRegistry } from './provider-registry.js';
 
-/** Immutable public binding from a committed order. */
-export type StartOrder = Readonly<
-  {
-    jobRunId: JobRunId;
-    workerProviderId: WorkerProviderId;
-    bootstrapDeadlineAt: string;
-  } & (
-    | { allocationLifetime: 'provider-managed'; allocationScope: AllocationScope }
-    | { allocationLifetime: 'provisioner-process-bound'; allocationScope?: never }
-  )
->;
-
-/** Infrastructure result of starting or observing the same order. */
-export type StartWorkerResult =
-  | { kind: 'allocated'; allocationRef: ProviderAllocationRef }
-  | { kind: 'confirmed-absent'; evidence: BoundedRecoveryEvidence }
-  | { kind: 'unknown'; reason: 'dispatch-unresolved' | 'observation-unavailable' | 'allocation-conflict' }
-  | {
-      kind: 'refused';
-      reason:
-        | 'not-committed'
-        | 'binding-mismatch'
-        | 'run-closed'
-        | 'bootstrap-expired'
-        | 'provider-unavailable'
-        | 'allocation-scope-blocked'
-        | 'start-material-unavailable';
-    };
-
-/**
- * Start an ordered worker or observe the durable claim.
- * @param call - Authenticated in-process order owner.
- * @param order - Binding from the committed order.
- * @param signal - Cancels the caller's wait.
- * @throws {@link TypeError} If a process-bound provider returns an allocation without a terminate method.
- */
-export type StartOrderedWorker = (
-  call: CallContext,
-  order: StartOrder,
-  signal: AbortSignal,
-) => Promise<StartWorkerResult>;
+export type { StartOrder, StartWorkerResult } from '@makaio/contracts/capabilities';
 
 /** Host-owned order snapshot joined to its original token deadline in the same transaction. */
 export interface CommittedWorkerOrder {
@@ -89,6 +48,18 @@ export interface WorkerOrderSource {
   readStartToken(order: CommittedWorkerOrder): string | undefined;
 }
 
+/** Host-owned drain for work that can outlive the caller's wait. */
+export interface ProvisionDrain {
+  /** Aborted before the host stops accepting returned allocations into its registry. */
+  readonly closed: AbortSignal;
+  /**
+   * Retain start work through outcome recording and handle handoff.
+   * @param handoff - Settles once no unsent claim needs storage protection.
+   * @param work - The complete start operation.
+   */
+  track(handoff: Promise<unknown>, work: Promise<StartWorkerResult>): void;
+}
+
 /** Host composition for the start port and its supervision operations. */
 export interface WorkerStartOptions {
   readonly database: HostDatabase;
@@ -99,6 +70,11 @@ export interface WorkerStartOptions {
   readonly connection: () => WorkerRuntimeConnection;
   /** Independent lifetime of provider operations, owned by the host. */
   readonly operationSignal: AbortSignal;
+  readonly provisionDrain?: ProvisionDrain;
+  /** Aborted when the host stops waiting for local teardown and releases storage. */
+  readonly localCleanupSignal?: AbortSignal;
   /** Distinguishes actual process incarnations and is shared by ports in one host. */
   readonly processIncarnation: string;
+  /** Live controls owned by this host incarnation. */
+  readonly handles: Map<JobRunId, LocalWorkerControl>;
 }

@@ -1,5 +1,5 @@
 import type { BoundedRecoveryEvidence, JobRunId, ProviderAllocationRef } from '@makaio/contracts';
-import type { DispatchBinding } from '../ordered-provider.js';
+import type { DispatchBinding } from '@makaio/contracts/extension';
 import { defineDualTable } from '@makaio/storage-drizzle';
 
 /** A returned allocation that contradicted a settled dispatch. */
