@@ -62,6 +62,7 @@ import { NodeRuntimeProvider } from './node-runtime-provider.js';
 import { loadOrCreateMachineIdentity } from '@makaio/machine-identity';
 import { resolveExtensionOptions } from './resolve-extension-options.js';
 import { initializeNodeDatabase } from './initialize-node-database.js';
+import { MAKAIO_RULES_PARTY_KIND } from '@makaio/core';
 import { KernelSubjects } from '@makaio/kernel/namespace';
 import {
   AdapterSubsystemToken,
@@ -83,6 +84,8 @@ import {
   type RuleContributionsService,
   RuleContributionsToken,
   RuleEvaluator,
+  createRuleJournalReader,
+  startRuleJournalEvaluation,
   createToolContributionProcessor,
   createTransitionContributionProcessor,
   createWorkflowBlockContributionProcessor,
@@ -611,6 +614,7 @@ export async function bootMakaioRuntimeCore(
       return service instanceof ReactionRegistry ? service : undefined;
     };
     const coordinator: ExtensionCoordinator<KernelExtensionContext> = new ExtensionCoordinator(bus, {
+      onRuleSourceRegistered: (): void => journalReaders.wake(),
       validateRules: async (input) => {
         const service = getRuleContributions();
         if (!service) throw new Error('Rule contributions are unavailable');
@@ -698,7 +702,14 @@ export async function bootMakaioRuntimeCore(
     shutdownSteps.push(resourceStep('subject directory', () => directory.destroy()));
     await directory.init();
     coordinator.registerContributionProcessor(journalContributions);
+    let ruleEvaluator: RuleEvaluator | undefined;
+    const rulesParty = { kind: MAKAIO_RULES_PARTY_KIND, id: MAKAIO_RULES_PARTY_KIND };
     const journalReaders = new JournalReaderService({
+      hostReader: {
+        contribution: createRuleJournalReader(() => ruleEvaluator),
+        call: mintCallContext({ caller: rulesParty, principal: rulesParty }),
+        canSelect: () => coordinator.getRuleSourceRegistration() !== undefined,
+      },
       bus,
       host: database,
       directory,
@@ -975,16 +986,18 @@ export async function bootMakaioRuntimeCore(
     if (!contributions || !reactions) {
       throw new Error('Rule evaluation requires the host rule contributions and reaction registry');
     }
-    const ruleEvaluator = new RuleEvaluator(
+    ruleEvaluator = new RuleEvaluator(
       database,
       contributions,
       reactions.invoke.bind(reactions),
-      coordinator.getRuleSource,
+      coordinator.getRuleSourceRegistration,
     );
     const reportStartedConfig = reportOperatorConfig;
     reportOperatorConfig = undefined;
     reportStartedConfig();
     checkpoint();
+    const stopRuleEvaluation = startRuleJournalEvaluation(database, ruleEvaluator);
+    shutdownSteps.push(resourceStep('rule journal evaluation', stopRuleEvaluation));
     journalReaders.start();
     startGate.open();
     rights.openBoundary();

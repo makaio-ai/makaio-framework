@@ -84,9 +84,10 @@ export async function enqueue(
     ruleTriggers: () => [],
     onTriggersChanged: () => () => {},
   };
-  const prepared = await new RuleEvaluator(db, service, invoke, () => source).prepare(event);
-  if (!prepared) throw new Error('The fixture trigger did not fire');
-  return db.transaction((tx) => storeRuleOccasion(tx, prepared));
+  const registration = { contribution: source };
+  const prepared = await new RuleEvaluator(db, service, invoke, () => registration).prepare(event);
+  if (prepared.state !== 'prepared') throw new Error('The fixture trigger did not fire');
+  return db.transaction((tx) => storeRuleOccasion(tx, prepared.work));
 }
 
 /** @param db - Host database.

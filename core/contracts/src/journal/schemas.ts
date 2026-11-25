@@ -83,6 +83,8 @@ export const ReaderStatesPageSchema = z
   .object({
     /** Reading states of the page. */
     states: z.array(ReaderEntryStateSchema),
+    /** The reader's stored journal position, even when no entry states match. */
+    readerPosition: PositionSchema.optional(),
     /** Opaque token for the next page; absent on the last page. */
     nextCursor: z.string().min(1).optional(),
   })

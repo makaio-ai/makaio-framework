@@ -1,13 +1,17 @@
+import { isJsonObject } from '@makaio/contracts';
 import { AccessSubjects, CoreDenialPlace, type AccessDenied } from '@makaio/contracts/access';
 import { JOURNAL_PAGE_MAX_LIMIT, JournalSubjects } from '@makaio/contracts/journal';
 import {
+  SUBJECT_SEND_RIGHT,
   SUBJECT_SUBSCRIBE_RIGHT,
   SubjectSubscribeRightContextSchema,
   type RightsSourceContribution,
 } from '@makaio/contracts/rights';
 import type { CallContext } from '@makaio/core';
 import type { KernelMakaioExtension } from '@makaio/kernel';
-import { expect, it, onTestFinished, vi } from 'vitest';
+import { getHostDatabaseWake, markTransactionWakeTopic } from '@makaio/storage-drizzle';
+import { beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
+import type { MakaioRuntime } from '../boot-types.js';
 import { bootJournalHost, delivery, extension, subject, writer } from './boot-journal-fixture.js';
 
 const consumer = 'journal-boot-reader';
@@ -134,4 +138,89 @@ it('uses the reader identity for authorization and keeps denied entries out of t
   );
   expect(keys).toEqual(['visible']);
   expect(calls).toMatchObject([{ caller, principal: { kind: 'makaio.extension', id: extension } }]);
+});
+
+describe('local reader-state requests', () => {
+  const observer = 'journal-state-observer';
+  const registeredReader = `${extension}.reader`;
+  const absentReader = `${extension}.absent`;
+  const settledTopic = 'journal-state-test-settled';
+  let host: MakaioRuntime;
+  let observe: () => Promise<unknown>;
+  let mutations: boolean[];
+
+  beforeEach(async () => {
+    mutations = [];
+    const request = Promise.withResolvers<() => Promise<unknown>>();
+    const settled = Promise.withResolvers<void>();
+    const { pkg, started } = writer();
+    const { boot } = await bootJournalHost([
+      {
+        ...pkg,
+        readers: [
+          {
+            reader: registeredReader,
+            description: 'Process test entries',
+            subjects: () => [subject],
+            async handle() {
+              return {
+                state: 'done',
+                commit: async (tx) => markTransactionWakeTopic(tx, settledTopic),
+              };
+            },
+          },
+        ],
+        rightsSources: [
+          {
+            source: `${extension}.reader-policy`,
+            description: 'Allow only authorized callers to inspect reader states',
+            rights: [SUBJECT_SEND_RIGHT],
+            async answer({ call, context }) {
+              if (!isJsonObject(context) || context.subject !== 'makaio:journal.reader-states') {
+                return { granted: true };
+              }
+              if (call.caller.id === observer) return { granted: false, reason: 'reader-state-denied' };
+              const { payload } = context;
+              if (isJsonObject(payload) && payload.reader === absentReader) {
+                mutations.push(Reflect.set(payload, 'reader', registeredReader));
+              }
+              return { granted: true };
+            },
+          },
+        ],
+      },
+      {
+        name: observer,
+        displayName: 'Journal state observer',
+        version: '1.0.0',
+        critical: true,
+        create({ bus, database }) {
+          request.resolve(() =>
+            bus.request(bus.own('observer'), JournalSubjects['reader-states'], { reader: registeredReader }),
+          );
+          return { destroy: getHostDatabaseWake(database).subscribe(settledTopic, () => settled.resolve()) };
+        },
+      },
+    ]);
+    host = await boot;
+    const edge = await started;
+    await edge.accept(delivery('reader-state-test'));
+    await settled.promise;
+    observe = await request.promise;
+  });
+
+  it('checks permissions and keeps the authorized selection stable', async () => {
+    const { bus } = host;
+    // ORIGIN: The host operator inspects the reader's durable state.
+    const call = bus.own('observer');
+    const states = await bus.request(call, JournalSubjects['reader-states'], { reader: registeredReader });
+    expect(states.states).toMatchObject([{ state: 'done' }]);
+    await expect(observe()).rejects.toMatchObject({
+      cause: { code: 'forbidden', data: { reason: 'reader-state-denied' } },
+    });
+    await expect(bus.request(call, JournalSubjects['reader-states'], { reader: absentReader })).resolves.toEqual({
+      states: [],
+    });
+    expect(mutations).toEqual([false]);
+  });
 });

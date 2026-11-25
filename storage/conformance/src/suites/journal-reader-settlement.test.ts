@@ -71,10 +71,18 @@ class ShortLeaseStore extends JournalReaderStore {
    * @param reader - Reader acquiring work.
    * @param _leaseMs - Production lease requested by the run.
    * @param patterns - The reader's active patterns.
+   * @param canSelect - Whether the run can still select work.
+   * @param owner - Expected cursor owner.
    * @returns A real claim bounded by the test lease.
    */
-  public override claim(reader: string, _leaseMs: number, patterns?: readonly string[]) {
-    return super.claim(reader, leaseMs, patterns);
+  public override claim(
+    reader: string,
+    _leaseMs: number,
+    patterns?: readonly string[],
+    canSelect?: () => boolean,
+    owner?: string,
+  ) {
+    return super.claim(reader, leaseMs, patterns, canSelect, owner);
   }
 }
 
@@ -95,6 +103,9 @@ describeStorageConformance('journal reader settlement', (config) => {
     let entered = false;
     let stopped = false;
     let commitSignal: AbortSignal | undefined;
+    const store = new ShortLeaseStore(host);
+    const [cursor] = await store.initialize(extension, [{ reader, startAt: 'beginning' }]);
+    if (!cursor) throw new Error('Expected a reader cursor.');
     const run = new JournalReaderRun(
       {
         reader,
@@ -120,13 +131,13 @@ describeStorageConformance('journal reader settlement', (config) => {
           };
         },
       },
-      new ShortLeaseStore(host),
+      store,
       {
         directory,
         ...coordinator.hostRights,
         bindCall: (caller, { principal }) => mintCallContext({ caller, principal }),
       },
-      { call: bus.own('schedule'), position: 0, isActive: isCurrent },
+      { call: bus.own('schedule'), isActive: isCurrent, cursor },
     );
     run.wake();
     let close: Promise<void> | undefined;
@@ -179,7 +190,7 @@ describeStorageConformance('journal reader settlement', (config) => {
   it('commits a completed effect when the final progress update crosses the lease deadline', async () => {
     const { subject, entryId, peer, effects } = await setup(getDatabase(), 'near-deadline');
     const reader = `${extension}.near-deadline`;
-    await peer.initialize(reader, 'beginning');
+    await peer.initialize(extension, [{ reader, startAt: 'beginning' }]);
     await peer.admit(reader, [subject]);
     const claim = await peer.claim(reader, leaseMs, [subject]);
     if (claim === undefined) throw new Error('Expected a claim.');

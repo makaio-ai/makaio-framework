@@ -114,11 +114,16 @@ export type ContributionProcessor<THostContext extends KernelHostContext = Kerne
     /**
      * Stage static manifest contributions before the service is created.
      * Runs in registration order independently of the activation filter.
-     * If staging or activation fails, processStopped can undo partial staging.
+     * If staging or activation fails, the rollback hook can undo partial staging.
      * @param name - Extension package name.
      * @param pkg - Extension manifest.
      */
     readonly processActivating?: (name: string, pkg: KernelMakaioExtension<THostContext>) => void | Promise<void>;
+    /**
+     * Undo a failed activation, including partial staging. Defaults to processStopped.
+     * @param name - Extension package name.
+     */
+    readonly processActivationRollback?: (name: string) => Promise<void>;
   };
 
 /**
@@ -178,6 +183,8 @@ export interface RuntimeEnvironment {
 export interface ExtensionCoordinatorOptions<THostContext extends KernelHostContext = KernelExtensionContext> {
   /** Live rules validator supplied by the host composition. */
   readonly validateRules?: RulesCapability['validate'];
+  /** Notifies the host after a rule source registration becomes visible. */
+  readonly onRuleSourceRegistered?: () => void;
   /** Hosted surface category used to apply package gating. Defaults to `'headless'`. */
   surface?: ExtensionRuntimeSurface;
   /** Shared host rights, or a mode for coordinators that own their capability. */

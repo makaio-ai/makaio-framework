@@ -11,12 +11,20 @@ import {
 import { z } from 'zod';
 import type { PinnedRuleSnapshot } from './types.js';
 
-const SourceEnvelopeSchema = z.object({
-  set: RuleSetRefSchema,
-  rules: z.array(z.unknown()),
-  groups: z.array(z.unknown()),
-  excluded: z.array(z.unknown()),
-});
+const SourceEnvelopeSchema = z.union([
+  z.object({ set: z.null() }),
+  z.object({
+    set: RuleSetRefSchema,
+    rules: z.array(z.unknown()),
+    groups: z.array(z.unknown()),
+    excluded: z.array(z.unknown()),
+  }),
+]);
+
+type PinnedSource =
+  | { readonly state: 'pinned'; readonly snapshot: PinnedRuleSnapshot; readonly entries: SourceEntry[] }
+  | { readonly state: 'no-match' }
+  | { readonly state: 'source-unavailable' };
 
 interface SourceEntry {
   /** Identifier supplied by this entry, if it can be stored as text. */
@@ -73,13 +81,14 @@ function sourceId(raw: unknown, detached: unknown): string | null {
 
 /** Validate the source envelope and pin each entry independently.
  * @param value - Effective set returned by the live source.
- * @returns The pinned snapshot and corresponding rules, or no usable set identity.
+ * @returns The pinned set, a valid response without a set, or an unusable response.
  */
-export function pinRuleSource(value: unknown): { snapshot: PinnedRuleSnapshot; entries: SourceEntry[] } | undefined {
+export function pinRuleSource(value: unknown): PinnedSource {
   const envelope = SourceEnvelopeSchema.safeParse(value);
-  if (!envelope.success) return undefined;
+  if (!envelope.success) return { state: 'source-unavailable' };
+  if (envelope.data.set === null) return { state: 'no-match' };
   const { set, rules, groups, excluded } = envelope.data;
-  if (pinStorageValue(set) === undefined) return undefined;
+  if (pinStorageValue(set) === undefined) return { state: 'source-unavailable' };
   const entries: SourceEntry[] = [];
   const pinnedRules: JsonValue[] = [];
   for (const raw of rules) {
@@ -92,6 +101,7 @@ export function pinRuleSource(value: unknown): { snapshot: PinnedRuleSnapshot; e
     pinnedRules.push(pinned?.data ?? null);
   }
   return {
+    state: 'pinned',
     snapshot: {
       set,
       rules: pinnedRules,

@@ -86,8 +86,8 @@ export async function checkRuleLookups(
         message: 'Lookup names must be unique',
       });
     }
-    checkParameterReferences(call.args, objectSchema(check.roots), `${path}.args`, check.findings);
-    await checkParameterSchema(call.args, lookup.args, `${path}.args`, check.findings);
+    checkParameterReferences(call.args, objectSchema(check.roots), `${path}.args`, check.findings, 'record');
+    await checkParameterSchema(call.args, lookup.args, `${path}.args`, check.findings, 'record');
     const validate = lookup.validate?.bind(lookup);
     if (validate) {
       const location = {
@@ -230,10 +230,53 @@ export async function checkParameterSchema(
     }
     return;
   }
-  if (expression(tree, root) || tree === null || typeof tree !== 'object' || schema.def.checks?.length) return;
+  if (expression(tree, root) || tree === null || typeof tree !== 'object') return;
+  if (schema instanceof z.ZodObject && isJsonObject(tree)) {
+    checkObjectKeys(tree, schema, path, findings);
+  }
+  if (schema.def.checks?.length) return;
   for (const [key, value] of Object.entries(tree)) {
     const child = parameterChildSchema(schema, tree, key);
     if (child) await checkParameterSchema(value, child, `${path}.${key}`, findings);
+  }
+}
+
+/**
+ * Check object keys whose presence is independent of resolved references.
+ * @param tree - Explicit fields in the parameter object.
+ * @param schema - Direct object parser used at runtime.
+ * @param path - Rule location.
+ * @param findings - Accumulator for diagnostics.
+ */
+function checkObjectKeys(
+  tree: Record<string, unknown>,
+  schema: z.ZodObject,
+  path: string,
+  findings: RuleFinding[],
+): void {
+  for (const [name, child] of Object.entries(schema.shape)) {
+    // The object parser uses input optionality to distinguish an absent key from an undefined value.
+    if (!Object.hasOwn(tree, name) && child instanceof z.ZodType && child._zod.optin !== 'optional') {
+      findings.push({
+        severity: 'error',
+        code: 'params-invalid',
+        path: `${path}.${name}`,
+        message: 'Missing required parameter',
+      });
+    }
+  }
+  if (schema.def.catchall instanceof z.ZodNever) {
+    for (const name of Object.keys(tree)) {
+      // The object parser discards this key before applying the catchall.
+      if (name !== '__proto__' && !Object.hasOwn(schema.shape, name)) {
+        findings.push({
+          severity: 'error',
+          code: 'params-invalid',
+          path: `${path}.${name}`,
+          message: 'Unexpected parameter',
+        });
+      }
+    }
   }
 }
 

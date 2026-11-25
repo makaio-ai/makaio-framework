@@ -1,7 +1,10 @@
 import type { HostTransaction } from '@makaio/contracts';
-import { getTransactionQueryContext, resolveSchema } from '@makaio/storage-drizzle';
+import { getTransactionQueryContext, markTransactionWakeTopic, resolveSchema } from '@makaio/storage-drizzle';
 import type { PreparedOccasion } from '../types.js';
 import { ruleStorageSchema } from './schema.variants.js';
+
+/** Database wake shared by readers committing new occasions and runners. */
+export const RULE_OCCASION_WAKE_TOPIC = 'rules.occasions';
 
 /** Store a prepared occasion and its evaluations in the caller's transaction.
  * @param tx - Transaction shared with the incoming reader commitment.
@@ -46,5 +49,6 @@ export async function storeRuleOccasion(tx: HostTransaction, input: PreparedOcca
     })),
   ];
   if (evaluations.length) await query.insert(tables.ruleEvaluations).values(evaluations);
+  markTransactionWakeTopic(tx, RULE_OCCASION_WAKE_TOPIC);
   return true;
 }

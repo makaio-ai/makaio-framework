@@ -1,13 +1,15 @@
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { MakaioBus } from '@makaio/bus-core';
-import type { JournalEdgeCapability } from '@makaio/contracts';
+import type { HostDatabase, JournalEdgeCapability } from '@makaio/contracts';
 import { createBusNamespace, journalSubject } from '@makaio/core';
 import type { KernelMakaioExtension } from '@makaio/kernel';
 import { onTestFinished, vi } from 'vitest';
 import { z } from 'zod';
 import { bootMakaioRuntimeCore } from '../boot.js';
+import type { CoreBootOptions } from '../boot-types.js';
 import { ExplicitDescriptorDiscovery } from '../extension-discovery.js';
 
 export const extension = 'journal-boot-writer';
@@ -27,15 +29,19 @@ export const namespace = createBusNamespace(extension, {
  * @param packages - Manifests to discover during boot.
  * @param signal - Optional startup cancellation signal.
  * @param journalStartupWaitTimeoutMs - Maximum time an inbound delivery waits for startup.
- * @returns The pending runtime and its SQLite URL.
+ * @param options - Existing home, database target, and optional coordinator wiring.
+ * @returns The pending runtime and its database URL.
  */
 export async function bootJournalHost(
   packages: readonly KernelMakaioExtension[],
   signal?: AbortSignal,
   journalStartupWaitTimeoutMs?: number,
+  options: Pick<CoreBootOptions, 'configureCoordinator' | 'database'> & {
+    home?: string;
+  } = {},
 ) {
-  const home = await mkdtemp(join(tmpdir(), 'makaio-boot-journal-'));
-  const url = `file:${join(home, 'makaio.db')}`;
+  const home = options.home ?? (await mkdtemp(join(tmpdir(), 'makaio-boot-journal-')));
+  const url = options.database?.url ?? `file:${join(home, 'makaio.db')}`;
   const discovery = new ExplicitDescriptorDiscovery(
     packages.map((pkg) => ({
       descriptor: {
@@ -59,6 +65,8 @@ export async function bootJournalHost(
     discovery,
     signal,
     journalStartupWaitTimeoutMs,
+    ...(url.startsWith('file:') ? { dbPath: url.slice('file:'.length) } : { database: options.database }),
+    configureCoordinator: options.configureCoordinator,
   });
   onTestFinished(async () => {
     try {
@@ -67,11 +75,11 @@ export async function bootJournalHost(
     } finally {
       MakaioBus.__resetHandlers?.();
       vi.unstubAllEnvs();
-      await rm(home, { recursive: true, force: true });
+      if (!options.home) await rm(home, { recursive: true, force: true });
     }
   }, 30_000);
   void boot.catch(() => undefined);
-  return { boot, url };
+  return { boot, home, url };
 }
 
 /**
@@ -81,7 +89,10 @@ export async function bootJournalHost(
  */
 export function writer(duringStart?: (edge: JournalEdgeCapability) => Promise<void>) {
   const started = Promise.withResolvers<JournalEdgeCapability>();
-  let transaction: ReturnType<typeof vi.spyOn> | undefined;
+  const readyDatabase = Promise.withResolvers<HostDatabase>();
+  const deliveryContext = new AsyncLocalStorage<{ openedTransaction: boolean }>();
+  let instrumentedDatabase: HostDatabase | undefined;
+  let deliveriesWithTransaction = 0;
   const pkg: KernelMakaioExtension = {
     name: extension,
     displayName: 'Journal writer',
@@ -90,8 +101,24 @@ export function writer(duringStart?: (edge: JournalEdgeCapability) => Promise<vo
     namespaces: [namespace],
     edges: [{ edge: edgeName, description: 'Receives changes', subjects: [subject] }],
     create: ({ bus, database, journal }) => {
-      transaction ??= vi.spyOn(database, 'transaction');
-      const edge = journal.edge(edgeName);
+      readyDatabase.resolve(database);
+      if (database !== instrumentedDatabase) {
+        const transact = database.transaction.bind(database);
+        database.transaction = (run) => {
+          const delivery = deliveryContext.getStore();
+          if (delivery && !delivery.openedTransaction) {
+            delivery.openedTransaction = true;
+            deliveriesWithTransaction++;
+          }
+          return transact(run);
+        };
+        instrumentedDatabase = database;
+      }
+      const registered = journal.edge(edgeName);
+      const edge: JournalEdgeCapability = {
+        ...registered,
+        accept: (input) => deliveryContext.run({ openedTransaction: false }, () => registered.accept(input)),
+      };
       const destroy = bus.on(namespace.subjects.record, async ({ payload: { key }, call, setResult }) => {
         const outcomes = await database.transaction((tx) =>
           journal.record(call, { tx, entries: [{ key, subject, payload: key }] }),
@@ -107,7 +134,12 @@ export function writer(duringStart?: (edge: JournalEdgeCapability) => Promise<vo
       };
     },
   };
-  return { pkg, started: started.promise, transactions: () => transaction };
+  return {
+    pkg,
+    started: started.promise,
+    database: readyDatabase.promise,
+    deliveriesWithTransaction: () => deliveriesWithTransaction,
+  };
 }
 
 /**

@@ -33,6 +33,7 @@ export interface RuleSourceContribution {
    *
    * Runs without a host transaction. The result is fixed by `set`; the kernel
    * may cache after that.
+   * The source decides per entry whether rules apply to events recorded before their activation.
    * @param input - The occasion to resolve rules for.
    * @returns The effective set with its groups and exclusions, or `{ set: null }` when none applies.
    */

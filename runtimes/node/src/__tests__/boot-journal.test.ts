@@ -29,7 +29,7 @@ it('waits for the last extension before accepting and commits handler records to
 }, async () => {
   const entered = Promise.withResolvers<void>();
   const release = Promise.withResolvers<void>();
-  const { pkg, started, transactions } = writer();
+  const { pkg, started, deliveriesWithTransaction } = writer();
   const { boot, url } = await bootJournalHost([
     pkg,
     dependent(async () => {
@@ -43,11 +43,12 @@ it('waits for the last extension before accepting and commits handler records to
     const inbound = edge.accept(delivery('inbound'));
     void inbound.catch(() => undefined);
     await setImmediate();
-    expect(transactions()).not.toHaveBeenCalled();
+    expect(deliveriesWithTransaction()).toBe(0);
 
     release.resolve();
     const runtime = await boot;
     await expect(inbound).resolves.toMatchObject([{ status: 'recorded' }]);
+    expect(deliveriesWithTransaction()).toBe(1);
     const reader = await createDatabaseClient({ url });
     try {
       // ORIGIN: The test host sends a fresh request to the running extension.
@@ -74,7 +75,7 @@ it('waits for the last extension before accepting and commits handler records to
 it('breaks a cycle between a dependent startup and the edge owner', { timeout: 30_000 }, async () => {
   const requested = Promise.withResolvers<void>();
   const response = Promise.withResolvers<unknown>();
-  const { pkg, started, transactions } = writer(async (edge) => {
+  const { pkg, started, deliveriesWithTransaction } = writer(async (edge) => {
     // The owner serves this request after its own init has returned.
     void requested.promise.then(() => edge.accept(delivery('startup-cycle'))).then(response.resolve, response.resolve);
   });
@@ -93,11 +94,11 @@ it('breaks a cycle between a dependent startup and the edge owner', { timeout: 3
     25,
   );
   await boot;
-  expect(transactions()).not.toHaveBeenCalled();
+  expect(deliveriesWithTransaction()).toBe(0);
 });
 
 it('rejects an accept awaited by the edge owner during startup and re-enable', { timeout: 30_000 }, async () => {
-  const { pkg, transactions } = writer(async (edge) => {
+  const { pkg, deliveriesWithTransaction } = writer(async (edge) => {
     const ownStart = edge.accept(delivery('own-start'));
     await expect(Promise.race([ownStart, setTimeout(300, 'startup is waiting')])).rejects.toMatchObject({
       code: 'accept-during-own-start',
@@ -108,7 +109,7 @@ it('rejects an accept awaited by the edge owner during startup and re-enable', {
   const runtime = await boot;
   await expect(runtime.coordinator.applyExtensionTransition(extension, false)).resolves.toBe('applied');
   await expect(runtime.coordinator.applyExtensionTransition(extension, true)).resolves.toBe('applied');
-  expect(transactions()).not.toHaveBeenCalled();
+  expect(deliveriesWithTransaction()).toBe(0);
 });
 
 it.each(['critical failure', 'cancellation'] as const)('rejects waiting deliveries on %s', {
@@ -118,7 +119,7 @@ it.each(['critical failure', 'cancellation'] as const)('rejects waiting deliveri
   const release = Promise.withResolvers<void>();
   const abort = new AbortController();
   const failure = new Error('boot interrupted');
-  const { pkg, started, transactions } = writer();
+  const { pkg, started, deliveriesWithTransaction } = writer();
   const { boot } = await bootJournalHost(
     [
       pkg,
@@ -147,7 +148,7 @@ it.each(['critical failure', 'cancellation'] as const)('rejects waiting deliveri
     await expect(
       Promise.race([edge.accept(delivery('unavailable')), setTimeout(500, 'delivery is still waiting')]),
     ).rejects.toThrow(failure.message);
-    expect(transactions()).not.toHaveBeenCalled();
+    expect(deliveriesWithTransaction()).toBe(0);
   } finally {
     release.resolve();
   }

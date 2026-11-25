@@ -102,7 +102,7 @@ async function resolveLookup(
   deadline: DecisionDeadline,
   index: number,
 ): Promise<JsonValue | null> {
-  const args = resolveParameters(input.args, facts);
+  const args = resolveParameters(input.args, facts, 'record');
   if (args === undefined) return null;
   const record = JsonRecordSchema.safeParse(args);
   if (!record.success) throw new DecisionFailure('lookup-args-invalid');

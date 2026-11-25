@@ -281,6 +281,20 @@
       "when": 1795570104768,
       "tag": "0039_journal-writes",
       "breakpoints": true
+    },
+    {
+      "idx": 40,
+      "version": "7",
+      "when": 1795592790516,
+      "tag": "0040_journal_reader_owner",
+      "breakpoints": true
+    },
+    {
+      "idx": 41,
+      "version": "7",
+      "when": 1795595567318,
+      "tag": "0041_journal_reader_reservation",
+      "breakpoints": true
     }
   ]
 }

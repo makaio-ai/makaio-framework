@@ -206,7 +206,7 @@ it('boots rule contributions, serves live catalogs and releases readers and sour
     payload: {},
   };
   expect(coordinator.getRuleSource()).toBe(feed.source);
-  await expect(runtime.ruleEvaluator.prepare(occasion)).resolves.toBeUndefined();
+  await expect(runtime.ruleEvaluator.prepare(occasion)).resolves.toEqual({ state: 'no-match' });
   await expect(rules?.validate({ rules: [], groups: [] })).resolves.toEqual([]);
   const rule = {
     id: 'validated-rule',
@@ -249,9 +249,9 @@ it('boots rule contributions, serves live catalogs and releases readers and sour
   await coordinator.applyExtensionTransition('rule-source', false);
   expect(coordinator.getRuleSource()).toBeUndefined();
   expect(feed.listeners.size).toBe(0);
-  await expect(runtime.ruleEvaluator.prepare(occasion)).resolves.toBeNull();
+  await expect(runtime.ruleEvaluator.prepare(occasion)).resolves.toEqual({ state: 'source-unavailable' });
   await coordinator.applyExtensionTransition('rule-source', true);
-  await expect(runtime.ruleEvaluator.prepare(occasion)).resolves.toBeUndefined();
+  await expect(runtime.ruleEvaluator.prepare(occasion)).resolves.toEqual({ state: 'no-match' });
 });
 
 it('diagnoses foreign and duplicate definitions and rolls back contributors that cannot activate', async () => {

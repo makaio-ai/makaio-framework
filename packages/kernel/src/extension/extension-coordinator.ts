@@ -197,7 +197,7 @@ export class ExtensionCoordinator<THostContext extends KernelHostContext = Kerne
   public constructor(bus: IMakaioBus, ...args: ExtensionCoordinatorArguments<THostContext>) {
     const [options = {}] = args;
     this.bus = bus;
-    this.rules = new RuleSourceRegistry(options.validateRules);
+    this.rules = new RuleSourceRegistry(options.validateRules, options.onRuleSourceRegistered);
     this.rights = typeof options.rights === 'object' ? options.rights : createCoordinatorRights(bus, options.rights);
     this.hostRights = this.rights.hostRights;
     this.surface = options.surface ?? 'headless';
@@ -229,6 +229,10 @@ export class ExtensionCoordinator<THostContext extends KernelHostContext = Kerne
    * @returns The current rule source, if one has been registered.
    */
   public readonly getRuleSource = (): RuleSourceContribution | undefined => this.rules.get();
+
+  /** @returns The active source registration for checking in-flight rule requests. */
+  public readonly getRuleSourceRegistration = (): ReturnType<RuleSourceRegistry['getRegistration']> =>
+    this.rules.getRegistration();
 
   /** @returns Host-side authorization for the built-in rule contributions. */
   public get ruleRights(): CoordinatorRights['ruleRights'] {

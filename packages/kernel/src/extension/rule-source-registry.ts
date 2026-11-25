@@ -41,8 +41,14 @@ export class RuleSourceRegistry {
   /** Refresh callbacks and their lifetime cleanup, independent of the source's lifetime. */
   private readonly readers = new Map<() => void, () => void>();
 
-  /** @param validate - Host validator, when this composition provides rule evaluation. */
-  public constructor(private readonly validate?: RulesCapability['validate']) {}
+  /**
+   * @param validate - Host validator, when this composition provides rule evaluation.
+   * @param onRegistered - Host notification for a newly visible registration.
+   */
+  public constructor(
+    private readonly validate?: RulesCapability['validate'],
+    private readonly onRegistered?: () => void,
+  ) {}
 
   /**
    * Installs the declared rule source for a live activation.
@@ -94,6 +100,11 @@ export class RuleSourceRegistry {
       },
     };
     this.releaseSource(previous);
+    try {
+      this.onRegistered?.();
+    } catch (error) {
+      console.error('[RuleSourceRegistry] Failed to notify the host of a registration:', error);
+    }
     return lease;
   }
 
@@ -112,7 +123,12 @@ export class RuleSourceRegistry {
    * @returns The complete registered contribution, if present.
    */
   public get(): RuleSourceContribution | undefined {
-    return this.current?.lifetime.aborted ? undefined : this.current?.contribution;
+    return this.getRegistration()?.contribution;
+  }
+
+  /** @returns The active registration, with stable identity for one activation. */
+  public getRegistration(): Pick<SourceRegistration, 'contribution'> | undefined {
+    return this.current?.lifetime.aborted ? undefined : this.current;
   }
 
   /**

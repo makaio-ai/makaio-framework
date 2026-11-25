@@ -132,6 +132,7 @@ async function createSqliteDatabaseContext(
   };
 
   return {
+    url: fileUrl,
     db: primary.db,
     dialect: 'sqlite',
     capabilities: SQLITE_CAPABILITIES,

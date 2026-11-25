@@ -47,6 +47,11 @@ export const READER_INITIAL_RETRY_DELAY_MS = 1_000;
 const MAX_RETRY_DELAY_MS = 300_000;
 const RETRY_DELAYS_MS = Array.from({ length: 9 }, (_, retries) => READER_INITIAL_RETRY_DELAY_MS * 2 ** retries);
 
+/** An active reader can no longer lock a cursor for its recorded owner. */
+export class ReaderCursorLostError extends Error {
+  public readonly code = 'reader-cursor-lost';
+}
+
 /** Roll back effects when the contribution or the durable claim is no longer current. */
 class LostReaderClaim extends Error {}
 
@@ -68,15 +73,21 @@ function databaseNow(q: TransactionQueryContext): SQL<number> {
  * Serialize selection, admission and reprocessing for one reader, taking the write lock first on SQLite.
  * @param q - Query context of the current transaction.
  * @param reader - Name of the registered reader.
+ * @param owner - Expected owner when called by an active reader.
  * @returns The durable reader frontier, if initialized.
  */
-export async function lockReader(q: TransactionQueryContext, reader: ReaderName): Promise<number | undefined> {
+export async function lockReader(
+  q: TransactionQueryContext,
+  reader: ReaderName,
+  owner?: string,
+): Promise<number | undefined> {
   const { journalReaderCursors: cursors } = resolveSchema(q, journalStorageSchema);
   const [row] = await q
     .update(cursors)
     .set({ position: sql`${cursors.position}` })
-    .where(eq(cursors.reader, reader))
+    .where(and(eq(cursors.reader, reader), owner === undefined ? undefined : eq(cursors.owner, owner)))
     .returning({ position: cursors.position });
+  if (!row && owner !== undefined) throw new ReaderCursorLostError('Active reader lost its cursor');
   return row?.position;
 }
 
@@ -168,6 +179,8 @@ async function expireClaims(q: TransactionQueryContext, reader: ReaderName, time
  * @param reader - Registered reader.
  * @param leaseMs - Duration of the claim.
  * @param patterns - Current eligible subjects.
+ * @param canSelect - Whether the reader may acquire new work.
+ * @param owner - Expected owner when called by an active reader.
  * @returns The entry and its claim, if one was available.
  */
 export function claimEntry(
@@ -175,10 +188,12 @@ export function claimEntry(
   reader: ReaderName,
   leaseMs: number,
   patterns?: readonly SubjectPattern[],
+  canSelect: () => boolean = () => true,
+  owner?: string,
 ): Promise<ReaderClaim | undefined> {
   return host.transaction(async (tx) => {
     const q = getTransactionQueryContext(tx);
-    if ((await lockReader(q, reader)) === undefined) return undefined;
+    if (!canSelect() || (await lockReader(q, reader, owner)) === undefined || !canSelect()) return undefined;
     await expireClaims(q, reader);
     const { journalReaderStates: states, journalEntries: entries } = resolveSchema(q, journalStorageSchema);
     const { held, condition } = heldKey(q, states);
@@ -197,7 +212,7 @@ export function claimEntry(
       )
       .orderBy(asc(states.position))
       .limit(1);
-    if (row === undefined) return undefined;
+    if (row === undefined || !canSelect()) return undefined;
 
     const token = randomUUID();
     const expiresAt = Date.now() + leaseMs;

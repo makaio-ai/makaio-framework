@@ -11,6 +11,6 @@ export function ruleCall(event: EventFacts): CallContext {
   return mintCallContext({
     caller: { kind: MAKAIO_RULES_PARTY_KIND, id: MAKAIO_RULES_PARTY_KIND },
     principal,
-    attestedBy,
+    ...(attestedBy === undefined ? {} : { attestedBy }),
   });
 }

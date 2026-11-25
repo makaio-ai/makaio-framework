@@ -48,7 +48,7 @@ export async function runContributionProcessors<THostContext extends KernelHostC
   }
 
   contextHost.rules.release(extensionGenerationSignal(entry.identity));
-  return runStoppedProcessors(processors, name, contextHost.rights);
+  return runStoppedProcessors(processors, name, contextHost.rights, 'stop');
 }
 
 /**
@@ -97,7 +97,7 @@ async function activateContributions<THostContext extends KernelHostContext>(
     }
   } catch (err) {
     sourceLease?.release();
-    const failures = await runStoppedProcessors([...rollback], name, contextHost.rights);
+    const failures = await runStoppedProcessors([...rollback], name, contextHost.rights, 'activation-rollback');
     for (const failure of failures) {
       console.error(`[ExtensionCoordinator] Contribution processor rollback error for "${name}":`, failure);
     }
@@ -113,12 +113,14 @@ async function activateContributions<THostContext extends KernelHostContext>(
  * @param processors - Registration-ordered list of processors to invoke.
  * @param name - Extension name used in log messages.
  * @param rights - The coordinator's rights lifecycle.
+ * @param reason - Whether to stop a completed activation or roll back a failed one.
  * @returns Failures raised by rights release and stopped processors, in invocation order.
  */
 async function runStoppedProcessors(
-  processors: ReadonlyArray<Pick<ContributionProcessor, 'processStopped'>>,
+  processors: ReadonlyArray<Pick<ContributionProcessor, 'processStopped' | 'processActivationRollback'>>,
   name: string,
   rights: Pick<ExtensionContextHost['rights'], 'deactivate'>,
+  reason: 'stop' | 'activation-rollback',
 ): Promise<unknown[]> {
   const failures: unknown[] = [];
   try {
@@ -128,9 +130,12 @@ async function runStoppedProcessors(
   }
 
   for (const processor of [...processors].reverse()) {
-    if (!processor.processStopped) continue;
     try {
-      await processor.processStopped(name);
+      if (reason === 'activation-rollback' && processor.processActivationRollback) {
+        await processor.processActivationRollback(name);
+      } else if (processor.processStopped) {
+        await processor.processStopped(name);
+      }
     } catch (err) {
       failures.push(err);
     }
