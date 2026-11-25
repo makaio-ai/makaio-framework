@@ -73,8 +73,8 @@ export interface StorageDatabaseContext {
    */
   createSiblingClient(options?: SiblingClientOptions): Promise<SiblingClient>;
   /**
-   * Close all clients, then destroy the isolation unit (unlink temp db files /
-   * DROP SCHEMA ... CASCADE via a short-lived admin client). Per-resource close
+   * Close all clients, then destroy the isolation unit (SQLite file, Postgres
+   * schema, or Postgres database). Per-resource close
    * failures are collected instead of aborting teardown, so the isolation-unit
    * destruction always gets its attempt; collected failures are rethrown after
    * cleanup completes (a single failure as-is, several as an AggregateError).
@@ -87,6 +87,11 @@ export interface StorageDatabaseContext {
  * Options for provisioning a context.
  */
 export interface CreateDatabaseContextOptions {
+  /**
+   * Postgres only: use an exclusive database for tests that observe database-wide
+   * signals. Requires CREATE DATABASE privileges. Defaults to schema isolation.
+   */
+  readonly postgresIsolation?: 'database';
   /**
    * Apply the dialect's central migration chain before returning. Default true.
    * Migration-runner suites pass false and drive applyMigrations themselves.
@@ -118,11 +123,9 @@ export interface StorageConformanceConfig {
   /**
    * Provision a FRESH isolated database for one suite.
    * sqlite: new temp-file db via createDatabaseClient(`file:...`).
-   * postgres: CREATE SCHEMA `conformance_` plus 12 lowercase hex chars from
-   * randomUUID on MAKAIO_STORAGE_TEST_URL via a short-lived admin client, then
-   * a client whose connection string carries `options=-c search_path=...` so
-   * every pooled connection lands in the schema. Central chain applied unless
-   * opted out.
+   * postgres: create a dedicated schema on MAKAIO_STORAGE_TEST_URL by default
+   * or a dedicated database for database-wide signals. All pooled connections
+   * are pinned to the context's schema. Central chain applied unless opted out.
    * @param options - Provisioning options.
    */
   createDatabaseContext(options?: CreateDatabaseContextOptions): Promise<StorageDatabaseContext>;

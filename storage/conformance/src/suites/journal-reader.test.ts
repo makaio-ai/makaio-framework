@@ -1335,7 +1335,8 @@ function testRuleSourceAvailability(
 }
 
 describeStorageConformance('journal readers', (config) => {
-  const getDatabase = useSuiteDatabaseContext(config);
+  // Retry recovery waits for the append and settlement wakes on the database channel.
+  const getDatabase = useSuiteDatabaseContext(config, { postgresIsolation: 'database' });
 
   beforeAll(async () => {
     await getDatabase().executor.run(sql.raw(fixtureKvDdl(config.dialect)));

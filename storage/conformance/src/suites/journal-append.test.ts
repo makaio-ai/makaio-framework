@@ -102,7 +102,8 @@ type AppendFixture = ReturnType<typeof useAppendFixture>;
  * @returns Accessors for the active database, rows and wake count.
  */
 function useAppendFixture(config: StorageConformanceConfig) {
-  const getCtx = useSuiteDatabaseContext(config, { postgresSettings });
+  // Exact journal wake counts require a channel that other files cannot publish to.
+  const getCtx = useSuiteDatabaseContext(config, { postgresSettings, postgresIsolation: 'database' });
   let host: HostDatabase;
   let wakes = 0;
   let unsubscribe = (): void => undefined;
