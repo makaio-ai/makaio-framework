@@ -7,6 +7,7 @@ import {
 } from '../shared/condition.js';
 import { JsonValueSchema } from '../shared/json-value.js';
 import type { JsonValue } from '../shared/json-value.js';
+import { isJsonObject } from '../shared/json-tree.js';
 import { FactPathSchema } from './fact-path.js';
 import type { FactPath } from './fact-path.js';
 
@@ -25,6 +26,17 @@ export const ValueExprSchema: z.ZodType<ValueExpr> = z.union([
   z.object({ ref: FactPathSchema }).strict(),
   z.object({ template: z.string() }).strict(),
 ]);
+
+/** @param value - Unbound operand or parameter node.
+ * @returns Whether the object must be interpreted as a value expression.
+ */
+function isReservedOperand(value: unknown): boolean {
+  return (
+    isJsonObject(value) &&
+    Object.keys(value).length === 1 &&
+    (Object.hasOwn(value, 'ref') || Object.hasOwn(value, 'template') || Object.hasOwn(value, 'literal'))
+  );
+}
 
 /**
  * A tree of parameters for a lookup call or a reaction: a {@link ValueExpr},
@@ -52,11 +64,11 @@ export const ParamTreeSchema: z.ZodType<ParamTree> = z.lazy(() =>
     z.number(),
     z.string(),
     z.array(ParamTreeSchema),
-    z.record(z.string(), ParamTreeSchema),
+    z.record(z.string(), ParamTreeSchema).refine((value) => !isReservedOperand(value)),
   ]),
 );
 
-const referenceOperators = [
+const comparisonOperators = [
   '$eq',
   '$ne',
   '$in',
@@ -74,23 +86,29 @@ const referenceOperators = [
   '$empty',
 ] as const;
 
-/** One comparison whose operand is read from previously available facts. */
-type ReferenceComparison = Partial<Record<(typeof referenceOperators)[number], { ref: FactPath }>>;
+/** One comparison with an explicit operand expression. */
+type ExpressionComparison = Partial<Record<(typeof comparisonOperators)[number], ValueExpr>>;
 
 /**
- * A lookup filter whose comparison operands may reference preceding facts.
- * After binding, the lookup receives a regular condition.
+ * A lookup filter with the same value expressions as a parameter tree.
+ * Single-key `ref`, `template` and `literal` objects are reserved at the
+ * operand boundary. After binding, the lookup receives a regular condition.
  */
 export type ConditionTemplate =
   | { $and: ConditionTemplate[] }
   | { $or: ConditionTemplate[] }
   | { $not: ConditionTemplate }
-  | { field: FactPath; operator: FieldOperator | ReferenceComparison }
+  | { field: FactPath; operator: FieldOperator | ExpressionComparison }
   | ExpressionCondition;
 
-const referenceComparisonSchema = z
-  .partialRecord(z.enum(referenceOperators), z.object({ ref: FactPathSchema }).strict())
+const expressionComparisonSchema = z
+  .partialRecord(z.enum(comparisonOperators), ValueExprSchema)
   .refine((value) => Object.keys(value).length === 1);
+
+const directOperatorSchema = FieldOperatorSchema.refine(
+  (operator) => !isJsonObject(operator) || !isReservedOperand(Object.values(operator)[0]),
+  'Single-key ref, template and literal operands are reserved for operand expressions',
+);
 
 /** Zod schema for {@link ConditionTemplate}. */
 export const ConditionTemplateSchema: z.ZodType<ConditionTemplate> = z.lazy(() =>
@@ -98,7 +116,7 @@ export const ConditionTemplateSchema: z.ZodType<ConditionTemplate> = z.lazy(() =
     z.object({ $and: z.array(ConditionTemplateSchema) }).strict(),
     z.object({ $or: z.array(ConditionTemplateSchema) }).strict(),
     z.object({ $not: ConditionTemplateSchema }).strict(),
-    z.object({ field: FactPathSchema, operator: z.union([FieldOperatorSchema, referenceComparisonSchema]) }).strict(),
+    z.object({ field: FactPathSchema, operator: z.union([directOperatorSchema, expressionComparisonSchema]) }).strict(),
     ExpressionConditionSchema,
   ]),
 );

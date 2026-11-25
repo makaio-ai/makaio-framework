@@ -24,7 +24,7 @@ interface ContributionValidators {
 }
 
 /** Identity and position of a check; its findings all belong to the same rule. */
-type CheckLocation = Pick<RuleContributionValidationFailure, 'ruleId' | 'contribution' | 'path'>;
+export type CheckLocation = Pick<RuleContributionValidationFailure, 'ruleId' | 'contribution' | 'path'>;
 
 /**
  * Collects custom findings for a structurally checked rule.
@@ -44,7 +44,7 @@ export async function validateRuleContributions(
   const reaction = validators.reaction(rule.reaction.kind);
   if (reaction) {
     checks.push(
-      runCheck(
+      runContributionCheck(
         { ruleId: rule.id, path: '$.reaction', contribution: { kind: 'reaction', name: rule.reaction.kind } },
         timeoutMs,
         () => reaction(rule.reaction.params ?? {}, ctx),
@@ -56,7 +56,7 @@ export async function validateRuleContributions(
     const validate = definition?.validate;
     if (!validate) continue;
     checks.push(
-      runCheck(
+      runContributionCheck(
         { ruleId: rule.id, path: `$.lookups[${index}]`, contribution: { kind: 'lookup', name: lookup.lookup } },
         timeoutMs,
         () => validate.call(definition, lookup.args, ctx),
@@ -68,7 +68,7 @@ export async function validateRuleContributions(
     const validate = definition?.validate;
     if (!validate) continue;
     checks.push(
-      runCheck(
+      runContributionCheck(
         { ruleId: rule.id, path: `$.extensions[${JSON.stringify(name)}]`, contribution: { kind: 'rule-block', name } },
         timeoutMs,
         () => validate.call(definition, block, rule, ctx),
@@ -85,7 +85,7 @@ export async function validateRuleContributions(
  * @param check - The contributed validation call.
  * @returns Its findings or a host finding if the call fails or times out.
  */
-async function runCheck(
+export async function runContributionCheck(
   location: CheckLocation,
   timeoutMs: number,
   check: () => RuleFinding[] | Promise<RuleFinding[]>,

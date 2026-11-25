@@ -160,6 +160,8 @@ export interface BusRequestMessage {
   payload: unknown;
   correlationId: string;
   messageId: string;
+  /** Optional sender-provided operation key. This field conveys no authority. */
+  idempotencyKey?: string;
   /**
    * Remaining request budget in milliseconds at the moment this hop was sent.
    *

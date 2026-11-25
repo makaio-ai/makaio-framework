@@ -11,7 +11,7 @@ import {
 import { busContextOf } from '@makaio/bus-core/kernel-api';
 import { isSubjectName, type CallContext } from '@makaio/core';
 import { RightDenialReason, type RightAnswer } from '@makaio/contracts/rights';
-import type { ReactionDefinition } from '@makaio/contracts';
+import type { JsonValue, ReactionDefinition } from '@makaio/contracts';
 import { JsonRecordSchema, defineReaction } from '@makaio/contracts';
 import { getErrorString } from '@makaio/utils';
 
@@ -19,9 +19,14 @@ import { getErrorString } from '@makaio/utils';
  * Checks that an evaluation may send to the requested subject.
  * @param call - The evaluation's call.
  * @param subject - The full request subject.
+ * @param payload - Resolved request payload.
  * @returns The shared rights resolver's decision.
  */
-export type RuleSendAuthorization = (call: CallContext, subject: string) => Promise<RightAnswer>;
+export type RuleSendAuthorization = (
+  call: CallContext,
+  subject: string,
+  payload: Record<string, JsonValue>,
+) => Promise<RightAnswer>;
 
 /** Canonical kind of the core's generic "send one bus request" reaction. */
 export const SEND_BUS_REQUEST_REACTION_KIND = 'makaio.send-bus-request';
@@ -29,13 +34,10 @@ export const SEND_BUS_REQUEST_REACTION_KIND = 'makaio.send-bus-request';
 /**
  * Resolved parameters of {@link SEND_BUS_REQUEST_REACTION_KIND}.
  *
- * `payload` is a JSON object rather than any `JsonValue`: every request
- * subject on this bus carries an object envelope (its wire-level
- * `RequestMessagePayload` always pairs an object request with an object
- * response), so a subject named only at invocation time — this reaction
- * cannot know its registered shape ahead of time — still has to offer one of
- * those two shapes to the bus's send surface. A rule that wants to carry a
- * bare scalar wraps it in an object itself.
+ * Bus requests use a JSON object envelope. Candidate validation checks that
+ * the target request is registered and checks independently parsed literal
+ * inputs against its request schema. The handler checks the full payload
+ * against that schema after the evaluator expands the parameters.
  */
 export const SendBusRequestParamsSchema = z.object({
   /** Full bus subject key the request is sent to; always a fixed value in a rule. */
@@ -76,7 +78,7 @@ export function createSendBusRequestReaction(bus: IMakaioBus, authorize: RuleSen
         };
       }
 
-      const answer = await authorize(call, parameters.subject);
+      const answer = await authorize(call, parameters.subject, parameters.payload);
       if (!answer.granted) {
         return answer.reason === RightDenialReason.sourceUnavailable
           ? { state: 'retry', reason: answer.reason }
@@ -96,6 +98,7 @@ export function createSendBusRequestReaction(bus: IMakaioBus, authorize: RuleSen
         result = await bus.request(call, subjectDef, parameters.payload, {
           signal: context.signal,
           correlationId: context.correlationId,
+          idempotencyKey: context.key,
           ...(parameters.timeoutMs === undefined ? {} : { timeout: parameters.timeoutMs }),
         });
       } catch (error) {

@@ -25,8 +25,8 @@ export interface RulesTriggerReader {
  */
 export interface RulesCapability {
   /**
-   * Checks rule definitions before a rule set takes effect. Asynchronous,
-   * without a `call`: the check itself asks as `makaio.rules`.
+   * Pre-checks rule definitions as `makaio.rules` without a rights guarantee.
+   * The runtime checks rights again at evaluation time, and that check is authoritative.
    * @param input - The rule set, groups and exclusions to check.
    * @returns Findings of the check; an empty array means nothing rejects the set.
    */

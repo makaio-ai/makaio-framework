@@ -1,10 +1,12 @@
+import type { JsonValue } from '@makaio/contracts';
 import type { BoundaryAccessCheck, IMakaioBus } from '@makaio/bus-core';
-import { assertCallCarrier, busContextOf } from '@makaio/bus-core/kernel-api';
+import { assertCallCarrier, busContextOf, mintCallContext } from '@makaio/bus-core/kernel-api';
 import { CoreDenialPlace, HostOnlyRightsError, type DenialPlace } from '@makaio/contracts/access';
 import { MAKAIO_RULES_PARTY_KIND, type CallContext } from '@makaio/core';
 import {
   RightDenialReason,
   SUBJECT_SEND_RIGHT,
+  SUBJECT_SUBSCRIBE_RIGHT,
   type RightAnswer,
   type RightQuestion,
   type RightsCapability,
@@ -18,6 +20,18 @@ const ruleCarrier = { kind: MAKAIO_RULES_PARTY_KIND, id: MAKAIO_RULES_PARTY_KIND
 
 /** Authorization operations used by the host's built-in rule contributions. */
 interface RuleRights {
+  /** @returns The live directory names used to check a prospective rule. */
+  listRights(): readonly string[];
+  /** @param pattern - Proposed subscription.
+   * @param check - Optional candidate catalog context.
+   * @returns Whether the evaluator may subscribe.
+   */
+  canSubscribe(pattern: string, check: JsonValue | undefined): Promise<boolean>;
+  /** @param subject - Proposed outgoing request.
+   * @param check - Optional candidate catalog context.
+   * @returns Whether the evaluator may send.
+   */
+  canSend(subject: string, check: JsonValue | undefined): Promise<boolean>;
   /**
    * Resolve a lookup's question and announce a meaningful denial. The host
    * owns this resolver across activations, so it checks the built-in owner's
@@ -28,9 +42,10 @@ interface RuleRights {
    * Authorize a rule reaction's request through the same rights resolver.
    * @param call - The rule evaluation's call.
    * @param subject - Full subject of the outgoing request.
+   * @param payload - Resolved request payload.
    * @returns The combined resolution.
    */
-  resolveRuleSendRight(call: CallContext, subject: string): Promise<RightAnswer>;
+  resolveRuleSendRight(call: CallContext, subject: string, payload?: JsonValue): Promise<RightAnswer>;
 }
 
 /** Rights surfaces needed by the extension coordinator and its host. */
@@ -96,6 +111,7 @@ export function createCoordinatorRights(bus: IMakaioBus, mode: 'host' | 'refused
   const ownsRights = mode !== 'refused';
   const hub = ownsRights ? createRightsHub({ bus }) : createRefusedRightsHub();
   let phase: BoundaryPhase = 'starting';
+  const validationCall = mintCallContext({ caller: ruleCarrier, principal: ruleCarrier });
   return {
     openBoundary: () => {
       if (phase === 'starting') phase = 'ready';
@@ -106,14 +122,42 @@ export function createCoordinatorRights(bus: IMakaioBus, mode: 'host' | 'refused
     isBoundaryReady: () => phase === 'ready',
     capabilityFor: hub.capabilityFor,
     ruleRights: {
+      listRights: () => hub.list().map(({ right }) => right),
+      canSubscribe: async (pattern, check) =>
+        (
+          await hub.resolve(
+            {
+              call: validationCall,
+              right: SUBJECT_SUBSCRIBE_RIGHT,
+              context: check === undefined ? { pattern } : { pattern, check },
+            },
+            { bypassCache: true },
+          )
+        ).granted,
+      canSend: async (subject, check) =>
+        (
+          await hub.resolve(
+            {
+              call: validationCall,
+              right: SUBJECT_SEND_RIGHT,
+              context: check === undefined ? { subject } : { subject, check },
+            },
+            { bypassCache: true },
+          )
+        ).granted,
       async resolveLookupRight(call, { right, context }) {
         if (!ownsRights) throw new HostOnlyRightsError();
         assertCallCarrier(call, ruleCarrier, busContextOf(bus));
         if (!hub.isOwnerActive(CORE_RIGHTS_OWNER)) throw new Error('Built-in rule lookups are not active.');
         return resolveRuleRight(hub, CoreDenialPlace.lookup, { call, right, context });
       },
-      resolveRuleSendRight: (call, subject) =>
-        resolveRuleRight(hub, CoreDenialPlace.send, { call, right: SUBJECT_SEND_RIGHT, context: { subject } }, subject),
+      resolveRuleSendRight: (call, subject, payload) =>
+        resolveRuleRight(
+          hub,
+          CoreDenialPlace.send,
+          { call, right: SUBJECT_SEND_RIGHT, context: payload === undefined ? { subject } : { subject, payload } },
+          subject,
+        ),
     },
     beginActivation: hub.beginActivation,
     activate: hub.activate,

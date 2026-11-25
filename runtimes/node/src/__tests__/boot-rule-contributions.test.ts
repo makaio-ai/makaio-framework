@@ -14,7 +14,7 @@ import {
   type RulesTriggerReader,
 } from '@makaio/contracts/rules';
 import type { RightSourceQuestion } from '@makaio/contracts/rights';
-import { createBusNamespace, MAKAIO_RULES_PARTY_KIND } from '@makaio/core';
+import { createBusNamespace, journalSubject, MAKAIO_RULES_PARTY_KIND } from '@makaio/core';
 import type { KernelMakaioExtension } from '@makaio/kernel';
 import {
   type ReactionRegistry,
@@ -25,15 +25,20 @@ import {
   allGroupStrategy,
 } from '@makaio/services-core';
 import { createTestCall } from '@makaio/test-utils';
+import type { BootMakaioRuntimeOptions } from '../boot-types.js';
 import { bootMakaioRuntime } from '../boot.js';
 import { ExplicitDescriptorDiscovery } from '../extension-discovery.js';
 
 /**
  * Boot the real Node host with an isolated home and discover in-process manifests.
  * @param packages - Extensions to load.
+ * @param packageConfigDefaults - Configuration defaults for the test host.
  * @returns The running host.
  */
-async function bootRuleHost(packages: readonly KernelMakaioExtension[]) {
+async function bootRuleHost(
+  packages: readonly KernelMakaioExtension[],
+  packageConfigDefaults?: BootMakaioRuntimeOptions['packageConfigDefaults'],
+) {
   const home = await mkdtemp(join(tmpdir(), 'makaio-rules-'));
   onTestFinished(() => rm(home, { recursive: true, force: true }));
   const server = createServer();
@@ -42,6 +47,7 @@ async function bootRuleHost(packages: readonly KernelMakaioExtension[]) {
   onTestFinished(() => new Promise<void>((resolve) => server.close(() => resolve())));
   const runtime = await bootMakaioRuntime({
     httpServer: server,
+    packageConfigDefaults,
     makaioHome: home,
     frameworkVersion: '3.0.0',
     discovery: new ExplicitDescriptorDiscovery(
@@ -189,8 +195,35 @@ it('boots rule contributions, serves live catalogs and releases readers and sour
   const { bus, coordinator } = runtime;
   const service = coordinator.getExtensionService<RuleContributionsService>(RuleContributionsToken.name);
   const call = createTestCall();
+  const occasion = {
+    id: 'entry',
+    event: {
+      cause: { entryId: 'entry', position: 1 },
+      subject: 'rule-consumer.changed',
+      origin: { caller: call.caller, principal: call.principal },
+      facts: {},
+    },
+    payload: {},
+  };
   expect(coordinator.getRuleSource()).toBe(feed.source);
-  await expect(rules?.validate({ rules: [], groups: [] })).rejects.toThrow('validation is not implemented');
+  await expect(runtime.ruleEvaluator.prepare(occasion)).resolves.toBeUndefined();
+  await expect(rules?.validate({ rules: [], groups: [] })).resolves.toEqual([]);
+  const rule = {
+    id: 'validated-rule',
+    description: 'Validate an active trigger and reaction',
+    on: { kind: 'rule-consumer.test' },
+    reaction: { kind: 'rule-consumer.run', params: {} },
+  };
+  await expect(rules?.validate({ rules: [rule], groups: [] })).resolves.toEqual([]);
+  await expect(
+    rules?.validate({
+      rules: [{ ...rule, reaction: { kind: 'rule-consumer.missing' }, extensions: { 'rule-consumer': {} } }],
+      groups: [],
+    }),
+  ).resolves.toEqual([
+    expect.objectContaining({ ruleId: rule.id, code: 'unknown-reaction', severity: 'error' }),
+    expect.objectContaining({ ruleId: rule.id, code: 'extension-block-mismatch', severity: 'error' }),
+  ]);
   expect(service?.groupStrategies.get('rule-consumer.all')).toBeDefined();
   expect(service?.ruleBlocks.get('rule-consumer')).toBeDefined();
   expect(
@@ -216,6 +249,9 @@ it('boots rule contributions, serves live catalogs and releases readers and sour
   await coordinator.applyExtensionTransition('rule-source', false);
   expect(coordinator.getRuleSource()).toBeUndefined();
   expect(feed.listeners.size).toBe(0);
+  await expect(runtime.ruleEvaluator.prepare(occasion)).resolves.toBeNull();
+  await coordinator.applyExtensionTransition('rule-source', true);
+  await expect(runtime.ruleEvaluator.prepare(occasion)).resolves.toBeUndefined();
 });
 
 it('diagnoses foreign and duplicate definitions and rolls back contributors that cannot activate', async () => {
@@ -240,6 +276,89 @@ it('diagnoses foreign and duplicate definitions and rolls back contributors that
       ?.triggers.get('rule-other-source.test'),
   ).toBeUndefined();
   expect(coordinator.getRuleSource()).toBe(source);
+});
+
+it('checks candidate schemas and rights deterministically without activating candidate rights', async () => {
+  const namespace = createBusNamespace('rule-candidate', {
+    changed: journalSubject(z.object({}), {
+      retention: 'recorded',
+      schemaVersion: '1',
+      readOlder: { kind: 'as-recorded' },
+    }),
+    apply: { request: z.object({}), response: z.object({}) },
+  });
+  let rules: RulesCapability | undefined;
+  const questions: RightSourceQuestion[] = [];
+  const candidateRight = { right: 'rule-candidate.read', description: 'Read candidate values', context: {} };
+  await bootRuleHost([
+    extension('rule-candidate', {
+      namespaces: [namespace],
+      triggers: [
+        {
+          kind: 'rule-candidate.changed',
+          description: 'Project candidate facts',
+          subjects: () => ['rule-candidate.changed'],
+          facts: (_params, catalogContext) => ({
+            type: 'object',
+            $defs: { allowed: { type: 'string' } },
+            properties: catalogContext === 'allowed' ? { defined: { $ref: '#/$defs/allowed' } } : {},
+            required: ['defined'],
+            additionalProperties: false,
+          }),
+          toFacts: () => ({ defined: 'yes' }),
+        },
+      ],
+      rightsSources: [
+        {
+          source: 'rule-candidate.validate',
+          description: 'Authorize from the candidate context',
+          rights: ['makaio.subject.send', 'makaio.subject.subscribe'],
+          async answer(question) {
+            questions.push(question);
+            const context = z.object({ check: z.string().optional() }).parse(question.context);
+            return context.check !== 'denied' ? { granted: true } : { granted: false, reason: 'candidate-denied' };
+          },
+        },
+      ],
+      create(ctx) {
+        rules = ctx.rules;
+        return {};
+      },
+    }),
+  ]);
+  const rule = {
+    id: 'candidate-rule',
+    description: 'Check a rule using staged rights and facts',
+    on: { kind: 'rule-candidate.changed' },
+    lookups: [{ lookup: 'makaio.has-right', name: 'access', args: { right: candidateRight.right } }],
+    when: { field: '$event.facts.defined', operator: { $eq: 'yes' } },
+    reaction: { kind: 'makaio.send-bus-request', params: { subject: 'rule-candidate.apply', payload: {} } },
+  };
+  const candidate = { groups: [], pendingRights: [candidateRight], rules: [rule] };
+  await expect(rules?.validate({ ...candidate, catalogContext: 'allowed' })).resolves.toEqual([]);
+  await expect(rules?.validate({ ...candidate, catalogContext: 'allowed', pendingRights: [] })).resolves.toEqual([
+    expect.objectContaining({ code: 'unknown-right' }),
+  ]);
+  const denied = { ...candidate, catalogContext: 'denied' };
+  const findings = await rules?.validate(denied);
+  expect(findings).toEqual([
+    expect.objectContaining({ code: 'not-subscribable' }),
+    expect.objectContaining({ code: 'unknown-path' }),
+    expect.objectContaining({ code: 'request-not-granted' }),
+  ]);
+  await expect(rules?.validate(denied)).resolves.toEqual(findings);
+  expect(questions).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({
+        call: expect.objectContaining({
+          caller: { kind: MAKAIO_RULES_PARTY_KIND, id: MAKAIO_RULES_PARTY_KIND },
+          principal: { kind: MAKAIO_RULES_PARTY_KIND, id: MAKAIO_RULES_PARTY_KIND },
+        }),
+        context: { check: 'denied', pattern: 'rule-candidate.changed' },
+      }),
+      expect.objectContaining({ context: { check: 'denied', subject: 'rule-candidate.apply' } }),
+    ]),
+  );
 });
 
 it('asks the shared rights resolver with the witnessed call and reports a sanitized denial', async () => {
@@ -275,8 +394,10 @@ it('asks the shared rights resolver with the witnessed call and reports a saniti
     principal: { kind: 'test.user', id: 'principal' },
     attestedBy: { kind: 'test.source', id: 'witness' },
   });
+  const deadline = new Date(Date.now() + 1_000).toISOString();
+  const { signal } = new AbortController();
   await expect(
-    lookup?.resolve(call, { right, context: { privateValue: 'redacted' } }, undefined, new Date().toISOString()),
+    lookup?.resolve(call, { right, context: { privateValue: 'redacted' } }, undefined, deadline, signal),
   ).resolves.toEqual({ granted: false, reason: 'declined' });
   expect(questions[0]?.call).toMatchObject({ principal: call.principal, attestedBy: call.attestedBy });
   expect(denials).toEqual([
@@ -289,7 +410,7 @@ it('asks the shared rights resolver with the witnessed call and reports a saniti
     },
   ]);
   await expect(
-    lookup?.resolve(call, { right, context: { alternate: true } }, undefined, new Date().toISOString()),
+    lookup?.resolve(call, { right, context: { alternate: true } }, undefined, deadline, signal),
   ).rejects.toThrow('source-unavailable');
   expect(denials).toHaveLength(1);
 });
@@ -299,12 +420,14 @@ it('sends the generic reaction request as the evaluation for the witnessed princ
     echo: { request: z.object({}), response: z.object({ echoed: z.boolean() }) },
   });
   const views: unknown[] = [];
+  const rulePorts: unknown[] = [];
   const { bus, coordinator } = await bootRuleHost([
     extension('rule-echo', {
       dependencies: [dep(ReactionRegistryToken.name)],
       namespaces: [namespace],
       create(ctx) {
         views.push(ctx.getService(extensionToken(ReactionRegistryToken.name)));
+        rulePorts.push(ctx.getService(RuleContributionsToken));
         return {};
       },
       reactions: {
@@ -325,14 +448,23 @@ it('sends the generic reaction request as the evaluation for the witnessed princ
   ]);
   coordinator.forExtension('rule-echo', (_name, _pkg, ctx) => {
     const view = ctx.getService(ReactionRegistryToken);
+    if (!view) throw new Error('Reaction view is unavailable');
     views.push(view);
-    expect(view?.listDescriptors()).toContainEqual(expect.objectContaining({ kind: 'rule-echo.local' }));
+    expect(view.listDescriptors()).toContainEqual(expect.objectContaining({ kind: 'rule-echo.local' }));
+    Reflect.apply(view.deregister, view, ['makaio']);
+    expect(view.listDescriptors()).not.toContainEqual(expect.objectContaining({ kind: 'rule-echo.local' }));
+    expect(view.listDescriptors()).toContainEqual(expect.objectContaining({ kind: 'makaio.send-bus-request' }));
   });
   expect(views).toHaveLength(3);
   for (const view of views) {
     expect(view).toBeDefined();
-    expect(view).not.toHaveProperty('invoke');
+    expect.soft(view).not.toHaveProperty('invoke');
+    expect.soft(view).not.toHaveProperty('ruleDefinition');
+    expect.soft(view).not.toHaveProperty('getValidator');
   }
+  expect(rulePorts).toEqual([expect.objectContaining({ listLookups: expect.any(Function) })]);
+  expect(rulePorts[0]).not.toHaveProperty('reaction');
+  expect(rulePorts[0]).not.toHaveProperty('reactions');
   const caller = { kind: MAKAIO_RULES_PARTY_KIND, id: MAKAIO_RULES_PARTY_KIND };
   const principal = { kind: 'test.user', id: 'principal' };
   const attestedBy = { kind: 'test.source', id: 'witness' };
@@ -340,7 +472,7 @@ it('sends the generic reaction request as the evaluation for the witnessed princ
   const received: unknown[] = [];
   onTestFinished(
     bus.on(namespace.subjects.echo, (ctx) => {
-      received.push(ctx.call);
+      received.push({ call: ctx.call, key: ctx.idempotencyKey });
       ctx.setResult({ echoed: true });
     }),
   );
@@ -370,5 +502,80 @@ it('sends the generic reaction request as the evaluation for the witnessed princ
       },
     ),
   ).resolves.toEqual({ state: 'accepted', result: { echoed: true } });
-  expect(received).toEqual([expect.objectContaining({ caller, principal, attestedBy })]);
+  expect(received).toEqual([{ call: expect.objectContaining({ caller, principal, attestedBy }), key: 'echo-part' }]);
+});
+
+it('awaits contribution checks through the public rule validation capability', async () => {
+  let rules: RulesCapability | undefined;
+  const stalled = Promise.withResolvers<[]>();
+  await bootRuleHost(
+    [
+      extension('rule-consumer', {
+        triggers: [trigger],
+        reactions: {
+          createReactions: () => [
+            defineReaction({
+              kind: 'rule-consumer.run',
+              description: 'Validate a reaction asynchronously',
+              parameterSchema: z.object({}),
+              keyed: false,
+              handler: async () => ({ state: 'accepted' }),
+              async validate(_params, { catalogContext }) {
+                return [{ severity: 'warning', code: 'reaction-note', path: '$', message: String(catalogContext) }];
+              },
+            }),
+          ],
+        },
+        lookups: [
+          {
+            kind: 'rule-consumer.find',
+            description: 'Wait for an unavailable validation result',
+            args: z.object({}),
+            answer: () => ({}),
+            resolve: async () => null,
+            validate: () => stalled.promise,
+          },
+        ],
+        ruleBlock: {
+          schema: z.object({ enabled: z.boolean() }),
+          async validate() {
+            throw new Error('Invalid block');
+          },
+        },
+        create(ctx) {
+          rules = ctx.rules;
+          return {};
+        },
+      }),
+    ],
+    new Map([[RuleContributionsToken.name, { validationTimeoutMs: 50 }]]),
+  );
+  if (!rules) throw new Error('Rules capability is unavailable');
+  await expect(
+    rules.validate({
+      rules: [
+        {
+          id: 'check-contributions',
+          description: 'Check each contribution',
+          on: { kind: 'rule-consumer.test' },
+          reaction: { kind: 'rule-consumer.run' },
+          lookups: [{ name: 'found', lookup: 'rule-consumer.find', args: {} }],
+          extensions: { 'rule-consumer': { enabled: true } },
+        },
+      ],
+      groups: [],
+      catalogContext: 'candidate context',
+    }),
+  ).resolves.toEqual([
+    expect.objectContaining({
+      code: 'contribution-validation-timeout',
+      contribution: { kind: 'lookup', name: 'rule-consumer.find' },
+    }),
+    expect.objectContaining({ code: 'reaction-note', message: 'candidate context' }),
+    expect.objectContaining({
+      code: 'contribution-validation-failed',
+      contribution: { kind: 'rule-block', name: 'rule-consumer' },
+    }),
+  ]);
+  stalled.resolve([]);
 });

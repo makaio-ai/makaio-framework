@@ -88,7 +88,7 @@ it('returns the reaction catalog in its published response envelope', async () =
   const { bus } = await startCatalogs();
   const response = await bus.request(createTestCall(), RulesSubjects.reactions, {});
 
-  expect(ReactionCatalogResponseSchema.parse(response)).toEqual({ entries: [] });
+  expect(ReactionCatalogResponseSchema.parse(response)).toEqual({ entries: [], findings: [] });
 });
 
 it('detaches trigger facts and subjects before returning them to extensions', async () => {
@@ -98,7 +98,7 @@ it('detaches trigger facts and subjects before returning them to extensions', as
   catalogs.triggers.register('makaio', [{ ...busMessageTrigger, facts: () => facts, subjects: () => subjects }]);
   const call = createTestCall();
 
-  const first = catalogs.extensionServiceView.listTriggers();
+  const first = catalogs.extensionServiceView().listTriggers();
   const entry = first.entries[0]!;
   expect(entry.facts['properties']).not.toBe(facts.properties);
   entry.facts['properties'] = null;

@@ -180,6 +180,7 @@ export async function requestWithMintedCall<
       allowedTransports,
       correlationId,
       messageId,
+      idempotencyKey: options?.idempotencyKey,
       timeout,
       readinessTimeout,
       signal,

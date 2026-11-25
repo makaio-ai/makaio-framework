@@ -35,17 +35,26 @@ import '@makaio/services-core/session/storage/namespace';
 
 ### Compose extension packages
 
+Supply the client and adapter packages in `hostPackages` to satisfy the core
+packages' dependencies. Resolve the Reaction registry from the host coordinator
+to assemble rule contributions.
+
 ```typescript
 import {
-  frameworkCorePackages,
-  sessionOrchestratorPackage,
-  toolRegistryPackage,
   createModelRegistryPackage,
+  createRuleContributionsPackage,
+  frameworkCorePackages,
+  ReactionRegistryToken,
+  type ReactionRegistry,
 } from '@makaio/services-core';
 
 coordinator.load([
-  ...frameworkCorePackages({ bus, db }),
-  createModelRegistryPackage({ bus, fetcher }),
+  ...hostPackages,
+  ...frameworkCorePackages,
+  createModelRegistryPackage(fetcher),
+  createRuleContributionsPackage(() =>
+    coordinator.getExtensionService<ReactionRegistry>(ReactionRegistryToken.name),
+  ),
 ]);
 ```
 
@@ -101,5 +110,6 @@ major domains:
 | `createModelRegistryPackage()` | `ModelRegistryToken` | `ModelRegistryService` with injected fetcher |
 | `capabilityPackage` | `CapabilityToken` | `CapabilityService` |
 | `trayMenuPackage` | `TrayMenuToken` | `TrayMenuService` |
-| `frameworkCorePackages()` | — | Convenience factory returning all framework-critical extension packages |
+| `frameworkCorePackages` | — | Core extension packages shared across hosts |
 | `createFrameworkCorePackages()` | — | `frameworkCorePackages` with the tool registry and tool approval packages bound to a host `fileAccessRuleProvider` |
+| `createRuleContributionsPackage()` | `RuleContributionsToken` | Rule contributions service with an injected Reaction registry resolver |

@@ -265,6 +265,7 @@ const handleRequestMessage = async (
       call,
       correlationId: message.correlationId,
       messageId: message.messageId,
+      idempotencyKey: typeof message.idempotencyKey === 'string' ? message.idempotencyKey : undefined,
       timeout: relayTimeout,
       // Anchored from the relative budget alone — `message.deadline` belongs to the
       // sender's clock and is never compared against ours.

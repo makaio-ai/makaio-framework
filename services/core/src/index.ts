@@ -178,7 +178,7 @@ export {
   RuleBlockRegistry,
   RuleContributionsService,
   RuleContributionsToken,
-  ruleContributionsPackage,
+  createRuleContributionsPackage,
   SEND_BUS_REQUEST_REACTION_KIND,
   SendBusRequestParamsSchema,
   TriggerRegistry,
@@ -464,3 +464,7 @@ export {
   type SubagentTemplateInstanceStatus,
   type SubagentTemplateSpawnRequest,
 } from './subagent-template/index.js';
+
+export { RuleEvaluator } from './rules/rule-evaluator.js';
+export { storeRuleOccasion } from './rules/storage/store-occasion.js';
+export type { PreparedOccasion, RuleOccasion, RuleSnapshot } from './rules/types.js';

@@ -14,18 +14,22 @@ const { makeContext: makeStubNodeExtensionContext } = useJournalHostFixture();
 
 function makeContext(registry?: ReactionRegistry): KernelExtensionContext {
   const bus = createBusInstance();
+  const identity = stubExtensionIdentity('alpha');
+  const signal = new AbortController().signal;
   return makeStubNodeExtensionContext(bus, {
-    identity: stubExtensionIdentity('alpha'),
+    identity,
     platform: 'linux',
     homedir: '/home/test',
     makaioHome: '/home/test/.makaio',
     dataDir: '/home/test/.makaio/extensions/alpha',
     username: 'test',
     machineId: 'machine-1',
-    signal: new AbortController().signal,
+    signal,
     tryImport: async () => null,
     getService: <T>(token: ExtensionToken<T>): T | undefined =>
-      (token.name === ReactionRegistryToken.name ? registry : undefined) as T | undefined,
+      (token.name === ReactionRegistryToken.name ? registry?.extensionServiceView(identity, signal) : undefined) as
+        | T
+        | undefined,
     hasExtension: () => false,
   });
 }

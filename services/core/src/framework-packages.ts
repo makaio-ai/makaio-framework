@@ -19,7 +19,6 @@ import {
 import { capabilityPackage, CapabilityToken } from './capability/package.js';
 import { canonicalModelPackage } from './canonical-model/package.js';
 import { reactionRegistryPackage } from './reaction/packages.js';
-import { ruleContributionsPackage } from './rule-contributions/packages.js';
 import {
   automationTriggerRegistryPackage,
   automationTriggerBindingRuntimePackage,
@@ -94,8 +93,6 @@ export { SubagentServiceToken };
 export { ArtifactSchemaRegistryToken, artifactSchemaRegistryPackage };
 /** Reaction-domain package (defined in the reaction domain module). */
 export { reactionRegistryPackage };
-/** Rule-contributions-domain package (defined in the rule-contributions domain module). */
-export { ruleContributionsPackage };
 /** Materialization-domain tokens and packages (defined in the materialization domain module). */
 export {
   ArtifactViewBuilderRegistryToken,
@@ -366,6 +363,8 @@ export function createModelRegistryPackage(fetcher: IModelRegistryFetcher): Maka
  * and the subsystem is pushed into the same load set immediately before these
  * packages so the ordering the canonical-model service needs is the
  * coordinator's to satisfy rather than the array order's to preserve.
+ * Hosts compose the rule contributions package separately with their live
+ * reaction registry resolver.
  */
 export const frameworkCorePackages: ReadonlyArray<MakaioNodeExtension<IMakaioBus>> = buildFrameworkCorePackages(
   toolRegistryPackage,
@@ -424,7 +423,6 @@ function buildFrameworkCorePackages(
     frameworkShellWindowPackage,
     workflowBlockRegistryPackage,
     reactionRegistryPackage,
-    ruleContributionsPackage,
     automationTriggerRegistryPackage,
     automationTriggerBindingRuntimePackage,
     automationTriggerBuiltinsPackage,

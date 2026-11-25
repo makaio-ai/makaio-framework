@@ -105,7 +105,8 @@
         "./src/session/import-cursors/schema.ts",
         "./src/harness/storage/schema.ts",
         "./src/journal/storage/schema.ts",
-        "./src/worker-provider/storage/schema.ts"
+        "./src/worker-provider/storage/schema.ts",
+        "./src/rules/storage/schema.ts"
       ],
       "postgres": [
         "./src/session/storage/schema.postgres.ts",
@@ -116,7 +117,8 @@
         "./src/session/import-cursors/schema.postgres.ts",
         "./src/harness/storage/schema.postgres.ts",
         "./src/journal/storage/schema.postgres.ts",
-        "./src/worker-provider/storage/schema.postgres.ts"
+        "./src/worker-provider/storage/schema.postgres.ts",
+        "./src/rules/storage/schema.postgres.ts"
       ]
     }
   },

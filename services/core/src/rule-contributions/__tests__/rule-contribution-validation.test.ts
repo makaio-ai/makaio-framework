@@ -5,9 +5,10 @@ import { defineReaction } from '@makaio/contracts/reaction';
 import type { LookupContribution, ReactionRule, RuleFinding } from '@makaio/contracts/rules';
 import { ExtensionCoordinator, type KernelMakaioExtension } from '@makaio/kernel';
 import { useJournalHostFixture } from '@makaio/storage-conformance';
-import { reactionRegistryPackage } from '../../reaction/packages.js';
+import { ReactionRegistryToken, reactionRegistryPackage } from '../../reaction/packages.js';
 import { createReactionContributionProcessor } from '../../reaction/reaction-contribution-processor.js';
-import { RuleContributionsToken, ruleContributionsPackage } from '../packages.js';
+import type { ReactionRegistry } from '../../reaction/reaction-registry.js';
+import { RuleContributionsToken, createRuleContributionsPackage } from '../packages.js';
 import { createRuleContributionProcessor } from '../rule-contribution-processor.js';
 import type { RuleContributionsService } from '../rule-contributions-service.js';
 
@@ -68,6 +69,9 @@ async function startService(contributor: KernelMakaioExtension, validationTimeou
   );
   const getService = () => coordinator.getExtensionService<RuleContributionsService>(RuleContributionsToken.name);
   coordinator.registerContributionProcessor(createRuleContributionProcessor(getService));
+  const ruleContributionsPackage = createRuleContributionsPackage(() =>
+    coordinator.getExtensionService<ReactionRegistry>(ReactionRegistryToken.name),
+  );
   coordinator.load(
     [reactionRegistryPackage, ruleContributionsPackage, contributor],
     new Map([[RuleContributionsToken.name, { validationTimeoutMs }]]),

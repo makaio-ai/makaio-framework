@@ -337,6 +337,13 @@
       "when": 1795530658894,
       "tag": "0047_worker-dispatch",
       "breakpoints": true
+    },
+    {
+      "idx": 48,
+      "version": "6",
+      "when": 1795561738243,
+      "tag": "0048_rule-evaluation",
+      "breakpoints": true
     }
   ]
 }

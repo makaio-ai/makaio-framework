@@ -66,8 +66,8 @@ export function createReactionContributionProcessor(
     // admitted while this asynchronous factory is pending therefore cannot
     // run between its settlement and registration: it follows this complete
     // activation and deregisters the just-installed batch.
-    registry.register(name, reactions);
-    cleanups.set(name, () => registry.deregister(name));
+    registry.register(reactions);
+    cleanups.set(name, () => registry.deregister());
   };
 
   return {

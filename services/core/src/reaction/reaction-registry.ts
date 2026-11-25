@@ -3,6 +3,7 @@ import { zodSchemaToJsonRecord } from '@makaio/contracts/shared';
 import type { ReactionCause } from '@makaio/contracts/reaction';
 import type { IMakaioBus } from '@makaio/bus-core';
 import type {
+  ExtensionIdentity,
   FrameworkReactionFailureCode,
   ReactionDefinition,
   ReactionDescriptor,
@@ -10,10 +11,11 @@ import type {
   ReactionInvocationId,
   ReactionOutcome,
 } from '@makaio/contracts';
-import { FrameworkReactionFailureCodeSchema, ReactionDescriptorSchema } from '@makaio/contracts';
+import { FrameworkReactionFailureCodeSchema, ReactionDescriptorSchema, ReactionOutcomeSchema } from '@makaio/contracts';
 import type { CallContext } from '@makaio/core';
 import { BaseService } from '@makaio/service-base';
 import { getErrorString } from '@makaio/utils';
+import { uncertainReactionOutcome } from './uncertain-outcome.js';
 import { ContributionRegistryCore } from '../contribution-registry/index.js';
 
 /**
@@ -38,6 +40,8 @@ export interface ReactionInvocationInput {
    * `(ruleId, occasion, location of the element)`. A reaction may refine it.
    */
   readonly key: string;
+  /** Key guarantee recorded when the host prepared the effect. */
+  readonly expectedKeyed?: boolean;
   /** What caused this invocation to run. */
   readonly cause: ReactionCause;
   /** Bus correlation identifier from the triggering message, when one exists. */
@@ -45,7 +49,7 @@ export interface ReactionInvocationInput {
   /**
    * Absolute deadline for this invocation as epoch milliseconds. An
    * invocation already past its deadline never enters handler code; a
-   * deadline reached mid-flight aborts the per-invocation signal. Deadlines
+   * deadline reached mid-flight aborts the signal and bounds the wait. Deadlines
    * beyond the platform timer cap (~24.8 days) are honored via rescheduling.
    * Non-finite values (`NaN`, `±Infinity`) are deterministically treated as
    * "no deadline"; the value is still passed through verbatim on the
@@ -73,6 +77,10 @@ const MAX_TIMEOUT_DELAY_MS = 2_147_483_647;
 interface InvocationCancellation {
   /** Runtime-owned controller backing the per-invocation signal. */
   readonly controller: AbortController;
+  /** @param work - Current invocation phase.
+   * @returns The phase result or a rejection at the deadline.
+   */
+  wait<T>(work: Promise<T>): Promise<T>;
   /** Releases the host-signal listener and deadline timer. */
   readonly release: () => void;
 }
@@ -100,10 +108,12 @@ interface RegisteredReaction {
 }
 
 /** Contribution and discovery API made available to extension contexts. */
-export type ReactionRegistryView = Pick<
-  ReactionRegistry,
-  'register' | 'deregister' | 'listCatalog' | 'listDescriptors' | 'getValidator'
->;
+export type ReactionRegistryView = Pick<ReactionRegistry, 'listCatalog' | 'listDescriptors'> & {
+  /** @param reactions - The requesting extension's complete reaction batch. */
+  register(reactions: readonly ReactionDefinition[]): void;
+  /** Removes the requesting extension's reactions. */
+  deregister(): void;
+};
 
 /**
  * Owner-aware registry and in-process dispatcher for Reactions contributed by
@@ -130,14 +140,28 @@ export type ReactionRegistryView = Pick<
  * deliberate later seam, not an omission.
  */
 export class ReactionRegistry extends BaseService {
-  /** Exposes registration and discovery without handing out host dispatch. */
-  public readonly extensionServiceView: ReactionRegistryView = Object.freeze({
-    register: this.register.bind(this),
-    deregister: this.deregister.bind(this),
-    listCatalog: this.listCatalog.bind(this),
-    listDescriptors: this.listDescriptors.bind(this),
-    getValidator: this.getValidator.bind(this),
-  });
+  /**
+   * Binds registry mutations to the requesting extension's live activation.
+   * @param identity - Identity supplied by the kernel.
+   * @param lifetime - Requesting extension's activation signal.
+   * @returns Registration and discovery operations for the requesting extension.
+   */
+  public extensionServiceView(identity: ExtensionIdentity, lifetime: AbortSignal): ReactionRegistryView {
+    const owner = identity.extensionName;
+    const view: ReactionRegistryView = {
+      register: (reactions) => {
+        lifetime.throwIfAborted();
+        this.register(owner, reactions);
+      },
+      deregister: () => {
+        lifetime.throwIfAborted();
+        this.deregister(owner);
+      },
+      listCatalog: this.listCatalog.bind(this),
+      listDescriptors: this.listDescriptors.bind(this),
+    };
+    return Object.freeze(view);
+  }
 
   /** Generic owner-aware name index, owner check, and batch lifecycle. */
   private readonly core = new ContributionRegistryCore<RegisteredReaction>({
@@ -202,6 +226,18 @@ export class ReactionRegistry extends BaseService {
   }
 
   /**
+   * Reads validation metadata for a registered reaction.
+   * @param kind - Reaction kind.
+   * @returns The runtime metadata, when available.
+   */
+  public ruleDefinition(kind: string) {
+    const owned = this.core.listOwned().find(({ entry }) => entry.descriptor.kind === kind);
+    if (!owned) return undefined;
+    const { parameterSchema, keyed, validate } = owned.entry;
+    return { extension: owned.extension, parameterSchema, keyed, validate };
+  }
+
+  /**
    * Returns detached serializable descriptors for all registered Reactions.
    *
    * Descriptor factories run only during successful batch validation; listing
@@ -255,15 +291,17 @@ export class ReactionRegistry extends BaseService {
    *   optional host signal and deadline propagate into it from parameter
    *   validation through handler settlement (listeners and timers are
    *   released after settle), and aborting one invocation never affects
-   *   another. Cancellation is cooperative after handler entry: a mid-flight
-   *   abort signals the handler, which may still return its own outcome.
-   *   Cancellation without a handler outcome yields `'retry'` for a keyed
+   *   another. Host cancellation is cooperative after handler entry, so the
+   *   handler may still return its own outcome before the deadline.
+   *   Before handler entry, cancellation always yields `'retry'`. After entry,
+   *   cancellation without a handler outcome yields `'retry'` for a keyed
    *   Reaction and `'failed'` with `'outcome-unknown'` otherwise.
    * - The handler receives a frozen top-level invocation envelope. `cause` is
    *   a host-owned value passed through verbatim, not deep-cloned or frozen.
    *   Hosts detach it before invocation when they need deeper isolation.
-   * - Any thrown value (including non-`Error`) is caught, logged with the
-   *   kind, invocation id, and correlation id, and normalized to an outcome.
+   * - Invalid return values and thrown values (including non-`Error`) are
+   *   logged with the kind, invocation id, and correlation id, and normalized
+   *   to an outcome.
    * @param kind - Canonical Reaction kind to invoke.
    * @param parameters - Host-resolved, not-yet-validated invocation parameters.
    * @param input - Host-supplied invocation input (event, context, controls).
@@ -283,13 +321,7 @@ export class ReactionRegistry extends BaseService {
       );
     }
     const deadlineEpochMs = normalizeDeadline(input.deadlineEpochMs);
-    const preValidationCancellation = this.cancelledBeforeValidation(
-      kind,
-      invocationId,
-      input,
-      deadlineEpochMs,
-      registered.keyed,
-    );
+    const preValidationCancellation = this.preflightOutcome(kind, input, deadlineEpochMs, registered.keyed);
     if (preValidationCancellation) return preValidationCancellation;
 
     // Cancellation ownership begins before the first async boundary, so a
@@ -310,15 +342,9 @@ export class ReactionRegistry extends BaseService {
       // never enter handler code, and invoke() must never reject.
       let parsed: Awaited<ReturnType<typeof registered.parameterSchema.safeParseAsync>>;
       try {
-        parsed = await registered.parameterSchema.safeParseAsync(parameters);
+        parsed = await cancellation.wait(registered.parameterSchema.safeParseAsync(parameters));
       } catch (error) {
-        const interrupted = this.cancelledAfterValidation(
-          kind,
-          context,
-          cancellation,
-          deadlineEpochMs,
-          registered.keyed,
-        );
+        const interrupted = this.cancelledAfterValidation(kind, context, cancellation, deadlineEpochMs);
         if (interrupted) return interrupted;
         return this.failure(
           kind,
@@ -329,7 +355,7 @@ export class ReactionRegistry extends BaseService {
           error,
         );
       }
-      const interrupted = this.cancelledAfterValidation(kind, context, cancellation, deadlineEpochMs, registered.keyed);
+      const interrupted = this.cancelledAfterValidation(kind, context, cancellation, deadlineEpochMs);
       if (interrupted) return interrupted;
       if (!parsed.success) {
         return this.failure(
@@ -341,9 +367,8 @@ export class ReactionRegistry extends BaseService {
         );
       }
 
-      // The handler's return value already is the final ReactionOutcome; the
-      // registry neither wraps nor reinterprets it.
-      return await registered.handler(call, parsed.data, context);
+      const outcome = await cancellation.wait(registered.handler(call, parsed.data, context));
+      return ReactionOutcomeSchema.parse(outcome);
     } catch (error) {
       if (deadlineEpochMs !== undefined) abortWhenDeadlineReached(cancellation.controller, deadlineEpochMs);
       if (context.signal.aborted) {
@@ -359,7 +384,7 @@ export class ReactionRegistry extends BaseService {
       // The outcome carries the extracted reason; the log line names only the
       // failure site and lets the rendered error carry that reason, avoiding
       // printing it twice in one console.error call.
-      this.logFailure(kind, invocationId, context.correlationId, `Reaction '${kind}' handler threw`, error);
+      this.logFailure(kind, invocationId, context.correlationId, `Reaction '${kind}' handler failed`, error);
       return {
         state: 'failed',
         code: FrameworkReactionFailureCodeSchema.enum['handler-failed'],
@@ -412,44 +437,31 @@ export class ReactionRegistry extends BaseService {
     cause?: unknown,
   ): ReactionOutcome {
     this.logFailure(kind, invocationId, correlationId, reason, cause);
-    return keyed
-      ? { state: 'retry', reason }
-      : { state: 'failed', code: FrameworkReactionFailureCodeSchema.enum['outcome-unknown'], reason };
+    return uncertainReactionOutcome(keyed, reason);
   }
 
   /**
-   * Returns the normalized outcome when an invocation is cancelled before validation starts.
+   * Checks the pinned key guarantee and cancellation before validation starts.
    * @param kind - Reaction kind that was cancelled.
-   * @param invocationId - Runtime-minted identifier of the cancelled invocation.
    * @param input - Host-supplied input for the invocation.
    * @param deadlineEpochMs - Normalized invocation deadline, when one exists.
    * @param keyed - Whether the Reaction is idempotent per key.
    * @returns A normalized cancellation outcome, or `undefined` when validation may proceed.
    */
-  private cancelledBeforeValidation(
+  private preflightOutcome(
     kind: string,
-    invocationId: ReactionInvocationId,
     input: ReactionInvocationInput,
     deadlineEpochMs: number | undefined,
     keyed: boolean,
   ): ReactionOutcome | undefined {
+    if (input.expectedKeyed !== undefined && input.expectedKeyed !== keyed) {
+      return { state: 'retry', reason: 'reaction-key-guarantee-changed' };
+    }
     if (input.hostSignal?.aborted) {
-      return this.cancellationOutcome(
-        kind,
-        invocationId,
-        input.correlationId,
-        keyed,
-        `Reaction '${kind}' host signal already aborted`,
-      );
+      return { state: 'retry', reason: `Reaction '${kind}' host signal already aborted` };
     }
     if (deadlineEpochMs !== undefined && deadlineEpochMs <= Date.now()) {
-      return this.cancellationOutcome(
-        kind,
-        invocationId,
-        input.correlationId,
-        keyed,
-        `Reaction '${kind}' deadline already passed`,
-      );
+      return { state: 'retry', reason: `Reaction '${kind}' deadline already passed` };
     }
     return undefined;
   }
@@ -464,7 +476,6 @@ export class ReactionRegistry extends BaseService {
    * @param context - Frozen invocation envelope.
    * @param cancellation - Runtime-owned cancellation wiring for the invocation.
    * @param deadlineEpochMs - Normalized invocation deadline, when one exists.
-   * @param keyed - Whether the Reaction is idempotent per key.
    * @returns A normalized cancellation outcome, or `undefined` when processing may continue.
    */
   private cancelledAfterValidation(
@@ -472,21 +483,16 @@ export class ReactionRegistry extends BaseService {
     context: ReactionExecutionContext,
     cancellation: InvocationCancellation,
     deadlineEpochMs: number | undefined,
-    keyed: boolean,
   ): ReactionOutcome | undefined {
     if (deadlineEpochMs !== undefined) {
       abortWhenDeadlineReached(cancellation.controller, deadlineEpochMs);
     }
     if (!context.signal.aborted) return undefined;
     const reason: unknown = context.signal.reason;
-    return this.cancellationOutcome(
-      kind,
-      context.invocationId,
-      context.correlationId,
-      keyed,
-      `Reaction '${kind}' cancelled before handler entry: ${getErrorString(reason)}`,
-      reason,
-    );
+    return {
+      state: 'retry',
+      reason: `Reaction '${kind}' cancelled before handler entry: ${getErrorString(reason)}`,
+    };
   }
 
   /**
@@ -545,11 +551,6 @@ export class ReactionRegistry extends BaseService {
   }
 }
 
-/** Shared release for invocations with no host signal and no deadline wired. */
-const NOOP_RELEASE = (): void => {
-  // Intentionally empty: nothing was wired, so nothing needs releasing.
-};
-
 /**
  * Normalizes a host-supplied deadline at the invocation boundary.
  *
@@ -574,16 +575,15 @@ function normalizeDeadline(deadlineEpochMs: number | undefined): number | undefi
  * re-checks.
  * @param hostSignal - Optional host-owned cancellation signal.
  * @param deadlineEpochMs - Already-normalized finite deadline, or `undefined`.
- * @returns The controller and its release function.
+ * @returns The controller, deadline rejection, and cleanup.
  */
 function createInvocationCancellation(
   hostSignal: AbortSignal | undefined,
   deadlineEpochMs: number | undefined,
 ): InvocationCancellation {
   const controller = new AbortController();
-  if (hostSignal === undefined && deadlineEpochMs === undefined) {
-    return { controller, release: NOOP_RELEASE };
-  }
+  const deadline =
+    deadlineEpochMs === undefined ? undefined : { at: deadlineEpochMs, ...Promise.withResolvers<void>() };
   const releases: Array<() => void> = [];
 
   if (hostSignal) {
@@ -596,16 +596,17 @@ function createInvocationCancellation(
     });
   }
 
-  if (deadlineEpochMs !== undefined) {
+  if (deadline) {
     // Mutable slot: `schedule` replaces the handle on every reschedule and
     // the release closure always clears the CURRENT handle.
     let timer: ReturnType<typeof setTimeout> | undefined;
     const schedule = (): void => {
-      if (abortWhenDeadlineReached(controller, deadlineEpochMs)) {
+      if (abortWhenDeadlineReached(controller, deadline.at)) {
         timer = undefined;
+        deadline.resolve();
         return;
       }
-      const remaining = deadlineEpochMs - Date.now();
+      const remaining = deadline.at - Date.now();
       // setTimeout clamps delays above the platform cap to ~1ms, which would
       // abort far-future deadlines immediately — wake up at the cap instead
       // and re-check the remaining time.
@@ -622,6 +623,15 @@ function createInvocationCancellation(
 
   return {
     controller,
+    wait: (work) =>
+      deadline
+        ? Promise.race([
+            work,
+            deadline.promise.then(() => {
+              throw controller.signal.reason;
+            }),
+          ])
+        : work,
     release: (): void => {
       for (const release of releases) release();
     },

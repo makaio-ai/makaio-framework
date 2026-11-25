@@ -1,3 +1,4 @@
+import type { RulesCapability } from '@makaio/contracts/rules';
 import type { IsolatedNodeExtensionContext } from '@makaio/contracts/extension';
 import type {
   CredentialResolver,
@@ -175,6 +176,8 @@ export interface RuntimeEnvironment {
  * Options for constructing an {@link ExtensionCoordinator}.
  */
 export interface ExtensionCoordinatorOptions<THostContext extends KernelHostContext = KernelExtensionContext> {
+  /** Live rules validator supplied by the host composition. */
+  readonly validateRules?: RulesCapability['validate'];
   /** Hosted surface category used to apply package gating. Defaults to `'headless'`. */
   surface?: ExtensionRuntimeSurface;
   /** Shared host rights, or a mode for coordinators that own their capability. */

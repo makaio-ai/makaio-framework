@@ -580,10 +580,12 @@ describe('createMessagePortTransport — real MessageChannel pair', () => {
     const transportB = createMessagePortTransport({ port: adaptedPort2, name: 'real-b' });
 
     const notices: string[] = [];
+    const requestKeys: Array<string | undefined> = [];
     busB.on(SubjectsB.notice, (ctx) => {
       notices.push(ctx.payload.label);
     });
     busB.on(SubjectsB.ping, (ctx) => {
+      requestKeys.push(ctx.idempotencyKey);
       ctx.setResult({ output: `pong:${ctx.payload.input}` });
     });
 
@@ -598,6 +600,9 @@ describe('createMessagePortTransport — real MessageChannel pair', () => {
 
     const response = await busA.request(SubjectsA.ping, { input: 'hello' });
     expect(response).toEqual({ output: 'pong:hello' });
+
+    await busA.request(SubjectsA.ping, { input: 'again' }, { idempotencyKey: 'stable-effect' });
+    expect(requestKeys).toEqual([undefined, 'stable-effect']);
 
     await busA.emit(SubjectsA.notice, { label: 'delivered' });
     await vi.waitFor(() => {

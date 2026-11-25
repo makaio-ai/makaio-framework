@@ -91,9 +91,11 @@ export interface ExtensionContextHost<THostContext extends KernelHostContext = K
   /**
    * Retrieve an active service's extension-facing API by name.
    * @param name - Extension name.
+   * @param identity - Extension requesting the service.
+   * @param lifetime - Requesting extension's activation signal.
    * @returns Extension-facing API, or `undefined` when unavailable.
    */
-  getExtensionService<T>(name: string): T | undefined;
+  getExtensionService<T>(name: string, identity: ExtensionIdentity, lifetime: AbortSignal): T | undefined;
 }
 
 /**
@@ -343,18 +345,20 @@ export function buildExtensionContext<THostContext extends KernelHostContext>(
   }
   const { credentialsFor, constructContext, ...base } = host.extensionContextBase;
   const carrier = extensionCarrierOf(entry.identity);
+  const lifetime = extensionGenerationSignal(entry.identity);
   const bus = createExtensionCarrierBus(host.bus, entry.identity);
   const credentials = credentialsFor?.(carrier, bus);
   const context: KernelNodeContext = {
     ...base,
     bus,
     rights: host.rights.capabilityFor(extensionName, carrier),
-    rules: host.rules.capabilityFor(extensionName, extensionGenerationSignal(entry.identity)),
+    rules: host.rules.capabilityFor(extensionName, lifetime),
     namespaces: namespaceCapabilityFor(host.bus, entry.identity),
     ...(credentials !== undefined ? { credentials } : {}),
     identity: entry.identity,
     dataDir: path.join(host.extensionContextBase.makaioHome, EXTENSION_DATA_DIR_SEGMENT, segment),
-    getService: <T>(token: ExtensionToken<T>): T | undefined => host.getExtensionService(token.name),
+    getService: <T>(token: ExtensionToken<T>): T | undefined =>
+      host.getExtensionService(token.name, entry.identity, lifetime),
     signal: host.signal,
     hasExtension: host.hasActiveExtension,
     openContributions: host.openContributionReaderFor(extensionName),

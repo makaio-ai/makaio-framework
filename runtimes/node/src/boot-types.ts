@@ -19,6 +19,7 @@ import type { WorkflowMaterializationSpecResolver } from '@makaio/subsystem-work
 import type { PersistedMachineIdentity } from '@makaio/machine-identity';
 import type { ConfigProvider } from '@makaio/providers';
 import type { FileAccessRuleProvider } from '@makaio/tools-core';
+import type { RuleEvaluator } from '@makaio/services-core';
 import type { IAdapterConfigRepository } from '@makaio/services-core/adapter-subsystem';
 import type { PostInstallHandler, StrategyDependencies } from '@makaio/subsystem-client';
 import type {
@@ -702,6 +703,9 @@ export interface MakaioRuntime {
    * active service graph (e.g. via `getExtensionService`) after boot.
    */
   readonly coordinator: ExtensionCoordinator;
+
+  /** Durable evaluation of rule occasions committed by the host. */
+  readonly ruleEvaluator: RuleEvaluator;
 
   /**
    * Shut down all services in reverse startup order.

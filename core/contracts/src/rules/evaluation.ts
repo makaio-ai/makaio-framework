@@ -130,10 +130,7 @@ export const EvaluationStateSchema = z.enum(['pending', 'not-matched', 'stopped'
 /** @see {@link EvaluationStateSchema} */
 export type EvaluationState = z.infer<typeof EvaluationStateSchema>;
 
-/**
- * View of one rule's evaluation on one occasion.
- */
-export const EvaluationViewSchema = z
+const EvaluationViewBaseSchema = z
   .object({
     /** Identifier of the evaluation. */
     evaluationId: EvaluationIdSchema,
@@ -145,10 +142,6 @@ export const EvaluationViewSchema = z
     event: EventFactsSchema,
     /** Group the rule belongs to, when it belongs to one. */
     group: z.string().optional(),
-    /** State of the evaluation. */
-    state: EvaluationStateSchema,
-    /** Who stopped the rule and with what reach, for state `'stopped'`. */
-    stoppedBy: StoppedBySchema.optional(),
     /** Why the evaluation is pending, stopped, rejected or failed. */
     reason: z.string().optional(),
     /** Number of retries so far. */
@@ -159,6 +152,20 @@ export const EvaluationViewSchema = z
     parts: z.array(EvaluationPartViewSchema),
   })
   .strict();
+
+/**
+ * View of one rule's evaluation on one occasion.
+ */
+export const EvaluationViewSchema = z.discriminatedUnion('state', [
+  EvaluationViewBaseSchema.extend({
+    state: z.literal('stopped'),
+    /** Who stopped the rule and with what reach, when known. */
+    stoppedBy: StoppedBySchema.optional(),
+  }),
+  EvaluationViewBaseSchema.extend({
+    state: EvaluationStateSchema.exclude(['stopped']),
+  }),
+]);
 /** @see {@link EvaluationViewSchema} */
 export type EvaluationView = z.infer<typeof EvaluationViewSchema>;
 
