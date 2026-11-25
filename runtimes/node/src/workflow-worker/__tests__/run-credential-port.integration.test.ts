@@ -16,7 +16,7 @@ import {
 import { MAKAIO_JOB_RUN_PARTY_KIND } from '@makaio/core';
 import { DuplicateCredentialResolverError, type KernelMakaioExtension } from '@makaio/kernel';
 import { createLocalLauncher } from '@makaio/subprocess';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { bootJournalHost } from '../../__tests__/boot-journal-fixture.js';
 import { closeHttpServer, listenOnLoopback } from '../../__tests__/http-test-helpers.js';
 import { createHttpWorkerModelPort } from '../agent-step/http-model-port.js';
@@ -241,6 +241,55 @@ describe('run-scoped credential mediation', () => {
     }
   });
 
+  it.each([
+    { bytes: 15, value: 'fixture-auth-15', accepted: false },
+    { bytes: 16, value: 'fixture-auth-016', accepted: true },
+  ])('enforces the $bytes-byte authorization boundary for a booked run', async ({ value, accepted }) => {
+    secret = createSecret(value);
+    await start();
+    const authorizations: (string | undefined)[] = [];
+    const upstream = await openUpstream((request, response) => {
+      authorizations.push(request.headers.authorization);
+      request.resume();
+      response.end(JSON.stringify({ text: '{"approved":true}' }));
+    });
+    try {
+      await expect(runModelStep(upstream.url)).resolves.toMatchObject({
+        status: 'completed',
+        output: { approved: accepted, revoked: !accepted },
+      });
+      expect(authorizations).toEqual(accepted ? [`Bearer ${value}`] : []);
+    } finally {
+      await upstream.close();
+    }
+  });
+
+  it('rejects the first credential when the second upstream attempt reflects it', async () => {
+    await start();
+    const initial = secret.reveal();
+    const refreshed = 'fixture-authorization-refreshed';
+    const seen: (string | undefined)[] = [];
+    const upstream = await openUpstream((request, response) => {
+      request.resume();
+      seen.push(request.headers.authorization);
+      if (seen.length === 1) {
+        secret = createSecret(refreshed);
+        response.writeHead(401).end(initial);
+      } else {
+        response.end(JSON.stringify({ text: initial }));
+      }
+    });
+    try {
+      await expect(runModelStep(upstream.url)).resolves.toMatchObject({
+        status: 'completed',
+        output: { invalidReply: true, noCredential: true },
+      });
+      expect(seen).toEqual([`Bearer ${initial}`, `Bearer ${refreshed}`]);
+    } finally {
+      await upstream.close();
+    }
+  });
+
   it.each(['deactivation', 'revocation'] as const)('aborts a started upstream on %s', async (reason) => {
     await start();
     const entered = Promise.withResolvers<void>();
@@ -322,7 +371,15 @@ describe('run-scoped credential mediation', () => {
       dependencies: [{ type: 'extension', name: owner, version: '*' }],
     };
     if (critical) {
-      await expect(start(second)).rejects.toBeInstanceOf(DuplicateCredentialResolverError);
+      const errorLog = vi.spyOn(console, 'error');
+      try {
+        await expect(start(second)).rejects.toBeInstanceOf(DuplicateCredentialResolverError);
+        expect(errorLog.mock.calls.filter(([message]) => String(message).startsWith('[boot] Startup failed'))).toEqual([
+          ['[boot] Startup failed (%s) — rolling back started resources', 'DuplicateCredentialResolverError'],
+        ]);
+      } finally {
+        errorLog.mockRestore();
+      }
     } else {
       await start(second);
       await expect(activate.coordinator.applyExtensionTransition(second.name, true)).resolves.toBe('rejected');

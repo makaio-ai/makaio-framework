@@ -67,9 +67,9 @@ describe('isolated text agent adapter', () => {
       }
       const authorization = request.headers.authorization;
       upstreamCalls.push({ authorization, body: Buffer.concat(chunks).toString() });
-      const code = authorization === 'Bearer renewed-token' ? 200 : 401;
+      const code = authorization === 'Bearer fixture-renewed-token' ? 200 : 401;
       response.writeHead(code, { 'content-type': 'application/json' });
-      response.end(JSON.stringify({ text: '{"approved":true}', irrelevant: 'renewed-token' }));
+      response.end(JSON.stringify({ text: '{"approved":true}', irrelevant: 'fixture-renewed-token' }));
     });
     await new Promise<void>((resolve, reject) => {
       server.once('error', reject);
@@ -89,7 +89,10 @@ describe('isolated text agent adapter', () => {
           expect(received).toBe(call);
           expect(input).toMatchObject({ purpose: 'model.use', target });
           resolvedReasons.push(input.reason);
-          return { kind: 'issued', credential: input.reason === 'refresh' ? 'renewed-token' : 'expired-token' };
+          return {
+            kind: 'issued',
+            credential: input.reason === 'refresh' ? 'fixture-renewed-token' : 'fixture-expired-token',
+          };
         },
       },
       target,
@@ -105,8 +108,8 @@ describe('isolated text agent adapter', () => {
       await expect(execution.turn).resolves.toEqual({ kind: 'completed', result: { output: { approved: true } } });
       expect(resolvedReasons).toEqual(['initial', 'refresh']);
       expect(upstreamCalls.map(({ authorization }) => authorization)).toEqual([
-        'Bearer expired-token',
-        'Bearer renewed-token',
+        'Bearer fixture-expired-token',
+        'Bearer fixture-renewed-token',
       ]);
       expect(upstreamCalls[0]?.body).toContain('check the change');
       expect(upstreamCalls[0]?.body).toContain('approved');
