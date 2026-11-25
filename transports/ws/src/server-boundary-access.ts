@@ -241,6 +241,7 @@ export class ServerBoundaryAccess {
     return this.check(
       {
         operation,
+        messageType: message.type,
         namespace: message.namespace,
         subject: message.subject,
         payload: message.payload === undefined ? undefined : JsonValueSchema.parse(message.payload),
@@ -283,9 +284,15 @@ export function sendSubscriptionAck(
   }
 }
 
-/** @returns A typed rejection for a policy decision whose peer changed before acknowledgement. */
-export function subscriptionPeerChanged(): Error {
-  return new AccessDeniedError({ at: CoreDenialPlace.subscribe, reason: 'peer-changed' });
+/**
+ * Describe a subscription update that could not be applied.
+ * @param reason - Reason for refusing the update.
+ * @returns A typed rejection for the acknowledgement.
+ */
+export function subscriptionRejection(
+  reason: 'peer-changed' | 'subscription-dispatch-failed' | 'subscription-not-admitted',
+): Error {
+  return new AccessDeniedError({ at: CoreDenialPlace.subscribe, reason });
 }
 
 /**

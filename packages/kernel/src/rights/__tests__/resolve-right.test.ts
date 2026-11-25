@@ -1,8 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { CallContext, Party } from '@makaio/core';
-import { CallContextRecordSchema } from '@makaio/core';
+import { CallContextRecordSchema, createBusNamespace } from '@makaio/core';
 import { mintCallContext } from '@makaio/bus-core/kernel-api';
-import { InvalidCallContextError, isMintedCallContext } from '@makaio/bus-core';
+import { createBusInstance, InvalidCallContextError, isMintedCallContext } from '@makaio/bus-core';
+import { z } from 'zod';
 import type { JsonSchema, JsonValue } from '@makaio/contracts/shared';
 import {
   RightDenialReason,
@@ -67,6 +68,71 @@ function directoryWithThingRight(): RightsDirectory {
 function thingContribution(right: RightName): RightFromData {
   return { right, description: 'test right', context: {} };
 }
+
+it('keeps the original payload writable for a handler after asking a payload-aware source', async () => {
+  const directory = directoryWithThingRight();
+  const source = createAnswerSource('acme.payload', [THING_RIGHT], { kind: 'grant' });
+  directory.registerSource('acme', { ...source, requiresPayload: [THING_RIGHT] });
+  const bus = createBusInstance();
+  const { subjects } = bus.registerNamespace(
+    createBusNamespace('acme', {
+      update: {
+        request: z.object({ nested: z.object({ value: z.string() }) }),
+        response: z.object({ value: z.string() }),
+      },
+    }),
+  );
+  bus.on(subjects.update, ({ payload, setResult }) => {
+    payload.nested.value = 'handled';
+    setResult({ value: payload.nested.value });
+  });
+
+  const payload = { nested: { value: 'original' } };
+  const decision = await resolveRight(
+    { directory, cache: createRightsCache() },
+    { call: mintCallContext({ caller: PARTY_U1, principal: PARTY_U1 }), right: THING_RIGHT, context: { ok: true } },
+    { externalPayload: { subject: 'acme.update', payload } },
+  );
+  expect(decision).toEqual({ granted: true });
+  await expect(bus.request(bus.own('root'), subjects.update, payload)).resolves.toEqual({ value: 'handled' });
+  const received = source.calls[0]?.context as { payload: typeof payload };
+  expect(received).toMatchObject({ payload: { nested: { value: 'original' } } });
+  expect(Object.isFrozen(received.payload.nested)).toBe(true);
+});
+
+it('gives each rights source an independent frozen copy of the question context', async () => {
+  const directory = directoryWithThingRight();
+  directory.declare('acme', [
+    { right: CACHE_RIGHT, description: 'Context snapshot test', context: CACHE_CONTEXT_SCHEMA },
+  ]);
+  const context = { ok: true, payload: { value: 'original' } };
+  const first = createAnswerSource('acme.first', [CACHE_RIGHT], {
+    kind: 'fn',
+    answer: (question) => {
+      const { payload } = question.context as typeof context;
+      Reflect.set(payload, 'value', 'changed');
+      return { granted: true };
+    },
+  });
+  const second = createAnswerSource('acme.second', [CACHE_RIGHT], { kind: 'grant' });
+  directory.registerSource('acme', first);
+  directory.registerSource('acme', second);
+  const call = mintCallContext({ caller: PARTY_U1, principal: PARTY_U1 });
+  await expect(
+    resolveRight({ directory, cache: createRightsCache() }, { call, right: CACHE_RIGHT, context }),
+  ).resolves.toEqual({ granted: true });
+
+  const [left, right] = [first, second].map((source) => source.calls[0]?.context as typeof context);
+  expect(right.payload.value).toBe('original');
+  expect(left).not.toBe(right);
+  expect(left.payload).not.toBe(right.payload);
+  expect(right.payload).not.toBe(context.payload);
+  for (const copy of [left, right]) {
+    expect(Object.isFrozen(copy)).toBe(true);
+    expect(Object.isFrozen(copy.payload)).toBe(true);
+  }
+  expect(Reflect.set(context.payload, 'value', 'still writable')).toBe(true);
+});
 
 // ---------------------------------------------------------------------------
 // 1. Resolution table

@@ -22,6 +22,7 @@ import {
   resolveInboundRequestBudget,
   shouldReceiveMessage,
 } from '@makaio/bus-core';
+import { DeferredSubscriptionReplay } from './deferred-subscription-replay.js';
 import type { WebSocketLike } from './types.js';
 
 /**
@@ -70,6 +71,8 @@ export type SocketAuthChecker = (client: WebSocketLike) => boolean;
 export interface ClientRegistryOptions {
   /** Enable debug logging. */
   debug?: boolean;
+  /** Delivery mode for connections without an admitted subscription. */
+  unsubscribedDelivery?: 'deliver' | 'drop';
   /**
    * Optional callback that resolves subscription subject restrictions for a
    * client socket.
@@ -108,6 +111,13 @@ interface RequestOrigin {
 /** Transport-level subscription updates produced after per-client state changes. */
 export type ClientSubscriptionUpdate = BusSubscribeMessage | BusUnsubscribeMessage;
 
+interface StagedSubscriptionUpdate {
+  /** Aggregate routing changes for the staged update. */
+  updates: ClientSubscriptionUpdate[];
+  /** Restore the previous state and return its aggregate routing changes. */
+  rollback: () => ClientSubscriptionUpdate[];
+}
+
 type DeliverySubscription = 'any' | 'handler';
 
 /**
@@ -126,11 +136,13 @@ export class ClientRegistry {
   private readonly clients = new Set<WebSocketLike>();
   private readonly clientsByConnectionId = new Map<string, WebSocketLike>();
   private readonly authenticatingClients = new Set<WebSocketLike>();
+  private readonly deferredSubscriptions = new Map<WebSocketLike, DeferredSubscriptionReplay>();
   private readonly clientSubscriptions = new Map<WebSocketLike, Set<string>>();
   private readonly clientSubscriptionState = new Map<WebSocketLike, Map<string, ClientSubscriptionState>>();
   private readonly clientFilters = new Map<WebSocketLike, Map<string, PayloadFilter>>();
   private readonly requestOrigins = new Map<string, RequestOrigin>();
   private readonly debug: boolean;
+  private readonly unsubscribedDelivery: 'deliver' | 'drop';
   private readonly subscriptionSubjectRestrictionResolver: SubscriptionSubjectRestrictionResolver | undefined;
   private readonly requiredSubscriptionFilterResolver: RequiredSubscriptionFilterResolver | undefined;
   private readonly socketAuthChecker: SocketAuthChecker | undefined;
@@ -140,6 +152,7 @@ export class ClientRegistry {
    */
   public constructor(options: ClientRegistryOptions = {}) {
     this.debug = options.debug ?? false;
+    this.unsubscribedDelivery = options.unsubscribedDelivery ?? 'drop';
     this.subscriptionSubjectRestrictionResolver = options.subscriptionSubjectRestrictionResolver;
     this.requiredSubscriptionFilterResolver = options.requiredSubscriptionFilterResolver;
     this.socketAuthChecker = options.socketAuthChecker;
@@ -202,6 +215,7 @@ export class ClientRegistry {
     const affectedSubjects = new Set(this.clientSubscriptionState.get(socket)?.keys() ?? []);
     this.clients.delete(socket);
     this.authenticatingClients.delete(socket);
+    this.deferredSubscriptions.delete(socket);
     this.clientSubscriptions.delete(socket);
     this.clientSubscriptionState.delete(socket);
     this.clientFilters.delete(socket);
@@ -239,6 +253,68 @@ export class ClientRegistry {
   // ---------------------------------------------------------------------------
   // Subscription management
   // ---------------------------------------------------------------------------
+
+  /**
+   * Get the deferred advertisements awaiting admission for this socket.
+   * @param socket - Socket owning the advertisements.
+   * @returns The per-client replay state.
+   */
+  public deferredSubscriptionsFor(socket: WebSocketLike): DeferredSubscriptionReplay {
+    let replay = this.deferredSubscriptions.get(socket);
+    if (replay === undefined) {
+      replay = new DeferredSubscriptionReplay(socket);
+      this.deferredSubscriptions.set(socket, replay);
+    }
+    return replay;
+  }
+
+  /**
+   * Stage routing changes and capture the previous entries for the affected patterns.
+   * @param client - Socket whose subscriptions are changing.
+   * @param message - Effective subscription update after admission.
+   * @param pending - Patterns deferred by this update.
+   * @returns Aggregate updates and a rollback that republishes restored routes.
+   */
+  public stageSubscriptionUpdate(
+    client: WebSocketLike,
+    message: BusSubscribeMessage | BusUnsubscribeMessage,
+    pending: Record<string, number[]>,
+  ): StagedSubscriptionUpdate {
+    const removed = message.type === 'subscribe' ? pending : message.subjects;
+    const affected = new Set([...Object.keys(removed), ...Object.keys(message.subjects)]);
+    const previous = [...affected].map((pattern) => ({
+      pattern,
+      state: this.clientSubscriptionState.get(client)?.get(pattern),
+      filter: this.clientFilters.get(client)?.get(pattern),
+    }));
+    const restore = (): boolean => {
+      if (!this.clients.has(client)) return false;
+      const subs = this.clientSubscriptions.get(client);
+      const states = this.clientSubscriptionState.get(client);
+      const filters = this.clientFilters.get(client);
+      for (const { pattern, state, filter } of previous) {
+        if (state === undefined) {
+          subs?.delete(pattern);
+          states?.delete(pattern);
+        } else {
+          subs?.add(pattern);
+          states?.set(pattern, state);
+        }
+        if (filter === undefined) filters?.delete(pattern);
+        else filters?.set(pattern, filter);
+      }
+      return true;
+    };
+
+    try {
+      const updates = this.handleUnsubscribeMessage(client, removed);
+      if (message.type === 'subscribe') updates.push(...this.handleSubscribeMessage(client, message));
+      return { updates, rollback: () => (restore() ? this.buildAggregateUpdates(affected) : []) };
+    } catch (error) {
+      restore();
+      throw error;
+    }
+  }
 
   /**
    * Apply a subscribe message to the per-client tracking state.
@@ -529,7 +605,9 @@ export class ClientRegistry {
    * @returns `true` if the client should receive the message
    */
   private clientWantsMessage(client: WebSocketLike, subject: string | undefined, payload: unknown): boolean {
-    const subs = this.clientSubscriptions.get(client) ?? new Set<string>();
+    if (subject === undefined) return true;
+    const subs = this.clientSubscriptions.get(client);
+    if (subs === undefined || subs.size === 0) return this.unsubscribedDelivery === 'deliver';
     const filters = this.clientFilters.get(client) ?? new Map<string, PayloadFilter>();
     return shouldReceiveMessage(subject, payload, subs, filters);
   }

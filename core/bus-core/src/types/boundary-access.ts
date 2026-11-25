@@ -10,6 +10,7 @@ export type BoundaryAccessTarget =
     }
   | {
       readonly operation: 'send' | 'deliver' | 'handle';
+      readonly messageType: 'request' | 'event' | 'broadcast';
       readonly namespace: string;
       readonly subject: string;
       readonly payload?: JsonValue;

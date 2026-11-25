@@ -62,6 +62,7 @@ const lateExtension: KernelMakaioExtension = {
   version: '1.0.0',
   namespaces: [lateNamespace],
 };
+const BOOT_STATE_PATTERN = `${BootNamespace.name}.getState`;
 const UPDATE_PATTERN = `${namespace.name}.*`;
 const HIDDEN_PATTERN = `${namespace.name}.hidden`;
 const SERVED_PATTERN = `${namespace.name}.served`;
@@ -82,6 +83,8 @@ describe('external bus rights', () => {
   let startupResult: unknown;
   let startupProbe: Promise<unknown>;
   let startupEvent: Promise<unknown>;
+  let startupReadOnly: Promise<unknown>;
+  let createPeer: () => WebSocketClientTransport;
   let notifySourceChanged: (() => void) | undefined;
   let removeDenialListener: (() => void) | undefined;
   let unregisterIdentity: (() => void) | undefined;
@@ -146,7 +149,9 @@ describe('external bus rights', () => {
         rights: [SUBJECT_HANDLE_RIGHT],
         async answer({ context }) {
           const { pattern, subject } = SubjectHandleRightContextSchema.parse(context);
-          return (pattern ?? subject) === SERVED_PATTERN ? { granted: true } : { granted: false, reason: REASON };
+          return [SERVED_PATTERN, BOOT_STATE_PATTERN].includes(pattern ?? subject ?? '')
+            ? { granted: true }
+            : { granted: false, reason: REASON };
         },
       },
     ],
@@ -175,6 +180,8 @@ describe('external bus rights', () => {
             ({ payload }) => payload,
             (error: unknown) => error,
           );
+          startupReadOnly = checkBootReadOnly().catch((error: unknown) => error);
+          await startupReadOnly;
           startupProbe = peerBus.request(BootSubjects.getState, {}).catch((error: unknown) => error);
           startupResult = await sendRequest(ExtensionSubjects.setEnabled.subject, ExtensionNamespace.name, undefined, {
             payload: { name: EXTENSION, enabled: false },
@@ -202,11 +209,13 @@ describe('external bus rights', () => {
       partyKind: CALLER.kind,
       attestingRole: 'local-cli',
     });
-    client = new WebSocketClientTransport({
-      url: `ws://127.0.0.1:${port}/bus`,
-      auth: new HmacAuth({ secret, identityId: CALLER.id }),
-      autoReconnect: false,
-    });
+    createPeer = () =>
+      new WebSocketClientTransport({
+        url: `ws://127.0.0.1:${port}/bus`,
+        auth: new HmacAuth({ secret, identityId: CALLER.id }),
+        autoReconnect: false,
+      });
+    client = createPeer();
     await client.subscribe(`${namespace.name}.updated`);
     await client.subscribe(HIDDEN_PATTERN);
     runtime = await bootMakaioRuntime({
@@ -304,6 +313,92 @@ describe('external bus rights', () => {
       totalDurationMs: expect.any(Number),
     });
     expect(await startupProbe).toMatchObject({ complete: false });
+  });
+
+  /**
+   * Observe the host decision and both event destinations over a real connection.
+   * @returns The event decision, event destinations, and handler registration outcome.
+   */
+  async function checkBootReadOnly() {
+    const observer = createPeer();
+    const ready = BootSubjects.service.ready;
+    const fullSubject = `${BootNamespace.name}.${ready.subject}`;
+    const candidate = { name: randomUUID(), displayName: 'Candidate', durationMs: 0 };
+    const marker = { ...candidate, displayName: 'Host marker' };
+    const decision = Promise.withResolvers<unknown>();
+    const markerReceived = Promise.withResolvers<void>();
+    const observed = new Set<string>();
+    const handled: unknown[] = [];
+    const removeHost = MakaioBus.on(
+      ready,
+      ({ payload }) => {
+        handled.push(payload);
+        if (payload.displayName === candidate.displayName) decision.resolve('delivered');
+      },
+      { filter: { name: candidate.name } },
+    );
+    const removeDiagnostic = MakaioBus.on(AccessSubjects.denied, ({ payload }) => {
+      if (payload.at === CoreDenialPlace.send && payload.subject === fullSubject) decision.resolve(payload);
+    });
+    observer.onReceive(async (message) => {
+      if (message.type !== 'event' || message.namespace !== BootNamespace.name || message.subject !== ready.subject) {
+        return;
+      }
+      const payload = z.object({ name: z.string(), displayName: z.string() }).parse(message.payload);
+      if (payload.name !== candidate.name) return;
+      observed.add(payload.displayName);
+      if (payload.displayName === marker.displayName) markerReceived.resolve();
+    });
+
+    try {
+      await observer.connect();
+      await observer.ready;
+      await observer.subscribe(fullSubject);
+      await peerBus.emit(ready, candidate);
+      const handler = await client.subscribe(BOOT_STATE_PATTERN, undefined, [100]).then(
+        async () => {
+          await client.unsubscribe(BOOT_STATE_PATTERN);
+          return 'registered';
+        },
+        (error: unknown) => error,
+      );
+      const broadcast = await client
+        .send({
+          type: 'broadcast',
+          namespace: BootNamespace.name,
+          subject: BootSubjects.getState.subject,
+          messageId: randomUUID(),
+          correlationId: randomUUID(),
+          payload: {},
+          timeout: REQUEST_TIMEOUT_MS,
+        })
+        .catch((error: unknown) => error);
+      const event = await decision.promise;
+      await MakaioBus.emit(ready, marker);
+      await markerReceived.promise;
+      return { event, handler, broadcast, handled, observed: [...observed] };
+    } finally {
+      removeDiagnostic();
+      removeHost();
+      await observer.disconnect();
+    }
+  }
+
+  it.each(['starting', 'ready'] as const)('keeps startup observation read-only while %s', async (phase) => {
+    const outcome = phase === 'starting' ? await startupReadOnly : await checkBootReadOnly();
+    expect(outcome).toMatchObject({
+      event: { at: CoreDenialPlace.send, reason: 'startup-observable-read-only' },
+      handler: {
+        code: ACCESS_DENIED_ERROR_CODE,
+        data: { at: CoreDenialPlace['register-handler'], reason: 'startup-observable-read-only' },
+      },
+      broadcast: {
+        code: ACCESS_DENIED_ERROR_CODE,
+        data: { at: CoreDenialPlace.send, reason: 'startup-observable-read-only' },
+      },
+      handled: [expect.objectContaining({ displayName: 'Host marker' })],
+      observed: ['Host marker'],
+    });
   });
 
   it('rejects a state-changing kernel request during startup', () => {

@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { createSubscriptionQueue, MAX_QUEUED_SUBSCRIPTION_BYTES } from '../deferred-subscription-replay.js';
+import {
+  createSubscriptionQueue,
+  DeferredSubscriptionReplay,
+  MAX_QUEUED_SUBSCRIPTION_BYTES,
+} from '../deferred-subscription-replay.js';
 import { MockWebSocket } from './test-helpers.js';
 
 describe('subscription queue', () => {
@@ -9,10 +13,15 @@ describe('subscription queue', () => {
     socket.addEventListener('close', ({ code, reason }) => closed.push({ code, reason }));
     const entered = Promise.withResolvers<void>();
     const release = Promise.withResolvers<void>();
-    const enqueue = createSubscriptionQueue(socket, { debug: false }, async () => {
-      entered.resolve();
-      await release.promise;
-    });
+    const enqueue = createSubscriptionQueue(
+      socket,
+      { debug: false },
+      new DeferredSubscriptionReplay(socket),
+      async () => {
+        entered.resolve();
+        await release.promise;
+      },
+    );
     const message = { type: 'unsubscribe', subjects: {} } as const;
     const pending = enqueue(message, MAX_QUEUED_SUBSCRIPTION_BYTES);
     try {

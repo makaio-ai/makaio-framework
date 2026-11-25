@@ -33,7 +33,12 @@ export interface SchemaViolationReport {
  * not the other way around. Single source of truth — no mirroring.
  */
 export type NamespaceRegistrationOptions = {
-  /** Host-only startup observation. Subjects must be read-only, and each request must be declared by key. */
+  /**
+   * In host-owned startup-observable namespaces, external peers may subscribe to
+   * events and call explicitly declared read-only requests before and after readiness.
+   * The host rejects an external request-handler wildcard in full if it matches
+   * any subject in a startup-observable namespace.
+   */
   startupObservable?: { readonly readOnlyRequests: readonly string[] };
 } & (
   | { busValidationMode?: 'strict' }

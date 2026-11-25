@@ -267,7 +267,7 @@ describe('createInboundMessageHandler', () => {
     );
   });
 
-  it('does not acknowledge subscribe messages when a handler fails', async () => {
+  it('rejects subscribe with a typed acknowledgement when a handler fails', async () => {
     const socket = new MockWebSocket();
     const sendSafely = vi.fn();
     const handlers = new Set<BusReceiveHandler>([
@@ -287,13 +287,13 @@ describe('createInboundMessageHandler', () => {
       makeDeps({ debug: false, handlers, sendSafely }),
     );
 
-    expect(sendSafely).not.toHaveBeenCalledWith(
-      socket,
-      JSON.stringify({ type: 'subscription-ack', ackId: 'subscribe-failed' }),
-    );
+    expect(sendSafely).toHaveBeenCalledExactlyOnceWith(socket, expect.any(String));
+    const ack = JSON.parse(sendSafely.mock.calls[0][1]);
+    expect(ack).toMatchObject({ type: 'subscription-ack', ackId: 'subscribe-failed', error: { code: 'forbidden' } });
+    expect(deserializeTransportError(ack.error)).toMatchObject({ data: { reason: 'subscription-dispatch-failed' } });
   });
 
-  it('does not acknowledge unsubscribe messages when a handler fails', async () => {
+  it('rejects unsubscribe with a typed acknowledgement when a handler fails', async () => {
     const socket = new MockWebSocket();
     const sendSafely = vi.fn();
     const handlers = new Set<BusReceiveHandler>([
@@ -312,10 +312,10 @@ describe('createInboundMessageHandler', () => {
       makeDeps({ debug: false, handlers, sendSafely }),
     );
 
-    expect(sendSafely).not.toHaveBeenCalledWith(
-      socket,
-      JSON.stringify({ type: 'subscription-ack', ackId: 'unsubscribe-failed' }),
-    );
+    expect(sendSafely).toHaveBeenCalledExactlyOnceWith(socket, expect.any(String));
+    const ack = JSON.parse(sendSafely.mock.calls[0][1]);
+    expect(ack).toMatchObject({ type: 'subscription-ack', ackId: 'unsubscribe-failed', error: { code: 'forbidden' } });
+    expect(deserializeTransportError(ack.error)).toMatchObject({ data: { reason: 'subscription-dispatch-failed' } });
   });
 
   it('aggregates priorities and lets first-hop-only win across clients', async () => {
@@ -822,7 +822,7 @@ describe('subscribe/unsubscribe subject restriction', () => {
     const auth = makePerSocketAuth(new Map([[socket, BOOTSTRAP_IDENTITY]]));
     const replay = new DeferredSubscriptionReplay(socket);
     const subjects = { 'test.action': [] };
-    replay.defer({ type: 'subscribe', subjects, deliveryClasses: {} }, subjects);
+    replay.stage({ type: 'subscribe', subjects, deliveryClasses: {} }, {}, subjects);
     registerHmacIdentitySecret(BOOTSTRAP_IDENTITY, BOOTSTRAP_SECRET, {
       partyKind: 'test.worker-bootstrap',
       allowedSubscriptionSubjects: [ALLOWED_SUBJECT],
@@ -1588,6 +1588,7 @@ describe('outbound required recipient filters', () => {
       requiredSubscriptionFilters: { [PROTECTED_SUBJECT]: { executionId: 'attempt-b' } },
     });
     const registry = new ClientRegistry({
+      unsubscribedDelivery: 'deliver',
       requiredSubscriptionFilterResolver: (client) => {
         const identityId = identities.get(client as MockWebSocket);
         return identityId ? resolveHmacIdentityRequiredSubscriptionFilters(identityId) : null;
@@ -1693,6 +1694,7 @@ describe('outbound required recipient filters', () => {
     });
     const auth = makePerSocketAuth(identities, 'test.test-peer');
     const registry = new ClientRegistry({
+      unsubscribedDelivery: 'deliver',
       requiredSubscriptionFilterResolver: (client) => {
         const identityId = identities.get(client as MockWebSocket);
         return identityId ? resolveHmacIdentityRequiredSubscriptionFilters(identityId) : null;

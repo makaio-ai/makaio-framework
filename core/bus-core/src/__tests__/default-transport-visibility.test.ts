@@ -25,6 +25,7 @@ import {
   type EmitOptions,
 } from '../index.js';
 import { busContextOf } from '../kernel-api.js';
+import { NamespaceStartupObservationConflictError } from '../registries/routing-metadata.js';
 import { MockTransport } from './helpers/transport-fixtures.js';
 
 // ---------------------------------------------------------------------------
@@ -398,6 +399,22 @@ it('requires every request in a startup-observable namespace to be declared read
     { startupObservable: { readOnlyRequests: [] } },
   );
   expect(() => bus.registerNamespace(definition)).toThrow(/declare every read-only request/);
+});
+
+it.each([false, true])('rejects conflicting startup observation when first enabled is %s', (firstEnabled) => {
+  const bus = createBusInstance();
+  const name = 'startup-observation';
+  const schemas = { query: { request: z.object({}), response: z.object({}) } };
+  const observed = { startupObservable: { readOnlyRequests: ['query'] } };
+  const first = firstEnabled ? observed : undefined;
+  const conflicting = firstEnabled ? undefined : observed;
+  const namespace = bus.registerNamespace(createBusNamespace(name, schemas, first));
+  expect(bus.registerNamespace(createBusNamespace(name, schemas, first))).toBe(namespace);
+  expect(() => bus.registerNamespace(createBusNamespace(name, schemas, conflicting))).toThrow(
+    NamespaceStartupObservationConflictError,
+  );
+  const registry = busContextOf(bus).namespaceRegistry;
+  expect(registry.getRegisteredSubject(`${name}.query`)?.startupObservable).toBe(firstEnabled || undefined);
 });
 
 describe('namespace-registry getDefaultTransports', () => {

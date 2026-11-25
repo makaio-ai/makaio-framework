@@ -108,6 +108,7 @@ export class ServerTransport implements BusTransport {
       };
     this.registry = new ClientRegistry({
       debug,
+      unsubscribedDelivery: checkBoundaryAccess === NO_BOUNDARY_ACCESS_CHECK ? 'deliver' : 'drop',
       subscriptionSubjectRestrictionResolver: auth
         ? resolveForSocket(resolveHmacIdentityAllowedSubscriptionSubjects)
         : undefined,

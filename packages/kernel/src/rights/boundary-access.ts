@@ -29,6 +29,25 @@ const RIGHT_BY_OPERATION = {
   handle: SUBJECT_HANDLE_RIGHT,
 } satisfies Record<BoundaryAccessTarget['operation'], RightName>;
 
+const isVisible = (entry: RegisteredSubjectSchema): boolean => !entry.local && !entry.channel;
+
+/**
+ * Check whether an operation exceeds the read-only contract of startup observation.
+ * @param target - Concrete subject operation at the transport boundary.
+ * @param entry - Registered metadata for the subject, when present.
+ * @returns Whether the operation is forbidden by the startup observation contract.
+ */
+function isStartupObservationWrite(
+  target: Extract<BoundaryAccessTarget, { namespace: string }>,
+  entry: RegisteredSubjectSchema | undefined,
+): boolean {
+  return (
+    entry?.startupObservable === true &&
+    (target.operation === 'handle' ||
+      (target.operation === 'send' && (target.messageType !== 'request' || !isRequestSchema(entry.schema))))
+  );
+}
+
 /**
  * Apply the host's subject directory and rights resolver at the transport boundary.
  * Only startup-observable namespaces can pass authorization while the host starts.
@@ -47,8 +66,6 @@ export function createBoundaryAccessCheck(
     const owner = registry.ownerOf(entry.namespace);
     return owner?.kind === 'host' || (owner?.kind === 'extension' && hub.isOwnerActive(owner.extension));
   };
-  const isVisible = (entry: RegisteredSubjectSchema): boolean => !entry.local && !entry.channel;
-
   const patternAvailability = (target: Extract<BoundaryAccessTarget, { pattern: string }>, starting: boolean) => {
     const { pattern, operation, defer } = target;
     if (!SubjectPatternSchema.safeParse(pattern).success) return 'invalid-pattern';
@@ -58,6 +75,9 @@ export function createBoundaryAccessCheck(
       : exact
         ? [exact]
         : [];
+    if (operation === 'register-handler' && matching.some((entry) => entry.startupObservable)) {
+      return 'startup-observable-read-only';
+    }
     const eligible = matching.filter(
       (entry) => isVisible(entry) && (operation !== 'register-handler' || isRequestSchema(entry.schema)),
     );
@@ -75,6 +95,7 @@ export function createBoundaryAccessCheck(
   ) => {
     const entry = subject === undefined ? undefined : registry.getRegisteredSubject(subject);
     if (starting && !entry?.startupObservable) return 'host-not-ready';
+    if (isStartupObservationWrite(target, entry)) return 'startup-observable-read-only';
     if (
       !entry ||
       entry.namespace !== target.namespace ||
@@ -107,6 +128,7 @@ export function createBoundaryAccessCheck(
           : {}),
       },
     );
+    if (phase() === 'closed') return hub.deny(at, { ...denial, reason: 'host-not-ready' });
     return answer.granted ? undefined : hub.deny(at, { ...denial, reason: answer.reason, by: answer.by });
   };
   check.reportRejectedReply = (call, reason) => {
