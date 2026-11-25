@@ -8,7 +8,7 @@ import { inspectSubjectSchema } from '@makaio/core';
 import { isRequestSchema } from '../utils/is-request-schema.js';
 import {
   type SubjectRoutingMetadata,
-  validateStartupObservation,
+  resolveStartupObservation,
   buildNamespaceRoutingMetadataFromInspections,
   failOnRoutingMetadataCollision,
 } from './routing-metadata.js';
@@ -318,6 +318,7 @@ type RegisteredNamespace<Namespace = unknown> = {
   holder: NamespaceHolder;
   inspections: SubjectInspections;
   routing: ReadonlyMap<string, SubjectRoutingMetadata>;
+  startupReadOnlyRequests?: ReadonlySet<string>;
   validation: ValidationConfig;
   defaultTransports?: 'all' | 'local-only';
 };
@@ -399,10 +400,10 @@ export class NamespaceRegistry {
     }
 
     const inspections = buildNamespaceInspections(schemas);
-    validateStartupObservation(domain, holder.kind, inspections, options?.startupObservable);
+    const existing = this.namespaces.get(domain);
+    const startupReadOnlyRequests = resolveStartupObservation(domain, holder.kind, inspections, options, existing);
     const routing = buildNamespaceRoutingMetadataFromInspections(inspections);
     const validation = validationConfigFromOptions(options);
-    const existing = this.namespaces.get(domain);
     if (existing) {
       failOnRoutingMetadataCollision(domain, existing.routing, routing);
       warnOnSchemaCollision(domain, existing.inspections, inspections);
@@ -428,6 +429,7 @@ export class NamespaceRegistry {
       holder: Object.freeze({ ...holder }),
       inspections,
       routing,
+      startupReadOnlyRequests,
       validation,
       defaultTransports,
     };
@@ -442,7 +444,7 @@ export class NamespaceRegistry {
         fullSubject,
         schema: inspection.schema,
         ...inspection.marks,
-        ...(options?.startupObservable && { startupObservable: true }),
+        ...(startupReadOnlyRequests && { startupObservable: true }),
       });
       this.registeredSubjects.set(fullSubject, registrations);
     }

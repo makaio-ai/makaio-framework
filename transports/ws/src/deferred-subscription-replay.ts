@@ -14,12 +14,30 @@ export class DeferredSubscriptionReplay {
   public constructor(private readonly socket: WebSocketLike) {}
 
   /**
-   * Retain the pattern and its routing metadata without retaining the rest of the frame.
-   * @param message - Original subscription advertisement.
-   * @param patterns - Unavailable patterns with their advertised handler priorities.
+   * Stage replacement of pending advertisements and return their restoration.
+   * @param message - Subscription update being dispatched.
+   * @param superseded - Patterns this update replaces or removes.
+   * @param deferred - New patterns that still await admission.
+   * @returns Restore the previous pending advertisements if dispatch fails.
    */
-  public defer(message: BusSubscribeMessage, patterns: Record<string, number[]>): void {
-    for (const [pattern, priorities] of Object.entries(patterns)) this.retain(message, pattern, priorities);
+  public stage(
+    message: SubscriptionMessage,
+    superseded: Record<string, number[]>,
+    deferred: Record<string, number[]>,
+  ): () => void {
+    const affected = new Set([...Object.keys(superseded), ...Object.keys(deferred)]);
+    const previous = [...affected].map((pattern) => [pattern, this.pending.get(pattern)] as const);
+    this.forget(superseded);
+    if (message.type === 'subscribe') {
+      for (const [pattern, priorities] of Object.entries(deferred)) this.retain(message, pattern, priorities);
+    }
+    return () => {
+      if (this.socket.readyState !== 1) return;
+      for (const [pattern, entry] of previous) {
+        if (entry === undefined) this.pending.delete(pattern);
+        else this.pending.set(pattern, entry);
+      }
+    };
   }
 
   /**
@@ -68,6 +86,7 @@ type SubscriptionMessage = BusSubscribeMessage | BusUnsubscribeMessage;
  * Serialize live subscription updates and retries on the same connection.
  * @param socket - The connection owning the subscription state.
  * @param options - Policy, authentication, and diagnostic options.
+ * @param replay - Pending advertisements owned by the client registry.
  * @param route - Run a subscription through the normal routing path.
  * @param lifetime - Aborted on socket close.
  * @returns A function to enqueue live subscription updates.
@@ -75,13 +94,13 @@ type SubscriptionMessage = BusSubscribeMessage | BusUnsubscribeMessage;
 export function createSubscriptionQueue(
   socket: WebSocketLike,
   { access, auth, debug }: { access?: ServerBoundaryAccess; auth?: TransportAuth; debug: boolean },
+  replay: DeferredSubscriptionReplay,
   route: (message: SubscriptionMessage, replay?: DeferredSubscriptionReplay) => Promise<void>,
   lifetime?: AbortSignal,
 ): (message: SubscriptionMessage, frameBytes: number) => Promise<void> {
   let tail = Promise.resolve();
   let scheduledReplay: Promise<void> | undefined;
   let queuedBytes = 0;
-  const replay = new DeferredSubscriptionReplay(socket);
   const isLive = (): boolean =>
     !lifetime?.aborted && socket.readyState === 1 && auth?.isSocketAuthenticated?.(socket) !== false;
 

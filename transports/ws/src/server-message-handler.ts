@@ -24,7 +24,7 @@ import {
   restampForClientFanout,
   reportRejectedReply,
   sendSubscriptionAck,
-  subscriptionPeerChanged,
+  subscriptionRejection,
   type ServerBoundaryAccess,
 } from './server-boundary-access.js';
 import { createSubscriptionQueue, type DeferredSubscriptionReplay } from './deferred-subscription-replay.js';
@@ -177,7 +177,7 @@ async function invokeHandlers(
   },
 ): Promise<boolean> {
   const results = await Promise.allSettled(
-    Array.from(handlers).map((handler) => handler(message, options.receiveContext)),
+    Array.from(handlers, async (handler) => handler(message, options.receiveContext)),
   );
 
   for (const result of results) {
@@ -191,7 +191,7 @@ async function invokeHandlers(
 }
 
 /**
- * Dispatch authoritative transport-level subscription updates in order.
+ * Publish one aggregate snapshot without awaiting between disjoint updates.
  * @param updates - Aggregate control messages produced by the client registry
  * @param handlers - Registered bus handlers
  * @param options - Dispatch and logging context
@@ -206,11 +206,9 @@ export async function invokeSubscriptionUpdates(
     logContext?: string;
   },
 ): Promise<boolean> {
-  let allApplied = true;
-  for (const update of updates) {
-    if (!(await invokeHandlers(update, handlers, options))) allApplied = false;
-  }
-  return allApplied;
+  // Begin publication for every pattern before another socket can change the aggregate.
+  const applied = await Promise.all(updates.map((update) => invokeHandlers(update, handlers, options)));
+  return applied.every(Boolean);
 }
 
 /**
@@ -308,25 +306,21 @@ function rejectDisallowedSubject(
 }
 
 /**
- * Validate the update, consume superseded deferred entries, and apply the identity filter.
+ * Validate the update and apply the identity filter.
  * @param message - Inbound subscription control message.
  * @param restriction - Current peer subject restriction.
  * @param debug - Whether to log dropped messages.
- * @param replay - Pending advertisements on this socket.
  * @returns Effective subjects, or `null` when the message must be dropped.
  */
 function resolveSubscriptionSubjects(
   message: BusSubscribeMessage | BusUnsubscribeMessage,
   restriction: SubjectRestriction | null,
   debug: boolean,
-  replay?: DeferredSubscriptionReplay,
 ): Record<string, number[]> | null {
   if (!isSubscriptionSubjects(message.subjects)) {
     if (debug) console.warn(`[ServerTransport] Malformed ${message.type} message: missing subjects record`);
     return null;
   }
-  // A replay consumes its entry even when the current identity disallows the pattern.
-  if (message.type === 'unsubscribe' || typeof message.ackId !== 'string') replay?.forget(message.subjects);
   if (restriction === null) return message.subjects;
 
   const filtered = filterSubscriptionSubjects(
@@ -344,13 +338,14 @@ function resolveSubscriptionSubjects(
 }
 
 /**
- * Route subscription updates through the registry and acknowledge successful dispatch.
+ * Apply a subscription update through admission and dispatch.
  * @param message - Inbound bus message.
  * @param socket - Socket that sent the message.
  * @param deps - Handler dependencies.
  * @param receiveContext - Authentication-derived receive context.
  * @param restriction - Current peer subject restriction.
  * @param replay - Deferred advertisements on this socket.
+ * @returns The refusal if the update could not be applied.
  */
 async function routeSubscriptionMessage(
   message: BusSubscribeMessage | BusUnsubscribeMessage,
@@ -359,49 +354,47 @@ async function routeSubscriptionMessage(
   receiveContext: TransportReceiveContext | undefined,
   restriction: SubjectRestriction | null,
   replay?: DeferredSubscriptionReplay,
-): Promise<void> {
-  const subjects = resolveSubscriptionSubjects(message, restriction, deps.debug, replay);
-  if (subjects === null) return;
+): Promise<Error | undefined> {
+  const acknowledged = typeof message.ackId === 'string';
+  const subjects = resolveSubscriptionSubjects(message, restriction, deps.debug);
+  if (subjects === null) {
+    // A replay consumes its entry when the current identity denies all its patterns.
+    if (!acknowledged && isSubscriptionSubjects(message.subjects)) replay?.forget(message.subjects);
+    return subscriptionRejection('subscription-not-admitted');
+  }
 
-  const { ackId } = message;
-  const acknowledged = typeof ackId === 'string';
   const defer = replay && (acknowledged ? 'unavailable' : 'replay');
   const admit =
     message.type === 'subscribe' && deps.access
       ? await deps.access.admitSubscriptions(socket, subjects, acknowledged, defer)
       : () => (socket.readyState === 1 ? { subjects, pending: {}, receiveContext } : undefined);
-  if (admit instanceof Error) {
-    sendSubscriptionAck(socket, ackId, deps.sendSafely, admit);
-    return;
-  }
-  if (admit === undefined) return;
+  if (typeof admit !== 'function') return admit ?? subscriptionRejection('peer-changed');
   const admitted = admit();
-  if (admitted === undefined) return;
+  if (admitted === undefined) return subscriptionRejection('peer-changed');
+
   const { subjects: allowed, pending } = admitted;
-  if (acknowledged) replay?.forget(allowed);
-  const updates =
-    message.type === 'subscribe'
-      ? [
-          ...deps.registry.handleUnsubscribeMessage(socket, pending),
-          ...deps.registry.handleSubscribeMessage(socket, { ...message, subjects: allowed }),
-        ]
-      : deps.registry.handleUnsubscribeMessage(socket, subjects);
+  const superseded = message.type === 'unsubscribe' || !acknowledged ? message.subjects : allowed;
+  const rollbackReplay = replay?.stage(message, superseded, pending);
+  let rollback: (() => ClientSubscriptionUpdate[]) | undefined;
+  let committed = false;
   const dispatch = {
     debug: deps.debug,
     receiveContext: admitted.receiveContext,
     logContext: `dispatching ${message.type}`,
   };
-  const handlersApplied = await invokeSubscriptionUpdates(updates, deps.handlers, dispatch);
-  if (!admit()) {
-    if (message.type === 'subscribe') {
-      await invokeSubscriptionUpdates(deps.registry.handleUnsubscribeMessage(socket, allowed), deps.handlers, dispatch);
+  try {
+    const staged = deps.registry.stageSubscriptionUpdate(socket, { ...message, subjects: allowed }, pending);
+    rollback = staged.rollback;
+    const handlersApplied = await invokeSubscriptionUpdates(staged.updates, deps.handlers, dispatch);
+    if (admit() === undefined) return subscriptionRejection('peer-changed');
+    if (!handlersApplied) return subscriptionRejection('subscription-dispatch-failed');
+    committed = true;
+  } finally {
+    if (!committed) {
+      rollbackReplay?.();
+      if (rollback !== undefined) await invokeSubscriptionUpdates(rollback(), deps.handlers, dispatch);
     }
-    sendSubscriptionAck(socket, ackId, deps.sendSafely, subscriptionPeerChanged());
-    return;
   }
-  if (!handlersApplied) return;
-  if (message.type === 'subscribe') replay?.defer(message, pending);
-  sendSubscriptionAck(socket, ackId, deps.sendSafely);
 }
 
 /**
@@ -473,7 +466,13 @@ export async function routeMessage(
   if (sender === undefined) return;
   const receiveContext = sender.connection;
   if (isSubscriptionMessage(message)) {
-    await routeSubscriptionMessage(message, socket, deps, receiveContext, restriction, replay);
+    const error = await routeSubscriptionMessage(message, socket, deps, receiveContext, restriction, replay).catch(
+      (error: unknown) => {
+        if (deps.debug) console.error('[ServerTransport] Failed to apply subscription:', error);
+        return subscriptionRejection('subscription-dispatch-failed');
+      },
+    );
+    sendSubscriptionAck(socket, message.ackId, deps.sendSafely, error);
     return;
   }
   if (message.type === 'broadcast') {
@@ -520,6 +519,7 @@ export function createInboundMessageHandler(
   const queueSubscription = createSubscriptionQueue(
     socket,
     deps,
+    registry.deferredSubscriptionsFor(socket),
     (message, replay) => routeMessage(message, socket, deps, replay),
     lifetime,
   );

@@ -190,16 +190,13 @@ async function answerForParty(
   sources: readonly RightsSourceContribution[],
   externalPayload?: ExternalPayloadContext,
 ): Promise<RightAnswer> {
-  const question: RightSourceQuestion = { call: partyCall, right, context };
   const answers = await Promise.all(
     sources.map((source) => {
-      if (externalPayload === undefined || !matchesAnySubscription(right, source.requiresPayload ?? [])) {
-        return askSource(question, source);
-      }
-      return askSource(
-        { ...question, context: deepFreeze({ subject: externalPayload.subject, payload: externalPayload.payload }) },
-        source,
-      );
+      const sourceContext =
+        externalPayload !== undefined && matchesAnySubscription(right, source.requiresPayload ?? [])
+          ? { subject: externalPayload.subject, payload: externalPayload.payload }
+          : context;
+      return askSource({ call: partyCall, right, context: deepFreeze(structuredClone(sourceContext)) }, source);
     }),
   );
   return answers.find((answer) => !answer.granted) ?? { granted: true };

@@ -18,28 +18,48 @@ import type {
 } from '@makaio/core';
 import { isRequestSchema } from '../utils/is-request-schema.js';
 
+/** A duplicate namespace registration declares different startup observation. */
+export class NamespaceStartupObservationConflictError extends Error {
+  /** @param namespace - Domain with conflicting startup observation declarations. */
+  public constructor(public readonly namespace: string) {
+    super(`[MakaioBus] Namespace '${namespace}' already registered with different startup observation.`);
+    this.name = 'NamespaceStartupObservationConflictError';
+  }
+}
+
 /**
- * Require host ownership and explicit read-only declarations for requests observable during startup.
+ * Validate and snapshot startup observation, including agreement with a previous registration.
  * @param domain - Namespace being registered.
  * @param owner - Kind of holder registering the namespace.
  * @param inspections - Unwrapped subject contracts.
- * @param observation - Optional startup observation declaration.
+ * @param options - Namespace registration options containing the declaration.
+ * @param existing - Previous registration, if this namespace is already registered.
+ * @returns A snapshot of the declared read-only requests when startup observation is enabled.
  */
-export function validateStartupObservation(
+export function resolveStartupObservation(
   domain: string,
   owner: 'host' | 'extension',
   inspections: ReadonlyMap<string, SubjectSchemaInspection<BaseSubjectSchema>>,
-  observation: NamespaceRegistrationOptions['startupObservable'],
-): void {
-  if (observation === undefined) return;
+  options: NamespaceRegistrationOptions | undefined,
+  existing?: { startupReadOnlyRequests?: ReadonlySet<string> },
+): ReadonlySet<string> | undefined {
+  const observation = options?.startupObservable;
+  const requests = observation && new Set(observation.readOnlyRequests);
+  const previous = existing?.startupReadOnlyRequests;
+  if (
+    existing !== undefined &&
+    (previous?.size !== requests?.size || (requests && [...requests].some((subject) => !previous?.has(subject))))
+  ) {
+    throw new NamespaceStartupObservationConflictError(domain);
+  }
+  if (requests === undefined) return undefined;
   if (
     owner !== 'host' ||
-    [...inspections].some(
-      ([name, { schema }]) => isRequestSchema(schema) && !observation.readOnlyRequests.includes(name),
-    )
+    [...inspections].some(([name, { schema }]) => isRequestSchema(schema) && !requests.has(name))
   ) {
     throw new Error(`Startup-observable namespace '${domain}' must be host-owned and declare every read-only request`);
   }
+  return requests;
 }
 
 /**

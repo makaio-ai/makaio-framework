@@ -21,7 +21,7 @@ import { createTestServer, waitForMessageCount } from './test-utils.js';
 // ============================================================================
 
 describe('Subscription filtering E2E', () => {
-  it('authorizes each event for a client that only registers a receive callback', async () => {
+  it('authorizes each event for a client subscribed to the global wildcard', async () => {
     const { wss, port } = await createTestServer();
     const decisions: string[] = [];
     const server = new ServerTransport({
@@ -41,6 +41,7 @@ describe('Subscription filtering E2E', () => {
     try {
       await client.connect();
       await client.ready;
+      await client.subscribe('*');
       for (const subject of ['restricted', 'allowed']) {
         await server.send({ type: 'event', namespace: 'test', subject, payload: {}, messageId: subject });
       }
