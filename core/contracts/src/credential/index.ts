@@ -18,3 +18,4 @@ export { createSecret, isSecret } from './secret.js';
 export type { Secret } from './secret.js';
 export type { CredentialResolution } from './resolution.js';
 export type { CredentialResolverContribution, CredentialResolverInput } from './resolver-contribution.js';
+export type { RunCredentialBinding, RunCredentialPort, RunCredentialResult, RunCredentialScope } from './run-port.js';

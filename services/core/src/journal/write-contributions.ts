@@ -44,12 +44,17 @@ function registerWriter(owner: string, contribution: WriterContribution): Regist
 export class WriteContributionProcessor implements ContributionProcessor {
   private readonly entries = new Map<string, WriteContributions>();
 
+  /** @param hostResolver - Read the shared resolver when the host owns the slot. */
+  public constructor(private readonly hostResolver?: () => CredentialResolverContribution | undefined) {}
+
   /**
    * @param pkg - Declaring extension.
    * @returns Whether the extension declares external write contributions.
    */
   public filter(pkg: KernelMakaioExtension): boolean {
-    return Boolean(pkg.writers?.length || pkg.writeParticipants?.length || pkg.credentialResolver);
+    return Boolean(
+      pkg.writers?.length || pkg.writeParticipants?.length || (!this.hostResolver && pkg.credentialResolver),
+    );
   }
 
   /**
@@ -75,10 +80,11 @@ export class WriteContributionProcessor implements ContributionProcessor {
       }
       participants.set(participant.name, { name: participant.name, prepare: participant.prepare.bind(participant) });
     }
-    if (pkg.credentialResolver && staged.some((entry) => entry.credentialResolver)) {
+    const credentialResolver = this.hostResolver ? undefined : pkg.credentialResolver;
+    if (credentialResolver && staged.some((entry) => entry.credentialResolver)) {
       throw new MakaioError('A credential resolver is already declared.');
     }
-    this.entries.set(owner, { writers, participants, credentialResolver: pkg.credentialResolver });
+    this.entries.set(owner, { writers, participants, credentialResolver });
   }
 
   /**
@@ -130,6 +136,7 @@ export class WriteContributionProcessor implements ContributionProcessor {
    * @returns The active resolver, if present.
    */
   public credentialResolver(): CredentialResolverContribution | undefined {
+    if (this.hostResolver) return this.hostResolver();
     for (const entry of this.entries.values()) {
       if (entry.credentialResolver && entry.isActive?.()) return entry.credentialResolver;
     }

@@ -17,6 +17,7 @@ import {
   type ExtensionConfigResolutionMode,
   resolveConfigOutcome,
 } from './resolve-config.js';
+import { extensionGenerationSignal, reopenExtensionGeneration } from './extension-generation.js';
 import { namespaceCapabilityFor, namespaceRegistrationFor, reopenExtensionNamespaces } from './namespace-capability.js';
 import type {
   ExtensionContextBase,
@@ -79,6 +80,8 @@ export interface ExtensionContextHost<THostContext extends KernelHostContext = K
    * @returns `true` when the named extension is active.
    */
   readonly hasActiveExtension: (name: string) => boolean;
+  /** Withdraw a contributed credential resolver at the start of teardown. */
+  readonly withdrawCredentialResolver?: (name: string) => void;
   /**
    * Create the open-contribution reader bound to one extension.
    *
@@ -232,29 +235,6 @@ function extensionCarrierOf(identity: ExtensionIdentity): PartyRef {
   return { kind: MAKAIO_EXTENSION_PARTY_KIND, id: identity.extensionName };
 }
 
-const carrierLifetimes = new WeakMap<ExtensionIdentity, AbortController>();
-
-/**
- * Gets the generation signal shared by capabilities of this activation.
- * @param identity - Trusted entry identity.
- * @returns The signal for the current activation.
- */
-export function extensionGenerationSignal(identity: ExtensionIdentity): AbortSignal {
-  const lifetime = carrierLifetimes.get(identity) ?? new AbortController();
-  carrierLifetimes.set(identity, lifetime);
-  return lifetime.signal;
-}
-
-/**
- * Remove registrations made through all carrier buses of this entry.
- * @param identity - Trusted identity of the entry being released.
- */
-export function releaseExtensionCarrierSubscriptions(identity: ExtensionIdentity): void {
-  const lifetime = carrierLifetimes.get(identity) ?? new AbortController();
-  carrierLifetimes.set(identity, lifetime);
-  lifetime.abort();
-}
-
 /**
  * Open a new registration generation when the coordinator begins activation.
  * Previously issued carrier buses keep their ended signal.
@@ -262,7 +242,7 @@ export function releaseExtensionCarrierSubscriptions(identity: ExtensionIdentity
  */
 export function reopenExtensionContext(identity: ExtensionIdentity): void {
   reopenExtensionNamespaces(identity);
-  if (carrierLifetimes.get(identity)?.signal.aborted) carrierLifetimes.delete(identity);
+  reopenExtensionGeneration(identity);
 }
 
 /**

@@ -70,3 +70,5 @@ export type {
   ExtensionInfo,
   SetEnabledReason,
 } from './observability/index.js';
+
+export { DuplicateCredentialResolverError } from './extension/credential-resolver-contributions.js';

@@ -29,14 +29,14 @@ export const namespace = createBusNamespace(extension, {
  * @param packages - Manifests to discover during boot.
  * @param signal - Optional startup cancellation signal.
  * @param journalStartupWaitTimeoutMs - Maximum time an inbound delivery waits for startup.
- * @param options - Existing home, database target, and optional coordinator wiring.
+ * @param options - Existing home, database target, and optional coordinator and journal wiring.
  * @returns The pending runtime and its database URL.
  */
 export async function bootJournalHost(
   packages: readonly KernelMakaioExtension[],
   signal?: AbortSignal,
   journalStartupWaitTimeoutMs?: number,
-  options: Pick<CoreBootOptions, 'configureCoordinator' | 'database'> & {
+  options: Pick<CoreBootOptions, 'configureCoordinator' | 'database' | 'writeJournal'> & {
     home?: string;
   } = {},
 ) {
@@ -67,6 +67,7 @@ export async function bootJournalHost(
     journalStartupWaitTimeoutMs,
     ...(url.startsWith('file:') ? { dbPath: url.slice('file:'.length) } : { database: options.database }),
     configureCoordinator: options.configureCoordinator,
+    writeJournal: options.writeJournal,
   });
   onTestFinished(async () => {
     try {

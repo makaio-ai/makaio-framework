@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
+import type { RunCredentialPort } from '@makaio/contracts/credential';
 import type { CallContext } from '@makaio/contracts/call-context';
 import {
   AgentModelReplySchema,
@@ -31,6 +32,9 @@ export type ModelCredentialSource = {
   ): Promise<{ readonly kind: 'issued'; readonly credential: string } | { readonly kind: 'purpose-not-granted' }>;
 };
 
+/** The worker may supply a run-bound port or a host-configured model source. */
+export type WorkerModelCredentialSource = ModelCredentialSource | RunCredentialPort;
+
 /** Worker-owned model invocation. The adapter never receives this port or its authorization. */
 export interface WorkerModelPort {
   readonly modelId: string;
@@ -41,7 +45,7 @@ export interface WorkerModelPort {
 export interface WorkerModelInvocation {
   readonly call: CallContext;
   readonly request: AgentModelRequest;
-  readonly credentialSource: ModelCredentialSource;
+  readonly credentialSource: WorkerModelCredentialSource;
   readonly target: string;
   readonly signal: AbortSignal;
 }
@@ -55,14 +59,19 @@ export type ModelMediationOutcome =
 
 /** Typed reply from the trusted worker model port. */
 export type WorkerModelResult =
-  | { readonly kind: 'completed'; readonly reply: AgentModelReply }
+  | {
+      readonly kind: 'completed';
+      readonly reply: AgentModelReply;
+      /** Recheck the run and resolver immediately before delivery. */
+      readonly isCurrent?: () => boolean;
+    }
   | { readonly kind: 'failed'; readonly code: ModelFailureCode };
 
 /** The worker owns the session, authorization source, named target and time bounds. */
 export interface LocalModelOptions {
   readonly call: CallContext;
   readonly model: WorkerModelPort;
-  readonly credentialSource: ModelCredentialSource;
+  readonly credentialSource: WorkerModelCredentialSource;
   readonly target: string;
   readonly signal: AbortSignal;
   readonly requestTimeoutMs: number;
@@ -125,6 +134,34 @@ function report(options: LocalModelOptions, outcome: ModelMediationOutcome): voi
   } catch {
     /* The sink cannot affect delivery. */
   }
+}
+
+/**
+ * Validate and deliver a terminal result in the same turn as the authorization check.
+ * @param response - Step's HTTP response.
+ * @param result - Outcome supplied by the worker's model port.
+ * @param fail - Send a content-free failure.
+ * @param finish - Record the local outcome.
+ * @returns No value. The response is completed synchronously.
+ */
+function deliverModelResult(
+  response: ServerResponse,
+  result: WorkerModelResult,
+  fail: (status: number, code: ModelFailureCode) => void,
+  finish: (outcome: ModelMediationOutcome) => void,
+): void {
+  if (result.kind !== 'completed') {
+    const code = ModelFailureCodeSchema.safeParse(result.code);
+    if (code.success && code.data === 'environmentMissing') return fail(403, code.data);
+    return fail(502, code.success ? code.data : 'upstream-failed');
+  }
+  const output = AgentModelReplySchema.safeParse(result.reply);
+  if (!output.success) return fail(502, 'reply-invalid');
+  const body = serializeModelMessage(output.data);
+  if (body === undefined) return fail(502, 'reply-invalid');
+  if (result.isCurrent?.() === false) return fail(403, 'environmentMissing');
+  response.writeHead(200, { 'content-type': 'application/json' }).end(body);
+  finish({ kind: 'completed', usage: output.data.usage });
 }
 
 /**
@@ -191,17 +228,7 @@ async function handleModel(
     pending.add(operation);
     const result = await operation.finally(() => pending.delete(operation));
     if (signal.aborted) return;
-    if (result.kind !== 'completed') {
-      const code = ModelFailureCodeSchema.safeParse(result.code);
-      if (code.success && code.data === 'environmentMissing') return fail(403, code.data);
-      return fail(502, code.success ? code.data : 'upstream-failed');
-    }
-    const output = AgentModelReplySchema.safeParse(result.reply);
-    if (!output.success) return fail(502, 'reply-invalid');
-    const body = serializeModelMessage(output.data);
-    if (body === undefined) return fail(502, 'reply-invalid');
-    finish({ kind: 'completed', usage: output.data.usage });
-    response.writeHead(200, { 'content-type': 'application/json' }).end(body);
+    deliverModelResult(response, result, fail, finish);
   } catch {
     fail(502, 'upstream-failed');
   } finally {
@@ -211,10 +238,11 @@ async function handleModel(
 
 /**
  * Open an authenticated capability on the worker's loopback address.
- * @param options - Authority, upstream port, credential source, named target and lifetime.
+ * @param input - Authority, upstream port, credential source, named target and lifetime.
  * @returns The revocable session address.
  */
-export async function openLocalModelAddress(options: LocalModelOptions): Promise<LocalModelLease> {
+export async function openLocalModelAddress(input: LocalModelOptions): Promise<LocalModelLease> {
+  const options = Object.freeze({ ...input });
   const { signal, requestTimeoutMs } = options;
   if (signal.aborted) throw new Error('Model mediation was cancelled');
   if (!Number.isInteger(requestTimeoutMs) || requestTimeoutMs < 1 || requestTimeoutMs > 2_147_483_647) {

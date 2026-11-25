@@ -607,7 +607,13 @@ export async function bootMakaioRuntimeCore(
     const busUrl = buildLocalBusUrl(boundHost, boundPort);
 
     const credentialBinder = createCredentialBinder();
-    const writeJournal = setupWriteJournal(database, bus, rights.hostRights, options.writeJournal);
+    const writeJournal = setupWriteJournal(
+      database,
+      bus,
+      rights.hostRights,
+      () => coordinator.credentials.activeResolver(),
+      options.writeJournal,
+    );
     if (writeJournal) shutdownSteps.push(resourceStep('write journal', () => writeJournal.destroy()));
 
     const getRuleContributions = () =>
@@ -617,6 +623,7 @@ export async function bootMakaioRuntimeCore(
       return service instanceof ReactionRegistry ? service : undefined;
     };
     const coordinator: ExtensionCoordinator<KernelExtensionContext> = new ExtensionCoordinator(bus, {
+      enableCredentialResolver: true,
       onRuleSourceRegistered: (): void => journalReaders.wake(),
       validateRules: async (input) => {
         const service = getRuleContributions();
@@ -1112,7 +1119,7 @@ export async function bootMakaioRuntimeCore(
     if (cancelled) {
       console.info('[boot] Startup cancelled — rolling back started resources');
     } else {
-      console.error('[boot] Startup failed — rolling back started resources', err);
+      console.error('[boot] Startup failed — rolling back started resources');
     }
     // Roll back in reverse order, collecting what fails to unwind.
     const rollbackFailures = await runBoundedShutdownSteps([...shutdownSteps].reverse());
