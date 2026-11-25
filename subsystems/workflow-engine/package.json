@@ -26,7 +26,7 @@
     "@makaio/utils": "workspace:*",
     "ajv": "^8.18.0",
     "drizzle-orm": "0.45.4",
-    "zod": "4.4.3"
+    "zod": "4.6.6"
   },
   "devDependencies": {
     "@makaio/build-tooling": "workspace:*",
