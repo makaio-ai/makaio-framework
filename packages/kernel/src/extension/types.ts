@@ -181,6 +181,8 @@ export interface RuntimeEnvironment {
  * Options for constructing an {@link ExtensionCoordinator}.
  */
 export interface ExtensionCoordinatorOptions<THostContext extends KernelHostContext = KernelExtensionContext> {
+  /** Enable the host-owned credential resolver slot for composed consumers. */
+  readonly enableCredentialResolver?: boolean;
   /** Live rules validator supplied by the host composition. */
   readonly validateRules?: RulesCapability['validate'];
   /** Notifies the host after a rule source registration becomes visible. */

@@ -12,6 +12,8 @@ export interface CredentialResolverInput {
   readonly purpose: string;
   /** Optional purpose-specific target the credential is requested for. */
   readonly target?: JsonValue;
+  /** Cancellation of a run-scoped request, when supplied by the worker. */
+  readonly signal?: AbortSignal;
 }
 
 /**

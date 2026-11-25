@@ -1,9 +1,9 @@
 import {
   buildExtensionContext,
-  extensionGenerationSignal,
   type ExtensionContextHost,
   resolveExtensionEntryConfig,
 } from './extension-context-builder.js';
+import { extensionGenerationSignal } from './extension-generation.js';
 import type { ContributionProcessor, ExtensionEntry, KernelHostContext } from './types.js';
 
 /**
@@ -47,6 +47,7 @@ export async function runContributionProcessors<THostContext extends KernelHostC
     return [];
   }
 
+  contextHost.withdrawCredentialResolver?.(name);
   contextHost.rules.release(extensionGenerationSignal(entry.identity));
   return runStoppedProcessors(processors, name, contextHost.rights, 'stop');
 }

@@ -10,10 +10,10 @@ import {
   buildExtensionContext,
   checkExtensionNameAddressable,
   type ExtensionContextHost,
-  releaseExtensionCarrierSubscriptions,
   reopenExtensionContext,
   resolveExtensionEntryConfig,
 } from './extension-context-builder.js';
+import { closeExtensionGeneration } from './extension-generation.js';
 import { createAndInitService, releaseService } from './extension-shutdown-runner.js';
 import { releaseExtensionNamespaces } from './namespace-capability.js';
 import { registerPackageTrayMenuEntry } from './tray-menu-entry-bridge.js';
@@ -82,7 +82,7 @@ export function releaseEntryNamespaces(entry: Pick<ExtensionEntry, 'identity'>):
  * @param entry - Extension entry whose lifecycle has ended.
  */
 export function closeEntryRegistration(entry: Pick<ExtensionEntry, 'identity' | 'pendingService'>): void {
-  releaseExtensionCarrierSubscriptions(entry.identity);
+  closeExtensionGeneration(entry.identity);
   if (entry.pendingService === undefined) releaseEntryNamespaces(entry);
 }
 

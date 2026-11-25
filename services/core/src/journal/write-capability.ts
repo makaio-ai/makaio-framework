@@ -14,7 +14,7 @@ import {
 } from '@makaio/contracts/journal';
 import { type CallContext, getFullSubjectForSubjectDefinition } from '@makaio/core';
 import { SUBJECT_SEND_RIGHT } from '@makaio/contracts/rights';
-import type { CoordinatorRights } from '@makaio/kernel';
+import type { CoordinatorRights, ExtensionCoordinator } from '@makaio/kernel';
 import { ExternalWriteJournal } from './external-write.js';
 import { WriteContributionProcessor } from './write-contributions.js';
 
@@ -42,6 +42,7 @@ export interface WriteJournalPolicy {
  * @param bus - Host bus serving the journal subjects.
  * @param rights - Rights resolver shared by all journal readers and the bus.
  * @param policy - Host policy for writes and deadlines.
+ * @param credentialResolver - Read the host's active resolver. Omit to use a journal-owned slot.
  * @returns Contribution processor, per-extension capability and cleanup.
  */
 export function createWriteJournal(
@@ -49,8 +50,9 @@ export function createWriteJournal(
   bus: IMakaioBus,
   rights: CoordinatorRights['hostRights'],
   policy: WriteJournalPolicy,
+  credentialResolver?: ExtensionCoordinator['credentials']['activeResolver'],
 ) {
-  const contributions = new WriteContributionProcessor();
+  const contributions = new WriteContributionProcessor(credentialResolver);
   const journal = new ExternalWriteJournal(host, contributions);
 
   const readSubject = getFullSubjectForSubjectDefinition(JournalSubjects.writes);

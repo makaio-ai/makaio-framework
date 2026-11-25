@@ -6,6 +6,7 @@ import {
   type StepRunErrorCode,
   type WorkflowResolvedRole,
 } from '@makaio/contracts';
+import type { RunCredentialPort } from '@makaio/contracts/credential';
 import type { CallContext } from '@makaio/core';
 import { isValidLaunchTimeoutMs, type Launcher } from '@makaio/subprocess';
 import { resolveAgentStepConfig } from '@makaio/subsystem-workflow-engine/workflow-orchestrator';
@@ -44,6 +45,12 @@ export type ProcessStepCheckoutOptions =
     }
   | { readonly checkout?: undefined; readonly onRequestRefused?: never };
 
+type ModelConfiguration = {
+  readonly target: { readonly name: string; readonly url: URL };
+  readonly adapterName: string;
+  readonly ownerInstanceId: string;
+};
+
 /** Launch, role and model configuration for a worker run. */
 export type ProcessStepRunnerOptions = ProcessStepCheckoutOptions & {
   readonly launcher: Launcher;
@@ -57,12 +64,9 @@ export type ProcessStepRunnerOptions = ProcessStepCheckoutOptions & {
     role: string,
     signal: AbortSignal,
   ) => Promise<WorkflowResolvedRole | undefined>;
-  readonly model?: {
-    readonly credentialSource: ModelCredentialSource;
-    readonly target: { readonly name: string; readonly url: URL };
-    readonly adapterName: string;
-    readonly ownerInstanceId: string;
-  };
+  readonly model?: ModelConfiguration & { readonly credentialSource: ModelCredentialSource };
+  /** Model configuration for an authenticated booking. Takes precedence when supplied. */
+  readonly runModel?: ModelConfiguration & { readonly credentialSource: RunCredentialPort };
 };
 
 const agentFailureCodes = {
@@ -147,6 +151,18 @@ function supportsResolvedRole(role: WorkflowResolvedRole, expectedAdapter: strin
 }
 
 /**
+ * Select the model and detach booked settings before asynchronous role resolution.
+ * @param options - Worker-supplied runner settings.
+ * @returns The model settings for this invocation.
+ */
+function selectModel(options: ProcessStepRunnerOptions): ProcessStepRunnerOptions['model' | 'runModel'] {
+  const { runModel } = options;
+  if (runModel === undefined) return options.model;
+  const { name, url } = runModel.target;
+  return Object.freeze({ ...runModel, target: Object.freeze({ name, url: new URL(url) }) });
+}
+
+/**
  * Resolve the role and run one isolated structured turn.
  * @param options - Model, adapter and ownership declared by the worker.
  * @param config - Resolved workflow invocation.
@@ -163,8 +179,9 @@ async function runAgentStep(
   const fail = (error: StepRunErrorCode): StepRunResult => ({ status: 'failed', error, telemetry: { duration: 0 } });
   const cancelled: StepRunResult = { status: 'cancelled', telemetry: { duration: 0 } };
   if (workflowSignal.aborted) return cancelled;
-  const model = options.model;
-  // The host must grant model.use for this target. Worker bootstrap authorization only connects the bus.
+  const model = selectModel(options);
+  if (workflowSignal.aborted) return cancelled;
+  // Worker bootstrap authorization only connects the bus. The model has its own grant.
   if (model === undefined) return fail('environmentMissing');
   if (!isValidLaunchTimeoutMs(launch.timeoutMs)) return fail('requestInvalid');
   const deadline = performance.now() + launch.timeoutMs;

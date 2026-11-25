@@ -1,7 +1,8 @@
 import type { CallContext } from '@makaio/core';
 import { boundedWait, isNonNegativeFinite, nonNegativeOption, outerBoundMs } from '@makaio/utils';
 import { runContributionProcessors } from './contribution-processor-runner.js';
-import { releaseExtensionCarrierSubscriptions, type ExtensionContextHost } from './extension-context-builder.js';
+import type { ExtensionContextHost } from './extension-context-builder.js';
+import { closeExtensionGeneration } from './extension-generation.js';
 import { transitionPackageEntry } from './state-transition.js';
 import type { ExtensionService } from '@makaio/contracts';
 import type { ContributionProcessor, ExtensionEntry, KernelHostContext, KernelExtensionContext } from './types.js';
@@ -302,7 +303,7 @@ export async function shutdownExtensions<THostContext extends KernelHostContext>
     const windowMs = extensionStopBoundMs(entry, host.defaultStopBudgetMs);
     const stopping = stopEntry(host, name, entry);
     const outcome = await boundedWait(stopping, windowMs);
-    releaseExtensionCarrierSubscriptions(entry.identity);
+    closeExtensionGeneration(entry.identity);
     if (!outcome.settled) {
       const message = `Extension "${name}" did not finish stopping within ${windowMs} ms; continuing with the next one`;
       console.error(`[ExtensionCoordinator] ${message}`);

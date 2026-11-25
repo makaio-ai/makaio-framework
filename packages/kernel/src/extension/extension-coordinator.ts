@@ -66,6 +66,7 @@ import {
   totalExtensionStopBudgetMs,
   type ExtensionShutdownHost,
 } from './extension-shutdown-runner.js';
+import { CredentialResolverContributions } from './credential-resolver-contributions.js';
 import { closeEntryRegistration, releaseEntryNamespaces, startExtensionEntry } from './extension-start-runner.js';
 import { reportStartupDiagnostics } from './startup-diagnostics.js';
 
@@ -159,6 +160,11 @@ export class ExtensionCoordinator<THostContext extends KernelHostContext = Kerne
   /** FIFO lane for lifecycle transitions that mutate extension entries. */
   private lifecycleTail: Promise<void> = Promise.resolve();
   private rpcCleanups: Array<() => void> = [];
+  private readonly credentialContributions = new CredentialResolverContributions<THostContext>();
+
+  /** Host access to the single extension-contributed resolver slot. */
+  public readonly credentials = this.credentialContributions.hostAccess;
+
   private readonly contributionProcessors: ContributionProcessor<THostContext>[] = [];
   /** Open-slot entries of active extensions; fed by the processor registered in the constructor. */
   private readonly openContributionIndex = new OpenContributionIndex();
@@ -214,6 +220,7 @@ export class ExtensionCoordinator<THostContext extends KernelHostContext = Kerne
     this.extensionManagedNames = options.extensionManagedNames;
     this.frameworkPackageNames = options.frameworkPackageNames;
     this.installedCatalog = options.installedCatalog;
+    if (options.enableCredentialResolver) this.contributionProcessors.push(this.credentialContributions);
     this.contributionProcessors.push(createOpenContributionProcessor<THostContext>(this.openContributionIndex));
     this.rpcCleanups.push(
       registerWarningActionHandler(this.bus, this.warningActionMap, options.launcherCommand ?? 'makaio'),
@@ -983,6 +990,7 @@ export class ExtensionCoordinator<THostContext extends KernelHostContext = Kerne
       loadConfig: this.loadConfig,
       operatorConfig: this.operatorConfig,
       signal: this.shutdownController.signal,
+      withdrawCredentialResolver: (name) => this.credentialContributions.withdraw(name),
       hasActiveExtension: (name) => this.entries.get(name)?.state === 'active',
       openContributionReaderFor: (name: string) => this.openContributionIndex.readerFor(name),
       getExtensionService: <T>(name: string, identity: ExtensionIdentity, lifetime: AbortSignal): T | undefined => {
