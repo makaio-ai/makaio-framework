@@ -9,6 +9,7 @@ import {
 import { DeferredPromise } from '@makaio/utils';
 import { eq, sql } from 'drizzle-orm';
 import type { StorageDatabaseContext } from '@makaio/storage-conformance';
+import { AllocationObservationSignal } from '../../internal/worker-provider-host-binding.js';
 import { readAllocationScopeSetting } from '../allocation-scope-source.js';
 import type { OrderedProvisionOutcome, OrderedWorkerProvider, SealedAllocationSet } from '@makaio/contracts/extension';
 import { decideAllocationScope } from '../scope-decision.js';
@@ -260,6 +261,7 @@ export async function orderFixture(database: HostDatabase, provider: OrderedWork
     database,
     ...options,
     providers,
+    allocationObservation: new AllocationObservationSignal(),
     operationSignal,
     processIncarnation: 'initial-incarnation',
     handles: new Map(),

@@ -41,6 +41,9 @@ export interface PreparedDispatchProof {
   readonly orderDigest: string;
 }
 
+/** Correlation is pending while more evidence can arrive, or uncorrelated once the sender cannot help. */
+export type UnresolvedDispatchCorrelation = 'pending' | 'uncorrelated';
+
 /** Proof policy selected by the host when preparing a binding. */
 interface DispatchProofOptions {
   readonly signal: AbortSignal;
@@ -53,14 +56,14 @@ interface DispatchProofOptions {
  * @param call - Authorized provider observation call.
  * @param claim - Durable dispatch claim.
  * @param options - Provider operation lifetime and reference policy.
- * @returns The exact verified reference and how long its proof is valid.
+ * @returns The verified reference, pending correlation, or rejection.
  */
 async function findLiveReference(
   host: WorkerStartOptions,
   call: CallContext,
   claim: DispatchClaim,
   options: DispatchProofOptions,
-): Promise<LiveReference | undefined> {
+): Promise<LiveReference | UnresolvedDispatchCorrelation | undefined> {
   const { binding } = claim;
   const provider = host.providers.get(binding.providerId);
   if (
@@ -69,7 +72,8 @@ async function findLiveReference(
     provider?.allocationLifetime === 'provisioner-process-bound'
   ) {
     const proof = await provider.proveLocalLive(call, binding, options.signal);
-    if (proof === undefined || !hasOpenDeadline(proof.expiresAt)) return undefined;
+    if (proof === undefined) return 'uncorrelated';
+    if (!hasOpenDeadline(proof.expiresAt)) return undefined;
     const ref = parseReference(binding.providerId, proof.allocationRef);
     return ref === undefined
       ? undefined
@@ -83,13 +87,14 @@ async function findLiveReference(
     return undefined;
   const observation = await observeManaged(call, provider.recovery, binding, options.signal, false);
   options.signal.throwIfAborted();
-  const ref = trustedObservationReference(
-    claim,
-    observation,
-    mergeCandidates(claim.candidates, observation.candidates),
-    options.useSenderReference,
-  );
-  if (ref === undefined) return undefined;
+  const candidates = mergeCandidates(claim.candidates, observation.candidates);
+  const ref = trustedObservationReference(claim, observation, candidates, options.useSenderReference);
+  if (ref === undefined) {
+    // An empty listing may still gain an independent supervision observation after the sender settles.
+    return observation.observedPage && !observation.foreignDiscovery && candidates.length === 0
+      ? 'pending'
+      : 'uncorrelated';
+  }
   const { liveThrough } = await observeLiveAllocation(call, provider.recovery, claim, ref, options.signal, true);
   return liveThrough === undefined
     ? undefined
@@ -105,7 +110,7 @@ async function findLiveReference(
  * @param claim - Dispatch authenticated against its locked order.
  * @param visibility - Host-selected platform verification policy.
  * @param options - Provider operation lifetime and reference policy.
- * @returns Proof for a conditional bind, if available.
+ * @returns Proof for a conditional bind, pending correlation, or rejection.
  */
 export async function prepareDispatchProof(
   host: WorkerStartOptions,
@@ -113,7 +118,7 @@ export async function prepareDispatchProof(
   claim: DispatchClaim,
   visibility: StartValueVisibility,
   options: DispatchProofOptions = { signal: host.operationSignal, useSenderReference: false },
-): Promise<PreparedDispatchProof | undefined> {
+): Promise<PreparedDispatchProof | UnresolvedDispatchCorrelation | undefined> {
   const snapshot = deepFreeze(structuredClone(claim));
   if (snapshot.settled !== null) return undefined;
   const policy = Object.freeze({ ...visibility });
@@ -121,7 +126,9 @@ export async function prepareDispatchProof(
   proofOptions.signal.throwIfAborted();
   const live = await findLiveReference(host, call, snapshot, proofOptions);
   proofOptions.signal.throwIfAborted();
-  if (live === undefined) return undefined;
+  // An open sender can still commit provenance that an incomplete observation could not establish.
+  if (live === 'uncorrelated' && !snapshot.sendSettled) return 'pending';
+  if (typeof live !== 'object') return live;
   const { liveThrough, requiresPlatform } = live;
   const ref = deepFreeze(structuredClone(live.ref));
   if (requiresPlatform && policy.kind !== 'externally-visible') return undefined;
@@ -185,7 +192,7 @@ export async function prepareAllocationBinding(
   if (current.order.redemption !== undefined) throw new AllocationBindingRequiresRedemptionError();
   if (!mayRedeem(current.order)) return undefined;
   const proof = await prepareDispatchProof(host, call, current.claim, policy);
-  if (proof === undefined) return undefined;
+  if (typeof proof !== 'object') return undefined;
   return Object.freeze<PreparedAllocationBinding>({
     allocationRef: proof.ref,
     bind: async (tx) => {

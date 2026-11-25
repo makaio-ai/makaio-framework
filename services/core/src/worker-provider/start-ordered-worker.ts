@@ -1,5 +1,6 @@
 import type { WorkerDispatchCapability } from '@makaio/contracts/capabilities';
 import { abortableWait, boundedWait } from '@makaio/utils';
+import { AllocationObservationSignal } from './allocation-observation-signal.js';
 import { dispatchWinner, observeDispatch, unresolved } from './dispatch-supervision.js';
 import { prepareAllocationBinding } from './redemption-binding.js';
 import { decideStart, lockDispatch, ownsOrder } from './start-claim.js';
@@ -11,6 +12,9 @@ import type { WorkerStartOptions } from './start-order.js';
  * @returns The in-process start port and observation-only supervision.
  */
 export function createWorkerDispatch(host: WorkerStartOptions): WorkerDispatchCapability {
+  if (!(host.allocationObservation instanceof AllocationObservationSignal)) {
+    throw new TypeError('Worker dispatch requires a shared AllocationObservationSignal');
+  }
   return Object.freeze<WorkerDispatchCapability>({
     prepareAllocationBinding(call, jobRunId, visibility) {
       host.operationSignal.throwIfAborted();

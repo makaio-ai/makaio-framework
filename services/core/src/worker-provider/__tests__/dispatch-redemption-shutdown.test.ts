@@ -7,6 +7,7 @@ import {
 import { createHostDatabase } from '@makaio/storage-drizzle';
 import { DeferredPromise } from '@makaio/utils';
 import { beforeAll, describe, expect, it } from 'vitest';
+import { AllocationObservationSignal } from '../../internal/worker-provider-host-binding.js';
 import { readDispatch } from '../dispatch-store.js';
 import { finishLocalAllocation } from '../local-worker-control.js';
 import { WorkerProviderRegistry } from '../provider-registry.js';
@@ -94,6 +95,7 @@ async function managedHandoff(context: StorageDatabaseContext, jobRunId: string,
     },
     source: owner.sourceFor(executor),
     providers,
+    allocationObservation: new AllocationObservationSignal(),
     scopeSetting: setting,
     connection: () => ({ busAuth: { kind: 'none' } }),
     operationSignal: operations.signal,

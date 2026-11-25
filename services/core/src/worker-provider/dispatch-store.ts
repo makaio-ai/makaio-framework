@@ -1,13 +1,36 @@
-import type { HostTransaction, JobRunId, ProviderAllocationRef } from '@makaio/contracts';
+import {
+  ProviderAllocationRefSchema,
+  type HostTransaction,
+  type JobRunId,
+  type ProviderAllocationRef,
+} from '@makaio/contracts';
 import { defineDialectSchema, getTransactionQueryContext, resolveSchema } from '@makaio/storage-drizzle';
 import { canonicalStringify } from '@makaio/utils';
-import { eq, isNull, and } from 'drizzle-orm';
+import { eq, isNull, and, getTableColumns, sql } from 'drizzle-orm';
+import { z } from 'zod';
 import { workerDispatch as postgres } from './storage/schema.postgres.js';
 import { workerDispatch as sqlite, type LateAllocation } from './storage/schema.js';
 
 const schema = defineDialectSchema({ dispatch: sqlite }, { dispatch: postgres });
 
 type StoredDispatch = typeof sqlite.$inferSelect;
+const referencesSchema = z.array(ProviderAllocationRefSchema);
+const candidatesSchema = z.union([
+  referencesSchema,
+  z.strictObject({
+    references: referencesSchema,
+    senderReference: ProviderAllocationRefSchema.optional(),
+    shutdownEnded: referencesSchema.optional(),
+  }),
+]);
+
+/** A stored dispatch contains unreadable allocation candidate evidence. */
+export class DispatchCandidateReadError extends Error {
+  public constructor() {
+    super('Stored worker dispatch candidates are invalid');
+    this.name = 'DispatchCandidateReadError';
+  }
+}
 
 /** Durable, secret-free dispatch state. */
 export type DispatchClaim = Omit<StoredDispatch, 'candidates'> & {
@@ -22,13 +45,33 @@ export type DispatchClaim = Omit<StoredDispatch, 'candidates'> & {
 export type NewDispatchClaim = Pick<DispatchClaim, 'jobRunId' | 'orderDigest' | 'binding'>;
 
 /**
+ * Project candidate JSON as text so both dialects use the same checked decoder.
+ * @param table - Dispatch storage table for the active dialect.
+ * @returns Columns for reading a complete dispatch.
+ */
+function dispatchColumns(table: typeof sqlite) {
+  return { ...getTableColumns(table), candidates: sql<string>`cast(${table.candidates} as text)` };
+}
+
+/**
  * Decode the candidate list and its evidence. Legacy arrays carry no sender provenance.
  * @param row - Stored dispatch using the same JSON column for both representations.
  * @returns Dispatch decoded for supervision.
  */
-function decodeDispatch({ candidates, ...row }: StoredDispatch): DispatchClaim {
-  if (Array.isArray(candidates)) return { ...row, candidates };
-  const { references, ...evidence } = candidates;
+function decodeDispatch({
+  candidates,
+  ...row
+}: Omit<StoredDispatch, 'candidates'> & { candidates: string }): DispatchClaim {
+  let json: unknown;
+  try {
+    json = JSON.parse(candidates);
+  } catch {
+    throw new DispatchCandidateReadError();
+  }
+  const parsed = candidatesSchema.safeParse(json);
+  if (!parsed.success) throw new DispatchCandidateReadError();
+  if (Array.isArray(parsed.data)) return { ...row, candidates: parsed.data };
+  const { references, ...evidence } = parsed.data;
   return { ...row, candidates: references, ...evidence };
 }
 
@@ -56,7 +99,7 @@ function encodeCandidates(
 export async function readDispatch(tx: HostTransaction, jobRunId: JobRunId): Promise<DispatchClaim | undefined> {
   const query = getTransactionQueryContext(tx);
   const { dispatch } = resolveSchema(query, schema);
-  const [row] = await query.select().from(dispatch).where(eq(dispatch.jobRunId, jobRunId));
+  const [row] = await query.select(dispatchColumns(dispatch)).from(dispatch).where(eq(dispatch.jobRunId, jobRunId));
   return row === undefined ? undefined : decodeDispatch(row);
 }
 
@@ -74,7 +117,7 @@ export async function insertDispatch(tx: HostTransaction, claim: NewDispatchClai
     .insert(dispatch)
     .values({ ...claim, candidates: [] })
     .onConflictDoNothing({ target: dispatch.jobRunId })
-    .returning();
+    .returning(dispatchColumns(dispatch));
   return row === undefined ? undefined : decodeDispatch(row);
 }
 
@@ -106,7 +149,7 @@ export async function updateDispatch(
     .update(dispatch)
     .set({ ...fields, candidates: storedCandidates })
     .where(and(eq(dispatch.jobRunId, claim.jobRunId), isNull(dispatch.settled)))
-    .returning();
+    .returning(dispatchColumns(dispatch));
   return row === undefined ? claim : decodeDispatch(row);
 }
 
@@ -162,7 +205,7 @@ async function saveShutdownCandidates(
     .update(dispatch)
     .set({ candidates: encodeCandidates(references, { senderReference: claim.senderReference, shutdownEnded }) })
     .where(eq(dispatch.jobRunId, claim.jobRunId))
-    .returning();
+    .returning(dispatchColumns(dispatch));
   return row === undefined ? claim : decodeDispatch(row);
 }
 
@@ -185,7 +228,7 @@ export async function recordLateAllocation(
     .update(dispatch)
     .set({ sendSettled: true, settled: { ...claim.settled, lateAllocation } })
     .where(eq(dispatch.jobRunId, claim.jobRunId))
-    .returning();
+    .returning(dispatchColumns(dispatch));
   return row === undefined ? claim : decodeDispatch(row);
 }
 
