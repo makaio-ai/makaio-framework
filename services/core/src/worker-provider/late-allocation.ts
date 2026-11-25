@@ -1,15 +1,39 @@
 import { AllocationTerminationSchema, type ProviderAllocationRef, type WorkerHandle } from '@makaio/contracts';
 import type { CallContext } from '@makaio/core';
-import { recordLateAllocation, sameReference, type DispatchClaim } from './dispatch-store.js';
+import type { OrderedWorkerRecovery } from '@makaio/contracts/extension';
+import {
+  mergeCandidates,
+  recordLateAllocation,
+  recordShutdownTeardown,
+  sameReference,
+  type DispatchClaim,
+} from './dispatch-store.js';
 import { finishLocalAllocation, localWorkerControl, releaseProvisionHandle } from './local-worker-control.js';
 import { isScopeApproved, lockDispatch } from './start-claim.js';
 import type { WorkerStartOptions } from './start-order.js';
 
 /**
+ * List durable cleanup duties backed by a settled send or a confirmed shutdown teardown.
+ * @param claim - Current dispatch state.
+ * @returns Exact references that still need teardown confirmation.
+ */
+export function pendingLateReferences(claim: DispatchClaim): readonly ProviderAllocationRef[] {
+  const late = claim.settled?.lateAllocation;
+  const sender = late?.state === 'pending' ? [late.reference] : [];
+  const { shutdownEnded } = claim;
+  return shutdownEnded === undefined
+    ? sender
+    : mergeCandidates(
+        sender,
+        claim.candidates.filter((ref) => !shutdownEnded.some((ended) => sameReference(ref, ended))),
+      );
+}
+
+/**
  * Dispose of returned local control only after teardown or durable managed handoff.
  * @param host - Composed host.
  * @param call - Current supervision call.
- * @param claim - Settled dispatch.
+ * @param claim - Dispatch with recorded cleanup evidence.
  * @param returnedHandle - Control from the original provisioning invocation, if this is the sender.
  */
 export async function finishLateAllocation(
@@ -20,7 +44,10 @@ export async function finishLateAllocation(
 ): Promise<void> {
   const { jobRunId } = claim;
   const late = claim.settled?.lateAllocation;
-  if (claim.binding.allocationLifetime === 'provider-managed' && late !== undefined) {
+  if (
+    claim.binding.allocationLifetime === 'provider-managed' &&
+    (late !== undefined || claim.shutdownEnded !== undefined)
+  ) {
     try {
       // Shutdown cancels provisioning, but a returned allocation still needs teardown.
       const signal =
@@ -28,12 +55,13 @@ export async function finishLateAllocation(
           ? new AbortController().signal
           : host.operationSignal;
       // Sender and recovery can overlap, so both use the repeat-safe termination operation.
-      if (
-        late.state === 'pending' &&
-        (await endByReference(host, call, claim, late.reference, signal).catch(() => false))
-      ) {
-        await recordLateTeardown(host, claim, late.reference);
-      }
+      await Promise.all(
+        pendingLateReferences(claim).map(async (ref) => {
+          if (await endByReference(host, call, claim, ref, signal).catch(() => false)) {
+            await recordLateTeardown(host, claim, ref);
+          }
+        }),
+      );
     } finally {
       await releaseProvisionHandle(returnedHandle);
     }
@@ -43,6 +71,35 @@ export async function finishLateAllocation(
     host.handles.set(jobRunId, localWorkerControl(returnedHandle));
   }
   await finishLocalAllocation(host, jobRunId);
+}
+
+/**
+ * Clean observed candidates under the applicable teardown rule.
+ * @param host - Composed dispatch host.
+ * @param call - Authorized supervision call.
+ * @param recovery - Provider operations for the scoped observation.
+ * @param claim - Snapshot after recording the observed candidates.
+ * @returns Whether direct teardown calls confirmed every candidate they handled.
+ */
+export async function endObservedCandidates(
+  host: WorkerStartOptions,
+  call: CallContext,
+  recovery: OrderedWorkerRecovery,
+  claim: DispatchClaim,
+): Promise<boolean> {
+  if (claim.shutdownEnded !== undefined) {
+    // Once local shutdown took custody, every other candidate has an independent durable duty.
+    await finishLateAllocation(host, call, claim);
+    return true;
+  }
+  const results = await Promise.allSettled(
+    claim.candidates.map(async (ref) =>
+      AllocationTerminationSchema.parse(
+        await recovery.terminateAllocation(call, claim.binding, ref, host.operationSignal),
+      ),
+    ),
+  );
+  return results.every((result) => result.status === 'fulfilled' && result.value.state === 'ended');
 }
 
 /**
@@ -57,10 +114,19 @@ async function recordLateTeardown(
   reference: ProviderAllocationRef,
 ): Promise<void> {
   await host.database.transaction(async (tx) => {
-    const current = await lockDispatch(tx, host, claim.jobRunId);
-    const pending = current?.claim.settled?.lateAllocation;
-    if (current !== undefined && pending?.state === 'pending' && sameReference(pending.reference, reference)) {
-      await recordLateAllocation(tx, current.claim, { ...pending, state: 'ended' });
+    const locked = await lockDispatch(tx, host, claim.jobRunId);
+    if (locked === undefined) return;
+    const current = locked.claim;
+    const late = current.settled?.lateAllocation;
+    if (late?.state === 'pending' && sameReference(late.reference, reference)) {
+      await recordLateAllocation(tx, current, { reference, state: 'ended' });
+    }
+    if (
+      current.shutdownEnded !== undefined &&
+      !current.shutdownEnded.some((ref) => sameReference(ref, reference)) &&
+      current.candidates.some((ref) => sameReference(ref, reference))
+    ) {
+      await recordShutdownTeardown(tx, current, reference);
     }
   });
 }
@@ -88,8 +154,11 @@ async function endByReference(
   }
   const approved = await host.database.transaction(async (tx) => {
     const current = await lockDispatch(tx, host, claim.jobRunId);
-    const late = current?.claim.settled?.lateAllocation;
-    return late?.state === 'pending' && sameReference(late.reference, ref) && isScopeApproved(tx, host, binding);
+    return (
+      current !== undefined &&
+      pendingLateReferences(current.claim).some((candidate) => sameReference(candidate, ref)) &&
+      isScopeApproved(tx, host, binding)
+    );
   });
   if (!approved) return false;
   const termination = AllocationTerminationSchema.parse(

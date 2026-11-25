@@ -14,7 +14,12 @@ import type { OrderedProvisionOutcome, OrderedWorkerProvider, SealedAllocationSe
 import { decideAllocationScope } from '../scope-decision.js';
 import { confirmAllocationScope } from '../scope-confirmation.js';
 import { WorkerProviderRegistry } from '../provider-registry.js';
-import type { CommittedWorkerOrder, StartOrder, WorkerOrderSource, WorkerStartOptions } from '../start-order.js';
+import type {
+  CommittedWorkerOrder,
+  SeparateBindingWorkerOrderSource,
+  StartOrder,
+  WorkerStartOptions,
+} from '../start-order.js';
 
 const entries = defineDualTable('ordered_worker_test_run', (c) => ({
   id: c.text('id').primaryKey(),
@@ -182,8 +187,8 @@ export async function orderSourceFixture(
       ? { ...common, allocationLifetime, allocationScope }
       : { ...common, allocationLifetime };
   const tokensInMemory = new Map<JobRunId, string>();
-  const source: WorkerOrderSource = {
-    async lockOrder(tx, id): Promise<CommittedWorkerOrder | undefined> {
+  const source: SeparateBindingWorkerOrderSource = {
+    async lockOrder(tx, id) {
       const query = getTransactionQueryContext(tx);
       const table = resolveSchema(query, schema);
       const [row] = await query
@@ -251,7 +256,7 @@ export async function orderFixture(database: HostDatabase, provider: OrderedWork
     { owner: 'example', key: 'primary', managedScopeConfirmed: true, providers: [provider] },
     operationSignal,
   );
-  const host: WorkerStartOptions = {
+  const host: WorkerStartOptions & { readonly source: SeparateBindingWorkerOrderSource } = {
     database,
     ...options,
     providers,

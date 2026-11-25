@@ -1,4 +1,4 @@
-import type { ContributionName, Party } from '@makaio/core';
+import type { CallContext, ContributionName, Party } from '@makaio/core';
 import type { HostTransaction } from '../host-database/index.js';
 import type { JsonSchema, JsonValue } from '../shared/json-value.js';
 
@@ -23,13 +23,7 @@ export interface ConnectionExchangeAccepted {
    * through `makaio:access.revoke` finds and closes it.
    */
   readonly revocationKey?: string;
-  /**
-   * Database work the setup needs. The core runs it in its own transaction;
-   * the extension guarantees that it can be repeated.
-   * @param tx - The open transaction of the host's database.
-   * @returns A promise that settles when the database work is done.
-   */
-  readonly commit?: (tx: HostTransaction) => Promise<void>;
+  readonly commit?: never;
   /** Not present on an accepted result; see {@link ConnectionExchangeRejected}. */
   readonly reject?: never;
 }
@@ -45,11 +39,26 @@ export type ConnectionExchangeRejected = {
 } & { readonly [Key in Exclude<keyof ConnectionExchangeAccepted, 'reject'>]?: never };
 
 /**
- * Result of a connection exchange: accepted with a party and payload, or
- * rejected. The two variants are mutually exclusive: exactly one of `reject`
- * and the accepted fields (`party`, `payload`, ...) is present.
+ * Prepared exchange whose final acceptance is decided by durable storage.
  */
-export type ConnectionExchangeResult = ConnectionExchangeAccepted | ConnectionExchangeRejected;
+export type ConnectionExchangeCommit = {
+  /**
+   * Run repeatable storage work in the host transaction. Only release the
+   * returned party and payload after the transaction commits successfully.
+   * @param call - The same anonymous call used for preparation.
+   * @param tx - Open transaction of the host database.
+   */
+  readonly commit: (
+    call: CallContext,
+    tx: HostTransaction,
+  ) => Promise<ConnectionExchangeAccepted | ConnectionExchangeRejected>;
+} & { readonly [Key in Exclude<keyof ConnectionExchangeAccepted, 'commit'>]?: never };
+
+/** Immediate result or prepared storage work that decides the final result. */
+export type ConnectionExchangeResult =
+  | ConnectionExchangeAccepted
+  | ConnectionExchangeRejected
+  | ConnectionExchangeCommit;
 
 /**
  * Connection setup with a payload at the `makaio.bus-connection` boundary, for
@@ -68,8 +77,9 @@ export interface ConnectionExchangeContribution {
    * Runs the exchange. It runs without a transaction (foreign code never runs
    * inside a transaction of the host); database work goes into `commit` of the
    * result.
+   * @param call - Anonymous call minted for this connection setup.
    * @param presented - The credential the setup message presents.
-   * @returns The accepted result with party and payload, or a rejection.
+   * @returns Immediate acceptance, rejection or prepared storage work.
    */
-  run(presented: JsonValue): Promise<ConnectionExchangeResult>;
+  run(call: CallContext, presented: JsonValue): Promise<ConnectionExchangeResult>;
 }

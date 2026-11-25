@@ -64,14 +64,36 @@ export type StartValueVisibility =
   | { readonly kind: 'allocation-only' }
   | {
       readonly kind: 'externally-visible';
-      /** Verify the evidence for this exact allocation and return the evidence expiry. */
-      readonly verifyPlatform: (allocationRef: ProviderAllocationRef) => Promise<string | undefined>;
+      /**
+       * Verify the evidence for this exact allocation and return the evidence expiry.
+       * @param allocationRef - Allocation to verify.
+       * @param signal - Lifetime of the proof request.
+       */
+      readonly verifyPlatform: (
+        allocationRef: ProviderAllocationRef,
+        signal: AbortSignal,
+      ) => Promise<string | undefined>;
     };
+
+/** The booked order requires the atomic redemption exchange. */
+export class AllocationBindingRequiresRedemptionError extends Error {
+  public readonly code = 'redemption-required';
+
+  public constructor() {
+    super('Allocation binding requires atomic redemption');
+    this.name = 'AllocationBindingRequiresRedemptionError';
+  }
+}
 
 /** Conditional binding to invoke in the same transaction as token redemption. */
 export interface PreparedAllocationBinding {
   readonly allocationRef: ProviderAllocationRef;
-  /** Throws on stale/conflicting evidence so the containing redemption must roll back. */
+  /**
+   * Bind while the order still permits separate binding. A refusal before
+   * writing leaves the caller's transaction usable. A storage failure marks it rollback-only.
+   * @param tx - Live transaction holding the order and allocation updates.
+   * @throws {@link AllocationBindingRequiresRedemptionError} If the order now requires atomic redemption.
+   */
   readonly bind: (tx: HostTransaction) => Promise<void>;
 }
 
@@ -86,10 +108,11 @@ export interface WorkerDispatchCapability {
    */
   superviseOrderedWorker(call: CallContext, jobRunId: JobRunId, signal: AbortSignal): Promise<StartWorkerResult>;
   /**
-   * Verify the allocation before the host's separate redemption transaction.
+   * Verify an allocation for an order that permits separate binding.
    * @param call - Authenticated order owner.
    * @param jobRunId - Run from the host's bootstrap verification.
    * @param visibility - Host-selected platform verification policy.
+   * @throws {@link AllocationBindingRequiresRedemptionError} If the order requires atomic redemption.
    */
   prepareAllocationBinding(
     call: CallContext,

@@ -8,6 +8,15 @@ export type LateAllocation = { reference: ProviderAllocationRef; state: 'pending
 /** Settlement evidence with an optional, independent cleanup duty. */
 type DispatchSettlement = BoundedRecoveryEvidence & { lateAllocation?: LateAllocation };
 
+/** Candidate references and independent evidence from the sender and managed shutdown. */
+type DispatchCandidates =
+  | ProviderAllocationRef[]
+  | {
+      references: ProviderAllocationRef[];
+      senderReference?: ProviderAllocationRef;
+      shutdownEnded?: ProviderAllocationRef[];
+    };
+
 /** The confirmed allocation scope and confirmation metadata for this installation. */
 export const workerAllocationScopeBindingDual = defineDualTable('worker_allocation_scope_binding', (c) => ({
   installation: c.text('installation').primaryKey(),
@@ -25,7 +34,7 @@ export const workerDispatchDual = defineDualTable('worker_dispatch', (c) => ({
   orderDigest: c.text('order_digest').notNull(),
   binding: c.jsonCol<DispatchBinding>('binding').notNull(),
   boundAllocation: c.jsonCol<ProviderAllocationRef>('bound_allocation'),
-  candidates: c.jsonCol<ProviderAllocationRef[]>('candidates').notNull(),
+  candidates: c.jsonCol<DispatchCandidates>('candidates').notNull(),
   sendSettled: c.bool('send_settled').notNull().default(false),
   settled: c.jsonCol<DispatchSettlement>('settled'),
 }));

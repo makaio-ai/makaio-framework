@@ -1,6 +1,7 @@
 export { BoundaryKindSchema, CoreBoundaryKind } from './kinds.js';
 export type {
   ConnectionExchangeAccepted,
+  ConnectionExchangeCommit,
   ConnectionExchangeContribution,
   ConnectionExchangeRejected,
   ConnectionExchangeResult,

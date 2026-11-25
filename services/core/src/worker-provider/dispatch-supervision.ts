@@ -1,5 +1,4 @@
 import {
-  AllocationTerminationSchema,
   PRE_REQUEST_REJECTION_CODE,
   BoundedRecoveryEvidenceSchema,
   type BoundedRecoveryEvidence,
@@ -13,6 +12,7 @@ import {
   type DispatchClaim,
   mergeCandidates,
   recordLateAllocation,
+  recordShutdownObservation,
   sameReference,
   updateDispatch,
 } from './dispatch-store.js';
@@ -31,7 +31,7 @@ import {
   releaseProvisionHandle,
   UNBOUND_PROCESS_TERMINATION_CODE,
 } from './local-worker-control.js';
-import { finishLateAllocation } from './late-allocation.js';
+import { endObservedCandidates, finishLateAllocation, pendingLateReferences } from './late-allocation.js';
 import type {
   OrderedProvisionOutcome,
   OrderedProvisionRequest,
@@ -309,7 +309,8 @@ async function recordSendSettled(
   bound?: ProviderAllocationRef,
   retainBound?: () => void,
 ) {
-  const canRecordAfterDrain = ref !== undefined && claim.binding.allocationLifetime === 'provider-managed';
+  const senderReference = claim.binding.allocationLifetime === 'provider-managed' ? ref : undefined;
+  const canRecordAfterDrain = senderReference !== undefined;
   if (host.provisionDrain?.closed.aborted && !canRecordAfterDrain) return undefined;
   return host.database.transaction(async (tx) => {
     const current = await lockDispatch(tx, host, claim.jobRunId);
@@ -328,11 +329,14 @@ async function recordSendSettled(
       });
       return { ...current, claim: updated };
     }
-    const boundAllocation = previous.boundAllocation ?? bound ?? null;
-    if (bound !== undefined && boundAllocation !== null && sameReference(boundAllocation, bound)) retainBound?.();
+    // Atomic redemption owns assignment. Supervision still retains custody of its observed allocation.
+    const assignment = current.order.redemption === undefined ? bound : undefined;
+    const boundAllocation = previous.boundAllocation ?? assignment ?? null;
+    if (bound !== undefined && (boundAllocation === null || sameReference(boundAllocation, bound))) retainBound?.();
     const updated = await updateDispatch(tx, previous, {
       sendSettled: true,
       candidates: ref === undefined ? previous.candidates : mergeCandidates(previous.candidates, [ref]),
+      senderReference,
       boundAllocation,
     });
     return { ...current, claim: updated };
@@ -347,7 +351,7 @@ async function recordSendSettled(
  * @param proven - Early reference with live evidence, if available.
  * @returns The latest claim and whether this observation permits termination.
  */
-export async function recordObservation(
+async function recordObservation(
   host: WorkerStartOptions,
   claim: DispatchClaim,
   observation: ManagedObservation,
@@ -357,12 +361,19 @@ export async function recordObservation(
     const locked = await lockDispatch(tx, host, claim.jobRunId);
     if (locked === undefined) return undefined;
     const current = locked.claim;
-    if (current.settled !== null) return { updated: current, mayTerminate: false };
+    if (current.settled !== null) {
+      const updated = await recordShutdownObservation(tx, current, observation.candidates);
+      return { updated, mayTerminate: false };
+    }
     const candidates = mergeCandidates(current.candidates, observation.candidates);
     // Under the run lock, a new binding requires the proven reference to remain the sole candidate.
     // A conflicting reference recorded during the proof leaves the merged set ineligible for binding.
     const ref = trustedObservationReference(current, observation, candidates);
-    const canBind = locked.order.state !== 'closed' && proven !== undefined && proven > Date.now();
+    const canBind =
+      locked.order.redemption === undefined &&
+      locked.order.state !== 'closed' &&
+      proven !== undefined &&
+      proven > Date.now();
     const boundAllocation = current.boundAllocation ?? (canBind ? ref : undefined) ?? null;
     const absent = !observation.foreignDiscovery && candidates.length === 0 && observation.seal?.refs.length === 0;
     const updated = await updateDispatch(tx, current, {
@@ -371,7 +382,7 @@ export async function recordObservation(
       ...(absent ? { settled: observation.seal?.evidence } : {}),
     });
     const mayTerminate =
-      locked.order.state === 'closed' &&
+      (locked.order.state === 'closed' || current.shutdownEnded !== undefined) &&
       candidates.length > 0 &&
       current.binding.allocationLifetime === 'provider-managed' &&
       (await isScopeApproved(tx, host, current.binding));
@@ -395,24 +406,23 @@ async function cleanManaged(
   claim: DispatchClaim,
   observation: ManagedObservation,
 ): Promise<DispatchClaim> {
-  const results = await Promise.allSettled(
-    claim.candidates.map(async (ref) =>
-      AllocationTerminationSchema.parse(
-        await recovery.terminateAllocation(call, claim.binding, ref, host.operationSignal),
-      ),
-    ),
-  );
+  const ended = await endObservedCandidates(host, call, recovery, claim);
   const seal = observation.seal;
   if (
     observation.foreignDiscovery ||
     seal === undefined ||
-    !results.every((result) => result.status === 'fulfilled' && result.value.state === 'ended') ||
+    !ended ||
     !claim.candidates.every((candidate) => seal.refs.some((ref) => sameReference(ref, candidate)))
   )
     return claim;
   return host.database.transaction(async (tx) => {
     const current = await lockDispatch(tx, host, claim.jobRunId);
-    if (current === undefined || current.claim.candidates.length !== claim.candidates.length) return claim;
+    if (
+      current === undefined ||
+      current.claim.candidates.length !== claim.candidates.length ||
+      (current.claim.shutdownEnded !== undefined && pendingLateReferences(current.claim).length > 0)
+    )
+      return claim;
     return updateDispatch(tx, current.claim, { settled: seal.evidence });
   });
 }
@@ -475,7 +485,7 @@ async function observeManagedDispatch(
   const candidates = mergeCandidates(claim.candidates, observation.candidates);
   const ref = trustedObservationReference(claim, observation, candidates);
   const proof =
-    order.state !== 'closed' && ref !== undefined
+    order.state !== 'closed' && claim.shutdownEnded === undefined && ref !== undefined
       ? await observeLiveAllocation(
           call,
           provider.recovery,
@@ -488,7 +498,10 @@ async function observeManagedDispatch(
   const recorded = await recordObservation(host, claim, observation, proof.liveThrough);
   if (recorded === undefined) return unresolved;
   const { updated, mayTerminate } = recorded;
-  if (updated.settled !== null) return resultOf(updated);
+  if (updated.settled !== null) {
+    if (updated.shutdownEnded !== undefined) await finishLateAllocation(host, call, updated);
+    return resultOf(updated);
+  }
   const result = resultOf(
     mayTerminate ? await cleanManaged(host, call, provider.recovery, updated, observation) : updated,
   );

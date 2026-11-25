@@ -7,11 +7,45 @@ import { workerDispatch as sqlite, type LateAllocation } from './storage/schema.
 
 const schema = defineDialectSchema({ dispatch: sqlite }, { dispatch: postgres });
 
+type StoredDispatch = typeof sqlite.$inferSelect;
+
 /** Durable, secret-free dispatch state. */
-export type DispatchClaim = typeof sqlite.$inferSelect;
+export type DispatchClaim = Omit<StoredDispatch, 'candidates'> & {
+  candidates: ProviderAllocationRef[];
+  /** The validated reference returned by the sole managed provision call. */
+  senderReference?: ProviderAllocationRef;
+  /** Positive termination evidence. Its presence opens reference-based shutdown cleanup. */
+  shutdownEnded?: ProviderAllocationRef[];
+};
 
 /** New dispatch claim. */
 export type NewDispatchClaim = Pick<DispatchClaim, 'jobRunId' | 'orderDigest' | 'binding'>;
+
+/**
+ * Decode the candidate list and its evidence. Legacy arrays carry no sender provenance.
+ * @param row - Stored dispatch using the same JSON column for both representations.
+ * @returns Dispatch decoded for supervision.
+ */
+function decodeDispatch({ candidates, ...row }: StoredDispatch): DispatchClaim {
+  if (Array.isArray(candidates)) return { ...row, candidates };
+  const { references, ...evidence } = candidates;
+  return { ...row, candidates: references, ...evidence };
+}
+
+/**
+ * Preserve independent evidence when replacing the stored candidate list.
+ * @param references - All positively identified candidates.
+ * @param evidence - Sender reference and managed shutdown evidence.
+ * @returns The candidate data for the existing JSON column.
+ */
+function encodeCandidates(
+  references: ProviderAllocationRef[],
+  { senderReference, shutdownEnded }: Pick<DispatchClaim, 'senderReference' | 'shutdownEnded'>,
+): StoredDispatch['candidates'] {
+  return senderReference === undefined && shutdownEnded === undefined
+    ? references
+    : { references, senderReference, shutdownEnded };
+}
 
 /**
  * Load the claim in the run owner's transaction.
@@ -23,7 +57,7 @@ export async function readDispatch(tx: HostTransaction, jobRunId: JobRunId): Pro
   const query = getTransactionQueryContext(tx);
   const { dispatch } = resolveSchema(query, schema);
   const [row] = await query.select().from(dispatch).where(eq(dispatch.jobRunId, jobRunId));
-  return row;
+  return row === undefined ? undefined : decodeDispatch(row);
 }
 
 /**
@@ -41,7 +75,7 @@ export async function insertDispatch(tx: HostTransaction, claim: NewDispatchClai
     .values({ ...claim, candidates: [] })
     .onConflictDoNothing({ target: dispatch.jobRunId })
     .returning();
-  return row;
+  return row === undefined ? undefined : decodeDispatch(row);
 }
 
 /**
@@ -54,16 +88,82 @@ export async function insertDispatch(tx: HostTransaction, claim: NewDispatchClai
 export async function updateDispatch(
   tx: HostTransaction,
   claim: DispatchClaim,
-  update: Partial<Pick<DispatchClaim, 'boundAllocation' | 'candidates' | 'sendSettled' | 'settled'>>,
+  update: Partial<
+    Pick<DispatchClaim, 'boundAllocation' | 'candidates' | 'senderReference' | 'sendSettled' | 'settled'>
+  >,
+): Promise<DispatchClaim> {
+  const query = getTransactionQueryContext(tx);
+  const { dispatch } = resolveSchema(query, schema);
+  const { candidates, senderReference, ...fields } = update;
+  const storedCandidates =
+    candidates === undefined && senderReference === undefined
+      ? undefined
+      : encodeCandidates(candidates ?? claim.candidates, {
+          senderReference: senderReference ?? claim.senderReference,
+          shutdownEnded: claim.shutdownEnded,
+        });
+  const [row] = await query
+    .update(dispatch)
+    .set({ ...fields, candidates: storedCandidates })
+    .where(and(eq(dispatch.jobRunId, claim.jobRunId), isNull(dispatch.settled)))
+    .returning();
+  return row === undefined ? claim : decodeDispatch(row);
+}
+
+/**
+ * Confirm one candidate ended while keeping discovery and other cleanup duties open.
+ * @param tx - Transaction holding the run lock.
+ * @param claim - Current claim read under that lock.
+ * @param reference - Exact candidate confirmed terminated.
+ */
+export async function recordShutdownTeardown(
+  tx: HostTransaction,
+  claim: DispatchClaim,
+  reference: ProviderAllocationRef,
+): Promise<void> {
+  await saveShutdownCandidates(tx, claim, claim.candidates, mergeCandidates(claim.shutdownEnded ?? [], [reference]));
+}
+
+/**
+ * Preserve a delayed positive observation independently of provider settlement.
+ * @param tx - Transaction holding the run lock.
+ * @param claim - Current managed dispatch.
+ * @param observed - Positively correlated references from the completed observation.
+ * @returns The claim with any added teardown duties.
+ */
+export async function recordShutdownObservation(
+  tx: HostTransaction,
+  claim: DispatchClaim,
+  observed: readonly ProviderAllocationRef[],
+): Promise<DispatchClaim> {
+  if (claim.shutdownEnded === undefined) return claim;
+  const references = mergeCandidates(claim.candidates, observed);
+  if (references.length === claim.candidates.length) return claim;
+  return saveShutdownCandidates(tx, claim, references, claim.shutdownEnded);
+}
+
+/**
+ * Save only reference-scoped duties, leaving provider settlement and binding untouched.
+ * @param tx - Transaction holding the run lock.
+ * @param claim - Current managed dispatch.
+ * @param references - All positively identified candidates.
+ * @param shutdownEnded - Candidates with confirmed teardown.
+ * @returns The claim with its updated teardown evidence.
+ */
+async function saveShutdownCandidates(
+  tx: HostTransaction,
+  claim: DispatchClaim,
+  references: ProviderAllocationRef[],
+  shutdownEnded: ProviderAllocationRef[],
 ): Promise<DispatchClaim> {
   const query = getTransactionQueryContext(tx);
   const { dispatch } = resolveSchema(query, schema);
   const [row] = await query
     .update(dispatch)
-    .set(update)
-    .where(and(eq(dispatch.jobRunId, claim.jobRunId), isNull(dispatch.settled)))
+    .set({ candidates: encodeCandidates(references, { senderReference: claim.senderReference, shutdownEnded }) })
+    .where(eq(dispatch.jobRunId, claim.jobRunId))
     .returning();
-  return row ?? claim;
+  return row === undefined ? claim : decodeDispatch(row);
 }
 
 /**
@@ -86,7 +186,7 @@ export async function recordLateAllocation(
     .set({ sendSettled: true, settled: { ...claim.settled, lateAllocation } })
     .where(eq(dispatch.jobRunId, claim.jobRunId))
     .returning();
-  return row ?? claim;
+  return row === undefined ? claim : decodeDispatch(row);
 }
 
 /**

@@ -262,6 +262,7 @@ export type {
   MaxRuntimeAssurance,
   WorkerProviderId,
 } from './worker/index.js';
+export { AllocationBindingRequiresRedemptionError } from './worker/index.js';
 export type {
   PreparedAllocationBinding,
   StartOrder,
