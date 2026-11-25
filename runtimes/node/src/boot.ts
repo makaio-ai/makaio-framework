@@ -52,6 +52,7 @@ import {
   JournalReaderService,
   SubjectDirectory,
 } from '@makaio/services-core/journal';
+import { bindWorkerDispatch } from './worker-dispatch-host-binding.js';
 import { JournalStartBarrier } from './journal-start-barrier.js';
 import { setupWriteJournal } from './write-journal-boot.js';
 import { CliNamespace } from '@makaio/kernel/cli';
@@ -433,8 +434,10 @@ export async function bootMakaioRuntimeCore(
     });
     const db = databaseClient.db;
     console.info('[boot] Database initialized');
-    shutdownSteps.push(resourceStep('database', () => databaseClient.close()));
     const database = createHostDatabase(db);
+    const workerDispatch = bindWorkerDispatch(options.workerDispatch, database, shutdownSteps, () =>
+      databaseClient.close(),
+    );
     checkpoint();
 
     // -----------------------------------------------------------------------
@@ -646,6 +649,7 @@ export async function bootMakaioRuntimeCore(
           return {
             ...context,
             database,
+            workerDispatch: workerDispatch?.capability,
             ...(writeJournal && {
               writes: writeJournal.bind(extension, context.bus, () => context.hasExtension(extension)),
             }),
@@ -894,6 +898,7 @@ export async function bootMakaioRuntimeCore(
     // -----------------------------------------------------------------------
     // The adapter contribution processor is registered by prepareAdapterRuntime()
     // (above, before load) so the adapter subsystem composes as one unit.
+    if (workerDispatch) coordinator.registerContributionProcessor(workerDispatch.contributionProcessor);
     coordinator.registerContributionProcessor(createLogImportContributionProcessor());
     coordinator.registerContributionProcessor(createArtifactKindContributionProcessor());
     coordinator.registerContributionProcessor(createArtifactLifecycleHookContributionProcessor());

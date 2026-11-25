@@ -5,7 +5,7 @@ import { canonicalStringify } from '@makaio/utils';
 import { readBinding } from './allocation-scope-store.js';
 import { decideAllocationScope } from './scope-decision.js';
 import { insertDispatch, readDispatch, type DispatchClaim } from './dispatch-store.js';
-import type { DispatchBinding, OrderedProvisionRequest, OrderedWorkerProvider } from './ordered-provider.js';
+import type { DispatchBinding, OrderedProvisionRequest, OrderedWorkerProvider } from '@makaio/contracts/extension';
 import type { CommittedWorkerOrder, StartOrder, StartWorkerResult, WorkerStartOptions } from './start-order.js';
 
 type Refusal = Extract<StartWorkerResult, { kind: 'refused' }>;

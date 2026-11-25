@@ -1,49 +1,56 @@
-import type { JobRunId, WorkerHandle } from '@makaio/contracts';
-import type { CallContext } from '@makaio/core';
-import { abortableWait } from '@makaio/utils';
-import { dispatchWinner, observeDispatch } from './dispatch-supervision.js';
+import type { WorkerDispatchCapability } from '@makaio/contracts/capabilities';
+import { abortableWait, boundedWait } from '@makaio/utils';
+import { dispatchWinner, observeDispatch, unresolved } from './dispatch-supervision.js';
+import { prepareAllocationBinding } from './redemption-binding.js';
 import { decideStart, lockDispatch, ownsOrder } from './start-claim.js';
-import type { StartOrderedWorker, StartWorkerResult, WorkerStartOptions } from './start-order.js';
-
-/** Start and observation share local control of process-bound allocations. */
-export interface WorkerDispatchService {
-  readonly startOrderedWorker: StartOrderedWorker;
-  /**
-   * Revisit a claimed dispatch, including an outstanding duty after run end.
-   * @param call - Authenticated run owner.
-   * @param jobRunId - Durable dispatch to revisit.
-   * @param signal - Cancels the caller's wait.
-   */
-  superviseOrderedWorker(call: CallContext, jobRunId: JobRunId, signal: AbortSignal): Promise<StartWorkerResult>;
-}
+import type { WorkerStartOptions } from './start-order.js';
 
 /**
  * Compose ordered dispatch against the host source and provider registry.
  * @param host - Host database, sources and provider lifecycle.
  * @returns The in-process start port and observation-only supervision.
  */
-export function createWorkerDispatch(host: WorkerStartOptions): WorkerDispatchService {
-  const handles = new Map<JobRunId, WorkerHandle>();
-  return {
+export function createWorkerDispatch(host: WorkerStartOptions): WorkerDispatchCapability {
+  return Object.freeze<WorkerDispatchCapability>({
+    prepareAllocationBinding(call, jobRunId, visibility) {
+      host.operationSignal.throwIfAborted();
+      return prepareAllocationBinding(host, call, jobRunId, visibility);
+    },
     startOrderedWorker(call, order, signal) {
       signal.throwIfAborted();
-      const work = decideStart(host, call, structuredClone(order)).then((decision) => {
+      const drain = host.provisionDrain;
+      if (drain !== undefined) {
+        host.operationSignal.throwIfAborted();
+        drain.closed.throwIfAborted();
+      }
+      const handoff = decideStart(host, call, structuredClone(order)).then((decision) => {
         if (decision.kind === 'refused') return decision;
-        if (decision.kind === 'observe') return observeDispatch(host, handles, call, decision);
-        return dispatchWinner(host, handles, call, decision);
+        if (decision.kind === 'observe')
+          return { outcome: observeDispatch(host, call, decision), remaining: undefined };
+        return dispatchWinner(host, call, decision);
       });
-      return abortableWait(work, signal);
+      const work = handoff.then((result) => ('outcome' in result ? result.outcome : result));
+      drain?.track(handoff, work);
+      const caller = handoff.then(async (result) => {
+        if (!('outcome' in result)) return result;
+        if (result.remaining === undefined) return result.outcome;
+        const timed = await boundedWait(result.outcome, result.remaining);
+        return timed.settled ? timed.value : unresolved;
+      });
+      void work.catch(() => undefined);
+      return abortableWait(caller, signal);
     },
     superviseOrderedWorker(call, jobRunId, signal) {
       signal.throwIfAborted();
+      host.provisionDrain?.closed.throwIfAborted();
       const work = host.database
         .transaction((tx) => lockDispatch(tx, host, jobRunId))
         .then((current) => {
           if (current === undefined) return { kind: 'refused', reason: 'not-committed' } as const;
           if (!ownsOrder(call, current.order)) return { kind: 'refused', reason: 'binding-mismatch' } as const;
-          return observeDispatch(host, handles, call, { ...current, kind: 'observe' });
+          return observeDispatch(host, call, { ...current, kind: 'observe' });
         });
       return abortableWait(work, signal);
     },
-  };
+  });
 }

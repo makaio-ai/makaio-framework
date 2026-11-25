@@ -262,3 +262,12 @@ export type {
   MaxRuntimeAssurance,
   WorkerProviderId,
 } from './worker/index.js';
+export type {
+  PreparedAllocationBinding,
+  StartOrder,
+  StartOrderedWorker,
+  StartValueVisibility,
+  StartWorkerResult,
+  WorkerAttachFailure,
+  WorkerDispatchCapability,
+} from './worker/index.js';

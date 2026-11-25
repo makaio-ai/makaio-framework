@@ -27,6 +27,7 @@ const PACK_TIMEOUT_MS = 60_000;
 export const INSTALLED_PACKAGE_SUITES = [
   'bus-single-copy.integration.test.ts',
   'call-context-declarations.integration.test.ts',
+  'worker-dispatch-scope.integration.test.ts',
 ] as const;
 
 /**

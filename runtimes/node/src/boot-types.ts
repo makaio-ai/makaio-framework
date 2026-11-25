@@ -15,6 +15,7 @@ import type {
   MakaioNodeExtension,
   TrayManifest,
   WorkerContributionManifest,
+  WorkerRuntimeConnection,
 } from '@makaio/contracts';
 import type { WorkflowMaterializationSpecResolver } from '@makaio/subsystem-workflow-engine';
 import type { PersistedMachineIdentity } from '@makaio/machine-identity';
@@ -22,6 +23,7 @@ import type { ConfigProvider } from '@makaio/providers';
 import type { FileAccessRuleProvider } from '@makaio/tools-core';
 import type { RuleEvaluator } from '@makaio/services-core';
 import type { IAdapterConfigRepository } from '@makaio/services-core/adapter-subsystem';
+import type { AllocationScopeSetting, WorkerOrderSource } from '@makaio/services-core/worker-provider';
 import type { PostInstallHandler, StrategyDependencies } from '@makaio/subsystem-client';
 import type {
   ContributionProcessor,
@@ -40,6 +42,15 @@ import type { ExtensionOperatorConfigSnapshot } from './extension-operator-confi
 import type { HttpRouteGraphBuilder } from './http-route-graph-builder.js';
 import type { WorkflowWorkerEntryMode } from './workflow-worker/worker-entry-resolver.js';
 import type { WorkspaceRootResolver } from './workflow-worker/local-directory-materializer.js';
+
+/** Host adapters for the committed dispatch capability. */
+export interface WorkerDispatchHostOptions {
+  readonly source: WorkerOrderSource;
+  /** Hosts obtain this setting from `readAllocationScopeSetting` on `@makaio/framework/services/internal/worker-provider-host-binding`, which carries no compatibility promise. */
+  readonly scopeSetting: AllocationScopeSetting;
+  /** Refreshed host connection values for the initial provider operation. */
+  readonly connection: () => WorkerRuntimeConnection;
+}
 
 /** Dev-mode map from npm package name to absolute workspace package directory. */
 export type DevPortalMap = ReadonlyMap<string, string>;
@@ -254,6 +265,8 @@ export interface CoreBootOptions {
    * A `postgres://` / `postgresql://` URL selects the Postgres backend.
    */
   readonly database?: DatabaseBootOptions;
+  /** Host configuration for committed worker orders. Extensions supply providers through `workerProviders`. */
+  readonly workerDispatch?: WorkerDispatchHostOptions;
 
   /**
    * Host-provided runtime config provider.

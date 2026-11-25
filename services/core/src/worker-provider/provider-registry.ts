@@ -7,7 +7,7 @@ import {
   WorkerProviderKeySchema,
 } from '@makaio/contracts';
 import { ContributionNameSchema, localContributionName, type CallContext, type ExtensionName } from '@makaio/core';
-import type { OrderedWorkerProvider } from './ordered-provider.js';
+import type { OrderedWorkerProvider, WorkerProviderContribution } from '@makaio/contracts/extension';
 
 const capabilitiesSchema = WorkerCapabilitiesSchema.extend({
   maxRuntimeMs: WorkerCapabilitiesSchema.shape.maxRuntimeMs.unwrap(),
@@ -15,11 +15,8 @@ const capabilitiesSchema = WorkerCapabilitiesSchema.extend({
 });
 
 /** Activation-time batch and its validated configuration and installation state. */
-export interface WorkerProviderActivation {
+interface WorkerProviderActivation extends WorkerProviderContribution {
   readonly owner: ExtensionName;
-  readonly key: string;
-  readonly managedScopeConfirmed: boolean;
-  readonly providers: readonly OrderedWorkerProvider[];
 }
 
 /** Separate selection of new allocations from resolution of outstanding ones. */
@@ -33,8 +30,14 @@ export class WorkerProviderRegistry {
    * @param call - Activation call carried to the provider.
    * @param activation - Contributions built from validated extension config.
    * @param signal - Activation lifetime.
+   * @returns A cleanup that withdraws only this activation from selection.
    */
-  public async replace(call: CallContext, activation: WorkerProviderActivation, signal: AbortSignal): Promise<void> {
+  public async replace(
+    call: CallContext,
+    activation: WorkerProviderActivation,
+    signal: AbortSignal,
+  ): Promise<() => void> {
+    const { owner } = activation;
     const key = WorkerProviderKeySchema.parse(activation.key);
     const next = new Map<string, OrderedWorkerProvider>();
     for (const input of activation.providers) {
@@ -47,7 +50,7 @@ export class WorkerProviderRegistry {
       const existing = this.retained.get(provider.id);
       if (
         existing !== undefined &&
-        (existing.owner !== activation.owner ||
+        (existing.owner !== owner ||
           existing.provider.allocationLifetime !== provider.allocationLifetime ||
           existing.provider.startValuesVisibility !== provider.startValuesVisibility)
       ) {
@@ -56,8 +59,11 @@ export class WorkerProviderRegistry {
         );
       }
     }
-    this.owners.set(activation.owner, next);
-    for (const provider of next.values()) this.retained.set(provider.id, { owner: activation.owner, provider });
+    this.owners.set(owner, next);
+    for (const provider of next.values()) this.retained.set(provider.id, { owner, provider });
+    return () => {
+      if (this.owners.get(owner) === next) this.owners.delete(owner);
+    };
   }
 
   /**

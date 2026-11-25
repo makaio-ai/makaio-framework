@@ -1,27 +1,17 @@
+import type { PreparedAllocationBinding, StartValueVisibility } from '@makaio/contracts/capabilities';
 import { getHostTransactionQueryContext } from '@makaio/storage-drizzle';
-import type { HostTransaction, JobRunId, ProviderAllocationRef } from '@makaio/contracts';
+import type { JobRunId, ProviderAllocationRef } from '@makaio/contracts';
 import type { CallContext } from '@makaio/core';
-import { observeManaged, parseReference, proveUniqueLive } from './dispatch-observation.js';
+import {
+  observeManaged,
+  parseReference,
+  observeLiveAllocation,
+  trustedObservationReference,
+} from './dispatch-observation.js';
 import { type DispatchClaim, mergeCandidates, sameReference, updateDispatch } from './dispatch-store.js';
 import { recordObservation } from './dispatch-supervision.js';
 import { hasOpenDeadline, lockDispatch, ownsOrder } from './start-claim.js';
 import type { CommittedWorkerOrder, WorkerStartOptions } from './start-order.js';
-
-/** Requirements supplied by the host verifier for this bootstrap presentation. */
-export type StartValueVisibility =
-  | { readonly kind: 'allocation-only' }
-  | {
-      readonly kind: 'externally-visible';
-      /** Verify the evidence for this exact allocation and return the evidence expiry. */
-      readonly verifyPlatform: (allocationRef: ProviderAllocationRef) => Promise<string | undefined>;
-    };
-
-/** Conditional binding to invoke in the same transaction as token redemption. */
-export interface PreparedAllocationBinding {
-  readonly allocationRef: ProviderAllocationRef;
-  /** Throws on stale/conflicting evidence so the containing redemption must roll back. */
-  readonly bind: (tx: HostTransaction) => Promise<void>;
-}
 
 /**
  * Whether the authoritative first-redemption window is still open.
@@ -72,12 +62,12 @@ async function findLiveReference(
   if (binding.allocationLifetime !== 'provider-managed' || provider?.allocationLifetime !== 'provider-managed')
     return undefined;
   const observation = await observeManaged(call, provider.recovery, binding, host.operationSignal, false);
+  if (observation.foreignDiscovery) return undefined;
   const recorded = await recordObservation(host, claim, observation, undefined);
   if (recorded === undefined || recorded.updated.settled !== null) return undefined;
-  const ref = recorded.updated.boundAllocation ?? observation.firstPageCandidate;
+  const ref = trustedObservationReference(recorded.updated, observation, recorded.updated.candidates);
   if (ref === undefined) return undefined;
-  const candidates = mergeCandidates(recorded.updated.candidates, [ref]);
-  const liveThrough = await proveUniqueLive(call, provider.recovery, claim, candidates, ref, host.operationSignal);
+  const { liveThrough } = await observeLiveAllocation(call, provider.recovery, claim, ref, host.operationSignal, true);
   return liveThrough === undefined
     ? undefined
     : { ref, liveThrough, requiresPlatform: provider.startValuesVisibility === 'externally-visible' };
@@ -115,6 +105,7 @@ export async function prepareAllocationBinding(
   return {
     allocationRef: structuredClone(ref),
     bind: async (tx) => {
+      host.operationSignal.throwIfAborted();
       getHostTransactionQueryContext(host.database, tx);
       const locked = await lockDispatch(tx, host, jobRunId);
       const candidates = mergeCandidates(locked?.claim.candidates ?? [], [ref]);

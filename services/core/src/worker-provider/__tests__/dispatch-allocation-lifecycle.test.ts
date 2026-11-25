@@ -5,7 +5,9 @@ import { DeferredPromise } from '@makaio/utils';
 import { sql } from 'drizzle-orm';
 import { beforeAll, describe, expect, it, vi } from 'vitest';
 import { readDispatch } from '../dispatch-store.js';
-import type { OrderedWorkerProvider } from '../ordered-provider.js';
+import type { OrderedWorkerProvider } from '@makaio/contracts/extension';
+import { finishLateProvisionHandle } from '../local-worker-control.js';
+import { decideStart } from '../start-claim.js';
 import { createWorkerDispatch } from '../start-ordered-worker.js';
 import {
   call,
@@ -27,39 +29,29 @@ describe(`ordered allocation lifecycle (${config.dialect})`, () => {
   const getContext = useSuiteDatabaseContext(config);
   beforeAll(async () => installOrderFixture(getContext()));
 
-  it.each([false, true])('handles an allocation returned after absence (termination fails: %s)', async (fails) => {
+  it.each([false, true])('hands off a late allocation (termination fails: %s)', async (fails) => {
     const database = createHostDatabase(getContext().db);
     const worker = controllableProvider();
-    const entered = new DeferredPromise<void>();
-    const resume = new DeferredPromise<void>();
-    const provider: OrderedWorkerProvider = {
-      ...worker.provider,
-      async provision(...args) {
-        entered.resolve();
-        await resume.getPromise();
-        return worker.provider.provision(...args);
-      },
-    };
-    const fixture = await orderFixture(database, provider, `late-allocation-${fails}`);
+    const terminateByReference = vi.spyOn(worker.provider.recovery, 'terminateAllocation');
+    const fixture = await orderFixture(database, worker.provider, `late-allocation-${fails}`);
     const { order, host } = fixture;
     await database.transaction(fixture.orderIn);
     const sender = createWorkerDispatch(host);
     const siblingDb = createHostDatabase((await getContext().createSiblingClient()).db);
-    const observer = createWorkerDispatch({ ...host, database: siblingDb });
+    const observer = createWorkerDispatch({ ...host, database: siblingDb, processIncarnation: 'observer' });
     const handle = handleFor(order.jobRunId);
     const terminate = vi.spyOn(handle, 'terminate');
-    if (fails) terminate.mockRejectedValue(new Error('teardown unconfirmed'));
     const release = vi.spyOn(handle, 'release');
-    worker.answer.resolve({ kind: 'allocated', allocationRef, handle });
     const pending = sender.startOrderedWorker(call, order, signal);
-    await entered.getPromise();
+    await worker.exposed.getPromise();
     const clock = vi.spyOn(Date, 'now').mockReturnValue(Date.parse(order.bootstrapDeadlineAt));
     const absent = { kind: 'confirmed-absent', evidence: worker.evidence };
     try {
       worker.finishTermination();
       await expect(observer.superviseOrderedWorker(call, order.jobRunId, signal)).resolves.toEqual(absent);
+      if (fails) terminateByReference.mockRejectedValueOnce(new Error('teardown unconfirmed'));
     } finally {
-      resume.resolve();
+      worker.answer.resolve({ kind: 'allocated', allocationRef, handle });
       try {
         await pending;
       } finally {
@@ -67,7 +59,9 @@ describe(`ordered allocation lifecycle (${config.dialect})`, () => {
       }
     }
     expect(worker.sends).toHaveLength(1);
-    expect(terminate).toHaveBeenCalledTimes(1);
+    expect(terminateByReference).toHaveBeenCalledTimes(1);
+    expect(terminateByReference.mock.calls[0]?.[2]).toEqual(allocationRef);
+    expect(terminate).not.toHaveBeenCalled();
     expect(release).toHaveBeenCalledTimes(1);
     const read = () => siblingDb.transaction((tx) => readDispatch(tx, order.jobRunId));
     await expect(read()).resolves.toMatchObject({
@@ -77,16 +71,106 @@ describe(`ordered allocation lifecycle (${config.dialect})`, () => {
         lateAllocation: { reference: allocationRef, state: fails ? 'pending' : 'ended' },
       },
     });
-    if (fails) {
-      const restarted = createWorkerDispatch({ ...host, database: siblingDb, processIncarnation: 'restarted' });
-      await expect(restarted.superviseOrderedWorker(call, order.jobRunId, signal)).resolves.toEqual(absent);
-      expect(worker.terminated).toEqual([allocationRef]);
-      await expect(read()).resolves.toMatchObject({
-        settled: { lateAllocation: { state: 'ended' } },
-      });
-    }
     await expect(pending).resolves.toEqual(absent);
     await expect(observer.superviseOrderedWorker(call, order.jobRunId, signal)).resolves.toEqual(absent);
+    expect(worker.terminated).toEqual([allocationRef]);
+    await expect(read()).resolves.toMatchObject({ settled: { lateAllocation: { state: 'ended' } } });
+  });
+
+  it.each([
+    'ended',
+    'read-failure',
+    'in-flight',
+  ])('releases the sender handle with recovery at write acknowledgment (%s)', async (recoveryPhase) => {
+    const database = createHostDatabase(getContext().db);
+    const siblingDb = createHostDatabase((await getContext().createSiblingClient()).db);
+    const worker = controllableProvider();
+    const end = worker.provider.recovery.terminateAllocation;
+    const terminateByReference = vi.spyOn(worker.provider.recovery, 'terminateAllocation');
+    const { host, order, orderIn } = await orderFixture(
+      database,
+      worker.provider,
+      `recovery-before-ack-${recoveryPhase}`,
+    );
+    const committed = new DeferredPromise<void>();
+    const acknowledge = new DeferredPromise<void>();
+    let delayAcknowledgment = false;
+    let failRead = false;
+    let readFailed = false;
+    const delayed: typeof database = {
+      ...database,
+      async transaction(body) {
+        const result = await database.transaction(async (tx) => {
+          if (failRead && !readFailed) {
+            readFailed = true;
+            throw new Error('late allocation reread unavailable');
+          }
+          return body(tx);
+        });
+        if (delayAcknowledgment) {
+          delayAcknowledgment = false;
+          committed.resolve();
+          await acknowledge.getPromise();
+        }
+        return result;
+      },
+    };
+    const sender = createWorkerDispatch({ ...host, database: delayed });
+    const observer = createWorkerDispatch({
+      ...host,
+      database: siblingDb,
+      processIncarnation: 'observer',
+      handles: new Map(),
+    });
+    const handle = handleFor(order.jobRunId);
+    const terminate = vi.spyOn(handle, 'terminate');
+    const release = vi.spyOn(handle, 'release');
+    const enteredTermination = new DeferredPromise<void>();
+    const resumeTermination = new DeferredPromise<void>();
+    await database.transaction(orderIn);
+    const pending = sender.startOrderedWorker(call, order, signal);
+    await worker.exposed.getPromise();
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(Date.parse(order.bootstrapDeadlineAt));
+    const absent = { kind: 'confirmed-absent', evidence: worker.evidence };
+    let recovery: ReturnType<typeof observer.superviseOrderedWorker> | undefined;
+    try {
+      worker.finishTermination();
+      await expect(observer.superviseOrderedWorker(call, order.jobRunId, signal)).resolves.toEqual(absent);
+      delayAcknowledgment = true;
+      worker.answer.resolve({ kind: 'allocated', allocationRef, handle });
+      await committed.getPromise();
+      if (recoveryPhase === 'in-flight') {
+        terminateByReference.mockImplementationOnce(async (...args) => {
+          const result = await end(...args);
+          enteredTermination.resolve();
+          await resumeTermination.getPromise();
+          return result;
+        });
+      }
+      recovery = observer.superviseOrderedWorker(call, order.jobRunId, signal);
+      if (recoveryPhase === 'in-flight') {
+        await enteredTermination.getPromise();
+      } else {
+        await expect(recovery).resolves.toEqual(absent);
+      }
+      failRead = recoveryPhase === 'read-failure';
+      acknowledge.resolve();
+      await expect(pending).resolves.toEqual(absent);
+    } finally {
+      worker.answer.resolve({ kind: 'allocated', allocationRef, handle });
+      acknowledge.resolve();
+      resumeTermination.resolve();
+      clock.mockRestore();
+      await Promise.all([pending, recovery]);
+    }
+    expect(readFailed).toBe(recoveryPhase === 'read-failure');
+    expect(terminate).not.toHaveBeenCalled();
+    expect(worker.terminated).toEqual(recoveryPhase === 'in-flight' ? [allocationRef, allocationRef] : [allocationRef]);
+    expect(release).toHaveBeenCalledTimes(1);
+    expect(host.handles.size).toBe(0);
+    await expect(siblingDb.transaction((tx) => readDispatch(tx, order.jobRunId))).resolves.toMatchObject({
+      settled: { lateAllocation: { reference: allocationRef, state: 'ended' } },
+    });
   });
 
   it.each([
@@ -240,6 +324,7 @@ describe(`ordered allocation lifecycle (${config.dialect})`, () => {
       sendSettled: true,
     });
     await database.transaction((tx) => fixture.setState(tx, 'closed'));
+    worker.allocations.push(allocationRef);
     await dispatch.superviseOrderedWorker(call, order.jobRunId, signal);
     expect(worker.terminated).toEqual([allocationRef]);
   });
@@ -268,6 +353,113 @@ describe(`ordered allocation lifecycle (${config.dialect})`, () => {
     await expect(database.transaction((tx) => readDispatch(tx, order.jobRunId))).resolves.toMatchObject({
       candidates: [allocationRef],
       boundAllocation: mismatched ? null : allocationRef,
+      settled: expect.objectContaining({ summary: 'Process-bound allocation terminated' }),
+    });
+  });
+
+  it('terminates a managed handle returned after the provisioning drain closes', async () => {
+    const database = createHostDatabase(getContext().db);
+    const worker = controllableProvider();
+    const { host, order, orderIn } = await orderFixture(database, worker.provider, 'managed-after-drain');
+    const drain = new AbortController();
+    const operations = new AbortController();
+    const dispatch = createWorkerDispatch({
+      ...host,
+      operationSignal: operations.signal,
+      provisionDrain: { closed: drain.signal, track() {} },
+    });
+    const handle = handleFor(order.jobRunId);
+    const terminate = vi.spyOn(handle, 'terminate');
+    const release = vi.spyOn(handle, 'release');
+
+    await database.transaction(orderIn);
+    const pending = dispatch.startOrderedWorker(call, order, signal);
+    await worker.exposed.getPromise();
+    operations.abort();
+    drain.abort();
+    worker.answer.resolve({ kind: 'allocated', allocationRef, handle });
+
+    await expect(pending).resolves.toEqual({ kind: 'unknown', reason: 'dispatch-unresolved' });
+    expect(terminate).toHaveBeenCalledTimes(1);
+    expect(release).toHaveBeenCalledTimes(1);
+    expect(host.handles.size).toBe(0);
+    await expect(database.transaction((tx) => readDispatch(tx, order.jobRunId))).resolves.toMatchObject({
+      sendSettled: false,
+      settled: null,
+    });
+  });
+
+  it('shares process control between two dispatch services of the same host', async () => {
+    const database = createHostDatabase(getContext().db);
+    const worker = controllableProvider();
+    const { host, order, orderIn, setState } = await orderFixture(
+      database,
+      processBoundProvider(worker.provider),
+      'shared-process-control',
+    );
+    const sender = createWorkerDispatch(host);
+    const observer = createWorkerDispatch({ ...host });
+    const handle = handleFor(order.jobRunId);
+    const terminate = vi.spyOn(handle, 'terminate');
+
+    expect(sender).not.toBe(observer);
+    await database.transaction(orderIn);
+    worker.answer.resolve({ kind: 'allocated', allocationRef, handle });
+    await expect(sender.startOrderedWorker(call, order, signal)).resolves.toEqual({
+      kind: 'allocated',
+      allocationRef,
+    });
+    await database.transaction((tx) => setState(tx, 'closed'));
+
+    const supervise = () => observer.superviseOrderedWorker(call, order.jobRunId, signal);
+    await Promise.all([supervise(), supervise()]);
+    expect(terminate).toHaveBeenCalledTimes(1);
+    await expect(database.transaction((tx) => readDispatch(tx, order.jobRunId))).resolves.toMatchObject({
+      settled: expect.objectContaining({ summary: 'Process-bound allocation terminated' }),
+    });
+  });
+
+  it('retries recording process teardown without terminating the worker again', async () => {
+    const database = createHostDatabase(getContext().db);
+    const worker = controllableProvider();
+    const { host, order, orderIn, setState } = await orderFixture(
+      database,
+      processBoundProvider(worker.provider),
+      'retry-process-settlement',
+    );
+    const handle = handleFor(order.jobRunId);
+    const persistenceError = new Error('Settlement transaction failed');
+    let failSettlement = false;
+    const terminate = vi.spyOn(handle, 'terminate').mockImplementationOnce(async () => {
+      failSettlement = true;
+    });
+    const dispatch = createWorkerDispatch({
+      ...host,
+      source: {
+        ...host.source,
+        async lockOrder(tx, id) {
+          if (failSettlement) {
+            failSettlement = false;
+            throw persistenceError;
+          }
+          return host.source.lockOrder(tx, id);
+        },
+      },
+    });
+
+    await database.transaction(orderIn);
+    worker.answer.resolve({ kind: 'allocated', allocationRef, handle });
+    await dispatch.startOrderedWorker(call, order, signal);
+    await database.transaction((tx) => setState(tx, 'closed'));
+    const supervise = () => dispatch.superviseOrderedWorker(call, order.jobRunId, signal);
+
+    await expect(supervise()).rejects.toThrow(persistenceError);
+    await expect(database.transaction((tx) => readDispatch(tx, order.jobRunId))).resolves.toMatchObject({
+      settled: null,
+    });
+    await supervise();
+    expect(terminate).toHaveBeenCalledTimes(1);
+    await expect(database.transaction((tx) => readDispatch(tx, order.jobRunId))).resolves.toMatchObject({
       settled: expect.objectContaining({ summary: 'Process-bound allocation terminated' }),
     });
   });
@@ -391,5 +583,29 @@ describe(`ordered allocation lifecycle (${config.dialect})`, () => {
       sql`UPDATE worker_dispatch SET order_digest = ${fixtureToken} WHERE job_run_id = ${order.jobRunId}`,
     );
     await expect(containsToken()).resolves.toBe(true);
+  });
+
+  it('leaves an unbound claim open when a late handle comes from another process incarnation', async () => {
+    const database = createHostDatabase(getContext().db);
+    const { host, order, orderIn } = await orderFixture(database, processBoundProvider(), 'late-from-old-process');
+    await database.transaction(orderIn);
+    await expect(decideStart(host, call, order)).resolves.toMatchObject({ kind: 'dispatch' });
+    const handle = handleFor(order.jobRunId);
+    const terminate = vi.spyOn(handle, 'terminate');
+    const release = vi.spyOn(handle, 'release');
+
+    await finishLateProvisionHandle({ ...host, processIncarnation: 'old-incarnation' }, order.jobRunId, handle, {
+      managed: false,
+      reference: allocationRef,
+      matchesRun: true,
+    });
+
+    expect(terminate).toHaveBeenCalledTimes(1);
+    expect(release).toHaveBeenCalledTimes(1);
+    await expect(database.transaction((tx) => readDispatch(tx, order.jobRunId))).resolves.toMatchObject({
+      boundAllocation: null,
+      sendSettled: false,
+      settled: null,
+    });
   });
 });

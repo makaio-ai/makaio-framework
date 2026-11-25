@@ -94,3 +94,12 @@ export type {
 
 export { AllocationTerminationSchema, MaxRuntimeAssuranceSchema } from './allocation-lifecycle.js';
 export type { AllocationTermination, MaxRuntimeAssurance } from './allocation-lifecycle.js';
+export type {
+  PreparedAllocationBinding,
+  StartOrder,
+  StartOrderedWorker,
+  StartValueVisibility,
+  StartWorkerResult,
+  WorkerAttachFailure,
+  WorkerDispatchCapability,
+} from './ordered-dispatch.js';
