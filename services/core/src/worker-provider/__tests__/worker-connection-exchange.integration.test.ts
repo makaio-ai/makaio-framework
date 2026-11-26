@@ -5,6 +5,7 @@ import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { createConnection } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { isDeepStrictEqual } from 'node:util';
 import { CorePartyKind } from '@makaio/core';
 import { HmacAuth, WebSocketClientTransport } from '@makaio/bus-transport-websocket';
@@ -68,6 +69,10 @@ const refusalScenarios = [
 ] as const;
 
 let certDirectory: string;
+/** Framework storage directory, located from this file so it holds in any checkout layout and working directory. */
+const storageDirectory = fileURLToPath(new URL('../../../../../storage', import.meta.url));
+/** Upper bound for the child stderr kept to explain an early exit. */
+const STDERR_TAIL_LIMIT = 2_000;
 let processDirectory: string;
 
 beforeAll(async () => {
@@ -124,6 +129,7 @@ class ExchangeProcess {
   private readonly channel = new AbortController();
   private readonly exited = Promise.withResolvers<void>();
   private crashed = false;
+  private stderrTail = '';
 
   /**
    * @param child - Independent process with an IPC channel.
@@ -151,6 +157,9 @@ class ExchangeProcess {
     child.once('disconnect', () => this.channel.abort('IPC disconnected'));
     child.on('error', () => this.channel.abort('process error'));
     child.once('spawn', () => mark?.(`${role} spawned`));
+    child.stderr?.on('data', (chunk: Buffer) => {
+      this.stderrTail = (this.stderrTail + chunk.toString()).slice(-STDERR_TAIL_LIMIT);
+    });
     child.on('message', (message: ExchangeMessage) => {
       if (message.kind === 'phase') {
         if (mark) mark(`${role}: ${message.phase}`, message.ms);
@@ -190,7 +199,10 @@ class ExchangeProcess {
         await once(this.child, 'message', { signal });
       } catch {
         const reason = this.channel.signal.aborted ? String(this.channel.signal.reason) : 'test cancelled';
-        throw new Error(`Exchange ${this.role} stopped before ${kind} (${reason})`);
+        const stderr = this.stderrTail.trim();
+        throw new Error(
+          `Exchange ${this.role} stopped before ${kind} (${reason})${stderr === '' ? '' : `\n${this.role} stderr (last ${STDERR_TAIL_LIMIT} chars):\n${stderr}`}`,
+        );
       }
     }
   }
@@ -699,12 +711,16 @@ function startHost(
     scenario === 'stock-refused' ||
     (scenario !== MEASURED_REFUSAL && refusalScenarios.some((item) => item === scenario));
   const started = performance.now();
-  const child = fork(hostFile, [scenario, runtime, certDirectory, advanceRefusal ? 'advance-refusal' : ''], {
-    execPath: runtime === 'bun' ? 'bun' : process.execPath,
-    ...(mark ? { env: { ...process.env, WORKER_EXCHANGE_TIMINGS: '1' } } : {}),
-    execArgv: [],
-    stdio: ['ignore', 'ignore', 'ignore', 'ipc'],
-  });
+  const child = fork(
+    hostFile,
+    [scenario, runtime, certDirectory, advanceRefusal ? 'advance-refusal' : '', storageDirectory],
+    {
+      execPath: runtime === 'bun' ? 'bun' : process.execPath,
+      ...(mark ? { env: { ...process.env, WORKER_EXCHANGE_TIMINGS: '1' } } : {}),
+      execArgv: [],
+      stdio: ['ignore', 'ignore', 'pipe', 'ipc'],
+    },
+  );
   child.once('spawn', () => reportTiming('host spawn', started));
   const host = new ExchangeProcess(child, 'host', test.context.signal, mark);
   test.context.onTestFinished(() => host.stop(test.timeout));
