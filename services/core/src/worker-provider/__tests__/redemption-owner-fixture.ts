@@ -11,6 +11,7 @@ import {
 } from '@makaio/storage-drizzle';
 import { deepFreeze } from '@makaio/utils';
 import { and, eq, isNull, sql } from 'drizzle-orm';
+import { digestWorkerBootstrapToken } from '../credential-digest.js';
 import type {
   CommittedWorkerOrder,
   StartOrder,
@@ -161,7 +162,7 @@ export async function bookRedemptionOwner(
   token: string,
   legacy: boolean,
 ) {
-  const tokenDigest = createHash('sha256').update(token).digest('hex');
+  const tokenDigest = digestWorkerBootstrapToken(token);
   const booking = deepFreeze(structuredClone({ order, owner, payload }));
   const id = booking.order.jobRunId;
   await database.transaction(async (tx) => {
@@ -221,6 +222,30 @@ export async function bookRedemptionOwner(
         await lockRow(tx, id);
         const { query, table } = ownerStorage(tx);
         await query.update(table).set({ tokenDigest }).where(eq(table.id, id));
+      });
+    },
+    /** Persist the old untagged encoding to exercise real credential reads. */
+    async storeUntaggedToken() {
+      const untagged = createHash('sha256').update(token).digest('hex');
+      await database.transaction(async (tx) => {
+        await lockRow(tx, id);
+        const { query, table } = ownerStorage(tx);
+        await query.update(table).set({ tokenDigest: untagged }).where(eq(table.id, id));
+      });
+    },
+    /**
+     * Replace the stored runtime digest to exercise replay against real persisted legacy data.
+     * @param runtimeDigest - Exact encoding to persist in the runtime credential slot.
+     */
+    async replaceRuntimeDigest(runtimeDigest: string) {
+      await database.transaction(async (tx) => {
+        const row = await lockRow(tx, id);
+        if (row?.stored == null) throw new Error('Test owner has no stored acceptance');
+        const { query, table } = ownerStorage(tx);
+        await query
+          .update(table)
+          .set({ stored: { ...row.stored, runtimeDigest } })
+          .where(eq(table.id, id));
       });
     },
     async revoke() {

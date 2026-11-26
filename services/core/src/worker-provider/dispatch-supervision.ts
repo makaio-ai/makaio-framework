@@ -154,16 +154,17 @@ async function settlePreRequestRejection(
     observedAt: new Date().toISOString(),
   },
 ): Promise<StartWorkerResult> {
-  return host.database.transaction(async (tx) => {
+  const settled = await host.database.transaction(async (tx) => {
     const current = await lockDispatch(tx, host, claim.jobRunId);
-    if (current === undefined || current.claim.candidates.length !== 0) return unresolved;
-    return resultOf(
-      await updateDispatch(tx, current.claim, {
-        sendSettled: true,
-        settled: current.claim.settled ?? evidence,
-      }),
-    );
+    if (current === undefined || current.claim.candidates.length !== 0) return undefined;
+    return await updateDispatch(tx, current.claim, {
+      sendSettled: true,
+      settled: current.claim.settled ?? evidence,
+    });
   });
+  if (settled === undefined) return unresolved;
+  host.allocationObservation.notify(claim.jobRunId);
+  return resultOf(settled);
 }
 
 /**
@@ -312,7 +313,7 @@ async function recordSendSettled(
   const senderReference = claim.binding.allocationLifetime === 'provider-managed' ? ref : undefined;
   const canRecordAfterDrain = senderReference !== undefined;
   if (host.provisionDrain?.closed.aborted && !canRecordAfterDrain) return undefined;
-  return host.database.transaction(async (tx) => {
+  const result = await host.database.transaction(async (tx) => {
     const current = await lockDispatch(tx, host, claim.jobRunId);
     if (current === undefined) return undefined;
     const previous = current.claim;
@@ -341,6 +342,8 @@ async function recordSendSettled(
     });
     return { ...current, claim: updated };
   });
+  if (result !== undefined) host.allocationObservation.notify(claim.jobRunId);
+  return result;
 }
 
 /**
@@ -357,7 +360,7 @@ async function recordObservation(
   observation: ManagedObservation,
   proven: number | undefined,
 ) {
-  return host.database.transaction(async (tx) => {
+  const result = await host.database.transaction(async (tx) => {
     const locked = await lockDispatch(tx, host, claim.jobRunId);
     if (locked === undefined) return undefined;
     const current = locked.claim;
@@ -388,6 +391,8 @@ async function recordObservation(
       (await isScopeApproved(tx, host, current.binding));
     return { updated, mayTerminate };
   });
+  if (result !== undefined) host.allocationObservation.notify(claim.jobRunId);
+  return result;
 }
 
 /**
@@ -415,16 +420,19 @@ async function cleanManaged(
     !claim.candidates.every((candidate) => seal.refs.some((ref) => sameReference(ref, candidate)))
   )
     return claim;
-  return host.database.transaction(async (tx) => {
+  const settled = await host.database.transaction(async (tx) => {
     const current = await lockDispatch(tx, host, claim.jobRunId);
     if (
       current === undefined ||
       current.claim.candidates.length !== claim.candidates.length ||
       (current.claim.shutdownEnded !== undefined && pendingLateReferences(current.claim).length > 0)
     )
-      return claim;
-    return updateDispatch(tx, current.claim, { settled: seal.evidence });
+      return undefined;
+    return await updateDispatch(tx, current.claim, { settled: seal.evidence });
   });
+  if (settled === undefined) return claim;
+  host.allocationObservation.notify(claim.jobRunId);
+  return settled;
 }
 
 /**

@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { pathToFileURL } from 'node:url';
 import { Worker } from 'node:worker_threads';
 import { createBusInstance } from '@makaio/bus-core';
@@ -12,7 +13,7 @@ import { AllocationBindingRequiresRedemptionError, type StartValueVisibility } f
 import type { OrderedWorkerProvider } from '@makaio/contracts/extension';
 import { CorePartyKind, type CallContext } from '@makaio/core';
 import { ExtensionCoordinator, type ExtensionContextBase } from '@makaio/kernel';
-import { createHostDatabase, type RawSqlExecutor } from '@makaio/storage-drizzle';
+import { createHostDatabase, getHostTransactionQueryContext, type RawSqlExecutor } from '@makaio/storage-drizzle';
 import {
   resolveStorageConformanceConfig,
   useJournalHostFixture,
@@ -25,6 +26,8 @@ import {
   WorkerRedemptionError,
   type WorkerRedemptionHost,
 } from '../../internal/worker-provider-host-binding.js';
+import { AllocationObservationSignal, type ObservationWatch } from '../allocation-observation-signal.js';
+import { digestWorkerBootstrapToken, digestWorkerRuntimeSecret } from '../credential-digest.js';
 import { decideAllocationScope } from '../scope-decision.js';
 import { confirmAllocationScope } from '../scope-confirmation.js';
 import { readDispatch } from '../dispatch-store.js';
@@ -56,6 +59,34 @@ type WorkerControl = ReturnType<typeof controllableProvider>;
 type FixtureMode = 'local' | 'managed' | 'legacy';
 type ManagedRecovery = NonNullable<WorkerControl['provider']['recovery']>;
 type ManageRecovery = (recovery: ManagedRecovery) => ManagedRecovery;
+
+/** Observe the real subscription lifecycle and the checkpoint after proof preparation. */
+class ObservedAllocationSignal extends AllocationObservationSignal {
+  public readonly checked = Promise.withResolvers<void>();
+  public subscriptions = 0;
+
+  /**
+   * Track active registrations without changing notification delivery.
+   * @param jobRunId - Run being checked.
+   * @returns Instrumented subscription.
+   */
+  public override watch(jobRunId: string): ObservationWatch {
+    const watch = super.watch(jobRunId);
+    this.subscriptions++;
+    let captured = false;
+    return {
+      changed: () => {
+        if (captured) this.checked.resolve();
+        captured = true;
+        return watch.changed();
+      },
+      dispose: () => {
+        watch.dispose();
+        this.subscriptions--;
+      },
+    };
+  }
+}
 
 interface FixtureStorage {
   readonly constructContext: ExtensionContextBase['constructContext'];
@@ -158,6 +189,7 @@ async function startFixture(
     },
   });
   const providers = new WorkerProviderRegistry();
+  const observations = new ObservedAllocationSignal();
   coordinator.registerContributionProcessor(createWorkerProviderContributionProcessor(providers));
   let booking:
     | {
@@ -186,6 +218,7 @@ async function startFixture(
         const owner = await bookRedemptionOwner(ctx.database, order, identity, fixtureToken, mode === 'legacy');
         const host: WorkerRedemptionHost = {
           supervisionCall,
+          allocationObservation: observations,
           database: ctx.database,
           source: owner.sourceFor(storage.executor),
           providers,
@@ -227,6 +260,7 @@ async function startFixture(
     host,
     owner,
     allocation,
+    observations,
     deadline,
     finishProvision,
     supervise,
@@ -303,12 +337,14 @@ async function startSqliteRival(
  * @param jobRunId - Presented job run.
  * @param credentials - Optional credentials to replace for this attempt.
  * @param policy - Host-selected visibility policy.
+ * @param connectionDeadline - Trusted setup deadline for this attempt.
  */
 async function prepare(
   fixture: Fixture,
   jobRunId: string,
   credentials: { token?: string; secret?: string } = {},
   policy: StartValueVisibility = localPolicy,
+  connectionDeadline = Date.now() + 120_000,
 ) {
   const anonymous = callFromReceive(
     { transportName: 'worker-test', connectionId: 'peer' },
@@ -325,6 +361,7 @@ async function prepare(
       runtimeSecret: credentials.secret ?? runtimeSecret,
     },
     policy,
+    connectionDeadline,
   );
   return {
     anonymous,
@@ -371,6 +408,21 @@ async function prepare(
  */
 function expectPrepared(value: { prepared: { commit?: ConnectionExchangeCommit['commit'] } }) {
   expect(value.prepared.commit).toBeTypeOf('function');
+}
+
+/**
+ * Require a post-proof correlation check before provoking a wakeup or timeout.
+ * @param fixture - Run whose real observation subscription is armed.
+ * @param pending - Preparation that must still be in progress.
+ */
+async function expectWaiting(fixture: Fixture, pending: ReturnType<typeof prepare>): Promise<void> {
+  await Promise.race([
+    fixture.observations.checked.promise,
+    pending.then(() => {
+      throw new Error('Preparation ended before checking for an allocation observation');
+    }),
+  ]);
+  expect(fixture.observations.subscriptions).toBe(1);
 }
 
 describe(`worker redemption owner storage (${config.dialect})`, () => {
@@ -489,6 +541,8 @@ describe(`worker redemption owner storage (${config.dialect})`, () => {
     expect(result).toHaveProperty('payload.order.inputs', expect.toSatisfy(Object.isFrozen));
     expect(JSON.stringify(row)).not.toContain(runtimeSecret);
     expect(JSON.stringify(row)).not.toContain(fixtureToken);
+    expect(row.tokenDigest).toBe(digestWorkerBootstrapToken(fixtureToken));
+    expect(row.stored.runtimeDigest).toBe(digestWorkerRuntimeSecret(runtimeSecret));
     await expect(fixture.host.database.transaction((tx) => readDispatch(tx, 'first-valid'))).resolves.toMatchObject({
       boundAllocation: fixture.allocation,
     });
@@ -510,6 +564,305 @@ describe(`worker redemption owner storage (${config.dialect})`, () => {
     expect(Object.isFrozen(replay.payload)).toBe(true);
     await expect(fixture.owner.read()).resolves.toEqual(before);
     expect(before?.state).toBe('redeemed');
+  });
+
+  it('refuses the old untagged token digest without changing the booking or dispatch', async () => {
+    const id = 'untagged-token';
+    const fixture = await start(id);
+    await fixture.owner.storeUntaggedToken();
+    const order = await fixture.owner.read();
+    const dispatch = await fixture.readDispatch();
+
+    await expect((await prepare(fixture, id)).exchange()).resolves.toEqual({ reject: 'rejected' });
+    await expect(fixture.owner.read()).resolves.toEqual(order);
+    await expect(fixture.readDispatch()).resolves.toEqual(dispatch);
+  });
+
+  it('wakes a waiting redemption after the sender commits its reference', async () => {
+    const id = 'pending-sender';
+    const fixture = await start(id, 'managed', (recovery) => ({
+      ...recovery,
+      async listAllocations() {
+        return { observations: [], completeness: { kind: 'complete' } };
+      },
+    }));
+    const pending = prepare(fixture, id);
+    await expectWaiting(fixture, pending);
+    await expect(fixture.readDispatch()).resolves.toMatchObject({ candidates: [], boundAllocation: null });
+    await expect(fixture.owner.read()).resolves.toMatchObject({ state: 'ordered', stored: null });
+
+    await fixture.finishProvision();
+    const exchange = await pending;
+    expect(fixture.observations.subscriptions).toBe(0);
+    expectPrepared(exchange);
+    await expect(fixture.readDispatch()).resolves.toMatchObject({
+      senderReference: fixture.allocation,
+      boundAllocation: null,
+    });
+    await expect(exchange.exchange()).resolves.toHaveProperty('party.id', id);
+    await expect(fixture.readDispatch()).resolves.toMatchObject({ boundAllocation: fixture.allocation });
+  });
+
+  it('wakes a waiting redemption after managed supervision commits its observation', async () => {
+    const id = 'pending-supervision';
+    let visible = false;
+    const fixture = await start(id, 'managed', (recovery) => ({
+      ...recovery,
+      async listAllocations(call, request, signal) {
+        if (visible) return recovery.listAllocations(call, request, signal);
+        return { observations: [], completeness: { kind: 'complete' } };
+      },
+    }));
+    const pending = prepare(fixture, id);
+    await expectWaiting(fixture, pending);
+    await expect(fixture.readDispatch()).resolves.toMatchObject({ candidates: [], sendSettled: false });
+
+    visible = true;
+    await fixture.supervise();
+    const exchange = await pending;
+    expect(fixture.observations.subscriptions).toBe(0);
+    expectPrepared(exchange);
+    await expect(exchange.exchange()).resolves.toHaveProperty('party.id', id);
+    await expect(fixture.readDispatch()).resolves.toMatchObject({ boundAllocation: fixture.allocation });
+  });
+
+  it.each([
+    'matching reference',
+    'no usable reference',
+    'deadline',
+  ] as const)('waits after an incomplete listing until %s', async (ending) => {
+    const id = `incomplete-before-sender-${ending.replaceAll(' ', '-')}`;
+    let attachments = 0;
+    const fixture = await start(id, 'managed', (recovery) => ({
+      ...recovery,
+      async listAllocations(call, request, signal) {
+        if (request.cursor !== undefined) return { observations: [], nextCursor: request.cursor };
+        const { observations } = await recovery.listAllocations(call, request, signal);
+        return { observations, nextCursor: 'incomplete' };
+      },
+      async attach(call, binding, ref, signal) {
+        attachments++;
+        return recovery.attach(call, binding, ref, signal);
+      },
+    }));
+    const order = await fixture.owner.read();
+    const before = await fixture.readDispatch();
+    if (ending === 'deadline') vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] });
+    const pending = prepare(fixture, id);
+    await expectWaiting(fixture, pending);
+    await expect(fixture.readDispatch()).resolves.toMatchObject({ sendSettled: false, boundAllocation: null });
+    expect(fixture.observations.subscriptions).toBe(1);
+    expect(attachments).toBe(0);
+
+    if (ending === 'matching reference') {
+      await fixture.finishProvision();
+    } else if (ending === 'no usable reference') {
+      await fixture.finishProvision({ ...fixture.allocation, providerId: 'example.worker:other' });
+    } else {
+      await vi.advanceTimersByTimeAsync(fixture.deadline - Date.now());
+    }
+    const dispatch = await fixture.readDispatch();
+    expect(dispatch).toMatchObject({ sendSettled: ending !== 'deadline', boundAllocation: null });
+    const exchange = await pending;
+    expect(fixture.observations.subscriptions).toBe(0);
+    if (ending === 'matching reference') {
+      expectPrepared(exchange);
+      expect(dispatch?.senderReference).toEqual(fixture.allocation);
+      expect(attachments).toBe(1);
+      await expect(exchange.exchange()).resolves.toHaveProperty('party.id', id);
+      await expect(fixture.readDispatch()).resolves.toMatchObject({ boundAllocation: fixture.allocation });
+    } else {
+      await expect(exchange.exchange()).resolves.toEqual({ reject: 'rejected' });
+      expect(attachments).toBe(0);
+      if (ending === 'deadline') expect(dispatch).toEqual(before);
+      await expect(fixture.owner.read()).resolves.toEqual(order);
+      await expect(fixture.readDispatch()).resolves.toEqual(dispatch);
+    }
+  });
+
+  it('rereads after the sender commits during an incomplete listing', async () => {
+    const id = 'sender-during-listing';
+    const listing = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    let exchangeLists = 0;
+    const fixture = await start(id, 'managed', (recovery) => ({
+      ...recovery,
+      async listAllocations(call, request, signal) {
+        if (call.caller.kind !== CorePartyKind.host || ++exchangeLists === 1) {
+          return { observations: [], completeness: { kind: 'complete' } };
+        }
+        if (request.cursor !== undefined) return { observations: [], nextCursor: request.cursor };
+        if (exchangeLists === 2) {
+          listing.resolve();
+          await release.promise;
+        }
+        const { observations } = await recovery.listAllocations(call, request, signal);
+        return { observations, nextCursor: 'incomplete' };
+      },
+    }));
+    const pending = prepare(fixture, id);
+    try {
+      await expectWaiting(fixture, pending);
+      await fixture.supervise();
+      await Promise.race([
+        listing.promise,
+        pending.then(() => {
+          throw new Error('Preparation ended before the second listing');
+        }),
+      ]);
+      await expect(fixture.readDispatch()).resolves.not.toHaveProperty('senderReference');
+      await fixture.finishProvision();
+      await expect(fixture.readDispatch()).resolves.toHaveProperty('senderReference', fixture.allocation);
+    } finally {
+      release.resolve();
+    }
+
+    const exchange = await pending;
+    expectPrepared(exchange);
+    await expect(exchange.exchange()).resolves.toHaveProperty('party.id', id);
+  });
+
+  it('refuses to bind when a supervision wakeup supplies only an incomplete listing', async () => {
+    const id = 'pending-incomplete';
+    let visible = false;
+    const fixture = await start(id, 'managed', (recovery) => ({
+      ...recovery,
+      async listAllocations(call, request, signal) {
+        if (!visible) {
+          return { observations: [], completeness: { kind: 'complete' } };
+        }
+        const { observations } = await recovery.listAllocations(call, request, signal);
+        return { observations, nextCursor: 'incomplete' };
+      },
+    }));
+    await fixture.finishProvision({ ...fixture.allocation, providerId: 'example.worker:other' });
+    const order = await fixture.owner.read();
+    let credentialReads = 0;
+    let platformChecks = 0;
+    const owner = fixture.owner.sourceFor(getContext().executor);
+    const source: AtomicRedemptionWorkerOrderSource = {
+      ...owner,
+      readRedemptionCredentials(jobRunId) {
+        credentialReads++;
+        return owner.readRedemptionCredentials(jobRunId);
+      },
+    };
+    const pending = prepare(
+      { ...fixture, host: { ...fixture.host, source } },
+      id,
+      {},
+      {
+        kind: 'externally-visible',
+        async verifyPlatform() {
+          platformChecks++;
+          return new Date(fixture.deadline).toISOString();
+        },
+      },
+    );
+    await expectWaiting(fixture, pending);
+    expect(credentialReads).toBe(2);
+    await expect(fixture.readDispatch()).resolves.toMatchObject({ candidates: [], sendSettled: true });
+
+    visible = true;
+    await fixture.supervise();
+    const dispatch = await fixture.readDispatch();
+    expect(dispatch).toMatchObject({
+      candidates: [fixture.allocation],
+      boundAllocation: null,
+    });
+    expect(dispatch?.senderReference).toBeUndefined();
+    await expect((await pending).exchange()).resolves.toEqual({ reject: 'rejected' });
+    expect(fixture.observations.subscriptions).toBe(0);
+    expect(credentialReads).toBe(4);
+    expect(platformChecks).toBe(0);
+    await expect(fixture.owner.read()).resolves.toEqual(order);
+    await expect(fixture.readDispatch()).resolves.toEqual(dispatch);
+  });
+
+  it('ends a pending observation at the bootstrap deadline without changing storage or retaining a handle', async () => {
+    const id = 'pending-deadline';
+    let attachments = 0;
+    const fixture = await start(id, 'managed', (recovery) => ({
+      ...recovery,
+      async listAllocations() {
+        return { observations: [], completeness: { kind: 'complete' } };
+      },
+      async attach(call, binding, ref, signal) {
+        attachments++;
+        return recovery.attach(call, binding, ref, signal);
+      },
+    }));
+    const order = await fixture.owner.read();
+    const dispatch = await fixture.readDispatch();
+    vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] });
+    const pending = prepare(fixture, id);
+    await expectWaiting(fixture, pending);
+    await expect(fixture.owner.read()).resolves.toEqual(order);
+    await vi.advanceTimersByTimeAsync(fixture.deadline - Date.now() - 1);
+    expect(fixture.observations.subscriptions).toBe(1);
+    await vi.advanceTimersByTimeAsync(1);
+
+    await expect((await pending).exchange()).resolves.toEqual({ reject: 'rejected' });
+    expect(fixture.observations.subscriptions).toBe(0);
+    await expect(fixture.owner.read()).resolves.toEqual(order);
+    await expect(fixture.readDispatch()).resolves.toEqual(dispatch);
+    expect(attachments).toBe(0);
+    expect(fixture.host.handles.size).toBe(0);
+  });
+
+  it.each(['deadline', 'host abort'] as const)('bounds the first credential read by %s', async (end) => {
+    const id = `stalled-read-${end}`;
+    const fixture = await start(id);
+    const order = await fixture.owner.read();
+    const dispatch = await fixture.readDispatch();
+    const operations = new AbortController();
+    const entered = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    const source = fixture.owner.sourceFor(getContext().executor);
+    const reader: AtomicRedemptionWorkerOrderSource = {
+      ...source,
+      async readRedemptionCredentials(jobRunId) {
+        entered.resolve();
+        await release.promise;
+        return source.readRedemptionCredentials(jobRunId);
+      },
+    };
+    vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] });
+    const host = { ...fixture.host, source: reader, operationSignal: operations.signal };
+    const pending = prepare({ ...fixture, host }, id, {}, localPolicy, fixture.deadline);
+    try {
+      await Promise.race([
+        entered.promise,
+        pending.then(() => {
+          throw new Error('Preparation ended before reading credentials');
+        }),
+      ]);
+      expect(fixture.observations.subscriptions).toBe(1);
+      if (end === 'deadline') await vi.advanceTimersByTimeAsync(fixture.deadline - Date.now());
+      else operations.abort();
+      await expect((await pending).exchange()).resolves.toEqual({ reject: 'rejected' });
+      expect(fixture.observations.subscriptions).toBe(0);
+    } finally {
+      release.resolve();
+    }
+    await expect(fixture.owner.read()).resolves.toEqual(order);
+    await expect(fixture.readDispatch()).resolves.toEqual(dispatch);
+  });
+
+  it.each([
+    ['bootstrap-as-runtime', fixtureToken, digestWorkerBootstrapToken(fixtureToken)],
+    ['untagged-runtime', runtimeSecret, createHash('sha256').update(runtimeSecret).digest('hex')],
+  ])('refuses replay with a %s digest in the runtime slot', async (id, secret, digest) => {
+    const fixture = await start(id);
+    await expect((await prepare(fixture, id)).exchange()).resolves.toHaveProperty('party.id', id);
+    await fixture.owner.replaceRuntimeDigest(digest);
+    const order = await fixture.owner.read();
+    const dispatch = await fixture.readDispatch();
+
+    const replay = await prepare(fixture, id, { secret });
+    await expect(replay.exchange()).resolves.toEqual({ reject: 'rejected' });
+    await expect(fixture.owner.read()).resolves.toEqual(order);
+    await expect(fixture.readDispatch()).resolves.toEqual(dispatch);
   });
 
   it('refuses a different runtime secret without replacing the winning identity', async () => {
@@ -547,6 +900,164 @@ describe(`worker redemption owner storage (${config.dialect})`, () => {
     const order = await fixture.owner.read();
     const dispatch = await fixture.readDispatch();
     await expect((await prepare(fixture, 'unknown-run')).exchange()).resolves.toEqual({ reject: 'rejected' });
+    await expect(fixture.owner.read()).resolves.toEqual(order);
+    await expect(fixture.readDispatch()).resolves.toEqual(dispatch);
+  });
+
+  it('returns the same refusal for a credential lookup failure and an unknown token', async () => {
+    const id = 'credential-lookup-failure';
+    const fixture = await start(id);
+    const order = await fixture.owner.read();
+    const dispatch = await fixture.readDispatch();
+    const owner = fixture.owner.sourceFor(getContext().executor);
+    const malformedId = 'malformed run id';
+    const source: AtomicRedemptionWorkerOrderSource = {
+      ...owner,
+      async readRedemptionCredentials(jobRunId) {
+        if (jobRunId === malformedId) throw new Error('Malformed identifier');
+        return owner.readRedemptionCredentials(jobRunId);
+      },
+    };
+    const peer = { ...fixture, host: { ...fixture.host, source } };
+    const unknown = await (await prepare(peer, id, { token: 'unknown' })).exchange();
+    expect(unknown).toStrictEqual({ reject: 'rejected' });
+    expect((await prepare(peer, malformedId)).prepared).toStrictEqual(unknown);
+    await expect(fixture.owner.read()).resolves.toEqual(order);
+    await expect(fixture.readDispatch()).resolves.toEqual(dispatch);
+  });
+
+  it.each([
+    'before',
+    'after',
+  ] as const)('handles a second read failure %s expiry after allocation proof', async (when) => {
+    const id = `second-read-${when}-expiry`;
+    const fixture = await start(id);
+    const order = await fixture.owner.read();
+    const dispatch = await fixture.readDispatch();
+    const owner = fixture.owner.sourceFor(getContext().executor);
+    const connectionDeadline = fixture.deadline - 1;
+    let reads = 0;
+    let platformChecks = 0;
+    const source: AtomicRedemptionWorkerOrderSource = {
+      ...owner,
+      async readRedemptionCredentials(jobRunId) {
+        if (++reads === 2) {
+          expect(platformChecks).toBe(1);
+          if (when === 'after') vi.setSystemTime(connectionDeadline);
+          throw new Error('Unexpected credential reread failure');
+        }
+        return owner.readRedemptionCredentials(jobRunId);
+      },
+    };
+    const policy: StartValueVisibility = {
+      kind: 'externally-visible',
+      async verifyPlatform() {
+        platformChecks++;
+        return new Date(fixture.deadline).toISOString();
+      },
+    };
+    const peer = { ...fixture, host: { ...fixture.host, source } };
+    // Only move the clock. The expiration timer must still be pending.
+    vi.useFakeTimers({ toFake: ['Date'] });
+    const pending = prepare(peer, id, {}, policy, connectionDeadline);
+    if (when === 'after') {
+      await expect(pending).resolves.toHaveProperty('prepared', { reject: 'rejected' });
+    } else {
+      await expect(pending).rejects.toMatchObject({
+        name: 'WorkerRedemptionError',
+        code: 'retryable',
+        message: 'Run redemption storage read failed',
+      });
+    }
+    vi.useRealTimers();
+    expect(reads).toBe(2);
+    expect(platformChecks).toBe(1);
+    expect(fixture.observations.subscriptions).toBe(0);
+    await expect(fixture.owner.read()).resolves.toEqual(order);
+    await expect(fixture.readDispatch()).resolves.toEqual(dispatch);
+    await expect((await prepare(peer, id, {}, policy)).exchange()).resolves.toHaveProperty('party.id', id);
+  });
+
+  it('invalidates replay proof when the persisted runtime digest changes', async () => {
+    const id = 'changed-replay-digest';
+    const fixture = await start(id);
+    await expect((await prepare(fixture, id)).exchange()).resolves.toHaveProperty('party.id', id);
+    const dispatch = await fixture.readDispatch();
+    const digest = digestWorkerRuntimeSecret('replacement-runtime-secret');
+    const policy: StartValueVisibility = {
+      kind: 'externally-visible',
+      async verifyPlatform() {
+        await fixture.owner.replaceRuntimeDigest(digest);
+        return new Date(fixture.deadline).toISOString();
+      },
+    };
+    await expect(prepare(fixture, id, {}, policy)).resolves.toHaveProperty('prepared', { reject: 'rejected' });
+    await expect(fixture.owner.read()).resolves.toMatchObject({ stored: { runtimeDigest: digest } });
+    await expect(fixture.readDispatch()).resolves.toEqual(dispatch);
+  });
+
+  it.each(['before', 'during'] as const)('refuses a runtime digest removed %s the confirming read', async (when) => {
+    const id = `removed-runtime-digest-${when}`;
+    const fixture = await start(id);
+    await expect((await prepare(fixture, id)).exchange()).resolves.toHaveProperty('party.id', id);
+    const dispatch = await fixture.readDispatch();
+    const { executor } = getContext();
+    const owner = fixture.owner.sourceFor(executor);
+    const removeStored = async () => {
+      await executor.run(sql`UPDATE redemption_test_order SET state = 'ordered', stored = NULL WHERE id = ${id}`);
+    };
+    let reads = 0;
+    let locks = 0;
+    const source: AtomicRedemptionWorkerOrderSource = {
+      ...owner,
+      async readRedemptionCredentials(jobRunId) {
+        const credentials = await owner.readRedemptionCredentials(jobRunId);
+        if (++reads === 2 && when === 'during') await removeStored();
+        return credentials;
+      },
+      async lockOrder(tx, jobRunId) {
+        locks++;
+        return owner.lockOrder(tx, jobRunId);
+      },
+    };
+    const policy: StartValueVisibility = {
+      kind: 'externally-visible',
+      async verifyPlatform() {
+        if (when === 'before') await removeStored();
+        return new Date(fixture.deadline).toISOString();
+      },
+    };
+    const peer = { ...fixture, host: { ...fixture.host, source } };
+    await expect(prepare(peer, id, {}, policy)).resolves.toHaveProperty('prepared', { reject: 'rejected' });
+    expect(reads).toBe(2);
+    expect(locks).toBe(when === 'before' ? 1 : 2);
+    await expect(fixture.owner.read()).resolves.toMatchObject({ state: 'ordered', stored: null });
+    await expect(fixture.readDispatch()).resolves.toEqual(dispatch);
+  });
+
+  it('returns a generic rejection when credential rereading fails before independent proof', async () => {
+    const id = 'unproved-credential-reread';
+    const fixture = await start(id);
+    const order = await fixture.owner.read();
+    const dispatch = await fixture.readDispatch();
+    const owner = fixture.owner.sourceFor(getContext().executor);
+    let reads = 0;
+    const source: AtomicRedemptionWorkerOrderSource = {
+      ...owner,
+      async readRedemptionCredentials(jobRunId) {
+        if (++reads === 2) throw new Error('Unexpected credential reread failure');
+        return owner.readRedemptionCredentials(jobRunId);
+      },
+    };
+    const peer = { ...fixture, host: { ...fixture.host, source } };
+    const policy: StartValueVisibility = {
+      kind: 'externally-visible',
+      async verifyPlatform() {
+        throw new Error('Independent proof unavailable');
+      },
+    };
+    await expect(prepare(peer, id, {}, policy)).resolves.toHaveProperty('prepared', { reject: 'rejected' });
+    expect(reads).toBe(2);
     await expect(fixture.owner.read()).resolves.toEqual(order);
     await expect(fixture.readDispatch()).resolves.toEqual(dispatch);
   });
@@ -632,6 +1143,144 @@ describe(`worker redemption owner storage (${config.dialect})`, () => {
     });
   });
 
+  it('reports an unexpected owner write failure after proof as retryable and rolls back', async () => {
+    const id = 'unexpected-owner-write-failure';
+    const fixture = await start(id);
+    const order = await fixture.owner.read();
+    const dispatch = await fixture.readDispatch();
+    const owner = fixture.owner.sourceFor(getContext().executor);
+    const source: AtomicRedemptionWorkerOrderSource = {
+      ...owner,
+      async lockOrder(tx, jobRunId) {
+        const locked = await owner.lockOrder(tx, jobRunId);
+        if (locked?.redemption === undefined) return locked;
+        return {
+          ...locked,
+          redemption: {
+            ...locked.redemption,
+            async accept() {
+              throw new Error('Unexpected owner write failure');
+            },
+          },
+        };
+      },
+    };
+    const peer = { ...fixture, host: { ...fixture.host, source } };
+    const prepared = await prepare(peer, id);
+    expectPrepared(prepared);
+    await expect(prepared.exchange()).rejects.toMatchObject({
+      name: 'WorkerRedemptionError',
+      code: 'retryable',
+      message: 'Run redemption commit failed',
+    });
+    await expect(fixture.owner.read()).resolves.toEqual(order);
+    await expect(fixture.readDispatch()).resolves.toEqual(dispatch);
+    const retry = await (await prepare(fixture, id)).exchange();
+    expect(retry).toHaveProperty('party.id', id);
+  });
+
+  it.each([-1, 0, 1])('classifies a typed commit failure at deadline %+i ms and rolls back', async (offset) => {
+    const id = `typed-host-transaction-failure-${offset}`;
+    const fixture = await start(id);
+    const order = await fixture.owner.read();
+    const dispatch = await fixture.readDispatch();
+    const owner = fixture.owner.sourceFor(getContext().executor);
+    const foreign = createHostDatabase(getContext().db);
+    const connectionDeadline = fixture.deadline - 1;
+    const source: AtomicRedemptionWorkerOrderSource = {
+      ...owner,
+      async lockOrder(tx, jobRunId) {
+        const locked = await owner.lockOrder(tx, jobRunId);
+        if (locked?.redemption === undefined) return locked;
+        const { redemption } = locked;
+        return {
+          ...locked,
+          redemption: {
+            ...redemption,
+            async accept(commitTx, result) {
+              vi.setSystemTime(connectionDeadline + offset);
+              getHostTransactionQueryContext(foreign, commitTx);
+              return redemption.accept(commitTx, result);
+            },
+          },
+        };
+      },
+    };
+    const peer = { ...fixture, host: { ...fixture.host, source } };
+    vi.useFakeTimers({ toFake: ['Date'] });
+    const prepared = await prepare(peer, id, {}, localPolicy, connectionDeadline);
+    expectPrepared(prepared);
+    await expect(prepared.exchange()).rejects.toMatchObject({
+      name: 'WorkerRedemptionError',
+      code: offset < 0 ? 'retryable' : 'rejected',
+      message: 'Run redemption commit failed',
+    });
+    vi.useRealTimers();
+    await expect(fixture.owner.read()).resolves.toEqual(order);
+    await expect(fixture.readDispatch()).resolves.toEqual(dispatch);
+    await expect((await prepare(fixture, id)).exchange()).resolves.toHaveProperty('party.id', id);
+  });
+
+  if (config.dialect === 'postgres') {
+    it('rejects a PostgreSQL data exception when writing the proved reply', async () => {
+      const id = 'reply-data-exception';
+      const fixture = await start(id);
+      const order = await fixture.owner.read();
+      const dispatch = await fixture.readDispatch();
+      const owner = fixture.owner.sourceFor(getContext().executor);
+      const source: AtomicRedemptionWorkerOrderSource = {
+        ...owner,
+        async lockOrder(tx, jobRunId) {
+          const locked = await owner.lockOrder(tx, jobRunId);
+          if (locked?.redemption === undefined) return locked;
+          const { redemption } = locked;
+          return {
+            ...locked,
+            redemption: {
+              ...redemption,
+              async accept(commitTx, result) {
+                // PostgreSQL jsonb cannot represent a NUL character (SQLSTATE 22P05).
+                return await redemption.accept(commitTx, {
+                  ...result,
+                  accepted: { ...result.accepted, payload: { value: '\u0000' } },
+                });
+              },
+            },
+          };
+        },
+      };
+      const peer = { ...fixture, host: { ...fixture.host, source } };
+      const prepared = await prepare(peer, id);
+      expectPrepared(prepared);
+      await expect(prepared.exchange()).rejects.toMatchObject({
+        name: 'WorkerRedemptionError',
+        code: 'rejected',
+        message: 'Run redemption commit failed',
+      });
+      await expect(fixture.owner.read()).resolves.toEqual(order);
+      await expect(fixture.readDispatch()).resolves.toEqual(dispatch);
+    });
+  }
+
+  it('refuses unreadable dispatch candidates without modifying the owner or evidence', async () => {
+    const id = 'unreadable-candidates';
+    const fixture = await start(id);
+    await fixture.finishProvision();
+    const { executor, dialect } = getContext();
+    const malformed = '{}';
+    const candidates = dialect === 'postgres' ? sql`cast(${malformed} as jsonb)` : sql`${malformed}`;
+    await executor.run(sql`UPDATE worker_dispatch SET candidates = ${candidates} WHERE job_run_id = ${id}`);
+    const order = await fixture.owner.read();
+
+    await expect((await prepare(fixture, id)).exchange()).resolves.toEqual({ reject: 'rejected' });
+    await expect(fixture.owner.read()).resolves.toEqual(order);
+    await expect(
+      executor.all(sql`
+      SELECT cast(candidates as text) AS candidates FROM worker_dispatch WHERE job_run_id = ${id}
+    `),
+    ).resolves.toEqual([{ candidates: malformed }]);
+  });
+
   it('marks the borrowed transaction rollback-only after the owner write fails', async () => {
     const fixture = await start('storage-reject');
     const prepared = await prepare(fixture, 'storage-reject');
@@ -676,6 +1325,56 @@ describe(`worker redemption owner storage (${config.dialect})`, () => {
     const [winner, rival] = await compete(fixture, 'competing-secret', 'different-secret');
     expect(rival).toEqual({ reject: 'rejected' });
     await expect(fixture.owner.read()).resolves.toMatchObject({ stored: { accepted: winner } });
+  });
+
+  it.each([
+    'same',
+    'different',
+  ] as const)('checks a %s secret when a competing exchange commits during proof', async (secret) => {
+    const id = `commit-during-proof-${secret}`;
+    const fixture = await start(id);
+    const first = await prepare(fixture, id);
+    expectPrepared(first);
+    const entered = Promise.withResolvers<void>();
+    const resume = Promise.withResolvers<void>();
+    let checks = 0;
+    const policy: StartValueVisibility = {
+      kind: 'externally-visible',
+      async verifyPlatform(ref) {
+        expect(ref).toEqual(fixture.allocation);
+        if (++checks === 1) {
+          entered.resolve();
+          await resume.promise;
+        }
+        return new Date(fixture.deadline).toISOString();
+      },
+    };
+    const pending = prepare(fixture, id, { secret: secret === 'same' ? runtimeSecret : 'different-secret' }, policy);
+    try {
+      await Promise.race([
+        entered.promise,
+        pending.then(() => {
+          throw new Error('Rival preparation did not reach allocation proof');
+        }),
+      ]);
+      const winner = await first.exchange();
+      expect(winner).toHaveProperty('party.id', id);
+      fixture.loseLiveProof();
+      resume.resolve();
+      const rival = await pending;
+      if (secret === 'same') {
+        expectPrepared(rival);
+        await expect(rival.exchange()).resolves.toEqual(winner);
+        expect(checks).toBe(2);
+      } else {
+        expect(rival.prepared).toEqual({ reject: 'rejected' });
+        expect(checks).toBe(1);
+      }
+      await expect(fixture.owner.read()).resolves.toMatchObject({ stored: { accepted: winner } });
+    } finally {
+      resume.resolve();
+      await Promise.allSettled([pending]);
+    }
   });
 
   it('rejects first use when proof names a different allocation', async () => {

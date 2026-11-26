@@ -4,6 +4,7 @@ import type { StartWorkerResult, WorkerDispatchCapability } from '@makaio/contra
 import type { BoundedShutdownStep, ContributionProcessor } from '@makaio/kernel';
 import { boundedWait, outerBoundMs } from '@makaio/utils';
 import {
+  AllocationObservationSignal,
   createWorkerDispatch,
   createWorkerProviderContributionProcessor,
   finishLocalAllocation,
@@ -50,6 +51,7 @@ export function bindWorkerDispatch(
   const host: WorkerStartOptions = {
     ...options,
     providers,
+    allocationObservation: new AllocationObservationSignal(),
     database,
     operationSignal: operations.signal,
     provisionDrain: {

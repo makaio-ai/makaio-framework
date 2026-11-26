@@ -4,7 +4,7 @@ import { createHostDatabase } from '@makaio/storage-drizzle';
 import { DeferredPromise } from '@makaio/utils';
 import { sql } from 'drizzle-orm';
 import { beforeAll, describe, expect, it, vi } from 'vitest';
-import { readDispatch } from '../dispatch-store.js';
+import { insertDispatch, readDispatch, recordLateAllocation, updateDispatch } from '../dispatch-store.js';
 import type { OrderedWorkerProvider } from '@makaio/contracts/extension';
 import { finishLateProvisionHandle } from '../local-worker-control.js';
 import { decideStart } from '../start-claim.js';
@@ -19,6 +19,7 @@ import {
   processBoundProvider,
   providerId,
 } from './ordered-worker-fixture.js';
+import { bookRedemptionOwner, migrateRedemptionOwner } from './redemption-owner-fixture.js';
 
 const config = resolveStorageConformanceConfig();
 if (config === null) throw new Error('MAKAIO_STORAGE_TEST_URL is required for PostgreSQL dispatch tests');
@@ -28,6 +29,7 @@ const allocationRef: ProviderAllocationRef = { version: 1, providerId, providerD
 describe(`ordered allocation lifecycle (${config.dialect})`, () => {
   const getContext = useSuiteDatabaseContext(config);
   beforeAll(async () => installOrderFixture(getContext()));
+  beforeAll(async () => migrateRedemptionOwner(getContext()));
 
   it.each([false, true])('hands off a late allocation (termination fails: %s)', async (fails) => {
     const database = createHostDatabase(getContext().db);
@@ -75,6 +77,48 @@ describe(`ordered allocation lifecycle (${config.dialect})`, () => {
     await expect(observer.superviseOrderedWorker(call, order.jobRunId, signal)).resolves.toEqual(absent);
     expect(worker.terminated).toEqual([allocationRef]);
     await expect(read()).resolves.toMatchObject({ settled: { lateAllocation: { state: 'ended' } } });
+  });
+
+  it('cleans up a late atomic allocation under supervision without a credential reader', async () => {
+    const { db, executor } = getContext();
+    const database = createHostDatabase(db);
+    const worker = controllableProvider();
+    const { host, order } = await orderFixture(database, worker.provider, 'late-atomic-allocation');
+    if (order.allocationLifetime !== 'provider-managed') throw new Error('Expected a managed allocation');
+    const { kind, id } = call.caller;
+    const owner = await bookRedemptionOwner(database, order, { kind, id }, fixtureToken, false);
+    const source = owner.sourceFor(executor);
+    const { jobRunId, allocationLifetime, allocationScope } = order;
+    await database.transaction(async (tx) => {
+      const locked = await source.lockOrder(tx, jobRunId);
+      if (locked?.redemption === undefined) throw new Error('Expected an atomic booking');
+      const claim = await insertDispatch(tx, {
+        jobRunId,
+        orderDigest: locked.orderDigest,
+        binding: {
+          jobRunId,
+          providerId,
+          allocationLifetime,
+          allocationScope,
+          provisioningStartedAt: new Date().toISOString(),
+        },
+      });
+      if (claim === undefined) throw new Error('Dispatch already exists');
+      const settled = await updateDispatch(tx, claim, { settled: worker.evidence });
+      await recordLateAllocation(tx, settled, { reference: allocationRef, state: 'pending' });
+    });
+
+    Reflect.deleteProperty(source, 'readRedemptionCredentials');
+    worker.finishTermination();
+    const observer = createWorkerDispatch({ ...host, source });
+    await expect(observer.superviseOrderedWorker(call, jobRunId, signal)).resolves.toEqual({
+      kind: 'confirmed-absent',
+      evidence: worker.evidence,
+    });
+    expect(worker.terminated).toEqual([allocationRef]);
+    await expect(database.transaction((tx) => readDispatch(tx, jobRunId))).resolves.toMatchObject({
+      settled: { lateAllocation: { reference: allocationRef, state: 'ended' } },
+    });
   });
 
   it.each([

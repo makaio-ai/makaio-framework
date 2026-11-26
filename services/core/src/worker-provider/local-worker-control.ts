@@ -163,7 +163,7 @@ async function recordLocalTeardown(
   // The scheduled cleanup fence can close while storage is still available to a late reply.
   const fence = returned === undefined ? host.localCleanupSignal : undefined;
   if (fence?.aborted) return false;
-  return host.database.transaction(async (tx) => {
+  const finished = await host.database.transaction(async (tx) => {
     const current = await lockDispatch(tx, host, jobRunId);
     if (current === undefined || fence?.aborted) return false;
     const { claim } = current;
@@ -192,7 +192,10 @@ async function recordLocalTeardown(
           observedAt: new Date().toISOString(),
         },
       });
+      return 'settled';
     }
     return true;
   });
+  if (finished === 'settled') host.allocationObservation.notify(jobRunId);
+  return finished !== false;
 }

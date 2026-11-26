@@ -1,4 +1,3 @@
-import { createHash, timingSafeEqual } from 'node:crypto';
 import { isMintedCallContext } from '@makaio/bus-core';
 import { ownCarrierOf } from '@makaio/bus-core/kernel-api';
 import type { HostTransaction, JobRunId, ProviderAllocationRef } from '@makaio/contracts';
@@ -11,8 +10,20 @@ import type { StartValueVisibility } from '@makaio/contracts/capabilities';
 import { CorePartyKind, type CallContext } from '@makaio/core';
 import { getHostTransactionQueryContext, markTransactionRollbackOnly } from '@makaio/storage-drizzle';
 import { abortableWait, deepFreeze } from '@makaio/utils';
-import { sameReference } from './dispatch-store.js';
-import { bindDispatchProof, prepareDispatchProof, type PreparedDispatchProof } from './redemption-binding.js';
+import type { ObservationWatch } from './allocation-observation-signal.js';
+import {
+  digestWorkerBootstrapToken,
+  digestWorkerRuntimeSecret,
+  matchesWorkerCredential,
+  type WorkerCredentialDigest,
+} from './credential-digest.js';
+import { DispatchCandidateReadError, sameReference } from './dispatch-store.js';
+import {
+  bindDispatchProof,
+  prepareDispatchProof,
+  type PreparedDispatchProof,
+  type UnresolvedDispatchCorrelation,
+} from './redemption-binding.js';
 import { hasOpenDeadline, lockDispatch } from './start-claim.js';
 import type {
   CommittedWorkerOrder,
@@ -58,8 +69,8 @@ interface RedemptionTarget {
 
 interface RedemptionAttempt {
   readonly jobRunId: JobRunId;
-  readonly tokenDigest: Buffer;
-  readonly runtimeDigest: Buffer;
+  readonly tokenDigest: WorkerCredentialDigest;
+  readonly runtimeDigest: WorkerCredentialDigest;
 }
 
 interface VerifiedOrder {
@@ -74,49 +85,33 @@ type AllocationEvidence = {
 };
 
 const rejected: ConnectionExchangeRejected = Object.freeze({ reject: 'rejected' });
-const missingDigest = Buffer.alloc(32);
 const maxTimerDelayMs = 2 ** 31 - 1;
-const retryableStorageCodes = new Set([
-  '40001',
-  '40P01',
-  'SQLITE_BUSY',
-  'SQLITE_BUSY_RECOVERY',
-  'SQLITE_BUSY_SNAPSHOT',
-]);
+
+interface PreparationLifetime {
+  readonly signal: AbortSignal;
+  readonly expiresAt: number;
+  /** Tighten the active deadline without extending it. */
+  shorten(deadline: number): void;
+}
 
 /**
- * Recognize explicit database retry signals through a driver's error wrapper.
- * @param error - Failure raised during storage work.
- * @returns Whether the storage operation can be repeated.
+ * Classify storage failures after proof, including wrapped driver errors.
+ * Rejection is limited to unreadable candidates, SQLSTATE class 22 data errors, and constraint violations.
+ * Infrastructure and programming errors remain retryable, even when typed.
+ * @param error - Failure from the owner or dispatch store.
+ * @returns Safe disposition for an exchange that has already proved its allocation.
  */
-function isRetryableStorageFailure(error: unknown): boolean {
+function storageDisposition(error: unknown): WorkerRedemptionError['code'] {
   const seen = new Set<Error>();
   while (error instanceof Error && !seen.has(error)) {
-    if ('code' in error && typeof error.code === 'string' && retryableStorageCodes.has(error.code)) return true;
+    if (error instanceof DispatchCandidateReadError) return 'rejected';
+    const code = 'code' in error ? error.code : undefined;
+    if (typeof code === 'string' && /^(?:2[23][0-9A-Z]{3}|SQLITE_CONSTRAINT(?:_[A-Z_]+)?)$/.test(code))
+      return 'rejected';
     seen.add(error);
     error = error.cause;
   }
-  return false;
-}
-
-/**
- * Hash a credential before doing asynchronous work.
- * @param value - Secret presented on the connection.
- * @returns The fixed-width SHA-256 digest.
- */
-function digest(value: string): Buffer {
-  return createHash('sha256').update(value).digest();
-}
-
-/**
- * Check a credential digest against the canonical stored encoding.
- * @param stored - Hex-encoded SHA-256 at rest, if available.
- * @param presented - SHA-256 of the presented secret.
- * @returns Whether the two digests match.
- */
-function matchesDigest(stored: string | undefined, presented: Buffer): boolean {
-  const decoded = stored !== undefined && /^[a-f0-9]{64}$/.test(stored) ? Buffer.from(stored, 'hex') : missingDigest;
-  return timingSafeEqual(decoded, presented) && decoded !== missingDigest;
+  return 'retryable';
 }
 
 /**
@@ -133,12 +128,14 @@ async function verifyOrder(
 ): Promise<VerifiedOrder | undefined> {
   const locked = await lockDispatch(tx, host, attempt.jobRunId);
   const redemption = locked?.order.redemption;
+  const tokenMatches = matchesWorkerCredential(redemption?.tokenDigest, attempt.tokenDigest);
+  const runtimeMatches = matchesWorkerCredential(redemption?.stored?.runtimeDigest, attempt.runtimeDigest);
   if (
     locked === undefined ||
     locked.claim.shutdownEnded !== undefined ||
     redemption === undefined ||
     redemption.tokenRevoked ||
-    !matchesDigest(redemption.tokenDigest, attempt.tokenDigest)
+    !tokenMatches
   )
     return undefined;
   if (
@@ -153,7 +150,7 @@ async function verifyOrder(
     locked.order.state !== 'redeemed' ||
     redemption.stored === undefined ||
     !hasOpenDeadline(redemption.stored.accepted.expiresAt) ||
-    !matchesDigest(redemption.stored.runtimeDigest, attempt.runtimeDigest) ||
+    !runtimeMatches ||
     locked.claim.boundAllocation === null ||
     locked.claim.settled !== null
   )
@@ -193,7 +190,7 @@ async function prepareReplay(
  * @param policy - Host-selected proof policy.
  * @param attempt - Hashed presentation used to reload a competing winner.
  * @param signal - Lifetime of this preparation attempt.
- * @returns Proof for the current or winning binding.
+ * @returns Proof for the current or winning binding, pending correlation, or rejection.
  */
 async function prepareEvidence(
   host: WorkerStartOptions,
@@ -202,52 +199,66 @@ async function prepareEvidence(
   policy: StartValueVisibility,
   attempt: RedemptionAttempt,
   signal: AbortSignal,
-): Promise<AllocationEvidence | undefined> {
+): Promise<AllocationEvidence | UnresolvedDispatchCorrelation | undefined> {
   if (current.redemption.stored !== undefined) return prepareReplay(current, policy, signal).catch(() => undefined);
   const first = await prepareDispatchProof(host, supervisionCall, current.locked.claim, policy, {
     useSenderReference: true,
     signal,
   }).catch(() => undefined);
   signal.throwIfAborted();
-  if (first !== undefined) return { ref: first.ref, platformThrough: first.platformThrough, first };
+  if (typeof first === 'object') {
+    return { ref: first.ref, platformThrough: first.platformThrough, first };
+  }
   // First-use liveness can disappear after a competing exchange commits.
   const winner = await readVerifiedOrder(host, attempt, signal);
-  return winner?.redemption.stored === undefined
-    ? undefined
-    : prepareReplay(winner, policy, signal).catch(() => undefined);
+  if (winner === undefined) return undefined;
+  return winner.redemption.stored === undefined ? first : prepareReplay(winner, policy, signal).catch(() => undefined);
 }
 
 /**
- * Bound asynchronous proof work by the applicable persisted deadline.
- * @param deadline - Bootstrap or replay expiry in milliseconds since the epoch.
+ * Bound all preparation work, including the first credential lookup.
+ * @param deadline - Trusted absolute connection deadline in milliseconds since the epoch.
  * @param hostSignal - Host operation lifetime.
- * @param work - Proof work to run outside the owner transaction.
- * @returns Proof, or undefined when the attempt's lifetime ends.
+ * @param work - Preparation work with access to the same deadline guard.
+ * @returns Prepared work, or undefined when the attempt's lifetime ends.
  */
-async function withinPreparationDeadline(
+async function withinPreparationDeadline<T>(
   deadline: number,
   hostSignal: AbortSignal,
-  work: (signal: AbortSignal) => Promise<AllocationEvidence | undefined>,
-): Promise<AllocationEvidence | undefined> {
+  work: (lifetime: PreparationLifetime) => Promise<T | undefined>,
+): Promise<T | undefined> {
   const controller = new AbortController();
   const signal = AbortSignal.any([hostSignal, controller.signal]);
+  let expiresAt = deadline;
   let timer: ReturnType<typeof setTimeout> | undefined;
   /** Arm against the absolute deadline, including dates beyond the platform timer range. */
   function arm(): void {
-    const remaining = deadline - Date.now();
-    if (remaining <= 0) controller.abort();
+    const remaining = expiresAt - Date.now();
+    if (!(remaining > 0)) controller.abort();
     else timer = setTimeout(arm, Math.min(remaining, maxTimerDelayMs));
   }
+  const lifetime: PreparationLifetime = {
+    signal,
+    get expiresAt() {
+      return expiresAt;
+    },
+    shorten(bound) {
+      signal.throwIfAborted();
+      expiresAt = Math.min(expiresAt, bound);
+      clearTimeout(timer);
+      arm();
+    },
+  };
   arm();
   try {
     if (signal.aborted) return undefined;
-    const evidence = await abortableWait(
-      Promise.resolve().then(() => work(signal)),
+    const prepared = await abortableWait(
+      Promise.resolve().then(() => work(lifetime)),
       signal,
     );
-    return !signal.aborted && deadline > Date.now() ? evidence : undefined;
+    return !signal.aborted && expiresAt > Date.now() ? prepared : undefined;
   } catch (error) {
-    if (!signal.aborted) throw error;
+    if (!signal.aborted && expiresAt > Date.now()) throw error;
     return undefined;
   } finally {
     clearTimeout(timer);
@@ -280,7 +291,7 @@ function firstResult(
   const expiresAt = new Date(redeemedAt.getTime() + maxRuntimeMs + cancellationWindowMs);
   if (!Number.isFinite(expiresAt.getTime())) return undefined;
   return {
-    runtimeDigest: attempt.runtimeDigest.toString('hex'),
+    runtimeDigest: attempt.runtimeDigest,
     redeemedAt: redeemedAt.toISOString(),
     requiresPlatformProof,
     accepted: {
@@ -333,6 +344,7 @@ async function commitRedemption(
  * @param attempt - Hashed presentation.
  * @param target - Booking identity captured before proof verification.
  * @param evidence - Frozen allocation evidence.
+ * @param expiresAt - Effective exchange deadline in epoch milliseconds.
  * @returns A commit callback that rechecks authority under the run lock.
  */
 function makeCommit(
@@ -341,6 +353,7 @@ function makeCommit(
   attempt: RedemptionAttempt,
   target: RedemptionTarget,
   evidence: AllocationEvidence,
+  expiresAt: number,
 ): ConnectionExchangeCommit {
   return Object.freeze<ConnectionExchangeCommit>({
     async commit(commitCall, tx) {
@@ -355,17 +368,10 @@ function makeCommit(
       }
       try {
         const locked = await verifyOrder(host, tx, attempt);
-        if (
-          locked === undefined ||
-          locked.redemption.generation !== target.generation ||
-          locked.locked.order.orderDigest !== target.orderDigest ||
-          locked.locked.order.owner.kind !== target.ownerKind ||
-          locked.locked.order.owner.id !== target.ownerId
-        )
-          return rejected;
+        if (locked === undefined || !matchesTarget(locked, target)) return rejected;
         return await commitRedemption(tx, locked, attempt, evidence);
       } catch (error) {
-        const code = isRetryableStorageFailure(error) ? 'retryable' : 'rejected';
+        const code = expiresAt > Date.now() ? storageDisposition(error) : 'rejected';
         const failure = new WorkerRedemptionError(code, 'Run redemption commit failed');
         markTransactionRollbackOnly(tx, failure);
         throw failure;
@@ -375,27 +381,96 @@ function makeCommit(
 }
 
 /**
- * Read the authoritative order and normalize storage failures at preparation.
+ * Screen the credentials without a write lock, then read the authoritative order.
  * @param host - Host dispatch and order storage.
  * @param attempt - Hashed presentation.
  * @param signal - Current preparation lifetime.
- * @returns The verified snapshot, or undefined on permanent failure or rejection.
+ * @param proof - Allocation proof from this exchange, if it has already passed.
+ * @returns The verified snapshot, or undefined if the presentation is rejected.
  */
-async function readVerifiedOrder(host: WorkerStartOptions, attempt: RedemptionAttempt, signal = host.operationSignal) {
+async function readVerifiedOrder(
+  host: WorkerStartOptions,
+  attempt: RedemptionAttempt,
+  signal: AbortSignal,
+  proof?: AllocationEvidence,
+) {
   try {
     const { source } = host;
-    if (signal.aborted || source.readRedemptionCredentials === undefined) return undefined;
+    if (signal.aborted || typeof source.readRedemptionCredentials !== 'function') return undefined;
     const { tokenDigest, runtimeDigest } = (await source.readRedemptionCredentials(attempt.jobRunId)) ?? {};
-    const tokenMatches = matchesDigest(tokenDigest, attempt.tokenDigest);
-    const runtimeMatches = matchesDigest(runtimeDigest, attempt.runtimeDigest);
+    const tokenMatches = matchesWorkerCredential(tokenDigest, attempt.tokenDigest);
+    const runtimeMatches = matchesWorkerCredential(runtimeDigest, attempt.runtimeDigest);
     if (signal.aborted || !tokenMatches || (runtimeDigest !== undefined && !runtimeMatches)) return undefined;
+    // Replay proof requires the stored runtime digest to remain present.
+    // A matching digest that appeared after first-use proof can begin replay.
+    if (proof !== undefined && proof.first === undefined && runtimeDigest === undefined) return undefined;
     return await host.database.transaction(async (tx) => (signal.aborted ? undefined : verifyOrder(host, tx, attempt)));
   } catch (error) {
-    if (isRetryableStorageFailure(error)) {
-      throw new WorkerRedemptionError('retryable', 'Run redemption storage temporarily unavailable');
-    }
-    return undefined;
+    if (proof === undefined || storageDisposition(error) === 'rejected') return undefined;
+    throw new WorkerRedemptionError('retryable', 'Run redemption storage read failed');
   }
+}
+
+/**
+ * Check that preparation still targets the same booking and issuer.
+ * @param current - Order and credentials read under the owner lock.
+ * @param target - Booking captured before proof preparation.
+ * @returns Whether the booking remained unchanged.
+ */
+function matchesTarget(current: VerifiedOrder, target: RedemptionTarget): boolean {
+  const { owner, orderDigest } = current.locked.order;
+  return (
+    current.redemption.generation === target.generation &&
+    orderDigest === target.orderDigest &&
+    owner.kind === target.ownerKind &&
+    owner.id === target.ownerId
+  );
+}
+
+/**
+ * Reread the booking after committed observations within the active preparation deadline.
+ * @param host - Dispatch and supervision authority.
+ * @param attempt - Hashed presentation.
+ * @param target - Original booking being redeemed.
+ * @param policy - Host-selected proof policy.
+ * @param initial - Verified order and notification captured before reading it.
+ * @param watch - Run-specific observation subscription.
+ * @param signal - Shared preparation and observation lifetime.
+ * @returns Proof for the original booking or rejection.
+ */
+async function prepareObservedEvidence(
+  host: WorkerRedemptionHost,
+  attempt: RedemptionAttempt,
+  target: RedemptionTarget,
+  policy: StartValueVisibility,
+  initial: { order: VerifiedOrder; changed: Promise<void> },
+  watch: ObservationWatch,
+  signal: AbortSignal,
+): Promise<AllocationEvidence | undefined> {
+  let current: VerifiedOrder | undefined = initial.order;
+  let changed = initial.changed;
+  while (current !== undefined && matchesTarget(current, target)) {
+    signal.throwIfAborted();
+    const evidence = await prepareEvidence(host, host.supervisionCall, current, policy, attempt, signal);
+    if (evidence === undefined) return undefined;
+    if (typeof evidence === 'object') {
+      const confirmed = await readVerifiedOrder(host, attempt, signal, evidence);
+      if (confirmed === undefined || !matchesTarget(confirmed, target)) return undefined;
+      if (evidence.first === undefined) return confirmed.redemption.stored === undefined ? undefined : evidence;
+      if (confirmed.redemption.stored === undefined) return evidence;
+      // A competing commit won with the same secret. Prove its durable allocation for replay.
+      current = confirmed;
+      continue;
+    }
+    if (changed === watch.changed()) {
+      if (evidence === 'uncorrelated') break;
+      await abortableWait(changed, signal);
+    }
+    signal.throwIfAborted();
+    changed = watch.changed();
+    current = await readVerifiedOrder(host, attempt, signal);
+  }
+  return undefined;
 }
 
 /**
@@ -407,6 +482,8 @@ async function readVerifiedOrder(host: WorkerStartOptions, attempt: RedemptionAt
  * @param call - Kernel-minted anonymous boundary call.
  * @param presentation - Worker credentials, used only to derive digests.
  * @param visibility - Host-selected allocation verification policy.
+ * @param connectionDeadline - Trusted absolute deadline for connection setup, in epoch milliseconds.
+ * The persisted bootstrap or replay deadline can tighten it once the order is readable.
  * @returns A rejection or storage work returning the final reply.
  */
 export async function prepareWorkerRedemption(
@@ -414,6 +491,7 @@ export async function prepareWorkerRedemption(
   call: CallContext,
   presentation: WorkerRedemptionPresentation,
   visibility: StartValueVisibility,
+  connectionDeadline: number,
 ): Promise<ConnectionExchangeResult> {
   const { supervisionCall } = host;
   if (
@@ -424,24 +502,35 @@ export async function prepareWorkerRedemption(
     call.attestedBy !== undefined ||
     ownCarrierOf(supervisionCall)?.kind !== CorePartyKind.host ||
     !presentation.oneTimeToken ||
-    !presentation.runtimeSecret
+    !presentation.runtimeSecret ||
+    !Number.isFinite(connectionDeadline)
   )
     return rejected;
   const { jobRunId, oneTimeToken, runtimeSecret } = presentation;
-  const attempt = Object.freeze({ jobRunId, tokenDigest: digest(oneTimeToken), runtimeDigest: digest(runtimeSecret) });
+  const attempt = Object.freeze({
+    jobRunId,
+    tokenDigest: digestWorkerBootstrapToken(oneTimeToken),
+    runtimeDigest: digestWorkerRuntimeSecret(runtimeSecret),
+  });
   const policy = Object.freeze({ ...visibility });
-  const current = await readVerifiedOrder(host, attempt);
-  if (current === undefined) return rejected;
-  const { generation } = current.redemption;
-  const { owner, orderDigest } = current.locked.order;
-  const target = Object.freeze({ generation, orderDigest, ownerKind: owner.kind, ownerId: owner.id });
-  const deadline = Date.parse(
-    current.redemption.stored?.accepted.expiresAt ?? current.locked.order.order.bootstrapDeadlineAt,
-  );
-  const evidence = await withinPreparationDeadline(deadline, host.operationSignal, (signal) =>
-    prepareEvidence(host, supervisionCall, current, policy, attempt, signal),
-  );
-  // The storage exchange treats missing evidence as rejection. A transport
-  // may wait for correlation only after identifying a pending observation.
-  return evidence === undefined ? rejected : makeCommit(host, call, attempt, target, evidence);
+  const watch = host.allocationObservation.watch(jobRunId);
+  try {
+    const prepared = await withinPreparationDeadline(connectionDeadline, host.operationSignal, async (lifetime) => {
+      const changed = watch.changed();
+      const current = await readVerifiedOrder(host, attempt, lifetime.signal);
+      if (current === undefined) return undefined;
+      lifetime.shorten(
+        Date.parse(current.redemption.stored?.accepted.expiresAt ?? current.locked.order.order.bootstrapDeadlineAt),
+      );
+      const { generation } = current.redemption;
+      const { owner, orderDigest } = current.locked.order;
+      const target = Object.freeze({ generation, orderDigest, ownerKind: owner.kind, ownerId: owner.id });
+      const initial = { order: current, changed };
+      const evidence = await prepareObservedEvidence(host, attempt, target, policy, initial, watch, lifetime.signal);
+      return evidence === undefined ? undefined : makeCommit(host, call, attempt, target, evidence, lifetime.expiresAt);
+    });
+    return prepared ?? rejected;
+  } finally {
+    watch.dispose();
+  }
 }

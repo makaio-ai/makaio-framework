@@ -10,6 +10,7 @@ import type {
 import type { StartOrder, StartWorkerResult } from '@makaio/contracts/capabilities';
 import type { ConnectionExchangeAccepted } from '@makaio/contracts/boundary';
 import type { PartyRef } from '@makaio/core';
+import type { AllocationObservationSignal } from './allocation-observation-signal.js';
 import type { AllocationScopeSetting } from './allocation-scope-source.js';
 import type { LocalWorkerControl } from './local-worker-control.js';
 import type { WorkerProviderRegistry } from './provider-registry.js';
@@ -18,6 +19,18 @@ export type { StartOrder, StartWorkerResult } from '@makaio/contracts/capabiliti
 
 /** Durable result stored on the run by its owner. */
 export interface StoredWorkerRedemption {
+  /**
+   * Purpose-tagged digest of the runtime credential.
+   *
+   * The SHA-256 input is the UTF-8 bytes of the purpose (without the colon),
+   * one NUL byte (0x00), and the UTF-8 bytes of the credential value, in that
+   * order. The stored string is the purpose, a colon, and the lowercase hex digest.
+   *
+   * Purpose `worker-runtime-v1` and value `example input` give hex digest
+   * `f4ea92a027441ce8c22d2a7c383832b8175ac0eac56c808bd435f5ea07c3523d`
+   * and stored string
+   * `worker-runtime-v1:f4ea92a027441ce8c22d2a7c383832b8175ac0eac56c808bd435f5ea07c3523d`.
+   */
   readonly runtimeDigest: string;
   readonly redeemedAt: string;
   readonly requiresPlatformProof: boolean;
@@ -31,7 +44,18 @@ export interface StoredWorkerRedemption {
 export interface LockedWorkerRedemption {
   /** Active acceptance generation; checked again when committing prepared work. */
   readonly generation: string;
-  /** SHA-256 of the redeem-purpose credential booked for this run and provider. */
+  /**
+   * Bootstrap credential digest for this run and provider.
+   *
+   * The SHA-256 input is the UTF-8 bytes of the purpose (without the colon),
+   * one NUL byte (0x00), and the UTF-8 bytes of the credential value, in that
+   * order. The stored string is the purpose, a colon, and the lowercase hex digest.
+   *
+   * Purpose `worker-bootstrap-v1` and value `example input` give hex digest
+   * `e065986136506eb4daabc992e5f19bb0df27afe327fcb74b4aab82b169e563f4`
+   * and stored string
+   * `worker-bootstrap-v1:e065986136506eb4daabc992e5f19bb0df27afe327fcb74b4aab82b169e563f4`.
+   */
   readonly tokenDigest: string;
   readonly tokenRevoked: boolean;
   /** Current issuer standing for first use. */
@@ -136,6 +160,8 @@ export interface WorkerStartOptions {
   readonly source: WorkerOrderSource;
   readonly providers: WorkerProviderRegistry;
   readonly scopeSetting: AllocationScopeSetting;
+  /** Direct wakeups shared by dispatch writers and redemption in this host. */
+  readonly allocationObservation: AllocationObservationSignal;
   /** Refreshed host connection values for the initial provider operation. */
   readonly connection: () => WorkerRuntimeConnection;
   /** Independent lifetime of provider operations, owned by the host. */

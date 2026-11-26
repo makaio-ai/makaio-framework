@@ -10,6 +10,14 @@ import type { CommittedWorkerOrder, StartOrder, StartWorkerResult, WorkerStartOp
 
 type Refusal = Extract<StartWorkerResult, { kind: 'refused' }>;
 
+/** The configured owner cannot support the redemption capability of its booking. */
+export class WorkerOrderConfigurationError extends Error {
+  public constructor() {
+    super('An atomic worker order source must implement readRedemptionCredentials');
+    this.name = 'WorkerOrderConfigurationError';
+  }
+}
+
 export type StartDecision =
   | Refusal
   | { kind: 'observe'; claim: DispatchClaim; order: CommittedWorkerOrder }
@@ -83,6 +91,7 @@ export function matchesClaim(claim: DispatchClaim, committed: CommittedWorkerOrd
 
 /**
  * Read a run under the host lock and validate the claim binding.
+ * Supervision can finish existing dispatches without a credential reader.
  * @param tx - Live host transaction.
  * @param host - Source and database that own the run.
  * @param jobRunId - Run to lock.
@@ -113,6 +122,9 @@ async function claimFirstStart(
   const { order, orderDigest, runtimeInputs, preserveWorkspace, continues } = committed;
   if (committed.state !== 'ordered') return { kind: 'refused', reason: 'run-closed' };
   if (!hasOpenDeadline(order.bootstrapDeadlineAt)) return { kind: 'refused', reason: 'bootstrap-expired' };
+  if (committed.redemption !== undefined && typeof host.source.readRedemptionCredentials !== 'function') {
+    throw new WorkerOrderConfigurationError();
+  }
   const provider = host.providers.selectForProvisioning(order.workerProviderId);
   if (provider === undefined || provider.allocationLifetime !== order.allocationLifetime) {
     return { kind: 'refused', reason: 'provider-unavailable' };
