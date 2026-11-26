@@ -17,7 +17,7 @@ import type { WorkerDispatchHostOptions } from './boot-types.js';
 import { resourceStep, resourceStepStopBudgetMs } from './runtime-stop-budget.js';
 import { createWorkerConnectionExchange, type WorkerConnectionExchangeOptions } from './worker-connection-exchange.js';
 
-interface BoundWorkerDispatch {
+export interface BoundWorkerDispatch {
   readonly capability: WorkerDispatchCapability;
   readonly contributionProcessor: ContributionProcessor;
   /**

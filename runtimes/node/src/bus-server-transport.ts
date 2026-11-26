@@ -18,6 +18,7 @@ import {
   CONNECTION_EXCHANGE_PATH,
   ConnectionExchangeAuth,
   DispatchingAuth,
+  isLoopbackAddress,
   verifyConnectionExchangeIngress,
   type ConnectionExchangeSetup,
   type WebSocketLike,
@@ -139,7 +140,7 @@ const DEFAULT_LOOPBACK_NAME = 'node';
 function isLoopbackListener(httpServer: HttpServer): boolean {
   const address = httpServer.address();
   if (address === null || typeof address === 'string') return false;
-  return address.address === '127.0.0.1' || address.address === '::1' || address.address === '::ffff:127.0.0.1';
+  return isLoopbackAddress(address.address);
 }
 
 /**
@@ -247,8 +248,17 @@ export class BusServerTransportProvider implements ServerTransportProvider {
     this.connecting = true;
 
     try {
-      const setup = this.options.connectionExchange;
-      const legacy = this.options.auth;
+      if (options.workerExchange !== undefined && this.options.connectionExchange !== undefined) {
+        throw new Error('Only one worker connection exchange may be configured');
+      }
+      const setup =
+        options.workerExchange === undefined
+          ? this.options.connectionExchange
+          : { setup: options.workerExchange.setup };
+      const ordinaryAuth =
+        this.options.auth ??
+        (isLoopbackListener(this.options.httpServer) ? new LoopbackReceiveContextAuth() : undefined);
+      const legacy = options.workerExchange === undefined ? this.options.auth : ordinaryAuth;
       if (setup !== undefined && legacy === undefined) {
         throw new Error('Connection exchange requires explicit legacy authentication');
       }
@@ -266,10 +276,7 @@ export class BusServerTransportProvider implements ServerTransportProvider {
       this.upgradeHandlerServer = this.options.httpServer;
       this.upgradeHandler = upgradeHandler;
 
-      const auth =
-        exchange?.auth ??
-        this.options.auth ??
-        (isLoopbackListener(this.options.httpServer) ? new LoopbackReceiveContextAuth() : undefined);
+      const auth = exchange?.auth ?? ordinaryAuth;
       this.busServer = await startBusServer({
         websocket: websocketServer,
         bus,

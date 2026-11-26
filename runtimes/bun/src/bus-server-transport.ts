@@ -31,7 +31,12 @@ import type { IMakaioBus } from '@makaio/bus-core';
 import { randomUUID } from 'node:crypto';
 import { MAKAIO_LOOPBACK_PARTY_KIND, type TransportReceiveContext } from '@makaio/core';
 import { startBusServer, HonoWebSocketBridge, type BusServer } from '@makaio/bus-server';
-import { ConnectionExchangeAuth, createWebSocketCloseEvent, DispatchingAuth } from '@makaio/bus-transport-websocket';
+import {
+  ConnectionExchangeAuth,
+  createWebSocketCloseEvent,
+  DispatchingAuth,
+  isLoopbackAddress,
+} from '@makaio/bus-transport-websocket';
 import type {
   ConnectionExchangeSetup,
   TransportAuth,
@@ -73,15 +78,6 @@ export interface BunBusServerTransportOptions {
 }
 
 const DEFAULT_LOOPBACK_NAME = 'bun';
-
-/**
- * Whether a host-confirmed listener is restricted to a loopback literal.
- * @param host - Listener host confirmed by the composition root.
- * @returns Whether the host is an accepted loopback literal.
- */
-function isLoopbackAuthorityHost(host: string | undefined): boolean {
-  return host === '127.0.0.1' || host === '::1' || host === '::ffff:127.0.0.1';
-}
 
 /** Provides trusted local context for the Bun host's loopback-only listener. */
 class LoopbackReceiveContextAuth implements TransportAuth {
@@ -341,7 +337,7 @@ export class BunBusServerTransportProvider implements ServerTransportProvider {
    * between the guard check and the first `await`.
    */
   private connecting = false;
-  private readonly exchange?: ConnectionExchangeAuth;
+  private exchange: ConnectionExchangeAuth | undefined;
 
   /**
    * @param options - Transport configuration.
@@ -387,7 +383,8 @@ export class BunBusServerTransportProvider implements ServerTransportProvider {
    *   arrive as `ArrayBuffer` rather than Node `Buffer`.
    */
   public createWebSocketHandler(): BunWebSocketHandler {
-    const { bridge, exchange } = this;
+    const { bridge } = this;
+    const readExchange = () => this.exchange;
     const isBusReady = (): boolean => this.busReady;
     const adapters = new WeakMap<RawServerWebSocket, BunServerWebSocketAdapter>();
 
@@ -401,6 +398,7 @@ export class BunBusServerTransportProvider implements ServerTransportProvider {
         const adapter = new BunServerWebSocketAdapter(ws);
         const upgrade = ws.data;
         if (typeof upgrade === 'object' && upgrade !== null && BUN_EXCHANGE_UPGRADE in upgrade) {
+          const exchange = readExchange();
           if (exchange === undefined || ws.terminate === undefined) {
             ws.close(1008, 'Authentication failed');
             return;
@@ -436,14 +434,21 @@ export class BunBusServerTransportProvider implements ServerTransportProvider {
     this.connecting = true;
 
     try {
+      const loopbackHost = options.workerExchange?.boundHost ?? this.options.loopbackAuthorityHost;
+      const legacy =
+        this.options.auth ?? (isLoopbackAddress(loopbackHost) ? new LoopbackReceiveContextAuth() : undefined);
+      if (options.workerExchange !== undefined) {
+        if (this.options.connectionExchange !== undefined) {
+          throw new Error('Only one worker connection exchange may be configured');
+        }
+        if (legacy === undefined) throw new Error('Connection exchange requires explicit legacy authentication');
+        this.exchange = new ConnectionExchangeAuth(legacy, options.workerExchange.setup);
+      }
       this.busServer = await startBusServer({
         websocket: this.bridge,
         bus,
         checkBoundaryAccess: options.checkBoundaryAccess,
-        auth:
-          this.exchange ??
-          this.options.auth ??
-          (isLoopbackAuthorityHost(this.options.loopbackAuthorityHost) ? new LoopbackReceiveContextAuth() : undefined),
+        auth: this.exchange ?? legacy,
         loopbackName: this.options.loopbackName ?? DEFAULT_LOOPBACK_NAME,
       });
       this.busReady = true;
@@ -477,5 +482,6 @@ export class BunBusServerTransportProvider implements ServerTransportProvider {
       });
       this.busServer = null;
     }
+    if (this.options.connectionExchange === undefined) this.exchange = undefined;
   }
 }

@@ -87,13 +87,14 @@ export async function prepareExchangeDatabase(directory: string): Promise<void> 
 /**
  * Allocate storage which is independent of the child process lifetimes.
  * @param directory - Parent-owned temporary files and SQLite template.
+ * @param seed - Whether to install the exchange-only fixture schema instead of leaving migrations to full boot.
  * @returns Private endpoint and teardown for one test.
  */
-export async function createRestartDatabase(directory: string) {
+export async function createRestartDatabase(directory: string, seed = true) {
   const id = randomUUID().replaceAll('-', '');
   if (process.env['MAKAIO_STORAGE_TEST_DIALECT'] !== 'postgres') {
     const file = join(directory, `${id}.db`);
-    await copyFile(join(directory, 'template.db'), file);
+    if (seed) await copyFile(join(directory, 'template.db'), file);
     return { url: `file:${file}`, cleanup: async () => void (await rm(file, { force: true })) };
   }
   ensurePostgresEngineRegistered();
@@ -113,7 +114,7 @@ export async function createRestartDatabase(directory: string) {
   const isolatedUrl = buildPostgresOptionsUrl(url, { search_path: schemaName });
   try {
     await executor.run(sql`CREATE SCHEMA ${schema}`);
-    await migrate(isolatedUrl);
+    if (seed) await migrate(isolatedUrl);
   } catch (error) {
     await cleanup();
     throw error;

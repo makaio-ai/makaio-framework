@@ -26,6 +26,8 @@ export type StockExchangeScenario =
 /** One independent host and client scenario. */
 export type ExchangeScenario =
   | StockExchangeScenario
+  | 'boot-protected'
+  | 'boot-default'
   | 'capacity'
   | 'silent'
   | 'committed'
@@ -77,6 +79,9 @@ export type ExchangeScenario =
 export const ExchangeHostStartSchema = z.strictObject({
   database: z.string(),
   proof: z.string(),
+  omitLegacyAuth: z.boolean().optional(),
+  bindHost: z.literal('::ffff:127.0.0.1').optional(),
+  rejectBindHost: z.enum(['0.0.0.0', 'localhost']).optional(),
   expiredAt: z.number().optional(),
   port: z.number().optional(),
   wake: z
@@ -114,6 +119,11 @@ export interface ExchangeSnapshot {
 
 export type ExchangeMessage =
   | { kind: 'host-loaded' }
+  | { kind: 'boot-listening'; port: number }
+  | { kind: 'boot-rejected'; message: string; port: number; transportRegistered: boolean }
+  | { kind: 'boot-owner-held' }
+  | { kind: 'boot-ending'; closed: boolean; connections: number }
+  | { kind: 'boot-snapshot'; reads: number; proofChecks: number; promotions: number; accepted: boolean; bound: boolean }
   | { kind: 'ready'; port: number }
   | { kind: 'restarted'; port: number }
   | { kind: 'transport-stopped'; abortedBeforeRelease: boolean }
@@ -176,6 +186,9 @@ export type ExchangeMessage =
 
 export type ExchangeCommand =
   | 'snapshot'
+  | 'boot-snapshot'
+  | 'boot-close'
+  | 'boot-rollback'
   | 'release'
   | 'release-terminal'
   | 'release-reconcile'

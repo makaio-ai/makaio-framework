@@ -88,7 +88,7 @@ export {
   type BunRouteGraphUpgradeServer,
 } from './bun-route-graph-fetch.js';
 export { resolveListeningPort, type BunServer, type BunServerAddress } from './http-server-utils.js';
-export { bootMakaioRuntime, type BunBootMakaioRuntimeOptions } from './boot.js';
+export { bootMakaioRuntime, serveBunWorkerExchangeTest, type BunBootMakaioRuntimeOptions } from './boot.js';
 export {
   collectActiveBunHostPackages,
   composeBunHostFetch,
