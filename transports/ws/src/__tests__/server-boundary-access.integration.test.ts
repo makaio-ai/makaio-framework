@@ -787,6 +787,7 @@ describe('WebSocket boundary live authorization', () => {
     };
     socket.send(JSON.stringify(request));
     const { correlationId } = await routed.promise;
+    expect(correlationId).not.toBe(request.correlationId);
     const clock = vi.spyOn(Date, 'now');
     cleanups.push(() => clock.mockRestore());
     const response: BusMessage = {
@@ -805,7 +806,9 @@ describe('WebSocket boundary live authorization', () => {
     if (session === 'active') socket.close(1000);
     await expect(closed).resolves.toEqual([session === 'active' ? 1000 : 1008, expect.any(Buffer)]);
     expect(frames).toEqual(
-      session === 'active' ? [JSON.stringify({ type: 'response', correlationId, result: 'handled' })] : [],
+      session === 'active'
+        ? [JSON.stringify({ type: 'response', correlationId: request.correlationId, result: 'handled' })]
+        : [],
     );
     expect(delivered).toBe(session === 'active');
   });

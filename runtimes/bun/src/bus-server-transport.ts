@@ -59,8 +59,9 @@ export interface BunBusServerTransportOptions {
    */
   auth?: TransportAuth;
   /**
-   * Explicit exchange policy for upgrades tagged by the host fetch handler.
-   * Enable only in tests until session revocation enforces one live connection per run identity.
+   * Custom exchange policy for upgrades tagged by the host fetch handler.
+   * The caller owns session replacement, owner ordering, and commit-time retirement.
+   * Use the single-host boot option to have the framework wire those guarantees.
    */
   connectionExchange?: ConnectionExchangeSetup;
 

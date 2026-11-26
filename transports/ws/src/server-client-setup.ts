@@ -1,3 +1,4 @@
+import type { TransportRequestOrigin } from '@makaio/core';
 /**
  * Client connection setup helpers for the server-mode WebSocket transport.
  *
@@ -33,6 +34,36 @@ import { ConnectionExchangeAuth } from './auth/connection-exchange-auth.js';
 
 const DEFAULT_CLIENT_BROADCAST_TIMEOUT_MS = 5_000;
 const MAX_CLIENT_BROADCAST_TIMEOUT_MS = 60_000;
+const EXCHANGE_CLOSE_HANDSHAKE_MS = 1_000;
+const closingExchangeSockets = new WeakSet<WebSocketLike>();
+
+/**
+ * Let the final frame and close handshake finish before forcing socket teardown.
+ * @param socket - Retired exchange connection.
+ * @param code - Classified reason for retirement.
+ * @param terminate - Native termination that does not depend on the peer reading.
+ */
+function closeExchangeSocket(socket: WebSocketLike, code: 1008 | 1011, terminate: () => void): void {
+  if (socket.readyState === 3 || closingExchangeSockets.has(socket)) return;
+  closingExchangeSockets.add(socket);
+  const clearDeadline = (): void => {
+    clearTimeout(timer);
+    socket.removeEventListener('close', clearDeadline);
+  };
+  const timer = setTimeout(() => {
+    clearDeadline();
+    if (socket.readyState !== 3) terminate();
+  }, EXCHANGE_CLOSE_HANDSHAKE_MS);
+  socket.addEventListener('close', clearDeadline);
+  try {
+    if (socket.readyState === 1) {
+      socket.close(code, code === 1011 ? 'Connection temporarily unavailable' : 'Authentication ended');
+    }
+  } catch {
+    clearDeadline();
+    terminate();
+  }
+}
 
 /**
  * Normalize a timeout supplied by a remote WebSocket client.
@@ -133,12 +164,13 @@ export async function setupClientConnection(socket: WebSocketLike, deps: ClientS
   const messageListener = (event: { data: string | Buffer }): void => {
     if (!auth?.handleSetupFrame?.(event.data, socket)) void messageHandler(event.data);
   };
-  const removeClient = (): void => {
+  let cancelFinalResponse: (() => void) | undefined;
+  const removeClient = (reply?: TransportRequestOrigin): void => {
     if (lifetime.signal.aborted) return;
     // Keep the authenticated owner before cleanup removes its socket context.
     const connectionId = auth?.getReceiveContext?.(socket)?.connectionId;
     auth?.cleanupSocket(socket);
-    const subscriptionUpdates = registry.removeClient(socket);
+    const subscriptionUpdates = registry.removeClient(socket, reply);
     socket.removeEventListener('message', messageListener);
     lifetime.abort();
     correlations.rejectAll(new ConnectionLostError('websocket'));
@@ -161,6 +193,7 @@ export async function setupClientConnection(socket: WebSocketLike, deps: ClientS
   const closeListener = (): void => {
     socket.removeEventListener('close', closeListener);
     socket.removeEventListener('error', errorListener);
+    cancelFinalResponse?.();
     removeClient();
   };
 
@@ -198,15 +231,25 @@ export async function setupClientConnection(socket: WebSocketLike, deps: ClientS
 
   try {
     if (auth instanceof ConnectionExchangeAuth) {
-      auth.bindExchangeRetirement(socket, (code = 1008) => {
-        try {
-          removeClient();
-        } finally {
-          if (socket.readyState === 1) {
-            socket.close(code, code === 1011 ? 'Connection temporarily unavailable' : 'Authentication ended');
+      auth.bindExchangeRetirement(
+        socket,
+        (terminate, code = 1008, reply) => {
+          const close = (): void => closeExchangeSocket(socket, code, terminate);
+          cancelFinalResponse = reply === undefined ? undefined : registry.reserveFinalResponse(socket, reply, close);
+          try {
+            removeClient(cancelFinalResponse === undefined ? undefined : reply);
+          } finally {
+            if (cancelFinalResponse === undefined) close();
           }
-        }
-      });
+        },
+        () => {
+          try {
+            removeClient();
+          } finally {
+            cancelFinalResponse?.();
+          }
+        },
+      );
       if (lifetime.signal.aborted) return;
     }
     if (auth) {

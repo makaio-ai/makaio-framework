@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  createSubscriptionQueue,
+  createInboundQueue,
   DeferredSubscriptionReplay,
   MAX_QUEUED_SUBSCRIPTION_BYTES,
 } from '../deferred-subscription-replay.js';
@@ -13,21 +13,28 @@ describe('subscription queue', () => {
     socket.addEventListener('close', ({ code, reason }) => closed.push({ code, reason }));
     const entered = Promise.withResolvers<void>();
     const release = Promise.withResolvers<void>();
-    const enqueue = createSubscriptionQueue(
+    const { enqueue } = createInboundQueue(
       socket,
       { debug: false },
       new DeferredSubscriptionReplay(socket),
+      async () => undefined,
+    );
+    const pending = enqueue(
       async () => {
         entered.resolve();
         await release.promise;
       },
+      { bytes: MAX_QUEUED_SUBSCRIPTION_BYTES, subscriptionBytes: MAX_QUEUED_SUBSCRIPTION_BYTES },
+      () => expect.unreachable(),
     );
-    const message = { type: 'unsubscribe', subjects: {} } as const;
-    const pending = enqueue(message, MAX_QUEUED_SUBSCRIPTION_BYTES);
     try {
       await entered.promise;
       expect(closed).toEqual([]);
-      await enqueue(message, 1);
+      await enqueue(
+        async () => expect.unreachable(),
+        { bytes: 1, subscriptionBytes: 1 },
+        () => socket.close(1008, 'Queued subscription frames exceed byte limit'),
+      );
       expect(closed).toEqual([{ code: 1008, reason: 'Queued subscription frames exceed byte limit' }]);
     } finally {
       release.resolve();

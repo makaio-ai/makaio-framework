@@ -60,7 +60,15 @@ import { setupWriteJournal } from './write-journal-boot.js';
 import { CliNamespace } from '@makaio/kernel/cli';
 import { RuntimeSubjects, RuntimeNamespace } from './bus/runtime/namespace.js';
 import { BusServerTransportProvider } from './bus-server-transport.js';
-import { prepareWorkerExchangeHostTestMode } from './worker-exchange-host-test-mode.js';
+import { requireWorkerRunSessionRetirement } from '@makaio/services-core/internal/worker-provider-host-binding';
+import { ServerTransport } from '@makaio/bus-transport-websocket';
+import { prepareWorkerExchangeHost } from './worker-exchange-host-test-mode.js';
+import {
+  type WorkerExchangeListener,
+  readSingleHostWorkerExchange,
+  WorkerExchangeListenerConfigurationError,
+} from './worker-exchange-listener.js';
+import { listenForNodeWorkerExchange } from './node-worker-exchange-listener.js';
 import { FileConfigStorage } from './file-config-storage.js';
 import { NodeRuntimeProvider } from './node-runtime-provider.js';
 import { loadOrCreateMachineIdentity } from '@makaio/machine-identity';
@@ -238,6 +246,7 @@ export function buildLocalBusUrl(host: string, port: number): string {
  * @param boundPort - TCP port the server is listening on.
  * @param boundHost - Host address the server is bound to.
  * @param options - Platform-agnostic boot options.
+ * @param openWorkerExchangeListener - Opens the native listener with the effective exchange message budget.
  * @returns Runtime handle with `port`, `machineId`, and `shutdown()`.
  */
 // eslint-disable-next-line max-lines-per-function, complexity
@@ -246,7 +255,11 @@ export async function bootMakaioRuntimeCore(
   boundPort: number,
   boundHost: string,
   options: CoreBootOptions,
+  openWorkerExchangeListener?: (maxBytes: number) => WorkerExchangeListener | Promise<WorkerExchangeListener>,
 ): Promise<MakaioRuntime> {
+  if (options.singleHostWorkerExchange !== undefined && openWorkerExchangeListener === undefined) {
+    throw new WorkerExchangeListenerConfigurationError('listener-required');
+  }
   // Shutdown steps are pushed in startup order. On normal shutdown they run
   // in reverse; on startup failure the same array is iterated in reverse as a
   // rollback, tearing down only what was successfully started. Every step runs
@@ -289,7 +302,7 @@ export async function bootMakaioRuntimeCore(
   const peerSigningKeyResolver = options.peerSigningKeyResolver;
 
   const startGate = new JournalStartBarrier(options.journalStartupWaitTimeoutMs);
-  const workerExchange = prepareWorkerExchangeHostTestMode(options.workerExchangeTest, boundHost);
+  const workerExchange = prepareWorkerExchangeHost(options, boundHost);
   const rights = createCoordinatorRights(MakaioBus, 'host');
   /** Reject inbound work as soon as boot is cancelled. */
   const closeOnAbort = (): void => {
@@ -301,6 +314,12 @@ export async function bootMakaioRuntimeCore(
   try {
     // Nothing is acquired yet: a boot that was cancelled before it began leaves at once.
     checkpoint();
+    const workerExchangeListener =
+      workerExchange === undefined ? undefined : await openWorkerExchangeListener?.(workerExchange.setup.maxBytes);
+    if (workerExchangeListener !== undefined) {
+      shutdownSteps.push(resourceStep('worker exchange listener', () => workerExchangeListener.close()));
+      checkpoint();
+    }
 
     // -----------------------------------------------------------------------
     // 1. Config
@@ -401,7 +420,14 @@ export async function bootMakaioRuntimeCore(
     await transport.connect(bus, {
       machineId,
       checkBoundaryAccess: boundaryCheck,
-      ...(workerExchange === undefined ? {} : { workerExchange: { setup: workerExchange.setup, boundHost } }),
+      ...(workerExchange === undefined
+        ? {}
+        : {
+            workerExchange: {
+              setup: workerExchange.setup,
+              boundHost: options.workerExchangeTest === undefined ? undefined : boundHost,
+            },
+          }),
     });
     const transportDisconnected = Promise.withResolvers<void>();
     shutdownSteps.push(
@@ -445,6 +471,11 @@ export async function bootMakaioRuntimeCore(
     const db = databaseClient.db;
     console.info('[boot] Database initialized');
     const database = createHostDatabase(db);
+    const workerSessionRetirement =
+      workerExchange === undefined ? undefined : requireWorkerRunSessionRetirement(database, workerExchange.disable);
+    if (workerSessionRetirement !== undefined) {
+      shutdownSteps.push(localStep('worker run session retirement', workerSessionRetirement.release));
+    }
     const workerDispatch = bindWorkerDispatch(options.workerDispatch, database, shutdownSteps, () =>
       databaseClient.close(),
     );
@@ -1033,7 +1064,15 @@ export async function bootMakaioRuntimeCore(
     startGate.open();
     rights.openBoundary();
     await notifySubscriptionAvailability();
-    workerExchange?.open(workerDispatch, supervisorCall, database);
+    if (workerExchange !== undefined && workerSessionRetirement !== undefined) {
+      const transport = busContextOf(bus).transportRegistry.getTransport('websocket');
+      if (!(transport instanceof ServerTransport))
+        throw new Error('Worker exchange requires a native WebSocket transport');
+      workerSessionRetirement.bind(({ jobRunId, revocationKey }, reply) =>
+        transport.invalidateExchangeSessions(revocationKey, jobRunId, reply),
+      );
+      workerExchange.open(workerDispatch, supervisorCall, database);
+    }
     // ORIGIN: Startup announces that the extension start phase is complete.
     await bus.emit(bus.own('start'), KernelSubjects.phase.servicesReady, { machineId });
     const allExtensions = coordinator.list();
@@ -1111,6 +1150,7 @@ export async function bootMakaioRuntimeCore(
     return {
       port: boundPort,
       host: boundHost,
+      workerExchangeAddress: workerExchangeListener?.address,
       machineId,
       bus,
       coordinator,
@@ -1183,21 +1223,37 @@ export async function bootMakaioRuntimeCore(
  * @returns Runtime handle with `port`, `machineId`, and `shutdown()`.
  */
 export async function bootMakaioRuntime(options: BootMakaioRuntimeOptions): Promise<MakaioRuntime> {
-  const transport = new BusServerTransportProvider({
-    httpServer: options.httpServer,
-    auth: options.auth,
-    loopbackName: options.loopbackName ?? 'node',
-  });
-
+  const exchange = readSingleHostWorkerExchange(options);
   const addr = options.httpServer.address();
   if (typeof addr !== 'object' || addr === null) {
     throw new Error('HTTP server is not bound to a TCP address');
   }
 
-  return bootMakaioRuntimeCore(transport, addr.port, addr.address, {
-    ...options,
-    hostCapabilities: normalizeNodeHostCapabilities(options.hostCapabilities),
-    clientBinaryStrategyDependencies:
-      options.clientBinaryStrategyDependencies ?? createNodeClientBinaryStrategyDependencies(),
+  let listener: Awaited<ReturnType<typeof listenForNodeWorkerExchange>> | undefined;
+  const security = exchange?.security;
+  const transport = new BusServerTransportProvider({
+    httpServer: options.httpServer,
+    auth: options.auth,
+    loopbackName: options.loopbackName ?? 'node',
+    getWorkerExchangeListener: () => listener?.server,
+    verifyWorkerExchangeIngress:
+      security?.kind === 'verified-ingress' ? security.verifyIngress.bind(security) : undefined,
   });
+  return bootMakaioRuntimeCore(
+    transport,
+    addr.port,
+    addr.address,
+    {
+      ...options,
+      hostCapabilities: normalizeNodeHostCapabilities(options.hostCapabilities),
+      clientBinaryStrategyDependencies:
+        options.clientBinaryStrategyDependencies ?? createNodeClientBinaryStrategyDependencies(),
+    },
+    exchange === undefined
+      ? undefined
+      : async () => {
+          listener = await listenForNodeWorkerExchange(exchange);
+          return listener;
+        },
+  );
 }

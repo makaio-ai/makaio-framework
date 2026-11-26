@@ -19,6 +19,7 @@ import {
   testProof,
 } from './job-run-outcome-fixture.js';
 import { migrateRedemptionOwner } from './redemption-owner-fixture.js';
+import { requireWorkerRunSessionRetirement, WorkerRunSessionRetirementError } from '../worker-run-sessions.js';
 
 const config = resolveStorageConformanceConfig();
 if (config === null) throw new Error('MAKAIO_STORAGE_TEST_URL is required for PostgreSQL outcome acceptance tests');
@@ -55,6 +56,21 @@ describe(`ordered outcome receiver (${config.dialect})`, () => {
   function start(behavior?: Parameters<typeof startOutcomeHost>[3]) {
     return startOutcomeHost(storage(), database, constructContext, behavior);
   }
+
+  it('reports missing session retirement on an enabled host after the outcome commits', async () => {
+    const host = await start();
+    const id = 'missing-session-retirement';
+    const booking = await bookOutcomeRun(host, database, id);
+    const worker = await connectOutcomeWorker(host.port, testProof(id));
+    const availability = new AbortController();
+    const retirement = requireWorkerRunSessionRetirement(database, (error) => availability.abort(error));
+    onTestFinished(retirement.release);
+
+    await worker.submit(completion(id));
+    expect(availability.signal.reason).toBeInstanceOf(WorkerRunSessionRetirementError);
+    expect(availability.signal.reason).toMatchObject({ code: 'WORKER_RUN_SESSION_RETIREMENT_FAILED' });
+    await expect(booking.read()).resolves.toMatchObject({ state: 'closed', effects: 1 });
+  });
 
   it.each([false, true])('serializes simultaneous submissions (different=%s)', async (different) => {
     const id = `race-${different}`;

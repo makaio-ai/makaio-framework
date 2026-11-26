@@ -13,7 +13,7 @@ import type {
   BusUnsubscribeMessage,
   SubscriptionDeliveryClass,
 } from '@makaio/bus-core';
-import type { PayloadFilter } from '@makaio/core';
+import type { PayloadFilter, TransportRequestOrigin } from '@makaio/core';
 import {
   DEFAULT_REQUEST_TIMEOUT_MS,
   getSubjectFromBusMessage,
@@ -103,7 +103,12 @@ interface ClientSubscriptionState {
   deliveryClass: SubscriptionDeliveryClass;
 }
 
+const FINAL_RESPONSE_HANDOFF_MS = 1_000;
+
 interface RequestOrigin {
+  readonly handle?: TransportRequestOrigin;
+  readonly wireCorrelationId?: string;
+  retirement?: { readonly deadline: number; readonly finish: () => void };
   socket: WebSocketLike;
   expiration: ReturnType<typeof setTimeout> | undefined;
 }
@@ -202,13 +207,14 @@ export class ClientRegistry {
   }
 
   /**
-   * Remove a socket from all tracking maps and sets.
+   * Remove a socket from routing, optionally retaining one retiring response.
    *
    * Safe to call on sockets that were never fully added (e.g. auth failures).
    * @param socket - The socket to remove
+   * @param reply - Route reserved for a final response to this socket.
    * @returns Aggregate subscription updates produced by removing the client
    */
-  public removeClient(socket: WebSocketLike): ClientSubscriptionUpdate[] {
+  public removeClient(socket: WebSocketLike, reply?: TransportRequestOrigin): ClientSubscriptionUpdate[] {
     for (const [connectionId, client] of this.clientsByConnectionId) {
       if (client === socket) this.clientsByConnectionId.delete(connectionId);
     }
@@ -220,7 +226,7 @@ export class ClientRegistry {
     this.clientSubscriptionState.delete(socket);
     this.clientFilters.delete(socket);
     for (const [correlationId, origin] of this.requestOrigins) {
-      if (origin.socket !== socket) continue;
+      if (origin.socket !== socket || (reply !== undefined && origin.handle === reply)) continue;
       this.clearRequestOrigin(correlationId, origin);
     }
 
@@ -249,14 +255,16 @@ export class ClientRegistry {
   }
 
   /**
-   * Return all sockets tracked by this registry, including those still
-   * authenticating.
+   * Return all sockets tracked by this registry, including sockets still
+   * authenticating or holding a final response.
    *
    * Used by `ServerTransport.disconnect()` to close every outstanding socket.
    * @returns Set containing all tracked sockets
    */
   public getAllSockets(): Set<WebSocketLike> {
-    return new Set([...this.clients, ...this.authenticatingClients]);
+    const sockets = new Set([...this.clients, ...this.authenticatingClients]);
+    for (const origin of this.requestOrigins.values()) if (origin.retirement !== undefined) sockets.add(origin.socket);
+    return sockets;
   }
 
   // ---------------------------------------------------------------------------
@@ -439,8 +447,14 @@ export class ClientRegistry {
    * response, cancellation, or socket removal.
    * @param socket - Socket that submitted the request
    * @param request - Accepted inbound request envelope
+   * @param wireCorrelationId - Peer correlation before replacement with a local identifier.
+   * @returns Response handle for a locally correlated exchange request.
    */
-  public trackRequestOrigin(socket: WebSocketLike, request: BusRequestMessage): void {
+  public trackRequestOrigin(
+    socket: WebSocketLike,
+    request: BusRequestMessage,
+    wireCorrelationId?: string,
+  ): TransportRequestOrigin | undefined {
     const { correlationId } = request;
     if (this.requestOrigins.has(correlationId)) return;
 
@@ -450,16 +464,42 @@ export class ClientRegistry {
 
     const origin: RequestOrigin = {
       socket,
+      handle: wireCorrelationId === undefined ? undefined : Object.freeze({ correlationId }),
+      wireCorrelationId,
       expiration: undefined,
     };
     if (remainingLifetime !== undefined) {
       origin.expiration = setTimeout(() => {
         if (this.requestOrigins.get(correlationId) === origin) {
-          this.requestOrigins.delete(correlationId);
+          this.cancelRequestOrigin(correlationId);
         }
       }, remainingLifetime);
     }
     this.requestOrigins.set(correlationId, origin);
+    return origin.handle;
+  }
+
+  /**
+   * Reserve only the committing request's response before detaching its socket.
+   * @param socket - Retiring connection.
+   * @param reply - Locally issued request origin.
+   * @param close - Native socket close, run after handoff or when the route expires.
+   * @returns Cleanup for a native disconnect, if a response was reserved.
+   */
+  public reserveFinalResponse(socket: WebSocketLike, reply: TransportRequestOrigin, close: () => void) {
+    const { correlationId } = reply;
+    const origin = this.requestOrigins.get(correlationId);
+    if (origin === undefined || origin.handle !== reply || origin.socket !== socket) return undefined;
+    // One second gives the local handler and receipt read time to hand off the response.
+    const timer = setTimeout(() => this.cancelRequestOrigin(correlationId), FINAL_RESPONSE_HANDOFF_MS);
+    origin.retirement = {
+      deadline: performance.now() + FINAL_RESPONSE_HANDOFF_MS,
+      finish: () => {
+        clearTimeout(timer);
+        close();
+      },
+    };
+    return () => this.cancelRequestOrigin(correlationId);
   }
 
   /**
@@ -476,19 +516,15 @@ export class ClientRegistry {
   }
 
   /**
-   * Consume the requesting socket for a correlated response.
-   *
-   * Responses are correlation-addressed, not subscription-addressed. A
-   * restricted socket may receive its own response, but no other socket can.
-   * @param correlationId - Response correlation identifier
-   * @returns Eligible requesting socket, or `undefined` when none remains
+   * Take the single-use response route, including a reserved retirement handoff.
+   * @param correlationId - Host-local correlation identifier.
+   * @returns The original route if still tracked.
    */
-  public consumeResponseClient(correlationId: string): WebSocketLike | undefined {
+  public takeResponseOrigin(correlationId: string): RequestOrigin | undefined {
     const origin = this.requestOrigins.get(correlationId);
-    if (!origin) return undefined;
-
+    if (origin === undefined) return undefined;
     this.clearRequestOrigin(correlationId, origin);
-    return this.isReadyAndAuthenticated(origin.socket) ? origin.socket : undefined;
+    return origin.retirement !== undefined || this.isReadyAndAuthenticated(origin.socket) ? origin : undefined;
   }
 
   /**
@@ -497,7 +533,9 @@ export class ClientRegistry {
    */
   public cancelRequestOrigin(correlationId: string): void {
     const origin = this.requestOrigins.get(correlationId);
-    if (origin) this.clearRequestOrigin(correlationId, origin);
+    if (origin === undefined) return;
+    this.clearRequestOrigin(correlationId, origin);
+    origin.retirement?.finish();
   }
 
   /**

@@ -204,12 +204,14 @@ export async function installBootOrderTable(url: string): Promise<void> {
  * @param home - Extension directory for this boot.
  * @param provider - Factory evaluated anew at every activation.
  * @param create - Service factory used to observe the context supplied at startup.
+ * @param jobRunOutcomes - Optional owner contribution exercised by full boot.
  * @returns Discovery source with the executable provider contribution.
  */
 export function dispatchProbeDiscovery(
   home: string,
   provider: () => OrderedWorkerProvider,
   create: KernelMakaioExtension['create'],
+  jobRunOutcomes?: KernelMakaioExtension['jobRunOutcomes'],
 ): ExplicitDescriptorDiscovery {
   const extension: KernelMakaioExtension = {
     name,
@@ -217,6 +219,7 @@ export function dispatchProbeDiscovery(
     version: '1.0.0',
     critical: true,
     create,
+    jobRunOutcomes,
     workerProviders: {
       createProviders: () => ({ key, managedScopeConfirmed: false, providers: [provider()] }),
     },

@@ -28,12 +28,14 @@ import {
   subscriptionRejection,
   type ServerBoundaryAccess,
 } from './server-boundary-access.js';
-import { createSubscriptionQueue, type DeferredSubscriptionReplay } from './deferred-subscription-replay.js';
+import type { DeferredSubscriptionReplay } from './deferred-subscription-replay.js';
+import { createInboundRouter, isSubscriptionMessage, type RoutingHandoff } from './inbound-message-order.js';
 import { anchorInboundBudget, prepareInboundMessage, type InboundBudget } from './inbound-request-budget.js';
 import type { TransportAuth, WebSocketLike } from './types.js';
 import type { BroadcastAggregator } from './broadcast-aggregator.js';
 import type { ClientRegistry, ClientSubscriptionUpdate } from './client-registry.js';
 import type { TransportReceiveContext } from '@makaio/core';
+import { bindInboundRequest } from './inbound-exchange-request.js';
 import {
   resolveHmacIdentityAllowedMessageSubjects,
   resolveHmacIdentityAllowedSubscriptionSubjects,
@@ -68,15 +70,6 @@ interface SubjectRestriction {
  */
 function isSubjectBearingMessage(message: BusMessage): message is SubjectBearingBusMessage {
   return message.type === 'request' || message.type === 'event' || message.type === 'broadcast';
-}
-
-/**
- * Identify subscription state updates that must run in arrival order.
- * @param message - Inbound bus message.
- * @returns Whether this is a subscribe or unsubscribe message.
- */
-function isSubscriptionMessage(message: BusMessage): message is BusSubscribeMessage | BusUnsubscribeMessage {
-  return message.type === 'subscribe' || message.type === 'unsubscribe';
 }
 
 /**
@@ -177,12 +170,15 @@ async function invokeHandlers(
     debug: boolean;
     receiveContext?: TransportReceiveContext;
     logContext?: string;
+    handoff?: RoutingHandoff;
   },
 ): Promise<boolean> {
-  const results = await Promise.allSettled(
+  const completion = Promise.allSettled(
     Array.from(handlers, async (handler) => handler(message, options.receiveContext)),
   );
 
+  options.handoff?.release();
+  const results = await completion;
   for (const result of results) {
     if (result.status === 'rejected' && options.debug) {
       const suffix = options.logContext ? ` ${options.logContext}` : '';
@@ -225,6 +221,9 @@ function handleCorrelationMessage(message: BusMessage, deps: MessageHandlerDeps,
   const { correlations, broadcastAggregator, access } = deps;
 
   if (message.type === 'heartbeat') return true;
+  if (message.type !== 'response' && message.type !== 'broadcast-response') return false;
+  // Retirement can detach the socket while the owner check is resolving.
+  if (deps.auth?.isSocketAuthenticated?.(socket) === false) return true;
 
   if (message.type === 'response') {
     if (typeof message.correlationId !== 'string') {
@@ -239,16 +238,12 @@ function handleCorrelationMessage(message: BusMessage, deps: MessageHandlerDeps,
     return true;
   }
 
-  if (message.type === 'broadcast-response') {
-    if (typeof message.correlationId !== 'string') {
-      reportRejectedReply(access, socket, 'malformed-broadcast-response');
-    } else if (!broadcastAggregator.handleResponse(socket, message)) {
-      reportRejectedReply(access, socket, 'broadcast-response-without-delivery');
-    }
-    return true;
+  if (typeof message.correlationId !== 'string') {
+    reportRejectedReply(access, socket, 'malformed-broadcast-response');
+  } else if (!broadcastAggregator.handleResponse(socket, message)) {
+    reportRejectedReply(access, socket, 'broadcast-response-without-delivery');
   }
-
-  return false;
+  return true;
 }
 
 /**
@@ -313,12 +308,14 @@ function rejectDisallowedSubject(
  * @param message - Inbound subscription control message.
  * @param restriction - Current peer subject restriction.
  * @param debug - Whether to log dropped messages.
+ * @param replay - Deferred advertisements on this socket.
  * @returns Effective subjects, or `null` when the message must be dropped.
  */
 function resolveSubscriptionSubjects(
   message: BusSubscribeMessage | BusUnsubscribeMessage,
   restriction: SubjectRestriction | null,
   debug: boolean,
+  replay?: DeferredSubscriptionReplay,
 ): Record<string, number[]> | null {
   if (!isSubscriptionSubjects(message.subjects)) {
     if (debug) console.warn(`[ServerTransport] Malformed ${message.type} message: missing subjects record`);
@@ -337,6 +334,8 @@ function resolveSubscriptionSubjects(
       `[ServerTransport] Dropping ${message.type} message: all subjects filtered for peer '${restriction.peerId}'`,
     );
   }
+  // A replay consumes its entry when the current identity denies all its patterns.
+  if (filtered === null && typeof message.ackId !== 'string') replay?.forget(message.subjects);
   return filtered;
 }
 
@@ -348,6 +347,7 @@ function resolveSubscriptionSubjects(
  * @param receiveContext - Authentication-derived receive context.
  * @param restriction - Current peer subject restriction.
  * @param replay - Deferred advertisements on this socket.
+ * @param handoff - Routing turn owned by a protected session.
  * @returns The refusal if the update could not be applied.
  */
 async function routeSubscriptionMessage(
@@ -357,14 +357,11 @@ async function routeSubscriptionMessage(
   receiveContext: TransportReceiveContext | undefined,
   restriction: SubjectRestriction | null,
   replay?: DeferredSubscriptionReplay,
+  handoff?: RoutingHandoff,
 ): Promise<Error | undefined> {
   const acknowledged = typeof message.ackId === 'string';
-  const subjects = resolveSubscriptionSubjects(message, restriction, deps.debug);
-  if (subjects === null) {
-    // A replay consumes its entry when the current identity denies all its patterns.
-    if (!acknowledged && isSubscriptionSubjects(message.subjects)) replay?.forget(message.subjects);
-    return subscriptionRejection('subscription-not-admitted');
-  }
+  const subjects = resolveSubscriptionSubjects(message, restriction, deps.debug, replay);
+  if (subjects === null) return subscriptionRejection('subscription-not-admitted');
 
   const defer = replay && (acknowledged ? 'unavailable' : 'replay');
   const admit =
@@ -378,7 +375,7 @@ async function routeSubscriptionMessage(
   const { subjects: allowed, pending } = admitted;
   const superseded = message.type === 'unsubscribe' || !acknowledged ? message.subjects : allowed;
   const rollbackReplay = replay?.stage(message, superseded, pending);
-  let rollback: (() => ClientSubscriptionUpdate[]) | undefined;
+  let undo: (() => void | Promise<boolean>) | undefined = rollbackReplay;
   let committed = false;
   const dispatch = {
     debug: deps.debug,
@@ -387,16 +384,21 @@ async function routeSubscriptionMessage(
   };
   try {
     const staged = deps.registry.stageSubscriptionUpdate(socket, { ...message, subjects: allowed }, pending);
-    rollback = staged.rollback;
-    const handlersApplied = await invokeSubscriptionUpdates(staged.updates, deps.handlers, dispatch);
+    // A late failure must not overwrite routes that later handoffs have replaced.
+    undo =
+      handoff?.retire ??
+      (() => {
+        rollbackReplay?.();
+        return invokeSubscriptionUpdates(staged.rollback(), deps.handlers, dispatch);
+      });
+    const published = invokeSubscriptionUpdates(staged.updates, deps.handlers, dispatch);
+    handoff?.release();
+    const handlersApplied = await published;
     if (admit() === undefined) return subscriptionRejection('peer-changed');
     if (!handlersApplied) return subscriptionRejection('subscription-dispatch-failed');
     committed = true;
   } finally {
-    if (!committed) {
-      rollbackReplay?.();
-      if (rollback !== undefined) await invokeSubscriptionUpdates(rollback(), deps.handlers, dispatch);
-    }
+    if (!committed) await undo?.();
   }
 }
 
@@ -408,6 +410,7 @@ async function routeSubscriptionMessage(
  * @param receiveContext - Authentication-derived receive context.
  * @param currentSender - Revalidate the sender before forwarding and local dispatch.
  * @param budget - Deadline anchored before send authorization.
+ * @param handoff - Routing turn owned by a protected session.
  * @returns Resolves after the broadcast is dispatched or discarded.
  */
 async function routeBroadcastMessage(
@@ -417,6 +420,7 @@ async function routeBroadcastMessage(
   receiveContext: TransportReceiveContext | undefined,
   currentSender: () => unknown,
   budget: InboundBudget | undefined,
+  handoff?: RoutingHandoff,
 ): Promise<void> {
   if (typeof message.correlationId !== 'string' || typeof message.subject !== 'string') {
     if (deps.debug) console.warn('[ServerTransport] Malformed broadcast message: missing correlationId or subject');
@@ -438,7 +442,11 @@ async function routeBroadcastMessage(
     budget?.timeout ?? 0,
   );
   if (!currentSender()) return deps.broadcastAggregator.cancelClientBroadcast(local);
-  await invokeHandlers({ ...localMessage, correlationId: local }, deps.handlers, { debug: deps.debug, receiveContext });
+  await invokeHandlers({ ...localMessage, correlationId: local }, deps.handlers, {
+    debug: deps.debug,
+    receiveContext,
+    handoff,
+  });
 }
 
 /**
@@ -451,6 +459,9 @@ async function routeBroadcastMessage(
  * @param socket - The originating client socket
  * @param deps - Handler dependencies
  * @param replay - Deferred advertisements on this socket.
+ * @param budget - Request or broadcast deadline anchored at ingress.
+ * @param handoff - Routing turn owned by a protected session.
+ * @returns Resolves after inbound dispatch or refusal.
  * @internal Exported for unit testing only.
  */
 export async function routeMessage(
@@ -458,10 +469,10 @@ export async function routeMessage(
   socket: WebSocketLike,
   deps: MessageHandlerDeps,
   replay?: DeferredSubscriptionReplay,
+  budget = anchorInboundBudget(message, deps.normalizeBroadcastTimeout, deps.now),
+  handoff?: RoutingHandoff,
 ): Promise<void> {
   if (handleCorrelationMessage(message, deps, socket)) return;
-
-  const budget = anchorInboundBudget(message, deps.normalizeBroadcastTimeout, deps.now);
   const restriction = resolveSubjectRestriction(deps.auth?.getAuthenticatedIdentityId?.(socket));
 
   if (rejectDisallowedSubject(message, socket, deps, restriction)) return;
@@ -477,23 +488,29 @@ export async function routeMessage(
   if (sender === undefined) return;
   const receiveContext = sender.connection;
   if (isSubscriptionMessage(message)) {
-    const error = await routeSubscriptionMessage(message, socket, deps, receiveContext, restriction, replay).catch(
-      (error: unknown) => {
-        if (deps.debug) console.error('[ServerTransport] Failed to apply subscription:', error);
-        return subscriptionRejection('subscription-dispatch-failed');
-      },
-    );
+    const error = await routeSubscriptionMessage(
+      message,
+      socket,
+      deps,
+      receiveContext,
+      restriction,
+      replay,
+      handoff,
+    ).catch((error: unknown) => {
+      if (deps.debug) console.error('[ServerTransport] Failed to apply subscription:', error);
+      return subscriptionRejection('subscription-dispatch-failed');
+    });
     sendSubscriptionAck(socket, message.ackId, deps.sendSafely, error);
     return;
   }
   if (message.type === 'broadcast') {
-    await routeBroadcastMessage(message, socket, deps, receiveContext, currentSender, budget);
+    await routeBroadcastMessage(message, socket, deps, receiveContext, currentSender, budget, handoff);
     return;
   }
 
   if (message.type === 'event') {
     if ((await forwardAuthorizedEvent(message, socket, deps, receiveContext, currentSender)) && currentSender()) {
-      await invokeHandlers(message, deps.handlers, { debug: deps.debug, receiveContext });
+      await invokeHandlers(message, deps.handlers, { debug: deps.debug, receiveContext, handoff });
     }
     return;
   }
@@ -501,12 +518,17 @@ export async function routeMessage(
   if (message.type === 'request') {
     const request = prepareInboundMessage(message, budget, socket, deps.sendSafely);
     if (request === undefined) return;
-    deps.registry.trackRequestOrigin(socket, request);
-    message = request;
+    const bound = bindInboundRequest(request, socket, deps, receiveContext);
+    if (bound === undefined) return;
+    await invokeHandlers(bound.request, deps.handlers, {
+      debug: deps.debug,
+      receiveContext: bound.receiveContext,
+      handoff,
+    });
+    return;
   }
 
-  // Call all registered handlers in parallel.
-  await invokeHandlers(message, deps.handlers, { debug: deps.debug, receiveContext });
+  await invokeHandlers(message, deps.handlers, { debug: deps.debug, receiveContext, handoff });
 }
 
 /**
@@ -527,13 +549,7 @@ export function createInboundMessageHandler(
   lifetime?: AbortSignal,
 ): (data: string | Buffer) => Promise<void> {
   const { auth, registry, debug } = deps;
-  const queueSubscription = createSubscriptionQueue(
-    socket,
-    deps,
-    registry.deferredSubscriptionsFor(socket),
-    (message, replay) => routeMessage(message, socket, deps, replay),
-    lifetime,
-  );
+  const route = createInboundRouter(socket, deps, routeMessage, lifetime);
 
   return async (data: string | Buffer): Promise<void> => {
     let parsed: unknown;
@@ -583,11 +599,7 @@ export function createInboundMessageHandler(
         return;
       }
 
-      if (isSubscriptionMessage(message)) {
-        await queueSubscription(message, Buffer.byteLength(data));
-      } else {
-        await routeMessage(message, socket, deps);
-      }
+      await route(message, data);
     } catch (error) {
       if (debug) {
         // Processing failures are logged separately from malformed JSON so

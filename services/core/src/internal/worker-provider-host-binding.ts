@@ -12,6 +12,14 @@ export {
 } from '../worker-provider/redeem-worker.js';
 export { WorkerOrderConfigurationError } from '../worker-provider/start-claim.js';
 export { createWorkerDispatch } from '../worker-provider/start-ordered-worker.js';
+export {
+  createWorkerRunPromotion,
+  createWorkerRunSessionVerifier,
+  requireWorkerRunSessionRetirement,
+  retireWorkerRunSessionOnCommit,
+  WorkerRunSessionRetirementError,
+  type WorkerRunSessionIdentity,
+} from '../worker-provider/worker-run-sessions.js';
 export { verifyWorkerRunIdentity } from '../worker-provider/verify-run-identity.js';
 export type { WorkerStartOptions } from '../worker-provider/start-order.js';
 export { createWorkerProviderContributionProcessor } from '../worker-provider/worker-provider-contribution-processor.js';

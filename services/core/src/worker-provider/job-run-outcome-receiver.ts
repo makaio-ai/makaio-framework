@@ -16,6 +16,7 @@ import {
   type CallContext,
   type ExtensionName,
   type TransportReceiveContext,
+  type TransportRequestOrigin,
 } from '@makaio/core';
 import type { ContributionProcessor } from '@makaio/kernel';
 import { didHostTransactionCommit } from '@makaio/storage-drizzle';
@@ -172,7 +173,7 @@ export function createJobRunOutcomeReceiver(authority: JobRunCloseAuthority) {
           setResult(
             owner === undefined || owner.generation.aborted || !owner.isActive()
               ? unavailable
-              : await invokeOwner(authority, owner, call, result, run.order),
+              : await invokeOwner(authority, owner, call, result, run.order, transport?.requestOrigin),
           );
         },
         { exclusive: true },
@@ -188,6 +189,7 @@ export function createJobRunOutcomeReceiver(authority: JobRunCloseAuthority) {
  * @param call - Original authenticated call.
  * @param result - Immutable validated result.
  * @param order - Immutable booking seen before invoking the owner.
+ * @param reply - Response route for the authenticated request.
  * @returns The committed answer or a typed refusal.
  */
 async function invokeOwner(
@@ -196,6 +198,7 @@ async function invokeOwner(
   call: CallContext,
   result: JobRunResult,
   order: Parameters<JobRunOutcomeHandler>[0]['order'],
+  reply?: TransportRequestOrigin,
 ): Promise<OutcomeSubmitResponse> {
   const invocation = new AbortController();
   const signal = AbortSignal.any([owner.generation, invocation.signal]);
@@ -206,6 +209,7 @@ async function invokeOwner(
     {
       call,
       result,
+      reply,
       noteClose: (tx) => {
         handledTransactions.add(tx);
       },

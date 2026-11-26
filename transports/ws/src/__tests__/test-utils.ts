@@ -9,7 +9,7 @@ import { WebSocketServer, type WebSocket } from 'ws';
  * @param options - Extra `WebSocketServer` options (e.g. `{ autoPong: false }`)
  * @returns Promise containing the WebSocket server and bound port number
  */
-export async function createTestServer(options?: { autoPong?: boolean; host?: string }): Promise<{
+export async function createTestServer(options?: { autoPong?: boolean; host?: string; maxPayload?: number }): Promise<{
   wss: WebSocketServer;
   port: number;
 }> {

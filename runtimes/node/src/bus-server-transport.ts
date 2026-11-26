@@ -25,6 +25,7 @@ import {
 } from '@makaio/bus-transport-websocket';
 import { MAKAIO_LOOPBACK_PARTY_KIND, type TransportReceiveContext } from '@makaio/core';
 import { WebSocketServer } from 'ws';
+import type { WorkerExchangeIngressRequest } from './worker-exchange-listener.js';
 import type { ServerTransportConnectOptions, ServerTransportProvider } from './boot-types.js';
 
 /**
@@ -49,6 +50,7 @@ function isBusUpgradeRequest(req: IncomingMessage): boolean {
  * @param getWss - Returns the current bus WebSocket server instance
  * @param isBusReady - Returns whether the bus server has finished startup
  * @param exchange - Optional host exchange policy and upgrade verification.
+ * @param exchangeOnly - Whether the listener serves only the protected exchange.
  * @returns Upgrade handler that accepts canonical and LAN fallback bus upgrades
  */
 function createBusUpgradeHandler(
@@ -59,12 +61,25 @@ function createBusUpgradeHandler(
     websocket: WebSocketServer;
     verifyIngress?: (request: IncomingMessage) => boolean;
   },
+  exchangeOnly = false,
 ): (req: IncomingMessage, socket: Duplex, head: Buffer) => void {
   return (req: IncomingMessage, socket: Duplex, head: Buffer): void => {
     const exchangeUpgrade = exchange !== undefined && req.url?.split('?')[0] === CONNECTION_EXCHANGE_PATH;
+    if (exchangeOnly && !exchangeUpgrade) {
+      socket.destroy();
+      return;
+    }
     if (!exchangeUpgrade && !isBusUpgradeRequest(req)) {
       // Do NOT destroy the socket — other upgrade listeners (e.g., Vite HMR)
       // may handle it.
+      return;
+    }
+    const encrypted =
+      exchangeUpgrade &&
+      ((socket instanceof TLSSocket && socket.encrypted) ||
+        verifyConnectionExchangeIngress(req, exchange.verifyIngress));
+    if (exchangeUpgrade && !encrypted && (exchangeOnly || exchange.verifyIngress !== undefined)) {
+      socket.end('HTTP/1.1 403 Forbidden\r\nConnection: close\r\nContent-Length: 0\r\n\r\n');
       return;
     }
     const wss = getWss();
@@ -81,8 +96,6 @@ function createBusUpgradeHandler(
       socket.end('HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\nContent-Length: 0\r\n\r\n');
       return;
     }
-    const encrypted =
-      (socket instanceof TLSSocket && socket.encrypted) || verifyConnectionExchangeIngress(req, exchange.verifyIngress);
     exchange.websocket.handleUpgrade(req, socket, head, (ws) => {
       if (!exchange.auth.register(ws, { encrypted }, () => ws.terminate())) {
         ws.terminate();
@@ -99,6 +112,10 @@ function createBusUpgradeHandler(
 export interface BusServerTransportOptions {
   /** Pre-existing HTTP server that is already listening. */
   httpServer: HttpServer;
+  /** Separate boot-created listener for worker upgrades. @internal */
+  getWorkerExchangeListener?: () => HttpServer | undefined;
+  /** Verifier for the boot-created protected ingress listener. @internal */
+  verifyWorkerExchangeIngress?: (request: WorkerExchangeIngressRequest) => boolean;
   /**
    * Auth strategy.
    *
@@ -108,13 +125,15 @@ export interface BusServerTransportOptions {
    */
   auth?: TransportAuth;
   /**
-   * Opt-in exchange. Ordinary upgrades must have an explicit authentication strategy.
-   * Enable only in tests until session revocation enforces one live connection per run identity.
+   * Custom exchange policy. Ordinary upgrades require explicit authentication.
+   * The caller owns session replacement, owner ordering, and commit-time retirement.
+   * Use the single-host boot option to have the framework wire those guarantees.
    */
   connectionExchange?: {
     readonly setup: ConnectionExchangeSetup;
     /**
      * Host verifier for a protected ingress, invoked for the accepted upgrade.
+     * It runs synchronously, must return quickly, and must return exactly `true` to accept.
      * The host must establish encrypted peer transport for this upgrade through the protected ingress.
      */
     readonly verifyIngress?: (request: IncomingMessage) => boolean;
@@ -196,11 +215,8 @@ export class BusServerTransportProvider implements ServerTransportProvider {
   /** Dedicated native receive limit for the exchange path. */
   private exchangeWebSocketServer: WebSocketServer | null = null;
 
-  /** HTTP server that currently owns the active upgrade handler. */
-  private upgradeHandlerServer: HttpServer | null = null;
-
-  /** Active `/bus` upgrade handler attached during connect. */
-  private upgradeHandler: ((req: IncomingMessage, socket: Duplex, head: Buffer) => void) | null = null;
+  /** Cleanup for the upgrade handlers attached during connection. */
+  private readonly removeUpgradeHandlers: (() => void)[] = [];
 
   /**
    * Whether the bus server has completed startup and is accepting connections.
@@ -254,7 +270,7 @@ export class BusServerTransportProvider implements ServerTransportProvider {
       const setup =
         options.workerExchange === undefined
           ? this.options.connectionExchange
-          : { setup: options.workerExchange.setup };
+          : { setup: options.workerExchange.setup, verifyIngress: this.workerExchangeIngressVerifier() };
       const ordinaryAuth =
         this.options.auth ??
         (isLoopbackListener(this.options.httpServer) ? new LoopbackReceiveContextAuth() : undefined);
@@ -267,14 +283,7 @@ export class BusServerTransportProvider implements ServerTransportProvider {
       const websocketServer = new WebSocketServer({ noServer: true });
       this.websocketServer = websocketServer;
 
-      const upgradeHandler = createBusUpgradeHandler(
-        () => this.websocketServer,
-        () => this.busReady,
-        exchange,
-      );
-      this.options.httpServer.on('upgrade', upgradeHandler);
-      this.upgradeHandlerServer = this.options.httpServer;
-      this.upgradeHandler = upgradeHandler;
+      this.attachUpgradeHandlers(exchange);
 
       const auth = exchange?.auth ?? ordinaryAuth;
       this.busServer = await startBusServer({
@@ -341,11 +350,57 @@ export class BusServerTransportProvider implements ServerTransportProvider {
    * Detach the active upgrade handler from the HTTP server.
    */
   private detachUpgradeHandler(): void {
-    if (this.upgradeHandlerServer && this.upgradeHandler) {
-      this.upgradeHandlerServer.off('upgrade', this.upgradeHandler);
-    }
-    this.upgradeHandlerServer = null;
-    this.upgradeHandler = null;
+    for (const remove of this.removeUpgradeHandlers.splice(0)) remove();
+  }
+
+  /**
+   * Keep the ordinary and dedicated exchange listener policies separate.
+   * @param exchange - Exchange upgrade wiring.
+   */
+  private attachUpgradeHandlers(
+    exchange: ReturnType<BusServerTransportProvider['createExchangeServer']> | undefined,
+  ): void {
+    const listener = this.options.getWorkerExchangeListener?.();
+    this.attachUpgradeHandler(this.options.httpServer, listener === undefined ? exchange : undefined);
+    if (listener !== undefined) this.attachUpgradeHandler(listener, exchange, true);
+  }
+
+  /**
+   * Attach one native listener to the bus transport.
+   * @param server - HTTP server that owns the upgrades.
+   * @param exchange - Exchange wiring, if that listener accepts it.
+   * @param exchangeOnly - Whether the listener rejects ordinary upgrades.
+   */
+  private attachUpgradeHandler(
+    server: HttpServer,
+    exchange: ReturnType<BusServerTransportProvider['createExchangeServer']> | undefined,
+    exchangeOnly = false,
+  ): void {
+    const handler = createBusUpgradeHandler(
+      () => this.websocketServer,
+      () => this.busReady,
+      exchange,
+      exchangeOnly,
+    );
+    server.on('upgrade', handler);
+    this.removeUpgradeHandlers.push(() => server.off('upgrade', handler));
+  }
+
+  /**
+   * Adapt native peer metadata for the shared boot verifier.
+   * @returns Verifier for the exchange-only server, when configured.
+   */
+  private workerExchangeIngressVerifier() {
+    const verify = this.options.verifyWorkerExchangeIngress;
+    return verify === undefined
+      ? undefined
+      : (request: IncomingMessage) => {
+          const headers = new Headers();
+          for (let index = 0; index < request.rawHeaders.length; index += 2) {
+            headers.append(request.rawHeaders[index], request.rawHeaders[index + 1]);
+          }
+          return verify({ peerAddress: request.socket.remoteAddress, headers });
+        };
   }
 
   /**

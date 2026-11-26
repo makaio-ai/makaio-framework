@@ -11,6 +11,7 @@ import {
   type BusMessage,
   type BusReceiveHandler,
   type BusRequestMessage,
+  type BusResponseMessage,
   type BusTransportError,
   type BusTransport,
   type SubscriptionDeliveryClass,
@@ -18,7 +19,7 @@ import {
   BusAbortError,
   CorrelationTracker,
 } from '@makaio/bus-core';
-import type { PayloadFilter } from '@makaio/core';
+import type { TransportRequestOrigin, PayloadFilter } from '@makaio/core';
 import { BroadcastAggregator } from './broadcast-aggregator.js';
 import { buildSubscribeMessage, buildUnsubscribeMessage, type SubscriptionEntry } from './subscribe-message.js';
 import { authorizedRecipients, projectBoundaryMessage, ServerBoundaryAccess } from './server-boundary-access.js';
@@ -142,6 +143,28 @@ export class ServerTransport implements BusTransport {
   }
 
   /**
+   * Hand the response to the originating socket, then close a retiring session.
+   * @param message - Bus response with the host-local correlation.
+   * @returns Whether the native socket accepted the frame.
+   */
+  private sendResponse(message: BusResponseMessage): boolean {
+    const origin = this.registry.takeResponseOrigin(message.correlationId);
+    if (origin === undefined) return false;
+    const { socket, wireCorrelationId, retirement } = origin;
+    try {
+      const frame = JSON.stringify(
+        wireCorrelationId === undefined ? message : { ...message, correlationId: wireCorrelationId },
+      );
+      if (retirement === undefined) return this.sendToClientSafely(socket, frame);
+      if (socket.readyState !== 1 || performance.now() >= retirement.deadline) return false;
+      socket.send(frame);
+      return true;
+    } finally {
+      retirement?.finish();
+    }
+  }
+
+  /**
    * Start listening for client connections.
    * @throws Error when called while the transport is already connected
    */
@@ -256,9 +279,7 @@ export class ServerTransport implements BusTransport {
    */
   public async send(message: BusMessage, timeout?: number): Promise<unknown> {
     if (message.type === 'response') {
-      const client = this.registry.consumeResponseClient(message.correlationId);
-      if (!client) return false;
-      return this.sendToClientSafely(client, JSON.stringify(message));
+      return this.sendResponse(message);
     }
 
     // Handle server-initiated broadcasts with response aggregation
@@ -390,10 +411,12 @@ export class ServerTransport implements BusTransport {
   /**
    * Invalidate live local exchange sessions after the issuer commits revocation.
    * @param key - Opaque issuer key of the revoked identity.
+   * @param jobRunId - Scope retirement to one run when keys are shared.
+   * @param reply - Local response route retained until handoff or expiry.
    */
-  public invalidateExchangeSessions(key: string): void {
+  public invalidateExchangeSessions(key: string, jobRunId?: string, reply?: TransportRequestOrigin): void {
     if (!(this.auth instanceof ConnectionExchangeAuth)) return;
-    for (const socket of this.registry.getAllSockets()) this.auth.invalidateSession(socket, key);
+    for (const socket of this.registry.getAllSockets()) this.auth.invalidateSession(socket, key, jobRunId, reply);
   }
 
   /**

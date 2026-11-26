@@ -3,7 +3,7 @@ import { randomBytes, randomUUID } from 'node:crypto';
 import { once } from 'node:events';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { createConnection } from 'node:net';
-import { tmpdir } from 'node:os';
+import { networkInterfaces, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { isDeepStrictEqual } from 'node:util';
@@ -15,6 +15,7 @@ import { createHostDatabase } from '@makaio/storage-drizzle';
 import { abortableWait } from '@makaio/utils';
 import { afterAll, beforeAll, describe, expect, it, onTestFailed } from 'vitest';
 import { getCurrentTest } from 'vitest/suite';
+import { startExchangeIngress } from './worker-exchange-ingress-fixture.js';
 import { buildExchangeProcesses } from './worker-exchange-process-build.js';
 import { readDispatch } from '../dispatch-store.js';
 import { fixtureToken } from './ordered-worker-fixture.js';
@@ -74,31 +75,38 @@ const storageDirectory = fileURLToPath(new URL('../../../../../storage', import.
 /** Upper bound for the child stderr kept to explain an early exit. */
 const STDERR_TAIL_LIMIT = 2_000;
 let processDirectory: string;
+const externalHost = Object.values(networkInterfaces())
+  .flatMap((addresses) => addresses ?? [])
+  .find((address) => address.family === 'IPv4' && !address.internal)?.address;
 
 beforeAll(async () => {
   certDirectory = await mkdtemp(join(tmpdir(), 'worker-exchange-'));
   const beforeCertificate = performance.now();
-  execFileSync(
-    'openssl',
-    [
-      'req',
-      '-x509',
-      '-newkey',
-      'rsa:2048',
-      '-noenc',
-      '-days',
-      '1',
-      '-subj',
-      '/CN=Test certificate',
-      '-addext',
-      'subjectAltName=IP:127.0.0.1,DNS:localhost',
-      '-keyout',
-      join(certDirectory, 'key.pem'),
-      '-out',
-      join(certDirectory, 'cert.pem'),
-    ],
-    { stdio: 'ignore' },
-  );
+  try {
+    execFileSync(
+      'openssl',
+      [
+        'req',
+        '-x509',
+        '-newkey',
+        'rsa:2048',
+        '-noenc',
+        '-days',
+        '1',
+        '-subj',
+        '/CN=Test certificate',
+        '-addext',
+        `subjectAltName=IP:127.0.0.1,DNS:localhost${externalHost === undefined ? '' : `,IP:${externalHost}`}`,
+        '-keyout',
+        join(certDirectory, 'key.pem'),
+        '-out',
+        join(certDirectory, 'cert.pem'),
+      ],
+      { stdio: 'ignore' },
+    );
+  } catch {
+    throw new Error('Worker exchange certificate fixture requires OpenSSL with req -noenc');
+  }
   reportTiming('TLS certificate', beforeCertificate);
   processDirectory = await mkdtemp(join(process.cwd(), 'node_modules', '.worker-exchange-'));
   const beforeBuild = performance.now();
@@ -616,7 +624,7 @@ describe.each(['node', 'bun'] as const)('public boot worker exchange on %s', (ru
       expect(code).toBe(1011);
     }
     host.send('release');
-    await host.event('ready');
+    expect((await host.event('ready')).exchangePort).toBeUndefined();
     host.send('boot-snapshot');
     await expect(host.event('boot-snapshot')).resolves.toMatchObject({
       reads: 0,
@@ -674,6 +682,238 @@ describe.each(['node', 'bun'] as const)('public boot worker exchange on %s', (ru
     }
   });
 });
+
+describe.each(['node', 'bun'] as const)('supported single-host worker exchange on %s', (runtime) => {
+  it('enforces the configured message budget before redeeming a worker', async () => {
+    const { test, storage, proof } = await prepareCase(false);
+    const host = startHost(test, runtime, 'boot-supported', {
+      database: storage.url,
+      proof,
+      externalExchange: { host: '127.0.0.1', security: 'tls', maxBytes: TEST_EXCHANGE_BUDGET },
+    });
+    await host.event('boot-owner-held');
+    host.send('release');
+    const { exchangePort } = await host.event('ready');
+    if (exchangePort === undefined) throw new Error('Boot did not open the worker exchange listener');
+    const peer = startPeer(test, 'peer', ['oversized', certDirectory]);
+    peer.send({ port: exchangePort, proof });
+    const result = await peer.event('closed');
+    // Some Bun versions drop the native connection without sending a close frame.
+    expect(runtime === 'node' ? [1009] : [1006, 1009]).toContain(result.code);
+    expect(result.reply).toBeUndefined();
+    host.send('boot-snapshot');
+    await expect(host.event('boot-snapshot')).resolves.toMatchObject({
+      reads: 0,
+      proofChecks: 0,
+      accepted: false,
+      bound: false,
+    });
+  });
+
+  it.each([
+    'tls',
+    'verified-ingress',
+  ] as const)('redeems a worker over %s with a non-loopback TLS peer', async (security) => {
+    if (externalHost === undefined) throw new Error('The test requires a non-loopback IPv4 interface');
+    const { test, storage, proof } = await prepareCase(false);
+    const bindHost = security === 'tls' ? externalHost : '127.0.0.1';
+    const host = startHost(test, runtime, 'boot-supported', {
+      database: storage.url,
+      proof,
+      externalExchange: { host: bindHost, security },
+    });
+    await host.event('boot-owner-held');
+    host.send('release');
+    const { exchangePort } = await host.event('ready');
+    if (exchangePort === undefined) throw new Error('Boot did not open the worker exchange listener');
+
+    let workerPort = exchangePort;
+    if (security === 'verified-ingress') {
+      const target = { host: bindHost, port: exchangePort };
+      const unverified = await startExchangeIngress(certDirectory, externalHost, target, false);
+      test.context.onTestFinished(() => unverified.close());
+      await expectExchangeUpgradeRefusal(`wss://${externalHost}:${unverified.port}/bus/exchange`, test);
+      host.send('boot-snapshot');
+      await expect(host.event('boot-snapshot')).resolves.toMatchObject({
+        reads: 0,
+        proofChecks: 0,
+        accepted: false,
+        bound: false,
+      });
+      const verified = await startExchangeIngress(certDirectory, externalHost, target, true);
+      test.context.onTestFinished(() => verified.close());
+      workerPort = verified.port;
+    }
+    const peer = startPeer(test, 'peer', ['boot-supported', certDirectory]);
+    peer.send({ host: externalHost, port: workerPort, proof });
+    await peer.event('boot-worker-redeemed');
+    host.send('boot-snapshot');
+    await expect(host.event('boot-snapshot')).resolves.toMatchObject({ proofChecks: 1, accepted: true, bound: true });
+
+    host.send('boot-rollback');
+    await expect(host.event('boot-ending')).resolves.toMatchObject({ closed: false, connections: 1 });
+    host.send('boot-close');
+    await expect(host.event('boot-ending')).resolves.toMatchObject({ closed: true, connections: 0 });
+    await expect(peer.event('closed')).resolves.toMatchObject({ code: 1008, successReplies: 1 });
+  });
+
+  it.each([
+    ['writes the committed response before closing', 'reply'],
+    ['closes when an owner delays the committed response', 'delay'],
+    ['refuses the next request after a direct revocation', 'direct-revocation'],
+  ] as const)('keeps a rolled-back outcome session and %s', async (_description, scenario) => {
+    const { test, storage, proof } = await prepareCase(false);
+    const host = startHost(test, runtime, 'boot-supported', {
+      database: storage.url,
+      proof,
+      exerciseOutcome: true,
+      externalExchange: { host: '127.0.0.1', security: 'tls' },
+    });
+    await host.event('boot-owner-held');
+    host.send('release');
+    const { exchangePort } = await host.event('ready');
+    if (exchangePort === undefined) throw new Error('Boot did not open the worker exchange listener');
+    const peer = startPeer(test, 'peer', ['boot-supported', certDirectory]);
+    peer.send({ port: exchangePort, proof });
+    await peer.event('boot-worker-redeemed');
+
+    peer.send('submit-rollback');
+    await expect(peer.event('outcome-response')).resolves.toMatchObject({ decision: 'refused' });
+    if (scenario === 'direct-revocation') {
+      host.send('boot-revoke-without-notification');
+      await expect(host.event('boot-revoked')).resolves.toMatchObject({ connections: 1 });
+      peer.send('submit-result');
+      await expect(peer.event('closed')).resolves.toMatchObject({ code: 1008, successReplies: 1 });
+      await expect(peer.event('outcome-after-close')).resolves.toMatchObject({ rejected: true });
+      expect(peer.count('outcome-response')).toBe(0);
+      expect(host.count('outcome-committed')).toBe(0);
+      return;
+    }
+    peer.send('submit-result');
+    await expect(host.event('outcome-committed')).resolves.toMatchObject({ connections: 0 });
+
+    if (scenario === 'reply') {
+      peer.send('probe-retiring');
+      await peer.event('preframes');
+      host.send('release-outcome');
+      await expect(peer.event('outcome-response')).resolves.toMatchObject({ decision: 'accepted' });
+    }
+    await expect(peer.event('closed')).resolves.toMatchObject({ code: 1008, successReplies: 1 });
+    await expect(peer.event('outcome-after-close')).resolves.toMatchObject({ rejected: true });
+    if (scenario === 'delay') {
+      expect(peer.count('outcome-response')).toBe(0);
+      host.send('release-outcome');
+    }
+  });
+
+  it.each([
+    ['unprotected wildcard listener', { host: '0.0.0.0', security: 'unprotected' }, 'protection-required'],
+    ['empty TLS certificate', { host: '0.0.0.0', security: 'tls', tlsIssue: 'empty-cert' }, 'invalid-tls'],
+    ['empty TLS key', { host: '0.0.0.0', security: 'tls', tlsIssue: 'empty-key' }, 'invalid-tls'],
+    ['malformed TLS certificate', { host: '0.0.0.0', security: 'tls', tlsIssue: 'malformed-cert' }, 'invalid-tls'],
+    ['mismatched TLS key', { host: '0.0.0.0', security: 'tls', tlsIssue: 'mismatched-key' }, 'invalid-tls'],
+    [
+      'IPv4 wildcard ingress without verifier',
+      { host: '0.0.0.0', security: 'verified-ingress', ingressVerifier: 'missing' },
+      'protection-required',
+    ],
+    [
+      'IPv6 wildcard ingress without verifier',
+      { host: '::', security: 'verified-ingress', ingressVerifier: 'missing' },
+      'protection-required',
+    ],
+  ] as const)('rejects %s at startup', async (_description, externalExchange, code) => {
+    const { test, storage, proof } = await prepareCase(false);
+    const host = startHost(test, runtime, 'boot-supported', {
+      database: storage.url,
+      proof,
+      externalExchange,
+    });
+    await expect(host.event('boot-rejected')).resolves.toMatchObject({ code, transportRegistered: false });
+    expect(host.count('boot-listening')).toBe(0);
+  });
+
+  it.each([
+    ['an exception', 'throws'],
+    ['a truthy non-boolean', 'truthy'],
+    ['a promise', 'promise'],
+  ] as const)('refuses %s from the ingress verifier', async (_description, behavior) => {
+    const { test, storage, proof } = await prepareCase(false);
+    const host = startHost(test, runtime, 'boot-supported', {
+      database: storage.url,
+      proof,
+      externalExchange: { host: '127.0.0.1', security: 'verified-ingress', ingressVerifier: behavior },
+    });
+    await host.event('boot-owner-held');
+    host.send('release');
+    const { exchangePort } = await host.event('ready');
+    if (exchangePort === undefined) throw new Error('Boot did not open the worker exchange listener');
+    await expectExchangeUpgradeRefusal(`ws://127.0.0.1:${exchangePort}/bus/exchange`, test);
+  });
+
+  it.each([
+    ['0.0.0.0', '127.0.0.1'],
+    ['::', '::1'],
+  ])('checks the peer of a wildcard %s ingress listener before capacity', async (bindHost, targetHost) => {
+    if (externalHost === undefined) throw new Error('The test requires a non-loopback IPv4 interface');
+    const { test, storage, proof } = await prepareCase(false);
+    const host = startHost(test, runtime, 'boot-supported', {
+      database: storage.url,
+      proof,
+      externalExchange: { host: bindHost, security: 'verified-ingress' },
+    });
+    await host.event('boot-owner-held');
+    host.send('release');
+    const { exchangePort } = await host.event('ready');
+    if (exchangePort === undefined) throw new Error('Boot did not open the worker exchange listener');
+    const verified = await startExchangeIngress(
+      certDirectory,
+      externalHost,
+      { host: targetHost, port: exchangePort },
+      true,
+    );
+    test.context.onTestFinished(() => verified.close());
+    const endpoint = `wss://${externalHost}:${verified.port}/bus/exchange`;
+    const ca = await readFile(join(certDirectory, 'cert.pem'));
+    const held = [new WebSocket(endpoint, { ca }), new WebSocket(endpoint, { ca })];
+    for (const socket of held) test.context.onTestFinished(() => socket.terminate());
+    await abortableWait(Promise.all(held.map((socket) => once(socket, 'open'))), test.context.signal);
+    await expectExchangeUpgradeRefusal(endpoint, test, 503);
+    if (bindHost === '0.0.0.0') {
+      await expectExchangeUpgradeRefusal(`ws://${externalHost}:${exchangePort}/bus/exchange`, test);
+    }
+  });
+});
+
+/**
+ * Check the HTTP refusal before WebSocket setup can send any application frame.
+ * @param endpoint - Exchange URL with or without the test TLS ingress.
+ * @param test - Owner of the probe and its lifetime.
+ * @param expected - Expected HTTP status.
+ */
+async function expectExchangeUpgradeRefusal(endpoint: string, test: ExchangeTest, expected = 403): Promise<void> {
+  const ca = await readFile(join(certDirectory, 'cert.pem'));
+  const socket = new WebSocket(endpoint, {
+    ca,
+    headers: {
+      'x-test-ingress-proof': 'verified',
+      forwarded: 'for=127.0.0.1;proto=https',
+      'x-forwarded-for': '127.0.0.1',
+      'x-forwarded-proto': 'https',
+    },
+  });
+  socket.on('error', () => {});
+  test.context.onTestFinished(() => socket.terminate());
+  const status = new Promise<number | undefined>((resolve, reject) => {
+    socket.once('open', () => reject(new Error('Refused ingress upgraded the socket')));
+    socket.once('error', reject);
+    socket.once('unexpected-response', (_request, response) => {
+      resolve(response.statusCode);
+      response.resume();
+    });
+  });
+  await expect(abortableWait(status, test.context.signal)).resolves.toBe(expected);
+}
 
 /**
  * Own one database for one test, including any replacement host.

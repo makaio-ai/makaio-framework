@@ -1,9 +1,10 @@
 import { DEFAULT_READINESS_TIMEOUT_MS } from '@makaio/bus-core';
-import { CorePartyKind, type TransportReceiveContext } from '@makaio/core';
+import { CorePartyKind, type TransportReceiveContext, type TransportRequestOrigin } from '@makaio/core';
 import { abortableWait } from '@makaio/utils';
 import { WebSocketConnectionError } from '../connection-error.js';
 import type { WebSocketLike } from '../types.js';
-import { DEFAULT_AUTH_CHALLENGE_TIMEOUT_MS } from './auth-deadline.js';
+import { DEFAULT_AUTH_CHALLENGE_TIMEOUT_MS, waitForRefusalRelease } from './auth-deadline.js';
+import { retireVerifiedExchange, verifyRunMessageOrDeny, withForcedRetirement } from './exchange-session-retirement.js';
 import type { TransportAuth } from './interface.js';
 
 /** Explicit WebSocket upgrade path reserved for the connection exchange. */
@@ -12,24 +13,6 @@ export const CONNECTION_EXCHANGE_PATH = '/bus/exchange';
 /** Host-owned facts for one exchange upgrade. */
 export interface ConnectionExchangeUpgrade {
   readonly encrypted: boolean;
-}
-
-/**
- * Check a composition-owned ingress verifier without letting an exception
- * escape the host upgrade handler.
- * @param request - Native upgrade request delivered by the host.
- * @param verify - Host verification policy for the protected ingress.
- * @returns Whether the verifier established encrypted connection evidence.
- */
-export function verifyConnectionExchangeIngress<Request>(
-  request: Request,
-  verify: ((request: Request) => boolean) | undefined,
-): boolean {
-  try {
-    return verify?.(request) === true;
-  } catch {
-    return false;
-  }
 }
 
 /** A committed reply and private receive context used to admit one connection. */
@@ -51,6 +34,8 @@ export interface ConnectionExchangeAdmission {
   readonly withPromotion?: (publish: () => void) => Promise<void>;
 }
 
+type VerifiedExchangeIdentity = Pick<ConnectionExchangeAdmission, 'caller' | 'revocationKey'>;
+
 /** Trusted metadata for one presentation attempt. */
 export interface ConnectionExchangeSetupContext {
   readonly connectionId: string;
@@ -58,8 +43,11 @@ export interface ConnectionExchangeSetupContext {
   readonly signal: AbortSignal;
   /** Allow interruptions to be classified as retryable once the credentials and proof passed. */
   markProofVerified(): void;
-  /** Record the issuer key once verified under the authoritative owner lock. */
-  markVerifiedRevocationKey?(key: string): void;
+  /**
+   * Record the issuer key and its verified caller under the authoritative owner lock.
+   * @param identity - Verified caller and its issuer key.
+   */
+  markVerifiedRevocationKey?(identity: VerifiedExchangeIdentity): void;
 }
 
 /** Server-side exchange policy. Configure only on hosts with a verified setup handler. */
@@ -74,6 +62,14 @@ export interface ConnectionExchangeSetup {
    * only after the host has reconciled durable authority.
    */
   readonly availability?: () => AbortSignal;
+  /**
+   * Recheck a worker's authoritative acceptance before dispatching a message.
+   * Resolve false to retire the connection. Release storage locks before returning.
+   */
+  verifyRunSession?(
+    session: { readonly jobRunId: string; readonly revocationKey: string; readonly expiresAt: string },
+    signal: AbortSignal,
+  ): Promise<boolean>;
   /**
    * Resolve the presentation and finish the durable exchange.
    * @param frame - Size-bounded setup message.
@@ -95,10 +91,10 @@ interface ExchangeState {
   readonly terminate: () => void;
   input?: PromiseWithResolvers<string | Buffer>;
   admission?: PendingAdmission;
-  pendingRevocationKey?: string;
+  pendingIdentity?: VerifiedExchangeIdentity;
   session?: Pick<PendingAdmission, 'caller' | 'expiresAt' | 'revocationKey' | 'connectionId'>;
   availability?: AbortSignal;
-  retire?: (code?: 1008 | 1011) => void;
+  retire?: (code?: 1008 | 1011, reply?: TransportRequestOrigin) => void;
   expiryTimer?: ReturnType<typeof setTimeout>;
 }
 
@@ -121,23 +117,6 @@ export class ConnectionExchangeConfigurationError extends Error {
       }[code],
     );
     this.name = 'ConnectionExchangeConfigurationError';
-  }
-}
-
-/**
- * Release business refusals on the same schedule and cancel the timer on close.
- * @param releaseAt - Deadline on the monotonic clock.
- * @param signal - Lifetime of the socket.
- */
-async function waitForRefusalRelease(releaseAt: number, signal: AbortSignal): Promise<void> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  try {
-    const wait = new Promise<void>((resolve) => {
-      timer = setTimeout(resolve, Math.max(0, releaseAt - performance.now()));
-    });
-    await abortableWait(wait, signal);
-  } finally {
-    clearTimeout(timer);
   }
 }
 
@@ -246,8 +225,8 @@ export class ConnectionExchangeAuth implements TransportAuth {
       markProofVerified() {
         proofVerified = true;
       },
-      markVerifiedRevocationKey(key: string) {
-        if (!setupSignal.aborted) state.pendingRevocationKey = key;
+      markVerifiedRevocationKey({ caller, revocationKey }: VerifiedExchangeIdentity) {
+        if (!setupSignal.aborted) state.pendingIdentity = { caller, revocationKey };
       },
     });
     if (state.upgrade.encrypted && typeof frame === 'string' && Buffer.byteLength(frame) <= this.setup.maxBytes) {
@@ -257,7 +236,7 @@ export class ConnectionExchangeAuth implements TransportAuth {
           admission !== undefined &&
           (admission.caller.kind !== CorePartyKind.jobRun || typeof admission.withPromotion === 'function')
         ) {
-          context.markVerifiedRevocationKey(admission.revocationKey);
+          context.markVerifiedRevocationKey(admission);
           return { ...admission, connectionId, deadline: context.deadline, setupSignal };
         }
       } catch (error) {
@@ -342,11 +321,7 @@ export class ConnectionExchangeAuth implements TransportAuth {
     for (const socket of localSockets) {
       const existing = this.states.get(socket);
       const session = existing?.session;
-      if (
-        session?.caller.kind === CorePartyKind.jobRun &&
-        session.caller.id === admission.caller.id &&
-        session.revocationKey === admission.revocationKey
-      ) {
+      if (session?.caller.kind === CorePartyKind.jobRun && session.caller.id === admission.caller.id) {
         existing?.retire?.();
       }
     }
@@ -366,7 +341,7 @@ export class ConnectionExchangeAuth implements TransportAuth {
     const { caller, expiresAt, revocationKey, connectionId } = admission;
     state.session = { caller, expiresAt, revocationKey, connectionId };
     state.admission = undefined;
-    state.pendingRevocationKey = undefined;
+    state.pendingIdentity = undefined;
     this.releasePending(socket);
   }
 
@@ -393,19 +368,31 @@ export class ConnectionExchangeAuth implements TransportAuth {
   /**
    * Bind shared cleanup before reading exchange credentials.
    * @param socket - Upgraded client socket.
-   * @param retire - Remove local state and initiate the classified close.
+   * @param retire - Remove local state and initiate a bounded close using native termination.
+   * @param forceDetach - Remove local routes without retaining a response handoff.
    */
-  public bindExchangeRetirement(socket: WebSocketLike, retire: (code?: 1008 | 1011) => void): void {
+  public bindExchangeRetirement(
+    socket: WebSocketLike,
+    retire: (terminate: () => void, code?: 1008 | 1011, reply?: TransportRequestOrigin) => void,
+    forceDetach: () => void,
+  ): void {
     const state = this.states.get(socket);
     if (state === undefined) return;
-    state.retire = retire;
+    const retireSocket = withForcedRetirement({
+      retire: (code, reply) => retire(state.terminate, code, reply),
+      forceDetach,
+      clearAuthentication: () => this.cleanupSocket(socket),
+      terminate: state.terminate,
+    });
+    state.retire = retireSocket;
     const generation = this.setup.availability?.();
     if (generation === undefined) return;
     // Each socket owns its listener without growing the host signal's listener list.
     const availability = AbortSignal.any([generation]);
     state.availability = generation;
-    if (availability.aborted) retire(1011);
-    else availability.addEventListener('abort', () => retire(1011), { once: true, signal: state.lifetime.signal });
+    const retireUnavailable = () => retireSocket(1011);
+    if (availability.aborted) retireUnavailable();
+    else availability.addEventListener('abort', retireUnavailable, { once: true, signal: state.lifetime.signal });
   }
 
   /**
@@ -428,14 +415,64 @@ export class ConnectionExchangeAuth implements TransportAuth {
    * Retire a live exchange socket or fence a verified pending admission.
    * @param socket - Candidate from the local client registry.
    * @param key - Committed revocation key.
+   * @param jobRunId - Scope retirement to one run when the owner provides it.
+   * @param reply - The initiating request’s response route, if any.
    */
-  public invalidateSession(socket: WebSocketLike, key: string): void {
+  public invalidateSession(
+    socket: WebSocketLike,
+    key: string,
+    jobRunId?: string,
+    reply?: TransportRequestOrigin,
+  ): void {
     const state = this.states.get(socket);
-    if (state?.session?.revocationKey === key) {
-      state.retire?.();
-    } else if (state?.pendingRevocationKey === key) {
+    const identity = state?.session ?? state?.pendingIdentity;
+    if (state === undefined || identity?.revocationKey !== key) return;
+    const { caller } = identity;
+    if (jobRunId !== undefined && (caller.kind !== CorePartyKind.jobRun || caller.id !== jobRunId)) return;
+    if (state.session !== undefined) {
+      retireVerifiedExchange(state, () => this.cleanupSocket(socket), reply);
+    } else {
       state.lifetime.abort(new WebSocketConnectionError('WS_AUTHENTICATION_REJECTED', 'Connection exchange refused'));
     }
+  }
+
+  /**
+   * Capture owner verification and retirement for a queued run message.
+   * @param socket - Sending connection.
+   * @returns The admission operations, when the session needs an owner check.
+   * @internal
+   */
+  public getRunMessageAdmission(socket: WebSocketLike) {
+    const state = this.states.get(socket);
+    const session = state?.session;
+    const verify = this.setup.verifyRunSession;
+    if (state === undefined || session?.caller.kind !== CorePartyKind.jobRun || verify === undefined) return;
+    const { caller, revocationKey, expiresAt } = session;
+    const retire = (): void => {
+      if (state.session === session) retireVerifiedExchange(state, () => this.cleanupSocket(socket));
+    };
+    return {
+      maxQueuedBytes: this.setup.maxBytes,
+      retire,
+      verify: async () => {
+        const verified = await verifyRunMessageOrDeny(() =>
+          verify.call(this.setup, { jobRunId: caller.id, revocationKey, expiresAt }, state.lifetime.signal),
+        );
+        if (state.session !== session) return false;
+        if (verified) return this.isSocketAuthenticated(socket);
+        retire();
+        return false;
+      },
+    };
+  }
+
+  /**
+   * Identify an authenticated exchange socket before tracking a request.
+   * @param socket - Socket that presented the request.
+   * @returns Whether this socket has an exchange session.
+   */
+  public hasExchangeSession(socket: WebSocketLike): boolean {
+    return this.states.get(socket)?.session !== undefined;
   }
 
   public hasSensitiveFrames(socket: WebSocketLike): boolean {
@@ -506,7 +543,7 @@ export class ConnectionExchangeAuth implements TransportAuth {
       state.retire = undefined;
       state.input = undefined;
       state.admission = undefined;
-      state.pendingRevocationKey = undefined;
+      state.pendingIdentity = undefined;
       state.session = undefined;
       state.lifetime.abort();
     }

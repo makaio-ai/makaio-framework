@@ -144,6 +144,7 @@ export type {
   SubjectRecordFromSchemaRecord,
   SubjectSchema,
   TransportReceiveContext,
+  TransportRequestOrigin,
   ConnectionAttestation,
   AttestingConnectionRole,
   InboundAttestingConnectionRole,

@@ -28,6 +28,7 @@ export type ExchangeScenario =
   | StockExchangeScenario
   | 'boot-protected'
   | 'boot-default'
+  | 'boot-supported'
   | 'capacity'
   | 'silent'
   | 'committed'
@@ -80,6 +81,16 @@ export const ExchangeHostStartSchema = z.strictObject({
   database: z.string(),
   proof: z.string(),
   omitLegacyAuth: z.boolean().optional(),
+  exerciseOutcome: z.boolean().optional(),
+  externalExchange: z
+    .strictObject({
+      host: z.string(),
+      security: z.enum(['tls', 'verified-ingress', 'unprotected']),
+      maxBytes: z.number().optional(),
+      tlsIssue: z.enum(['empty-cert', 'empty-key', 'malformed-cert', 'mismatched-key']).optional(),
+      ingressVerifier: z.enum(['missing', 'throws', 'truthy', 'promise']).optional(),
+    })
+    .optional(),
   bindHost: z.literal('::ffff:127.0.0.1').optional(),
   rejectBindHost: z.enum(['0.0.0.0', 'localhost']).optional(),
   expiredAt: z.number().optional(),
@@ -100,6 +111,7 @@ export const ExchangePeerStartSchema = z.strictObject({
   port: z.number(),
   proof: z.string(),
   otherRun: z.boolean().optional(),
+  host: z.string().optional(),
 });
 export type ExchangePeerStart = z.infer<typeof ExchangePeerStartSchema>;
 
@@ -120,11 +132,16 @@ export interface ExchangeSnapshot {
 export type ExchangeMessage =
   | { kind: 'host-loaded' }
   | { kind: 'boot-listening'; port: number }
-  | { kind: 'boot-rejected'; message: string; port: number; transportRegistered: boolean }
+  | { kind: 'boot-rejected'; message: string; port: number; transportRegistered: boolean; code?: string }
   | { kind: 'boot-owner-held' }
   | { kind: 'boot-ending'; closed: boolean; connections: number }
+  | { kind: 'boot-revoked'; connections: number }
   | { kind: 'boot-snapshot'; reads: number; proofChecks: number; promotions: number; accepted: boolean; bound: boolean }
-  | { kind: 'ready'; port: number }
+  | { kind: 'ready'; port: number; exchangePort?: number }
+  | { kind: 'boot-worker-redeemed' }
+  | { kind: 'outcome-committed'; connections: number }
+  | { kind: 'outcome-response'; decision: 'accepted' | 'refused' }
+  | { kind: 'outcome-after-close'; rejected: boolean }
   | { kind: 'restarted'; port: number }
   | { kind: 'transport-stopped'; abortedBeforeRelease: boolean }
   | { kind: 'stock-launch'; auth: StockLaunchAuth }
@@ -187,8 +204,13 @@ export type ExchangeMessage =
 export type ExchangeCommand =
   | 'snapshot'
   | 'boot-snapshot'
+  | 'submit-rollback'
+  | 'submit-result'
+  | 'probe-retiring'
+  | 'release-outcome'
   | 'boot-close'
   | 'boot-rollback'
+  | 'boot-revoke-without-notification'
   | 'release'
   | 'release-terminal'
   | 'release-reconcile'

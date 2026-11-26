@@ -66,6 +66,18 @@ export type {
   UpstreamTelemetryBootOptions,
   WorkflowRunnerBootOptions,
 } from './boot-types.js';
+export {
+  readSingleHostWorkerExchange,
+  WorkerExchangeListenerConfigurationError,
+  type SingleHostWorkerExchangeOptions,
+  type WorkerExchangeIngressRequest,
+  type WorkerExchangeListener,
+  type WorkerExchangeListenerSecurity,
+} from './worker-exchange-listener.js';
+export {
+  retireWorkerRunSessionOnCommit,
+  type WorkerRunSessionIdentity,
+} from '@makaio/services-core/internal/worker-provider-host-binding';
 export { filterConfigDefaultsForLoadedPackages, mergePackageConfigDefaults } from './boot-config.js';
 export {
   MAX_OPERATOR_CONFIG_BYTES,

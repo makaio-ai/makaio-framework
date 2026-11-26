@@ -10,10 +10,12 @@ import { getDatabaseSignals } from './database-signals';
 import { deliverLocalWakeTopics, registerHostDatabaseHandle } from './host-database-wake';
 import { HostTransactionError } from './host-transaction';
 import type { DriverTransaction, TransactionQueryContext } from './host-transaction';
-import { executeTransaction } from './transaction';
+import { executeTransactionWithCommit } from './transaction';
 import { createGuardedTransactionView } from './transaction-query-session';
 import type { MakaioDatabase } from './types';
 import { getDatabaseDialect } from './types';
+
+type CommitContinuation = (database: HostDatabase) => undefined;
 
 /** What the storage owner knows about one minted `HostTransaction`. */
 interface TransactionState {
@@ -29,6 +31,8 @@ interface TransactionState {
   finished: boolean;
   /** Set only once the driver acknowledges commit. */
   committed?: true;
+  /** Local continuations with no driver access, run only after a successful commit. */
+  afterCommit?: Array<{ notify: CommitContinuation; failClosed?: CommitContinuation }>;
   /** Error that causes a fulfilled callback to roll back. */
   rollbackCause?: Error;
   /** Synchronous authorization checks at commit handoff. */
@@ -117,7 +121,7 @@ async function runHostTransaction<T>(
 ): Promise<T> {
   let prepared: TransactionState | undefined;
 
-  const result = await executeTransaction(
+  const result = await executeTransactionWithCommit(
     db,
     async (tx) => {
       signal?.throwIfAborted();
@@ -151,12 +155,21 @@ async function runHostTransaction<T>(
       return fnResult;
     },
     signal,
+    () => {
+      if (prepared === undefined) return;
+      prepared.committed = true;
+      for (const { notify, failClosed } of prepared.afterCommit ?? []) {
+        try {
+          notify(host);
+        } catch {
+          if (failClosed === undefined) console.error('[host-database] Local commit continuation failed');
+          else failClosed(host);
+        }
+      }
+    },
   );
 
-  if (prepared !== undefined) {
-    prepared.committed = true;
-    if (prepared.wakeTopics.size > 0) deliverLocalWakeTopics(db, prepared.wakeTopics);
-  }
+  if (prepared !== undefined && prepared.wakeTopics.size > 0) deliverLocalWakeTopics(db, prepared.wakeTopics);
   return result;
 }
 
@@ -352,4 +365,21 @@ export function checkHostTransactionCommit(tx: HostTransaction, check: () => voi
  */
 export function didHostTransactionCommit(tx: HostTransaction): boolean {
   return transactions.get(tx)?.committed === true;
+}
+
+/**
+ * Schedule a synchronous local continuation after the driver commits, before
+ * the next operation on this handle. Rollback discards it. The continuation
+ * must not start storage work and a failure cannot change the commit result.
+ * @param tx - Current host transaction.
+ * @param notify - Local continuation receiving the facade that minted the transaction.
+ * @param failClosed - Non-throwing enforcement for a failed security continuation.
+ */
+export function onHostTransactionCommit(
+  tx: HostTransaction,
+  notify: CommitContinuation,
+  failClosed?: CommitContinuation,
+): void {
+  const state = requireTransactionState(tx);
+  (state.afterCommit ??= []).push({ notify, failClosed });
 }
