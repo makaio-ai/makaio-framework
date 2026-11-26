@@ -12,7 +12,7 @@ import { WORKER_REDEMPTION_EXCHANGE, WorkerExchangeReplySchema } from '@makaio/c
 import { WebSocket } from 'ws';
 import { createHostDatabase } from '@makaio/storage-drizzle';
 import { abortableWait } from '@makaio/utils';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, onTestFailed } from 'vitest';
 import { getCurrentTest } from 'vitest/suite';
 import { buildExchangeProcesses } from './worker-exchange-process-build.js';
 import { readDispatch } from '../dispatch-store.js';
@@ -41,6 +41,7 @@ import {
 
 type MessageKind = ExchangeMessage['kind'];
 type ExchangeTest = NonNullable<ReturnType<typeof getCurrentTest>>;
+type MarkExchangePhase = (phase: string, childMs?: number) => void;
 const timings = process.env['WORKER_EXCHANGE_TIMINGS'] === '1';
 
 const refusal = '{"type":"connection-exchange-result","reject":"rejected"}';
@@ -128,11 +129,13 @@ class ExchangeProcess {
    * @param child - Independent process with an IPC channel.
    * @param role - Process purpose used in failure reports.
    * @param testSignal - Lifetime of the running Vitest test.
+   * @param mark - Optional failure-only recorder for the test case.
    */
   public constructor(
     private readonly child: ChildProcess,
     private readonly role: 'host' | 'peer',
     private readonly testSignal: AbortSignal,
+    mark?: MarkExchangePhase,
   ) {
     const kill = () => this.killIfRunning();
     testSignal.addEventListener('abort', kill, { once: true });
@@ -147,11 +150,14 @@ class ExchangeProcess {
     });
     child.once('disconnect', () => this.channel.abort('IPC disconnected'));
     child.on('error', () => this.channel.abort('process error'));
+    child.once('spawn', () => mark?.(`${role} spawned`));
     child.on('message', (message: ExchangeMessage) => {
       if (message.kind === 'phase') {
-        console.info(`Exchange phase ${message.phase}: ${message.ms.toFixed(2)} ms`);
+        if (mark) mark(`${role}: ${message.phase}`, message.ms);
+        else console.info(`Exchange phase ${message.phase}: ${message.ms.toFixed(2)} ms`);
         return;
       }
+      mark?.(`${role}: ${message.kind}`);
       this.history.push(message);
       if (message.kind === 'failed') this.channel.abort(message.stage);
     });
@@ -268,13 +274,15 @@ class ExchangeProcess {
  * Launch the stock client using the real provider and a restartable host.
  * @param runtime - Native host runtime.
  * @param scenario - Independent worker boot case.
+ * @param mark - Optional failure-only recorder for startup milestones.
  */
-async function connectStock(runtime: ExchangeRuntime, scenario: StockExchangeScenario) {
+async function connectStock(runtime: ExchangeRuntime, scenario: StockExchangeScenario, mark?: MarkExchangePhase) {
   const { test, storage, proof } = await prepareCase();
+  mark?.('case database ready');
   const holdReconnectDial = scenario === 'stock-reconnect';
   const args = holdReconnectDial ? ['hold-reconnect-dial'] : scenario === 'stock-dns-retry' ? ['dns-retry'] : [];
-  const peer = startPeer(test, 'stock', args, scenario !== 'stock-untrusted');
-  const initialHost = startHost(test, runtime, scenario, { database: storage.url, proof });
+  const peer = startPeer(test, 'stock', args, scenario !== 'stock-untrusted', mark);
+  const initialHost = startHost(test, runtime, scenario, { database: storage.url, proof }, mark);
   let host = initialHost;
   const reconnect = scenario === 'stock-reconnect' || scenario === 'stock-before-sync';
   const restartable =
@@ -287,6 +295,7 @@ async function connectStock(runtime: ExchangeRuntime, scenario: StockExchangeSce
   ]);
   if (scenario === 'stock-offline') await host.stop(test.timeout);
   peer.send({ port, auth, requireDecoder: scenario === 'stock-no-decoder', reconnect });
+  mark?.('worker start sent');
   return {
     initialHost,
     peer,
@@ -346,8 +355,18 @@ describe.each(['node', 'bun'] as const)('stock worker exchange on %s', (runtime)
     expect(running.initialHost.count('stock-attempt')).toBe(1);
   });
 
-  it('receives its order and opens a run-authenticated connection', async () => {
-    const running = await connectStock(runtime, 'stock-success');
+  it('receives its order and opens a run-authenticated connection', async ({ signal }) => {
+    const started = performance.now();
+    const phases: string[] = [];
+    const mark: MarkExchangePhase = (phase, childMs) => {
+      if (signal.aborted) return;
+      const elapsed = Math.round(performance.now() - started);
+      phases.push(`${phase} +${elapsed} ms${childMs === undefined ? '' : ` (child ${Math.round(childMs)} ms)`}`);
+    };
+    onTestFailed(() => {
+      throw new Error(`Stock worker exchange phases: ${phases.join(' → ') || 'none reached'}`);
+    });
+    const running = await connectStock(runtime, 'stock-success', mark);
     await expect(running.peer.event('stock-accepted')).resolves.toMatchObject({
       principal: CorePartyKind.jobRun,
       payload: { order: 'booked' },
@@ -665,12 +684,14 @@ async function prepareCase(seed = true) {
  * @param runtime - Native host runtime.
  * @param scenario - Independent connection case.
  * @param start - Start data delivered on private IPC, withheld for a standby host.
+ * @param mark - Optional failure-only recorder for the test case.
  */
 function startHost(
   test: ExchangeTest,
   runtime: ExchangeRuntime,
   scenario: ExchangeScenario,
   start?: ExchangeHostStart,
+  mark?: MarkExchangePhase,
 ): ExchangeProcess {
   const hostFile = join(processDirectory, 'worker-exchange-host-process.mjs');
   const advanceRefusal =
@@ -680,11 +701,12 @@ function startHost(
   const started = performance.now();
   const child = fork(hostFile, [scenario, runtime, certDirectory, advanceRefusal ? 'advance-refusal' : ''], {
     execPath: runtime === 'bun' ? 'bun' : process.execPath,
+    ...(mark ? { env: { ...process.env, WORKER_EXCHANGE_TIMINGS: '1' } } : {}),
     execArgv: [],
     stdio: ['ignore', 'ignore', 'ignore', 'ipc'],
   });
   child.once('spawn', () => reportTiming('host spawn', started));
-  const host = new ExchangeProcess(child, 'host', test.context.signal);
+  const host = new ExchangeProcess(child, 'host', test.context.signal, mark);
   test.context.onTestFinished(() => host.stop(test.timeout));
   if (start !== undefined) host.send(start);
   return host;
@@ -696,19 +718,26 @@ function startHost(
  * @param entry - Executable probe.
  * @param args - Public fixture arguments.
  * @param trustCertificate - Trust the generated CA in the stock TLS client.
+ * @param mark - Optional failure-only recorder for the test case.
  */
-function startPeer(test: ExchangeTest, entry: 'peer' | 'stock', args: string[], trustCertificate = false) {
+function startPeer(
+  test: ExchangeTest,
+  entry: 'peer' | 'stock',
+  args: string[],
+  trustCertificate = false,
+  mark?: MarkExchangePhase,
+) {
   const started = performance.now();
   const child = fork(join(processDirectory, `worker-exchange-${entry}-process.mjs`), args, {
     execArgv: [],
     env: {
       ...(trustCertificate ? { NODE_EXTRA_CA_CERTS: join(certDirectory, 'cert.pem') } : {}),
-      ...(timings ? { WORKER_EXCHANGE_TIMINGS: '1' } : {}),
+      ...(timings || mark ? { WORKER_EXCHANGE_TIMINGS: '1' } : {}),
     },
     stdio: ['ignore', 'ignore', 'ignore', 'ipc'],
   });
   child.once('spawn', () => reportTiming('worker spawn', started));
-  const peer = new ExchangeProcess(child, 'peer', test.context.signal);
+  const peer = new ExchangeProcess(child, 'peer', test.context.signal, mark);
   test.context.onTestFinished(() => peer.stop(test.timeout));
   return peer;
 }

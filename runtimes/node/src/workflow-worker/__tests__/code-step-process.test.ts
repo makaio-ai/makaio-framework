@@ -175,10 +175,16 @@ describe.skipIf(process.platform === 'win32')('local code step output boundary',
     await expect(result).resolves.toMatchObject({ kind: 'process-failed', reason: 'refusal-observer-failed' });
   });
 
-  it.each([
-    'cancelled',
-    'timed-out',
-  ] as const)('reports an unobserved refusal when the process is %s', async (status) => {
+  it('reports an unobserved refusal when the process is cancelled', () => verifyUnobservedRefusal('cancelled'));
+
+  // A real child must run through its 1,500 ms process deadline before refusal can settle.
+  it('reports an unobserved refusal when the process is timed-out', () => verifyUnobservedRefusal('timed-out'), 10_000);
+
+  /**
+   * Verify settlement while a request refusal observer is still pending.
+   * @param status - How the child process is stopped.
+   */
+  async function verifyUnobservedRefusal(status: 'cancelled' | 'timed-out'): Promise<void> {
     const warning = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
     const controller = new AbortController();
     const observerStarted = Promise.withResolvers<void>();
@@ -218,7 +224,7 @@ describe.skipIf(process.platform === 'win32')('local code step output boundary',
       },
     );
     try {
-      await observerStarted.promise;
+      await Promise.race([observerStarted.promise, result]);
       if (status === 'cancelled') controller.abort();
       await expect(result).resolves.toMatchObject({
         kind: 'process-failed',
@@ -235,7 +241,7 @@ describe.skipIf(process.platform === 'win32')('local code step output boundary',
       controller.abort();
       warning.mockRestore();
     }
-  });
+  }
 
   it('accepts a complete result even if the child has already closed its input', async () => {
     await expect(
@@ -258,11 +264,12 @@ describe.skipIf(process.platform === 'win32')('local code step output boundary',
     });
   });
 
+  // The acknowledged child stays alive until its real 1,500 ms process deadline fires.
   it('discards an acknowledged result when the child fails to exit within the deadline', async () => {
     await expect(
       run(`${submit} submit(1, stepResult(null)).then(() => setInterval(() => {}, 1000));`, undefined, 1500),
     ).resolves.toMatchObject({ kind: 'timed-out' });
-  });
+  }, 10_000);
 
   it('stops a child that keeps running after an invalid submission', async () => {
     const source = `${submit} submit(1, { status: 'completed' }).then(() => setInterval(() => {}, 1000));`;

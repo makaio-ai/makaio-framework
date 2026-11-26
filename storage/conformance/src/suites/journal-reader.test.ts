@@ -1018,7 +1018,7 @@ function testReaderAuthorization(getDatabase: () => StorageDatabaseContext): voi
   }, async (failure) => {
     const key = failure === 'throws' ? 'unavailable-throw' : 'unavailable-timeout';
     const reader = `${extension}.${key}`;
-    const handled: string[] = [];
+    const handled: Array<{ key: string; attempt: number }> = [];
     let attempts = 0;
     const { store, edge } = await setup(getDatabase(), {
       readers: [
@@ -1027,7 +1027,7 @@ function testReaderAuthorization(getDatabase: () => StorageDatabaseContext): voi
           description: 'Check authorization before handling a recorded entry.',
           subjects: () => [subject],
           async handle(_call, recordedEntry) {
-            handled.push(recordedEntry.key);
+            handled.push({ key: recordedEntry.key, attempt: attempts });
             return done;
           },
         },
@@ -1054,18 +1054,22 @@ function testReaderAuthorization(getDatabase: () => StorageDatabaseContext): voi
     await vi.waitFor(
       async () => {
         const { states } = await store.getReaderStates({ reader, entryId: unavailable.entryId });
-        expect(states).toMatchObject([
-          {
-            state: 'open',
-            reason: RightDenialReason.sourceUnavailable,
-            retries: 1,
-            notBefore: expect.any(String),
-          },
-        ]);
+        // A poll may first observe the retry after it has already finished.
+        expect(states).toMatchObject(
+          states[0]?.state === 'done'
+            ? [{ state: 'done', retries: 1 }]
+            : [
+                {
+                  state: 'open',
+                  reason: RightDenialReason.sourceUnavailable,
+                  retries: 1,
+                  notBefore: expect.any(String),
+                },
+              ],
+        );
       },
       { timeout: 8_000 },
     );
-    expect(handled).toEqual([]);
     await vi.waitFor(
       async () => {
         const { states } = await store.getReaderStates({ reader });
@@ -1076,7 +1080,8 @@ function testReaderAuthorization(getDatabase: () => StorageDatabaseContext): voi
       },
       { timeout: 4_000 },
     );
-    expect(handled).toEqual([key]);
+    expect(attempts).toBe(2);
+    expect(handled).toEqual([{ key, attempt: 2 }]);
   });
 }
 

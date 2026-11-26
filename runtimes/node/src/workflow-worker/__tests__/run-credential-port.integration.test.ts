@@ -122,12 +122,9 @@ describe('run-scoped credential mediation', () => {
     beforeResolve = undefined;
   });
 
-  /**
-   * Start the real Node host with its journal and one resolver.
-   * @param second - Additional resolver extension, when testing activation conflicts.
-   */
-  async function start(second?: KernelMakaioExtension): Promise<void> {
-    const first = resolverExtension({
+  /** @returns The credential resolver registered for the current fixture. */
+  function credentialFixture(): KernelMakaioExtension {
+    return resolverExtension({
       /**
        * @param _call - Run call.
        * @param request - Frozen credential request.
@@ -142,6 +139,14 @@ describe('run-scoped credential mediation', () => {
         return { success: true, value: secret };
       },
     });
+  }
+
+  /**
+   * Start the real Node host with its journal and one resolver.
+   * @param second - Additional resolver extension, when testing activation conflicts.
+   */
+  async function start(second?: KernelMakaioExtension): Promise<void> {
+    const first = credentialFixture();
     const { boot } = await bootJournalHost(second ? [first, second] : [first], undefined, undefined, {
       writeJournal: { authorizeWrite: async () => false, deadline: () => Date.now() },
     });
@@ -163,10 +168,11 @@ describe('run-scoped credential mediation', () => {
   /**
    * Bind the fixture's authenticated run.
    * @param scopes - Exact scope pairs decoded by the fixture's booking owner.
+   * @param coordinator - Active owner of the registered credential resolver.
    * @returns The worker port for that booking.
    */
-  function bind(scopes: readonly RunCredentialScope[] = [scope]) {
-    return activate.coordinator.credentials.bindRun({ call, requester: owner, scopes, signal: lifetime.signal });
+  function bind(scopes: readonly RunCredentialScope[] = [scope], coordinator = activate.coordinator) {
+    return coordinator.credentials.bindRun({ call, requester: owner, scopes, signal: lifetime.signal });
   }
 
   /**
@@ -243,11 +249,12 @@ describe('run-scoped credential mediation', () => {
     }
   });
 
+  // The fixed-operation host runs a real agent child and waits for its model request and exit.
   it('keeps the booked model binding across fixed operations and into the agent step', async () => {
-    await start();
     const operationOwner = 'operation-fixture';
     const fixture = composeFixedOperationHost(
       [
+        credentialFixture(),
         makeFixedOperationExtension(operationOwner, [
           {
             name: `${operationOwner}.prepare`,
@@ -258,6 +265,7 @@ describe('run-scoped credential mediation', () => {
         ]),
       ],
       workspace,
+      { enableCredentialResolver: true },
     );
     const offRole = fixture.bus.on(WorkflowSubjects.resolveRole, (ctx) => {
       ctx.setResult({ adapterName: 'text-model', model: 'booked-model' });
@@ -289,7 +297,7 @@ describe('run-scoped credential mediation', () => {
             adapterName: 'text-model',
             ownerInstanceId: owner,
             target: { name: 'model', url: upstream.url },
-            credentialSource: bind([{ ...scope, target: upstream.url.href }]),
+            credentialSource: bind([{ ...scope, target: upstream.url.href }], fixture.coordinator),
           },
         },
         { ...runPorts, allowSourceFree: true },
@@ -304,7 +312,7 @@ describe('run-scoped credential mediation', () => {
       offRole();
       await Promise.all([fixture.close(), upstream.close()]);
     }
-  });
+  }, 10_000);
 
   it.each([
     { bytes: 15, value: 'fixture-auth-15', accepted: false },
