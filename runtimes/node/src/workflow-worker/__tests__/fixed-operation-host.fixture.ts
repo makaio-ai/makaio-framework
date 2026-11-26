@@ -8,7 +8,13 @@ import type {
   FixedOperationOutcome,
   MakaioExtension,
 } from '@makaio/contracts/extension';
-import { BootNamespace, ExtensionCoordinator, ExtensionNamespace, KernelNamespace } from '@makaio/kernel';
+import {
+  BootNamespace,
+  ExtensionCoordinator,
+  type ExtensionCoordinatorOptions,
+  ExtensionNamespace,
+  KernelNamespace,
+} from '@makaio/kernel';
 import { useJournalHostFixture } from '@makaio/storage-conformance';
 import { WorkflowStorageSubjects } from '@makaio/subsystem-workflow-engine';
 import { createFixedOperationHost } from '../fixed-operation-host.js';
@@ -46,11 +52,13 @@ export function makeFixedOperationExtension(name: string, fixedOperations: reado
  * Compose the real extension coordinator and its fixed operation processor.
  * @param extensions - Extensions to activate.
  * @param workspace - Test root.
+ * @param options - Optional credential contribution support for the coordinator.
  * @returns The coordinator, ports and workflow bus.
  */
 export function composeFixedOperationHost(
   extensions: readonly MakaioExtension<ReturnType<typeof constructContext>>[],
   workspace: string,
+  options?: Pick<ExtensionCoordinatorOptions, 'enableCredentialResolver'>,
 ) {
   const [bus, dispose] = makeBusWithStorage();
   bus.registerNamespace(BootNamespace);
@@ -58,6 +66,7 @@ export function composeFixedOperationHost(
   bus.registerNamespace(KernelNamespace);
   bus.on(WorkflowStorageSubjects.getRunContext, (ctx) => ctx.setResult({ runContext: null }));
   const coordinator = new ExtensionCoordinator(bus, {
+    ...options,
     extensionContextBase: {
       constructContext,
       platform: process.platform,

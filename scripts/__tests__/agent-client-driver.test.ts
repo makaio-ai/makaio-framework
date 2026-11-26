@@ -1159,6 +1159,7 @@ console.log('member:' + member.pid);
     },
   );
 
+  // A live group consumes the full quiescence observation after the denied kill.
   it.runIf(process.platform !== 'win32')(
     'fails the run when a denied group kill leaves live processes behind',
     async () => {
@@ -1196,5 +1197,6 @@ console.log('member:' + member.pid);
         }
       }
     },
+    15_000,
   );
 });

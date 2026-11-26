@@ -526,16 +526,22 @@ it.each([
   }
 });
 
-it.each([
-  'completed',
-  'failed',
-  'cancelled',
-  'path',
-  'revision',
-  'identity',
-  'phase',
-  'replaced',
-] as const)('verifies the real checkout and retires the private workspace (%s)', async (mode) => {
+// This case starts two complete workflow runs with real Git, step and follow-up children.
+it(
+  'verifies the real checkout and retires the private workspace (completed)',
+  () => verifyCheckout('completed'),
+  10_000,
+);
+it.each(['failed', 'cancelled', 'path', 'revision', 'identity', 'phase', 'replaced'] as const)(
+  'verifies the real checkout and retires the private workspace (%s)',
+  verifyCheckout,
+);
+
+/**
+ * Exercise checkout verification and private workspace retirement in the selected run.
+ * @param mode - Workflow outcome or source fault to exercise.
+ */
+async function verifyCheckout(mode: RunCase): Promise<void> {
   const root = await mkdtemp(join(tmpdir(), 'fixed-operation-host-'));
   const { workspace, source, operations, config, marker, prepared, followedUp } = await prepare(root, mode);
   const { host, bus, coordinator, close } = compose(operations, workspace);
@@ -610,7 +616,7 @@ it.each([
     await close();
     await rm(root, { recursive: true, force: true });
   }
-});
+}
 
 it.each([
   ['first-step-revision', 'record'],
