@@ -128,8 +128,9 @@ export class ServerTransport implements BusTransport {
    * @returns Whether the frame was sent on an open socket.
    */
   private sendToClientSafely(client: WebSocketLike, data: string): boolean {
-    if (client.readyState !== 1) return false;
+    if (!this.registry.hasClient(client) || client.readyState !== 1) return false;
     try {
+      if (this.auth instanceof ConnectionExchangeAuth && !this.auth.isExchangeAvailable(client)) return false;
       client.send(data);
       return true;
     } catch (error) {
@@ -163,7 +164,13 @@ export class ServerTransport implements BusTransport {
         sendSafely: (client, data) => this.sendToClientSafely(client, data),
         debug: this.debug,
         onConnectionClosed: (connectionId) => {
-          for (const handler of this.connectionClosedHandlers) handler(connectionId);
+          for (const handler of this.connectionClosedHandlers) {
+            try {
+              handler(connectionId);
+            } catch {
+              if (this.debug) console.warn('[ServerTransport] Connection close observer failed');
+            }
+          }
         },
       });
     };
@@ -223,7 +230,7 @@ export class ServerTransport implements BusTransport {
    */
   public send(message: BusRequestMessage, timeout?: number): Promise<unknown>;
   /**
-   * Send an event or other message to all interested clients.
+   * Send a response to its requester, or an event or control message to interested clients.
    * @param message - Bus message to deliver
    * @param timeout - Correlation timeout in milliseconds; `0` means no automatic timeout
    * @returns Promise resolving to `true` if delivered to at least one client, `false` otherwise
@@ -237,6 +244,7 @@ export class ServerTransport implements BusTransport {
    * Returns the response payload from the handler. Throws if no clients available.
    * - **Broadcasts** (`BusBroadcastMessage`): Sends to all interested clients and aggregates responses.
    * Returns array of results from all handlers that responded.
+   * - **Responses**: Sends to the requesting client. Returns whether the frame was sent.
    * - **Events/Other**: Broadcasts to all interested clients. Returns delivery status boolean.
    *
    * For requests, routing considers only clients with matching subscriptions
@@ -244,14 +252,13 @@ export class ServerTransport implements BusTransport {
    * For events, subscription-based filtering is applied for efficiency.
    * @param message - The bus message to send
    * @param timeout - Correlation timeout in milliseconds; `0` means no automatic timeout
-   * @returns Promise resolving to response data (requests), aggregated results (broadcasts), or delivery status (events)
+   * @returns Promise resolving to response data (requests), aggregated results (broadcasts), or delivery status
    */
   public async send(message: BusMessage, timeout?: number): Promise<unknown> {
     if (message.type === 'response') {
       const client = this.registry.consumeResponseClient(message.correlationId);
       if (!client) return false;
-      this.sendToClientSafely(client, JSON.stringify(message));
-      return true;
+      return this.sendToClientSafely(client, JSON.stringify(message));
     }
 
     // Handle server-initiated broadcasts with response aggregation
@@ -307,12 +314,12 @@ export class ServerTransport implements BusTransport {
         : () => candidates;
     const serialized = JSON.stringify(projected);
     const interested = recipients();
+    let sentToAny = false;
     for (const client of interested) {
-      this.sendToClientSafely(client, serialized);
+      if (this.sendToClientSafely(client, serialized)) sentToAny = true;
     }
-    const sentToAny = interested.length > 0;
 
-    if (!sentToAny) {
+    if (interested.length === 0) {
       if (subject && this.debug) console.warn(`[ServerTransport] No interested clients for subject: ${subject}`);
 
       // it's valid to have no interested clients -> only throw if there are no clients at all
@@ -340,6 +347,7 @@ export class ServerTransport implements BusTransport {
       return await routeRequestToClients(message, timeout, {
         registry: this.registry,
         correlationsFor: (client) => this.correlations.get(client),
+        sendSafely: (client, frame) => this.sendToClientSafely(client, frame),
         signal: route.signal,
         access: this.access,
       });
@@ -377,6 +385,15 @@ export class ServerTransport implements BusTransport {
   public onConnectionClosed(handler: (connectionId: string) => void): () => void {
     this.connectionClosedHandlers.add(handler);
     return () => this.connectionClosedHandlers.delete(handler);
+  }
+
+  /**
+   * Invalidate live local exchange sessions after the issuer commits revocation.
+   * @param key - Opaque issuer key of the revoked identity.
+   */
+  public invalidateExchangeSessions(key: string): void {
+    if (!(this.auth instanceof ConnectionExchangeAuth)) return;
+    for (const socket of this.registry.getAllSockets()) this.auth.invalidateSession(socket, key);
   }
 
   /**

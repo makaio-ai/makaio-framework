@@ -1,9 +1,11 @@
 import { createHash, randomBytes } from 'node:crypto';
 import { createBusInstance } from '@makaio/bus-core';
 import { callFromReceive } from '@makaio/bus-core/kernel-api';
-import type { HostTransaction, ProviderAllocationRef } from '@makaio/contracts';
-import type { OrderedWorkerProvider } from '@makaio/contracts/extension';
-import { createHostDatabase } from '@makaio/storage-drizzle';
+import type { HostTransaction, JsonValue, ProviderAllocationRef } from '@makaio/contracts';
+import { WORKER_REDEMPTION_EXCHANGE, type WorkerExchangeRequest } from '@makaio/contracts/boundary';
+import type { DispatchBinding, OrderedWorkerProvider } from '@makaio/contracts/extension';
+import type { CallContext } from '@makaio/core';
+import { createHostDatabase, serializeByKey } from '@makaio/storage-drizzle';
 import { abortableWait, canonicalStringify } from '@makaio/utils';
 import type { StoredWorkerRedemption } from '../start-order.js';
 import { createWorkerDispatch } from '../start-ordered-worker.js';
@@ -12,7 +14,13 @@ import { WorkerExchangeReplyTooLargeError } from '../redemption-reply.js';
 import { prepareWorkerRedemption, type WorkerRedemptionHost } from '../redeem-worker.js';
 import { WorkerProviderRegistry } from '../provider-registry.js';
 import { AllocationObservationSignal } from '../allocation-observation-signal.js';
-import { bookRedemptionOwner, readRedemptionOwnerRow, redemptionOwnerSource } from './redemption-owner-fixture.js';
+import { readIssuerIdentityKey } from '../issuer-identity-key.js';
+import {
+  bookRedemptionOwner,
+  readRedemptionOwnerEndings,
+  readRedemptionOwnerRow,
+  redemptionOwnerSource,
+} from './redemption-owner-fixture.js';
 import {
   controllableProvider,
   fixtureToken,
@@ -21,13 +29,20 @@ import {
   processBoundProvider,
 } from './ordered-worker-fixture.js';
 import {
+  OTHER_RUN_ID,
   RUN_ID,
   TEST_EXCHANGE_BUDGET,
+  type ExchangeHostStart,
   type ExchangeScenario,
   type StockLaunchAuth,
 } from './worker-exchange-process-types.js';
 import { openExchangeDatabase } from './worker-exchange-restart-storage.js';
 import { bindExchangeShutdown } from './worker-exchange-shutdown.js';
+import { bindTwoHostWake } from './worker-exchange-two-host-wake.js';
+import {
+  createWorkerConnectionExchange,
+  type WorkerConnectionExchangeOptions,
+} from '../../../../../runtimes/node/src/worker-connection-exchange.js';
 import { createOrderedWorkerBusAuth } from '../../../../../runtimes/node/src/workflow-worker/worker-bus-auth.js';
 
 export const TEST_RUNTIME_SECRET = 'runtime-fixture-secret';
@@ -37,8 +52,21 @@ export const TEST_RUNTIME_SECRET = 'runtime-fixture-secret';
  * @param proof - Per-allocation start material.
  * @returns Fixed-width digest used only by the test's proof verifier.
  */
-export function allocationProofDigest(proof: string): string {
+function allocationProofDigest(proof: string): string {
   return createHash('sha256').update('allocation-proof:').update(proof).digest('hex');
+}
+
+/**
+ * Match the presented fixture proof to the independently observed allocation.
+ * @param proof - Proof from the TLS setup message.
+ * @param allocation - Allocation established by supervision.
+ * @param expiresAt - Proof expiry for this test booking.
+ * @returns The deadline only for matching proof.
+ */
+export function verifyExchangeAllocationProof(proof: JsonValue, allocation: ProviderAllocationRef, expiresAt: string) {
+  return typeof proof === 'string' && allocationProofDigest(proof) === allocation.providerData['proofDigest']
+    ? expiresAt
+    : undefined;
 }
 
 interface ExchangePauses {
@@ -47,6 +75,8 @@ interface ExchangePauses {
   readonly duringDigest: () => Promise<void>;
   readonly afterDigest: () => void;
   readonly duringCommit: () => Promise<void>;
+  readonly beforeWakeReconnect: () => Promise<void>;
+  readonly beforeWakeReconcile: () => Promise<void>;
 }
 
 interface StockLaunch {
@@ -63,7 +93,7 @@ type ExchangeStorage = Awaited<ReturnType<typeof openExchangeDatabase>>;
  * @param operationSignal - Host shutdown lifetime.
  * @param url - Prepared test database endpoint.
  * @param proof - Independent allocation evidence.
- * @param expiredAt - Original expiry for a replacement host.
+ * @param start - Replacement host clock and optional cross-host wake configuration.
  * @param launch - Independent stock worker launch and durable restart settings.
  */
 export async function setupExchangeStorage(
@@ -72,12 +102,24 @@ export async function setupExchangeStorage(
   operationSignal: AbortSignal,
   url: string,
   proof: string,
-  expiredAt: number | undefined,
+  start: Pick<ExchangeHostStart, 'expiredAt' | 'wake'>,
   launch?: StockLaunch,
 ) {
-  const storage = await openExchangeDatabase(url);
+  const listenerTag = start.wake?.role === 'listener' ? start.wake.listenerTag : undefined;
+  const storage = await openExchangeDatabase(
+    url,
+    listenerTag === undefined
+      ? undefined
+      : {
+          applicationName: listenerTag,
+          async beforeReconnect() {
+            await pauses.beforeWakeReconnect();
+            operationSignal.throwIfAborted();
+          },
+        },
+  );
   try {
-    return await book(scenario, pauses, operationSignal, storage, proof, expiredAt, launch);
+    return await book(scenario, pauses, operationSignal, storage, proof, start, launch);
   } catch (error) {
     await storage.cleanup();
     throw error;
@@ -91,7 +133,7 @@ export async function setupExchangeStorage(
  * @param operationSignal - Owning host lifetime.
  * @param storage - Isolated test database.
  * @param proof - Independent allocation evidence.
- * @param expiredAt - Original expiry for a replacement host.
+ * @param start - Replacement host clock and optional cross-host wake configuration.
  * @param launch - Stock worker launch channel, when used.
  */
 async function book(
@@ -100,14 +142,20 @@ async function book(
   operationSignal: AbortSignal,
   storage: ExchangeStorage,
   proof: string,
-  expiredAt: number | undefined,
+  start: Pick<ExchangeHostStart, 'expiredAt' | 'wake'>,
   launch?: StockLaunch,
 ) {
+  const { expiredAt, wake } = start;
+  const attached = launch?.resume === true || wake?.role === 'listener';
   const bus = createBusInstance();
   const ownerCall = bus.own('start');
   const supervisionCall = bus.own('observer');
   const database = createHostDatabase(storage.db);
   const jobRunId = scenario === 'rollback' ? 'storage-reject' : RUN_ID;
+  const ownerTurns = new Map<string, Promise<void>>();
+  const runTurn = (id: string, work: () => Promise<void>) => serializeByKey(ownerTurns, id, work);
+  let completedTerminalTurns = 0;
+  const withOtherRun = scenario === 'local-revoke' || scenario === 'local-expiry' || scenario === 'local-takeover';
   const expiresAt = new Date(Date.now() + 60_000).toISOString();
   const control = controllableProvider();
   const allocation: ProviderAllocationRef = {
@@ -115,11 +163,18 @@ async function book(
     providerId: control.provider.id,
     providerData: { proofDigest: allocationProofDigest(proof) },
   };
+  const otherAllocation = { ...allocation, providerData: { ...allocation.providerData, run: OTHER_RUN_ID } };
   const outcome = { kind: 'allocated' as const, allocationRef: allocation, handle: handleFor(jobRunId) };
   let visible = scenario !== 'correlation';
   const processBound = {
     ...processBoundProvider(control.provider),
-    async proveLocalLive() {
+    async provision(...args: Parameters<OrderedWorkerProvider['provision']>) {
+      if (withOtherRun && args[1].binding.jobRunId === OTHER_RUN_ID) {
+        return { kind: 'allocated' as const, allocationRef: otherAllocation, handle: handleFor(OTHER_RUN_ID) };
+      }
+      return control.provider.provision(...args);
+    },
+    async proveLocalLive(_call: CallContext, binding: DispatchBinding) {
       if (!visible) {
         void pauses.beforeCorrelation().then(() => {
           visible = true;
@@ -127,7 +182,8 @@ async function book(
         });
         return undefined;
       }
-      return { allocationRef: allocation, expiresAt };
+      const allocationRef = binding.jobRunId === OTHER_RUN_ID && withOtherRun ? otherAllocation : allocation;
+      return { allocationRef, expiresAt };
     },
   };
   const managed = launch === undefined ? undefined : await orderSourceFixture(database, 'provider-managed', jobRunId);
@@ -175,7 +231,7 @@ async function book(
                 ? new Date(Date.now() + 4_000).toISOString()
                 : managed.order.bootstrapDeadlineAt,
         };
-  const owner = launch?.resume
+  const owner = attached
     ? undefined
     : await bookRedemptionOwner(
         database,
@@ -185,6 +241,7 @@ async function book(
         false,
         replyOrder(scenario),
       );
+  const otherOrder = { ...order, jobRunId: OTHER_RUN_ID };
   const foreign =
     scenario === 'foreign'
       ? await bookRedemptionOwner(
@@ -195,6 +252,21 @@ async function book(
           false,
         )
       : undefined;
+  const other = withOtherRun
+    ? await bookRedemptionOwner(
+        database,
+        otherOrder,
+        { kind: ownerCall.caller.kind, id: ownerCall.caller.id },
+        fixtureToken,
+        false,
+        replyOrder(scenario),
+      )
+    : undefined;
+  if (scenario === 'local-takeover') {
+    const key = (await owner?.read())?.booking.identityRevocationKey;
+    if (key === undefined || other === undefined) throw new Error('Missing takeover fixture owners');
+    await other.setIssuerIdentityKey(key);
+  }
   const source = owner?.sourceFor(storage.executor) ?? redemptionOwnerSource(storage.executor, '');
   const commitBoundary = scenario === 'dropped-commit' ? instrumentCommit(storage, pauses.duringCommit) : undefined;
   let digestReadFollowups = 0;
@@ -227,6 +299,7 @@ async function book(
           ...booked,
           redemption: {
             ...redemption,
+            ...(scenario === 'local-expiry' && id === RUN_ID ? { maxRuntimeMs: 2_000, cancellationWindowMs: 0 } : {}),
             async accept(ownerTx: HostTransaction, result: StoredWorkerRedemption) {
               if (scenario === 'storage-interrupted') throw new Error('Test write interrupted');
               if (scenario === 'stock-retry' && stockRetryCount++ === 0) throw new Error('Test write interrupted');
@@ -264,7 +337,7 @@ async function book(
   const shutdown =
     scenario === 'stock-shutdown' ? await bindExchangeShutdown(bus, host, provider, storage.cleanup) : undefined;
   const dispatch = shutdown?.capability ?? createWorkerDispatch(host);
-  const dispatched = launch?.resume ? undefined : dispatch.startOrderedWorker(ownerCall, order, operationSignal);
+  const dispatched = attached ? undefined : dispatch.startOrderedWorker(ownerCall, order, operationSignal);
   if (shutdown !== undefined) void dispatched?.catch(() => undefined);
   if (shutdown !== undefined) {
     await control.exposed.getPromise();
@@ -283,36 +356,15 @@ async function book(
     }
   }
   if (scenario === 'revoked') await owner?.revoke();
-  if (scenario === 'wrong-secret' || scenario === 'proof-replay' || scenario === 'stored-over' || scenario === 'over') {
-    const anonymous = callFromReceive(undefined, undefined, undefined, () => {});
-    const prepared = await prepareWorkerRedemption(
-      scenario === 'over' ? { ...host, exchangeReplyByteLimit: TEST_EXCHANGE_BUDGET } : host,
-      anonymous,
-      { jobRunId, oneTimeToken: fixtureToken, runtimeSecret: TEST_RUNTIME_SECRET },
-      { kind: 'allocation-only' },
-      Date.parse(expiresAt),
-    );
-    if (prepared.commit === undefined) throw new Error('Could not seed a redeemed booking');
-    const commit = prepared.commit;
-    await database.transaction(async (tx) => {
-      if (scenario !== 'over') {
-        const result = await commit(anonymous, tx);
-        if (result.reject !== undefined) throw new Error('Could not seed committed redemption');
-        return;
-      }
-      try {
-        await commit(anonymous, tx);
-      } catch (error) {
-        if (!(error instanceof WorkerExchangeReplyTooLargeError) || error.code !== 'reply-too-large') throw error;
-        const row = await readRedemptionOwnerRow(tx, jobRunId);
-        const claim = await readDispatch(tx, jobRunId);
-        if (row?.stored != null || claim?.boundAllocation != null)
-          throw new Error('Reply budget checked after writing');
-        return;
-      }
-      throw new Error('Expected a typed reply budget refusal');
-    });
+  if (other !== undefined) await dispatch.startOrderedWorker(ownerCall, otherOrder, operationSignal);
+  const seedIdentity = scenario.startsWith('identity-') && scenario !== 'identity-missing';
+  if (scenario === 'over') {
+    await checkOversizedRedemption(host, jobRunId, expiresAt);
+  } else if (seedIdentity || scenario === 'wrong-secret' || scenario === 'proof-replay' || scenario === 'stored-over') {
+    await seedProtectedRedemption(host, jobRunId, proof, expiresAt);
   }
+  if (scenario === 'identity-closed') await owner?.close();
+  if (scenario === 'identity-revoked') await owner?.revoke();
   const read = () =>
     database.transaction(async (tx) => ({
       owner: await readRedemptionOwnerRow(tx, jobRunId),
@@ -320,9 +372,13 @@ async function book(
       foreign: await foreign?.readIn(tx),
     }));
   const initial = canonicalStringify(await read());
-  if (scenario === 'expired' || expiredAt !== undefined) {
+  if (scenario === 'expired' || scenario === 'identity-expired' || expiredAt !== undefined) {
     const now = Date.now;
-    const adjustment = Math.max(0, (expiredAt ?? Date.parse(expiresAt)) - now());
+    const through =
+      scenario === 'identity-expired'
+        ? Date.parse((await read()).owner?.stored?.accepted.expiresAt ?? '') + 1
+        : (expiredAt ?? Date.parse(expiresAt));
+    const adjustment = Math.max(0, through - now());
     Date.now = () => now() + adjustment;
   }
   return {
@@ -332,6 +388,70 @@ async function book(
     initial,
     expiresAt,
     shutdown,
+    closeRun: () => owner?.close(),
+    twoHostWake:
+      wake === undefined
+        ? undefined
+        : bindTwoHostWake(
+            wake,
+            storage.db,
+            database,
+            ownerCall,
+            owner?.withJournal(ownerCall).capability,
+            pauses.beforeWakeReconcile,
+            (work) => runTurn(jobRunId, work),
+          ),
+    /**
+     * Create the owner promotion boundary for the verified run.
+     * @param beforeOwnerRead - Observe the turn immediately before its storage read.
+     */
+    withRunPromotion(
+      beforeOwnerRead?: (completedTerminalTurns: number) => void,
+    ): WorkerConnectionExchangeOptions['withRunPromotion'] {
+      return async (run, signal, publish) => {
+        await runTurn(run.jobRunId, async () => {
+          signal.throwIfAborted();
+          beforeOwnerRead?.(completedTerminalTurns);
+          const current = await database.transaction((tx) => source.lockOrder(tx, run.jobRunId, signal), { signal });
+          const redemption = current?.redemption;
+          if (
+            current?.state !== 'redeemed' ||
+            redemption?.tokenRevoked !== false ||
+            readIssuerIdentityKey(redemption) !== run.revocationKey ||
+            redemption.stored?.accepted.expiresAt !== run.expiresAt
+          )
+            return;
+          signal.throwIfAborted();
+          publish();
+        });
+      };
+    },
+    /**
+     * Exercise the test owner's journal-bound terminal transition.
+     * @param rollback - Abort the transaction after its writes.
+     * @param finish - Observe the outcome and finish synchronous local invalidation, if committed.
+     */
+    async endLocalRun(rollback: boolean, finish: (key: string | undefined) => Promise<void>) {
+      if (owner === undefined) throw new Error('Missing local run owner');
+      await runTurn(jobRunId, async () => {
+        await finish(await owner.closeForLocalInvalidation(ownerCall, rollback));
+        completedTerminalTurns += 1;
+      });
+    },
+    async enterLocalGrace() {
+      if (owner === undefined) throw new Error('Missing local run owner');
+      await database.transaction(owner.withJournal(ownerCall).cancelIn);
+    },
+    async terminalFacts() {
+      const { owner } = await read();
+      const facts = await database.transaction((tx) => readRedemptionOwnerEndings(tx, jobRunId));
+      return {
+        closed: owner?.state === 'closed',
+        revoked: owner?.revoked === true,
+        grace: owner?.cancellationDeadlineAt != null,
+        facts: facts.length,
+      };
+    },
     excludesProof: (encoded: string) => !encoded.includes(proof),
     digestReadFollowups: () => digestReadFollowups,
     async cleanup() {
@@ -341,6 +461,68 @@ async function book(
       else await storage.cleanup();
     },
   };
+}
+
+/**
+ * Prepare a winner using the protected path and its original valid proof.
+ * @param host - Live test host.
+ * @param jobRunId - Booking whose winner is needed for a replay or reconnect test.
+ * @param proof - Original allocation proof.
+ * @param expiresAt - Original bootstrap deadline.
+ */
+async function seedProtectedRedemption(host: WorkerRedemptionHost, jobRunId: string, proof: string, expiresAt: string) {
+  const exchange = createWorkerConnectionExchange(host, {
+    maxPendingExchanges: 1,
+    async withRunPromotion() {
+      // This setup only seeds storage and never publishes a route.
+    },
+    async verifyProof(presented, allocation) {
+      return verifyExchangeAllocationProof(presented, allocation, expiresAt);
+    },
+  });
+  const request: WorkerExchangeRequest = {
+    type: 'connection-exchange',
+    exchange: WORKER_REDEMPTION_EXCHANGE,
+    presented: { jobRunId, oneTimeToken: fixtureToken, runtimeSecret: TEST_RUNTIME_SECRET, proof },
+  };
+  const result = await exchange.admit(JSON.stringify(request), {
+    connectionId: 'setup-peer',
+    deadline: Date.parse(expiresAt),
+    signal: host.operationSignal,
+    markProofVerified: () => {},
+  });
+  if (result === undefined) throw new Error('Could not seed committed redemption');
+}
+
+/**
+ * Verify that the internal size error is raised before either durable write.
+ * @param host - Live test host.
+ * @param jobRunId - Booking with an oversized reply.
+ * @param expiresAt - Original bootstrap deadline.
+ */
+async function checkOversizedRedemption(host: WorkerRedemptionHost, jobRunId: string, expiresAt: string) {
+  const anonymous = callFromReceive(undefined, undefined, undefined, () => {});
+  const prepared = await prepareWorkerRedemption(
+    { ...host, exchangeReplyByteLimit: TEST_EXCHANGE_BUDGET },
+    anonymous,
+    { jobRunId, oneTimeToken: fixtureToken, runtimeSecret: TEST_RUNTIME_SECRET },
+    { kind: 'allocation-only' },
+    Date.parse(expiresAt),
+  );
+  const { commit } = prepared;
+  if (commit === undefined) throw new Error('Could not prepare oversized redemption');
+  await host.database.transaction(async (tx) => {
+    try {
+      await commit(anonymous, tx);
+    } catch (error) {
+      if (!(error instanceof WorkerExchangeReplyTooLargeError) || error.code !== 'reply-too-large') throw error;
+      const row = await readRedemptionOwnerRow(tx, jobRunId);
+      const claim = await readDispatch(tx, jobRunId);
+      if (row?.stored != null || claim?.boundAllocation != null) throw new Error('Reply budget checked after writing');
+      return;
+    }
+    throw new Error('Expected a typed reply budget refusal');
+  });
 }
 
 /**

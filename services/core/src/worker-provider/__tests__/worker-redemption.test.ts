@@ -1,14 +1,19 @@
 import { createHash } from 'node:crypto';
 import { pathToFileURL } from 'node:url';
+import { isDeepStrictEqual } from 'node:util';
 import { Worker } from 'node:worker_threads';
 import { createBusInstance } from '@makaio/bus-core';
 import { callFromReceive } from '@makaio/bus-core/kernel-api';
 import { ConnectionExchangeConfigurationError } from '@makaio/bus-transport-websocket';
 import type { HostDatabase, ProviderAllocationRef } from '@makaio/contracts';
-import type {
-  ConnectionExchangeAccepted,
-  ConnectionExchangeCommit,
-  ConnectionExchangeRejected,
+import {
+  type ConnectionExchangeAccepted,
+  type ConnectionExchangeCommit,
+  type ConnectionExchangeRejected,
+  type WorkerExchangeRequest,
+  type WorkerRunIdentityRequest,
+  WORKER_REDEMPTION_EXCHANGE,
+  WorkerRunIdentityReplySchema,
 } from '@makaio/contracts/boundary';
 import { AllocationBindingRequiresRedemptionError, type StartValueVisibility } from '@makaio/contracts/capabilities';
 import type { OrderedWorkerProvider } from '@makaio/contracts/extension';
@@ -21,7 +26,7 @@ import {
   useSuiteDatabaseContext,
 } from '@makaio/storage-conformance';
 import { sql } from 'drizzle-orm';
-import { afterEach, beforeAll, describe, expect, expectTypeOf, it, onTestFinished, vi } from 'vitest';
+import { afterEach, beforeAll, describe, expect, expectTypeOf, it, onTestFailed, onTestFinished, vi } from 'vitest';
 import { createWorkerConnectionExchange } from '../../../../../runtimes/node/src/worker-connection-exchange.js';
 import {
   prepareWorkerRedemption,
@@ -284,23 +289,30 @@ interface CommitBarrier {
   readonly beforeRelease?: (result: ExchangeOutcome) => Promise<void>;
 }
 
+type MarkRedemptionPhase = (
+  phase: 'rival started' | 'prepared' | 'write-locked' | 'winner committed' | 'rival completed',
+) => void;
+
 interface RedemptionRival {
   readonly entered: Promise<void>;
   /**
-   * Request the rival transaction.
+   * Observe the rival and request its transaction once the winner holds its write lock.
+   * @param written - The winning transaction has written or failed.
    * @param winner - The winning transaction, including its commit.
    */
-  begin(winner: Promise<ExchangeOutcome>): Promise<ExchangeOutcome>;
+  begin(written: Promise<void | ExchangeOutcome>, winner: Promise<ExchangeOutcome>): Promise<ExchangeOutcome>;
 }
 
 /**
  * Prepare an independently connected rival that reports SQLite write contention.
  * @param executor - The SQLite conformance database's raw executor.
  * @param input - Booked run and local provider fixture shared with the rival.
+ * @param mark - Optional test phase recorder.
  */
 async function startSqliteRival(
   executor: RawSqlExecutor,
   input: Omit<SqliteContenderInput, 'databaseUrl'>,
+  mark?: MarkRedemptionPhase,
 ): Promise<RedemptionRival> {
   const files = await executor.all<{ name: string; file: string }>(sql`PRAGMA database_list`);
   const file = files.find(({ name }) => name === 'main')?.file;
@@ -309,6 +321,7 @@ async function startSqliteRival(
     execArgv: ['--import', 'tsx'],
     workerData: { ...input, databaseUrl: pathToFileURL(file).href } satisfies SqliteContenderInput,
   });
+  mark?.('rival started');
   onTestFinished(async () => {
     await worker.terminate();
   });
@@ -316,18 +329,30 @@ async function startSqliteRival(
   const entered = Promise.withResolvers<void>();
   const completed = Promise.withResolvers<ExchangeOutcome>();
   worker.on('message', (message: SqliteContenderMessage) => {
-    if (message.kind === 'prepared') prepared.resolve();
-    else if (message.kind === 'write-locked') entered.resolve();
-    else completed.resolve(message.result);
+    if (message.kind === 'prepared') {
+      mark?.('prepared');
+      prepared.resolve();
+    } else if (message.kind === 'write-locked') {
+      mark?.('write-locked');
+      entered.resolve();
+    } else {
+      mark?.('rival completed');
+      completed.resolve(message.result);
+    }
   });
-  worker.once('error', (error) => completed.reject(error));
-  worker.once('exit', () => completed.reject(new Error('SQLite contender exited before returning the result')));
+  worker.once('error', (cause) => completed.reject(new Error('SQLite rival thread failed', { cause })));
+  worker.once('exit', (code) =>
+    completed.reject(new Error(`SQLite rival thread exited before completion (code ${code})`)),
+  );
   await Promise.race([prepared.promise, completed.promise]);
   return {
     entered: entered.promise,
-    begin(winner) {
-      worker.postMessage('commit');
-      void winner.then(() => worker.postMessage('winner-committed'), completed.reject);
+    begin(written, winner) {
+      void written
+        .then(() => worker.postMessage('commit'))
+        .then(() => winner)
+        .then(() => worker.postMessage('winner-committed'))
+        .catch(completed.reject);
       return completed.promise;
     },
   };
@@ -405,6 +430,44 @@ async function prepare(
 }
 
 /**
+ * Exercise the protected setup handler against the same persisted owner and dispatch.
+ * @param fixture - Booked run with real storage and allocation verification.
+ * @param jobRunId - Run belonging to the test owner.
+ * @returns The original bootstrap and identity-only presentations.
+ */
+function protectedPresentations(fixture: Fixture, jobRunId: string) {
+  const exchange = createWorkerConnectionExchange(fixture.host, {
+    maxPendingExchanges: 1,
+    async withRunPromotion() {
+      // These presentations exercise the stored acceptance without publishing a socket.
+    },
+    async verifyProof(_proof, allocation) {
+      return isDeepStrictEqual(allocation, fixture.allocation) ? new Date(fixture.deadline).toISOString() : undefined;
+    },
+  });
+  /** Create the trusted setup context for a connection. */
+  function context() {
+    return {
+      connectionId: 'protected-peer',
+      deadline: fixture.deadline,
+      signal: fixture.host.operationSignal,
+      markProofVerified: () => {},
+    };
+  }
+
+  const bootstrap: WorkerExchangeRequest = {
+    type: 'connection-exchange',
+    exchange: WORKER_REDEMPTION_EXCHANGE,
+    presented: { jobRunId, oneTimeToken: fixtureToken, runtimeSecret, proof: null },
+  };
+  const identity: WorkerRunIdentityRequest = { kind: 'job-run', jobRunId, runtimeSecret };
+  return {
+    bootstrap: () => exchange.admit(JSON.stringify(bootstrap), context()),
+    reconnect: () => exchange.admit(JSON.stringify(identity), context()),
+  };
+}
+
+/**
  * Require a pending storage callback for the test's pre-commit assertions.
  * @param value - Prepared exchange.
  */
@@ -457,6 +520,7 @@ describe(`worker redemption owner storage (${config.dialect})`, () => {
     expect(() =>
       createWorkerConnectionExchange(binding, {
         maxPendingExchanges: 1,
+        withRunPromotion: async () => {},
         verifyProof: async () => undefined,
       }),
     ).toThrow(
@@ -465,6 +529,23 @@ describe(`worker redemption owner storage (${config.dialect})`, () => {
           error instanceof ConnectionExchangeConfigurationError && error.code === 'WS_INVALID_EXCHANGE_HOST_SIGNAL',
       ),
     );
+  });
+
+  it('refuses to bind the worker exchange without an owner promotion boundary', async () => {
+    const { host, owner } = await start('missing-owner-promotion');
+    const options = {
+      maxPendingExchanges: 1,
+      withRunPromotion: async () => {},
+      verifyProof: async () => undefined,
+    };
+    Reflect.deleteProperty(options, 'withRunPromotion');
+    expect(() => createWorkerConnectionExchange(host, options)).toThrow(
+      expect.toSatisfy(
+        (error: unknown) =>
+          error instanceof ConnectionExchangeConfigurationError && error.code === 'WS_MISSING_WORKER_PROMOTION',
+      ),
+    );
+    await expect(owner.read()).resolves.toMatchObject({ state: 'ordered', stored: null });
   });
 
   /**
@@ -488,22 +569,35 @@ describe(`worker redemption owner storage (${config.dialect})`, () => {
    * @param fixture - Booked run and host authority.
    * @param jobRunId - Run presented by both runtimes.
    * @param runtimeSecret - Rival runtime's secret.
+   * @param mark - Optional test phase recorder.
    */
-  async function prepareRival(fixture: Fixture, jobRunId: string, runtimeSecret: string): Promise<RedemptionRival> {
+  async function prepareRival(
+    fixture: Fixture,
+    jobRunId: string,
+    runtimeSecret: string,
+    mark?: MarkRedemptionPhase,
+  ): Promise<RedemptionRival> {
     const context = getContext();
     if (context.dialect === 'sqlite') {
-      return startSqliteRival(context.executor, {
-        jobRunId,
-        runtimeSecret,
-        allocation: fixture.allocation,
-        deadline: fixture.deadline,
-        processIncarnation: fixture.host.processIncarnation,
-      });
+      return startSqliteRival(
+        context.executor,
+        {
+          jobRunId,
+          runtimeSecret,
+          allocation: fixture.allocation,
+          deadline: fixture.deadline,
+          processIncarnation: fixture.host.processIncarnation,
+        },
+        mark,
+      );
     }
     const second = await prepare(await siblingFixture(fixture), jobRunId, { secret: runtimeSecret });
     expectPrepared(second);
     const entered = Promise.withResolvers<void>();
-    return { entered: entered.promise, begin: () => second.exchange(undefined, { enter: entered.resolve }) };
+    return {
+      entered: entered.promise,
+      begin: (written) => written.then(() => second.exchange(undefined, { enter: entered.resolve })),
+    };
   }
 
   /**
@@ -511,22 +605,27 @@ describe(`worker redemption owner storage (${config.dialect})`, () => {
    * @param fixture - Booked run.
    * @param id - Run presented by both runtimes.
    * @param secondSecret - Runtime secret used by the competing connection.
+   * @param mark - Optional test phase recorder.
    */
-  async function compete(fixture: Fixture, id: string, secondSecret: string) {
+  async function compete(fixture: Fixture, id: string, secondSecret: string, mark?: MarkRedemptionPhase) {
     const first = await prepare(fixture, id);
     expectPrepared(first);
-    const contender = await prepareRival(fixture, id, secondSecret);
+    const contender = await prepareRival(fixture, id, secondSecret, mark);
     const written = Promise.withResolvers<void>();
     const release = Promise.withResolvers<void>();
-    const winner = first.exchange(undefined, {
-      async beforeRelease(result) {
-        expect(result).toHaveProperty('party');
-        written.resolve();
-        await release.promise;
-      },
-    });
-    await Promise.race([written.promise, winner]);
-    const rival = contender.begin(winner);
+    const winner = first
+      .exchange(undefined, {
+        async beforeRelease(result) {
+          expect(result).toHaveProperty('party');
+          written.resolve();
+          await release.promise;
+        },
+      })
+      .then((result) => {
+        mark?.('winner committed');
+        return result;
+      });
+    const rival = contender.begin(Promise.race([written.promise, winner]), winner);
     try {
       await Promise.race([
         contender.entered,
@@ -565,6 +664,72 @@ describe(`worker redemption owner storage (${config.dialect})`, () => {
     await expect(fixture.host.database.transaction((tx) => readDispatch(tx, 'first-valid'))).resolves.toMatchObject({
       boundAllocation: fixture.allocation,
     });
+  });
+
+  it('preserves direct atomic redemption without an issuer key and refuses protected replay', async () => {
+    const id = 'direct-without-issuer-key';
+    const fixture = await start(id);
+    await fixture.owner.setIssuerIdentityKey(undefined);
+    const result = await (await prepare(fixture, id)).exchange();
+    expect(result.revocationKey === `worker-run:${id}`).toBe(true);
+    const before = await fixture.owner.read();
+    const dispatch = await fixture.readDispatch();
+    expect(before?.state).toBe('redeemed');
+    expect(dispatch?.boundAllocation != null).toBe(true);
+
+    const protectedExchange = protectedPresentations(fixture, id);
+    expect((await protectedExchange.bootstrap()) === undefined).toBe(true);
+    expect((await protectedExchange.reconnect()) === undefined).toBe(true);
+    expect(isDeepStrictEqual(await fixture.owner.read(), before)).toBe(true);
+    expect(isDeepStrictEqual(await fixture.readDispatch(), dispatch)).toBe(true);
+  });
+
+  it('leaves a fresh booking without an issuer key unconsumed and unbound', async () => {
+    const id = 'protected-without-issuer-key';
+    const fixture = await start(id);
+    await fixture.finishProvision();
+    await fixture.owner.setIssuerIdentityKey(undefined);
+    const before = await fixture.owner.read();
+    const dispatch = await fixture.readDispatch();
+
+    expect((await protectedPresentations(fixture, id).bootstrap()) === undefined).toBe(true);
+    expect(before?.state).toBe('ordered');
+    expect(before?.stored === null).toBe(true);
+    expect(dispatch?.boundAllocation === null).toBe(true);
+    expect(isDeepStrictEqual(await fixture.owner.read(), before)).toBe(true);
+    expect(isDeepStrictEqual(await fixture.readDispatch(), dispatch)).toBe(true);
+  });
+
+  it('requires the same persisted opaque issuer key for protected bootstrap replay and reconnect', async () => {
+    const id = 'protected-issuer-key';
+    const fixture = await start(id);
+    await fixture.finishProvision();
+    const protectedExchange = protectedPresentations(fixture, id);
+    const first = await protectedExchange.bootstrap();
+    if (first === undefined) throw new Error('Protected first use refused');
+    const before = await fixture.owner.read();
+    const dispatch = await fixture.readDispatch();
+    const replay = await protectedExchange.bootstrap();
+    const identity = await protectedExchange.reconnect();
+    const identityReply = WorkerRunIdentityReplySchema.safeParse(JSON.parse(identity?.reply ?? 'null'));
+    expect(before?.state).toBe('redeemed');
+    expect(dispatch?.boundAllocation != null).toBe(true);
+    expect(first.revocationKey === before?.booking.identityRevocationKey).toBe(true);
+    expect(first.revocationKey === before?.stored?.accepted.revocationKey).toBe(true);
+    expect(replay?.reply === first.reply).toBe(true);
+    expect(identity?.revocationKey === first.revocationKey).toBe(true);
+    expect(identityReply.success).toBe(true);
+    expect(identityReply.data?.identity).toEqual({ jobRunId: id, expiresAt: first.expiresAt });
+    expect(Date.parse(first.expiresAt ?? '') > Date.now()).toBe(true);
+
+    await fixture.owner.setIssuerIdentityKey('replacement-issuer-key');
+    expect((await protectedExchange.bootstrap()) === undefined).toBe(true);
+    expect((await protectedExchange.reconnect()) === undefined).toBe(true);
+    const after = await fixture.owner.read();
+    expect(after?.state).toBe('redeemed');
+    expect(after?.booking.identityRevocationKey !== before?.booking.identityRevocationKey).toBe(true);
+    expect(isDeepStrictEqual(after?.stored, before?.stored)).toBe(true);
+    expect(isDeepStrictEqual(await fixture.readDispatch(), dispatch)).toBe(true);
   });
 
   it('returns the durable reply past bootstrap expiry without fresh liveness', async () => {
@@ -1397,11 +1562,20 @@ describe(`worker redemption owner storage (${config.dialect})`, () => {
     await expect(fixture.readDispatch()).resolves.toMatchObject({ boundAllocation: null });
   });
 
-  it('returns the first committed reply to a separately prepared same-secret exchange', async () => {
+  // The SQLite worker thread and SQLITE_BUSY retry took up to 2,181 ms locally and need headroom on two-core hosted runners.
+  it('returns the first committed reply to a separately prepared same-secret exchange', async ({ signal }) => {
+    const started = performance.now();
+    const phases: string[] = [];
+    const mark: MarkRedemptionPhase = (phase) => {
+      if (!signal.aborted) phases.push(`${phase} +${Math.round(performance.now() - started)} ms`);
+    };
+    onTestFailed(() => {
+      throw new Error(`Redemption phases: ${phases.join(' → ') || 'none reached'}`);
+    });
     const fixture = await start('same-secret');
-    const [winner, rival] = await compete(fixture, 'same-secret', runtimeSecret);
+    const [winner, rival] = await compete(fixture, 'same-secret', runtimeSecret, mark);
     expect(rival).toEqual(winner);
-  });
+  }, 15_000);
 
   it('refuses a separately prepared competitor with a different runtime secret', async () => {
     const fixture = await start('competing-secret');

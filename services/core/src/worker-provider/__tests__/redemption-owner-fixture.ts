@@ -1,17 +1,30 @@
-import { createHash } from 'node:crypto';
-import type { HostDatabase, HostTransaction, JobRunId, JsonValue } from '@makaio/contracts';
-import type { PartyRef } from '@makaio/core';
+import { createHash, randomUUID } from 'node:crypto';
+import { isMintedCallContext } from '@makaio/bus-core';
+import type { HostDatabase, HostTransaction, JobRunId, JsonValue, Origin } from '@makaio/contracts';
+import {
+  JobRunEndingSchema,
+  JobRunIdSchema,
+  type JobRunCapability,
+  type JobRunEnding,
+  type JobRunErrorCode,
+} from '@makaio/contracts/workflow';
+import { isInProcessCaller, type PartyRef } from '@makaio/core';
 import type { StorageDatabaseContext } from '@makaio/storage-conformance';
 import {
   defineDialectSchema,
   defineDualTable,
   getTransactionQueryContext,
+  markTransactionWakeTopic,
   resolveSchema,
   type RawSqlExecutor,
 } from '@makaio/storage-drizzle';
 import { deepFreeze } from '@makaio/utils';
 import { and, eq, isNull, sql } from 'drizzle-orm';
+import { z } from 'zod';
+import { appendEntries } from '../../journal/storage/append-entries.js';
+import { journalStorageSchema } from '../../journal/storage/schema.variants.js';
 import { digestWorkerBootstrapToken } from '../credential-digest.js';
+import { hasOpenDeadline } from '../start-claim.js';
 import type {
   CommittedWorkerOrder,
   StartOrder,
@@ -20,17 +33,77 @@ import type {
   WorkerRedemptionCredentials,
 } from '../start-order.js';
 
+const timing = { maxRuntimeMs: 120_000, cancellationWindowMs: 10_000 };
+// Isolate the test listener from other suites using the same PostgreSQL notification channel.
+export const redemptionOwnerClosedTopic = `test-run-closed:${randomUUID()}`;
+
+/** Test extension identity for terminal journal facts. */
+export const redemptionJournalOwner = 'test.redemption-owner';
+const endingSubject = `${redemptionJournalOwner}:ended`;
+const endingFact = z.strictObject({ jobRunId: JobRunIdSchema, ending: JobRunEndingSchema });
+type EndingFact = z.infer<typeof endingFact>;
+type EndingOrigin = Pick<Origin, 'caller' | 'principal' | 'attestedBy'>;
+type EndingWriter = (tx: HostTransaction, fact: EndingFact) => Promise<void>;
+
+/**
+ * Bind the test owner's declared subject to the real transaction-bound journal store.
+ * @param origin - Provenance from the fixture's journal write context.
+ * @returns Writer for the fixture's terminal fact.
+ */
+function bindEndingWriter({ caller, principal, attestedBy }: EndingOrigin): EndingWriter {
+  const origin = { caller, principal, ...(attestedBy === undefined ? {} : { attestedBy }) };
+  return async (tx, fact) => {
+    const [outcome] = await appendEntries(getTransactionQueryContext(tx), {
+      tx,
+      extension: redemptionJournalOwner,
+      subjects: {
+        resolve: (subject) =>
+          subject === endingSubject
+            ? { recorded: true, owner: redemptionJournalOwner, schemaVersion: '1', payloadSchema: endingFact }
+            : undefined,
+      },
+      entries: [{ subject: endingSubject, key: fact.jobRunId, orderKey: fact.jobRunId, payload: fact, origin }],
+    });
+    if (outcome?.status !== 'recorded') throw new Error('Expected a new terminal journal fact');
+  };
+}
+
+/**
+ * Read the fixture's terminal facts directly from the durable journal.
+ * @param tx - Current host transaction.
+ * @param id - Run to inspect.
+ * @returns Validated facts from the test owner's subject and run ordering key.
+ */
+export async function readRedemptionOwnerEndings(tx: HostTransaction, id: JobRunId): Promise<EndingFact[]> {
+  const query = getTransactionQueryContext(tx);
+  const { journalEntries: table } = resolveSchema(query, journalStorageSchema);
+  const facts = await query
+    .select({ payload: table.payload })
+    .from(table)
+    .where(and(eq(table.extension, redemptionJournalOwner), eq(table.subject, endingSubject), eq(table.orderKey, id)));
+  return facts.map(({ payload }) => endingFact.parse(payload));
+}
+
 const rows = defineDualTable('redemption_test_order', (c) => ({
   id: c.text('id').primaryKey(),
   state: c.text('state').$type<CommittedWorkerOrder['state']>().notNull(),
   booking: c
-    .jsonCol<{ order: StartOrder; owner: PartyRef; payload: JsonValue; includeDeadline?: true }>('booking')
+    .jsonCol<{
+      order: StartOrder;
+      owner: PartyRef;
+      payload: JsonValue;
+      identityRevocationKey?: string;
+      includeDeadline?: true;
+    }>('booking')
     .notNull(),
   tokenDigest: c.text('token_digest'),
   generation: c.text('generation').notNull(),
   revoked: c.bool('revoked').notNull(),
   stored: c.jsonCol<StoredWorkerRedemption>('stored'),
+  cancellationDeadlineAt: c.text('cancellation_deadline_at'),
+  ending: c.jsonCol<JobRunEnding>('ending'),
 }));
+type OwnerRow = typeof rows.sqlite.$inferSelect;
 const schema = defineDialectSchema({ rows: rows.sqlite }, { rows: rows.postgres });
 const payload = { order: { inputs: ['first', 'second'] } };
 
@@ -69,6 +142,7 @@ export async function migrateRedemptionOwner(
     CREATE TABLE redemption_test_order (
       id text PRIMARY KEY, state text NOT NULL, booking ${jsonType} NOT NULL, token_digest text,
       generation text NOT NULL, revoked ${boolType} NOT NULL, stored ${jsonType},
+      cancellation_deadline_at text, ending ${jsonType},
       CHECK (id <> 'storage-reject' OR stored IS NULL)
     )
   `);
@@ -112,12 +186,128 @@ async function lockRow(tx: HostTransaction, id: JobRunId) {
 }
 
 /**
+ * Write the single terminal transition and mark its commit notification.
+ * @param tx - Transaction holding the authoritative run lock.
+ * @param row - Locked snapshot of the run.
+ * @param ending - Terminal input accepted by the test owner.
+ * @param write - Journal writer for the lifecycle composition.
+ */
+async function closeLocked(
+  tx: HostTransaction,
+  row: OwnerRow,
+  ending: JobRunEnding,
+  write?: EndingWriter,
+): Promise<void> {
+  const { query, table } = ownerStorage(tx);
+  await write?.(tx, { jobRunId: row.id, ending });
+  await query.update(table).set({ state: 'closed', revoked: true, ending }).where(eq(table.id, row.id));
+  markTransactionWakeTopic(tx, redemptionOwnerClosedTopic);
+}
+
+/**
+ * Classify an elapsed deadline in a locked owner snapshot.
+ * @param row - Locked snapshot of the run.
+ * @returns The ending to persist, if the owner must close the run.
+ */
+function expiredEnding(row: OwnerRow): JobRunEnding | undefined {
+  if (row.state === 'ordered' && !hasOpenDeadline(row.booking.order.bootstrapDeadlineAt)) {
+    return { kind: 'no-result', outcome: 'lost', cause: 'bootstrap-expired' };
+  }
+  if (row.state !== 'redeemed' || row.stored === null) return undefined;
+  const original = row.stored.accepted.expiresAt;
+  const grace = row.cancellationDeadlineAt;
+  // Both deadlines are canonical ISO timestamps written by this owner and redemption.
+  if (grace !== null && grace < original && !hasOpenDeadline(grace)) {
+    return { kind: 'no-result', outcome: 'cancelled', cause: 'cancellation-expired' };
+  }
+  if (!hasOpenDeadline(original)) {
+    return { kind: 'no-result', outcome: grace === null ? 'lost' : 'cancelled', cause: 'result-expired' };
+  }
+  return undefined;
+}
+
+/**
+ * Check result eligibility against the same locked snapshot used by expiry.
+ * @param row - Locked snapshot of the run.
+ * @param ending - Proposed result.
+ * @returns The refusal code, if the result cannot close this run.
+ */
+function refuseResult(row: OwnerRow, ending: Extract<JobRunEnding, { kind: 'result' }>): JobRunErrorCode | undefined {
+  if (ending.result.executionId !== row.id) return 'result-run-mismatch';
+  if (row.state !== 'redeemed' || row.revoked || expiredEnding(row) !== undefined) return 'run-not-running';
+  if ((ending.result.status === 'cancelled') !== (row.cancellationDeadlineAt !== null)) return 'ending-invalid';
+  return undefined;
+}
+
+/**
+ * Bind lifecycle operations to the same row used by the redemption source.
+ * @param id - Booking owned by the fixture.
+ * @param write - Writer required by the transactional close capability.
+ */
+function bindLifecycle(id: JobRunId, write: EndingWriter) {
+  const capability: JobRunCapability = {
+    async close(call, input) {
+      const { tx, jobRunId } = input;
+      const ending = structuredClone(input.ending);
+      if (jobRunId !== id) throw new Error('run-unknown' satisfies JobRunErrorCode);
+      const row = await lockRow(tx, jobRunId);
+      if (row === undefined) throw new Error('run-unknown' satisfies JobRunErrorCode);
+      if (
+        !isMintedCallContext(call) ||
+        !isInProcessCaller(call) ||
+        row.booking.owner.kind !== call.caller.kind ||
+        row.booking.owner.id !== call.caller.id
+      ) {
+        throw new Error('not-acceptance-owner' satisfies JobRunErrorCode);
+      }
+      if (row.state === 'closed') throw new Error('run-not-running' satisfies JobRunErrorCode);
+      const refusal = ending.kind === 'result' ? refuseResult(row, ending) : undefined;
+      if (refusal !== undefined) throw new Error(refusal);
+      if (ending.kind === 'no-result' && row.state === 'redeemed') {
+        if ((ending.outcome === 'cancelled') !== (row.cancellationDeadlineAt !== null)) {
+          throw new Error('ending-invalid' satisfies JobRunErrorCode);
+        }
+      }
+      await closeLocked(tx, row, ending, write);
+    },
+  };
+  return {
+    capability,
+    /**
+     * Request cancellation in a transaction that may already hold the lock.
+     * @param tx - Caller-owned transaction.
+     */
+    async cancelIn(tx: HostTransaction) {
+      const row = await lockRow(tx, id);
+      if (row === undefined || row.state === 'closed') return;
+      if (row.state === 'ordered') {
+        await closeLocked(tx, row, { kind: 'no-result', outcome: 'cancelled', cause: 'cancel-requested' }, write);
+      } else if (row.cancellationDeadlineAt === null && expiredEnding(row) === undefined) {
+        const { query, table } = ownerStorage(tx);
+        const deadline = new Date(Date.now() + timing.cancellationWindowMs).toISOString();
+        await query.update(table).set({ cancellationDeadlineAt: deadline }).where(eq(table.id, id));
+      }
+    },
+    /**
+     * Let owner supervision close a run whose deadline has elapsed.
+     * @param tx - Caller-owned transaction.
+     */
+    async expireIn(tx: HostTransaction) {
+      const row = await lockRow(tx, id);
+      if (row === undefined) return;
+      const ending = expiredEnding(row);
+      if (ending !== undefined) await closeLocked(tx, row, ending, write);
+    },
+  };
+}
+
+/**
  * Persist the accepted exchange on the ordered row and return the stored value.
  * @param tx - Transaction holding the run lock.
  * @param row - Ordered snapshot for the owning generation.
  * @param stored - Candidate durable acceptance.
  */
-async function accept(tx: HostTransaction, row: typeof rows.sqlite.$inferSelect, stored: StoredWorkerRedemption) {
+async function accept(tx: HostTransaction, row: OwnerRow, stored: StoredWorkerRedemption) {
   const { query, table } = ownerStorage(tx);
   const [winner] = await query
     .update(table)
@@ -154,10 +344,12 @@ export function redemptionOwnerSource(executor: RawSqlExecutor, token: string): 
             : {
                 generation: row.generation,
                 tokenDigest: row.tokenDigest,
-                tokenRevoked: row.revoked,
+                // Deny expired grace on reads without changing the original acceptance or closing the row.
+                tokenRevoked:
+                  row.revoked || (row.cancellationDeadlineAt !== null && !hasOpenDeadline(row.cancellationDeadlineAt)),
                 issuerActive: true,
-                maxRuntimeMs: 120_000,
-                cancellationWindowMs: 10_000,
+                identityRevocationKey: row.booking.identityRevocationKey,
+                ...timing,
                 preparePayload: (latestResultAt) =>
                   row.booking.includeDeadline ? { order: row.booking.payload, latestResultAt } : row.booking.payload,
                 stored: row.stored ?? undefined,
@@ -192,6 +384,7 @@ export async function bookRedemptionOwner(
     structuredClone({
       order,
       owner,
+      identityRevocationKey: randomUUID(),
       payload: reply ?? payload,
       ...(reply === undefined ? {} : { includeDeadline: true as const }),
     }),
@@ -229,6 +422,50 @@ export async function bookRedemptionOwner(
 
   return {
     /**
+     * Close the test run under its owner lock and return the committed issuer key.
+     * @param origin - Provenance for the terminal journal fact.
+     * @param rollback - Abort after writing the fact and terminal row.
+     * @returns The issuer key only when the terminal transaction commits.
+     */
+    async closeForLocalInvalidation(origin: EndingOrigin, rollback: boolean): Promise<string | undefined> {
+      const interrupted = new Error('Test terminal rollback');
+      try {
+        return await database.transaction(async (tx) => {
+          const row = await lockRow(tx, id);
+          if (row === undefined || row.state !== 'redeemed' || row.stored === null) {
+            throw new Error('Expected a redeemed run under the owner lock');
+          }
+          const key = row.stored.accepted.revocationKey;
+          const ending: JobRunEnding =
+            row.cancellationDeadlineAt === null
+              ? { kind: 'no-result', outcome: 'lost', cause: 'owner-closed' }
+              : { kind: 'no-result', outcome: 'cancelled', cause: 'cancel-requested' };
+          await closeLocked(tx, row, ending, bindEndingWriter(origin));
+          if (rollback) throw interrupted;
+          return key;
+        });
+      } catch (error) {
+        if (error !== interrupted) throw error;
+        return undefined;
+      }
+    },
+    /**
+     * Enable the transactional lifecycle with a fixture-owned journal writer.
+     * @param origin - Provenance for the fixture's journal writes.
+     */
+    withJournal(origin: EndingOrigin) {
+      return bindLifecycle(id, bindEndingWriter(origin));
+    },
+    async close() {
+      await database.transaction(async (tx) => {
+        const row = await lockRow(tx, id);
+        if (row !== undefined && row.state !== 'closed') {
+          await closeLocked(tx, row, { kind: 'no-result', outcome: 'lost', cause: 'owner-closed' });
+        }
+      });
+    },
+
+    /**
      * Use the same owner adapter with an independent reader over the same database.
      * @param executor - Reader on the host's database connection.
      */
@@ -246,13 +483,6 @@ export async function bookRedemptionOwner(
     readIn,
     async read() {
       return database.transaction(readIn);
-    },
-    async close() {
-      await database.transaction(async (tx) => {
-        await lockRow(tx, id);
-        const { query, table } = ownerStorage(tx);
-        await query.update(table).set({ state: 'closed', revoked: true }).where(eq(table.id, id));
-      });
     },
     async enableRedemption() {
       await database.transaction(async (tx) => {
@@ -282,6 +512,21 @@ export async function bookRedemptionOwner(
         await query
           .update(table)
           .set({ stored: { ...row.stored, runtimeDigest } })
+          .where(eq(table.id, id));
+      });
+    },
+    /**
+     * Change only the issuer key on the locked booking.
+     * @param key - Replacement key, or undefined to remove it.
+     */
+    async setIssuerIdentityKey(key: string | undefined) {
+      await database.transaction(async (tx) => {
+        const row = await lockRow(tx, id);
+        if (row === undefined) throw new Error('Test owner row is missing');
+        const { query, table } = ownerStorage(tx);
+        await query
+          .update(table)
+          .set({ booking: { ...row.booking, identityRevocationKey: key } })
           .where(eq(table.id, id));
       });
     },

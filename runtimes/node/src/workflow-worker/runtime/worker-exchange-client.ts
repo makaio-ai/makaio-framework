@@ -12,12 +12,25 @@ import {
   WORKER_EXCHANGE_MAX_BYTES,
   WORKER_REDEMPTION_EXCHANGE,
   WorkerExchangeReplySchema,
+  WorkerRunIdentityReplySchema,
   type WorkerExchangeRequest,
+  type WorkerRunIdentityRequest,
 } from '@makaio/contracts/boundary';
-import { deepFreeze } from '@makaio/utils';
+import { abortableWait, deepFreeze } from '@makaio/utils';
 import { WebSocket } from 'ws';
 
 const transientSocketCodes = new Set(['EAI_AGAIN', 'ECONNREFUSED', 'ECONNRESET', 'EPIPE', 'ETIMEDOUT']);
+
+/** Owner check bound by a test composition to the synchronized worker bus. */
+export interface WorkerExchangeSessionCheck {
+  /**
+   * Read the current standing and original deadline of the caller's run.
+   * @param jobRunId - Expected authenticated run.
+   * @param signal - Lifetime of this synchronized connection.
+   * @returns The original expiry, or undefined when the run may no longer work.
+   */
+  readExpiry(jobRunId: string, signal: AbortSignal): Promise<string | undefined>;
+}
 
 /** @returns The same terminal error for every exhausted bootstrap attempt. */
 function deadlineElapsed(): WebSocketConnectionError {
@@ -26,10 +39,11 @@ function deadlineElapsed(): WebSocketConnectionError {
 
 /** Client-only handshake on the transport's normal pre-routing auth path. */
 class WorkerExchangeAuth implements TransportAuth {
-  private request: WorkerExchangeRequest | undefined;
+  private request: WorkerExchangeRequest | WorkerRunIdentityRequest | undefined;
   private pending: PromiseWithResolvers<void> | undefined;
   public payload: JsonValue | undefined;
   public possiblyPresented = false;
+  public expiresAt: string | undefined;
 
   /**
    * @param config - Ephemeral start material supplied by the provider.
@@ -82,14 +96,30 @@ class WorkerExchangeAuth implements TransportAuth {
     if (pending === undefined) return true;
     this.pending = undefined;
     const reply = WorkerExchangeReplySchema.safeParse(message);
-    this.discardRequest();
+    const request = this.request;
+    const identity = WorkerRunIdentityReplySchema.safeParse(message);
     if (!reply.success || 'reject' in reply.data) {
-      pending.reject(new WebSocketConnectionError('WS_AUTHENTICATION_REJECTED', 'Worker exchange refused'));
+      if (
+        request !== undefined &&
+        'kind' in request &&
+        identity.success &&
+        identity.data.identity.jobRunId === request.jobRunId &&
+        this.recordExpiry(identity.data.identity.expiresAt)
+      ) {
+        pending.resolve();
+      } else {
+        pending.reject(new WebSocketConnectionError('WS_AUTHENTICATION_REJECTED', 'Worker exchange refused'));
+      }
     } else if (Date.now() >= this.deadline()) {
       pending.reject(deadlineElapsed());
-    } else {
+    } else if (request !== undefined && 'presented' in request) {
+      const { jobRunId, runtimeSecret } = request.presented;
       this.payload = deepFreeze(reply.data.payload);
+      // This transition belongs to reply validation, before the peer's sync.
+      this.request = Object.freeze({ kind: 'job-run', jobRunId, runtimeSecret });
       pending.resolve();
+    } else {
+      pending.reject(new WebSocketConnectionError('WS_AUTHENTICATION_REJECTED', 'Unexpected bootstrap reply'));
     }
     return true;
   }
@@ -114,7 +144,20 @@ class WorkerExchangeAuth implements TransportAuth {
     this.pending?.reject(new WebSocketConnectionError('WS_CONNECTION_UNAVAILABLE', 'Worker connection interrupted'));
   }
 
-  /** Release the cleartext presentation at terminal completion. */
+  /**
+   * Record the original deadline without ever extending it.
+   * @param expiry - Deadline confirmed by the issuer or the synchronized owner.
+   * @returns Whether this session can use the deadline.
+   */
+  public recordExpiry(expiry: string): boolean {
+    if (Date.now() >= this.deadline() || !(Date.parse(expiry) > Date.now())) return false;
+    if (this.expiresAt !== undefined && this.expiresAt !== expiry) return false;
+    this.expiresAt = expiry;
+    this.onPresentation();
+    return true;
+  }
+
+  /** Release the cleartext presentation once no further attempt can use it. */
   public discardRequest(): void {
     this.request = undefined;
   }
@@ -146,19 +189,28 @@ function isRetryable(error: unknown): boolean {
   );
 }
 
-/** Open one authenticated bus session, retrying the presentation only before the first reply. */
+/** Own the bounded bootstrap and subsequent identity sessions of one worker. */
 export class WorkerExchangeClient extends WebSocketClientTransport {
   private readonly exchange: WorkerExchangeAuth;
+  private readonly jobRunId: string;
   private readonly bootstrapDeadline: number;
   private readonly replayDeadline: number;
   private armAttemptDeadline: (() => void) | undefined;
   private readonly lifetime = new AbortController();
+  private socketLifetime: AbortSignal | undefined;
 
   /**
    * @param busUrl - Direct or verified-ingress TLS bus endpoint.
    * @param config - Provider-supplied ephemeral admission material.
+   * @param check - Owner status check bound by the test composition.
+   * @param onTerminal - End the worker when an established identity cannot continue.
    */
-  public constructor(busUrl: string | undefined, config: OrderedWorkerBootstrapAuth) {
+  public constructor(
+    busUrl: string | undefined,
+    config: OrderedWorkerBootstrapAuth,
+    private readonly check?: WorkerExchangeSessionCheck,
+    private readonly onTerminal?: (error: unknown) => void,
+  ) {
     const url = exchangeUrl(busUrl ?? '');
     const auth = new WorkerExchangeAuth(
       config,
@@ -170,10 +222,10 @@ export class WorkerExchangeClient extends WebSocketClientTransport {
       attestingRole: 'core-uplink',
       auth,
       autoReconnect: false,
-      createWebSocket: (endpoint) =>
-        new WebSocket(endpoint, { rejectUnauthorized: true, maxPayload: WORKER_EXCHANGE_MAX_BYTES }),
+      createWebSocket: (endpoint) => this.openSocket(endpoint),
     });
     this.exchange = auth;
+    this.jobRunId = config.jobRunId;
     this.bootstrapDeadline = Date.parse(config.bootstrapDeadlineAt);
     this.replayDeadline = Date.parse(config.replayDeadlineAt);
   }
@@ -184,41 +236,92 @@ export class WorkerExchangeClient extends WebSocketClientTransport {
   }
 
   public override async connect(): Promise<void> {
-    const signal = this.lifetime.signal;
     try {
-      for (let attempt = 0; ; attempt += 1) {
-        signal.throwIfAborted();
-        if (!(this.deadline > Date.now())) throw deadlineElapsed();
-        try {
-          await this.connectBeforeDeadline();
-          return;
-        } catch (error) {
-          if (this.bootstrapPayload !== undefined || signal.aborted || !isRetryable(error)) throw error;
-        }
-        const untilDeadline = this.deadline - Date.now();
-        if (untilDeadline <= 0) throw deadlineElapsed();
-        await delay(Math.min(defaultReconnectDelay(attempt), untilDeadline), undefined, { signal });
+      const session = await this.connectWithinWindow();
+      if (this.check === undefined) {
+        this.exchange.discardRequest();
+      } else {
+        void this.followIdentity(session).catch((error: unknown) => {
+          if (!this.lifetime.signal.aborted) {
+            void this.disconnect();
+            this.onTerminal?.(error);
+          }
+        });
       }
-    } finally {
-      this.exchange.discardRequest();
+    } catch (error) {
+      await this.disconnect();
+      throw error;
     }
   }
 
-  /** @returns The active deadline, which changes only after a presentation is sent. */
+  /** @returns The lifetime of a synchronized connection that passed its check. */
+  private async connectWithinWindow(): Promise<AbortSignal> {
+    const signal = this.lifetime.signal;
+    for (let attempt = 0; ; attempt += 1) {
+      signal.throwIfAborted();
+      if (!(this.deadline > Date.now())) throw deadlineElapsed();
+      try {
+        return await this.connectBeforeDeadline();
+      } catch (error) {
+        if (signal.aborted || !isRetryable(error)) throw error;
+      }
+      const untilDeadline = this.deadline - Date.now();
+      if (untilDeadline <= 0) throw deadlineElapsed();
+      await delay(Math.min(defaultReconnectDelay(attempt), untilDeadline), undefined, { signal });
+    }
+  }
+
+  /**
+   * Watch only a status-authorized composition and retry only classified socket loss.
+   * @param session - Lifetime of the first synchronized and checked connection.
+   */
+  private async followIdentity(session: AbortSignal): Promise<void> {
+    const stopped = this.lifetime.signal;
+    while (!stopped.aborted) {
+      const remaining = this.deadline - Date.now();
+      if (remaining <= 0) throw deadlineElapsed();
+      try {
+        await delay(Math.min(remaining, 2 ** 31 - 1), undefined, { signal: AbortSignal.any([session, stopped]) });
+      } catch {
+        stopped.throwIfAborted();
+        if (!isRetryable(session.reason)) throw session.reason;
+        session = await this.connectWithinWindow();
+      }
+    }
+  }
+
+  /**
+   * Capture the native close disposition before subscription readiness begins.
+   * @param endpoint - Validated TLS exchange endpoint.
+   * @returns Socket owned by this attempt.
+   */
+  private openSocket(endpoint: string): WebSocket {
+    const socket = new WebSocket(endpoint, { rejectUnauthorized: true, maxPayload: WORKER_EXCHANGE_MAX_BYTES });
+    const closed = new AbortController();
+    this.socketLifetime = closed.signal;
+    socket.once('close', (code) => {
+      closed.abort(
+        new WebSocketConnectionError('WS_CONNECTION_UNAVAILABLE', 'Worker connection closed', undefined, code),
+      );
+    });
+    return socket;
+  }
+
+  /** @returns The deadline for the current stage of admission. */
   private get deadline(): number {
+    if (this.exchange.expiresAt !== undefined) return Date.parse(this.exchange.expiresAt);
     return this.exchange.possiblyPresented ? this.replayDeadline : this.bootstrapDeadline;
   }
 
-  /** Bound the attempt while preserving the replay window when a presentation is sent. */
-  private async connectBeforeDeadline(): Promise<void> {
+  /** @returns The lifetime of this connection once sync and the owner check have completed. */
+  private async connectBeforeDeadline(): Promise<AbortSignal> {
     let timer: ReturnType<typeof setTimeout> | undefined;
-    let elapsed = false;
+    const timeout = new AbortController();
     const armDeadline = (): void => {
       clearTimeout(timer);
       const remaining = this.deadline - Date.now();
-      if (this.bootstrapPayload !== undefined) return;
       if (remaining <= 0) {
-        elapsed = true;
+        timeout.abort(deadlineElapsed());
         void super.disconnect();
       } else {
         timer = setTimeout(armDeadline, Math.min(remaining, 2 ** 31 - 1));
@@ -229,8 +332,21 @@ export class WorkerExchangeClient extends WebSocketClientTransport {
       const connected = super.connect();
       armDeadline();
       await connected;
+      const session = this.socketLifetime;
+      if (session === undefined) throw new Error('Worker connection did not acquire a socket');
+      const signal = AbortSignal.any([session, timeout.signal, this.lifetime.signal]);
+      await abortableWait(this.ready, signal);
+      signal.throwIfAborted();
+      if (this.check !== undefined) {
+        const expiry = await abortableWait(this.check.readExpiry(this.jobRunId, signal), signal);
+        if (expiry === undefined || !this.exchange.recordExpiry(expiry)) {
+          throw new WebSocketConnectionError('WS_AUTHENTICATION_REJECTED', 'Worker status refused');
+        }
+      }
+      signal.throwIfAborted();
+      return session;
     } catch (error) {
-      if (elapsed && !this.lifetime.signal.aborted) throw deadlineElapsed();
+      if (timeout.signal.aborted && !this.lifetime.signal.aborted) throw deadlineElapsed();
       throw error;
     } finally {
       this.armAttemptDeadline = undefined;
@@ -241,6 +357,7 @@ export class WorkerExchangeClient extends WebSocketClientTransport {
   public override async disconnect(): Promise<void> {
     this.lifetime.abort(new Error('Worker connection cancelled'));
     this.exchange.discardRequest();
+    this.exchange.payload = undefined;
     await super.disconnect();
   }
 }

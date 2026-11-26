@@ -22,6 +22,25 @@ export const WorkerExchangeRequestSchema = z.strictObject({
 /** Bootstrap request on the worker setup connection. */
 export type WorkerExchangeRequest = z.infer<typeof WorkerExchangeRequestSchema>;
 
+/** An already redeemed run presenting its runtime credential over verified TLS. */
+export const WorkerRunIdentityRequestSchema = z.strictObject({
+  kind: z.literal('job-run'),
+  jobRunId: z.string().min(1),
+  runtimeSecret: z.string().min(1),
+});
+
+/** Identity presentation for a subsequent connection. */
+export type WorkerRunIdentityRequest = z.infer<typeof WorkerRunIdentityRequestSchema>;
+
+/** Confirmation of the original run identity and its unchanged expiry. */
+export const WorkerRunIdentityReplySchema = z.strictObject({
+  type: z.literal('connection-exchange-result'),
+  identity: z.strictObject({
+    jobRunId: z.string().min(1),
+    expiresAt: z.iso.datetime({ offset: true }),
+  }),
+});
+
 /** A committed opaque payload or the generic refusal. */
 export const WorkerExchangeReplySchema = z.union([
   z.strictObject({ type: z.literal('connection-exchange-result'), payload: JsonValueSchema }),

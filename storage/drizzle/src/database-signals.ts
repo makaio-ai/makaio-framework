@@ -85,6 +85,13 @@ export type DatabaseSignals =
        */
       subscribe(listener: (event: DatabaseSignal) => void): () => void;
       /**
+       * Subscribe to detected loss of an established signal connection. This
+       * registration does not start the connection or report its initial state.
+       * @param listener - Invoked when the established connection is lost.
+       * @returns Unsubscribe function. Idempotent.
+       */
+      onDisconnect?(listener: () => void): () => void;
+      /**
        * Resolves once the listener connection is established and able to
        * receive signals. Callers must register their subscription before
        * awaiting this so a signal delivered right after readiness is never

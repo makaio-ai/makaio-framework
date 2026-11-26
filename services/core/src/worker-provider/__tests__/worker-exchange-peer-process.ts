@@ -1,12 +1,18 @@
 import { once } from 'node:events';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import type { WorkerExchangeRequest } from '@makaio/contracts/boundary';
+import {
+  WorkerRunIdentityReplySchema,
+  type WorkerExchangeRequest,
+  type WorkerRunIdentityRequest,
+} from '@makaio/contracts/boundary';
 import { WebSocket } from 'ws';
 import { z } from 'zod';
 import { waitForCapacityRefusal, waitForSilentClose } from './worker-exchange-capacity-peer.js';
 import {
   RUN_ID,
+  OTHER_RUN_ID,
+  LOCAL_DELIVERY_SUBJECT,
   TEST_EXCHANGE_BUDGET,
   TEST_SUBJECT,
   type ExchangeMessage,
@@ -19,12 +25,14 @@ const directory = process.argv[3] ?? '';
 if (!process.connected) process.exit();
 process.once('disconnect', () => process.exit(process.exitCode ?? 0));
 const [start]: unknown[] = await once(process, 'message');
-const { port, proof } = ExchangePeerStartSchema.parse(start);
+const { port, proof, otherRun } = ExchangePeerStartSchema.parse(start);
 const protocol = scenario === 'plaintext' ? 'ws' : 'wss';
 const base = `${protocol}://127.0.0.1:${port}`;
 const ca = scenario === 'untrusted' ? undefined : await readFile(join(directory, 'cert.pem'));
 const connectFrame = z.looseObject({
   type: z.string(),
+  namespace: z.string().optional(),
+  subject: z.string().optional(),
   correlationId: z.string().optional(),
   reject: z.string().optional(),
   result: z.object({ principal: z.string() }).optional(),
@@ -37,6 +45,16 @@ const request = {
   correlationId: 'probe',
   payload: {},
 } as const;
+const localSession =
+  scenario === 'local-revoke' ||
+  scenario === 'local-expiry' ||
+  scenario === 'local-promotion' ||
+  scenario === 'local-promotion-hangs' ||
+  scenario === 'local-promotion-repeats' ||
+  scenario === 'local-takeover' ||
+  scenario === 'local-takeover-invalidates' ||
+  scenario === 'local-takeover-identity' ||
+  scenario === 'two-host-revoke';
 
 /**
  * Send only public measurements and test milestones to the supervisor.
@@ -87,6 +105,14 @@ async function runExchange(socket = connectExchange()): Promise<void> {
   const drop = Promise.withResolvers<void>();
   const dropListener = (message: unknown): void => {
     if (message === 'drop') drop.resolve();
+    else if (message === 'pause-wire') {
+      socket.pause();
+      report({ kind: 'local-peer-paused' });
+    } else if (message === 'resume-wire') socket.resume();
+    else if (message === 'probe') socket.send(JSON.stringify(request));
+    else if (message === 'probe-held') {
+      socket.send(JSON.stringify({ ...request, correlationId: 'held', payload: { hold: true } }));
+    }
   };
   process.on('message', dropListener);
   let rejectedTls = false;
@@ -110,18 +136,35 @@ async function runExchange(socket = connectExchange()): Promise<void> {
       elapsed = performance.now() - sentAt;
       if (reply.reject !== undefined) refusal = encoded;
       else {
+        if (scenario === 'local-takeover-identity') {
+          const identityReply = WorkerRunIdentityReplySchema.safeParse(reply);
+          if (!identityReply.success || identityReply.data.identity.jobRunId !== RUN_ID) {
+            report({ kind: 'failed', stage: 'unexpected identity reply' });
+            return;
+          }
+          report({ kind: 'local-takeover-identity', expiresAt: identityReply.data.identity.expiresAt });
+        }
         bytes = Buffer.byteLength(encoded);
         successReplies += 1;
       }
     } else if (reply.type === 'subscribe-sync-complete') {
+      if (localSession && !otherRun) {
+        socket.send(JSON.stringify({ type: 'subscribe', subjects: { [LOCAL_DELIVERY_SUBJECT]: [] } }));
+      }
       socket.send(JSON.stringify(request));
+    } else if (
+      (scenario === 'local-promotion' || scenario === 'local-takeover-identity') &&
+      reply.type === 'event' &&
+      `${reply.namespace}.${reply.subject}` === LOCAL_DELIVERY_SUBJECT
+    ) {
+      report({ kind: 'local-route-delivered' });
     } else if (reply.type === 'response') {
       if (reply.correlationId !== request.correlationId || reply.result === undefined) {
         report({ kind: 'failed', stage: 'unexpected response' });
       } else {
         report({ kind: 'accepted', bytes, principal: reply.result.principal });
       }
-      socket.close();
+      if (!localSession) socket.close();
     }
   });
   socket.on('pong', () => report({ kind: 'preframes' }));
@@ -158,7 +201,21 @@ async function runExchange(socket = connectExchange()): Promise<void> {
 /** @returns The single deliberate presentation for the current scenario. */
 function presentation(): string {
   if (scenario === 'malformed') return '{';
-  const jobRunId = scenario === 'unknown' ? 'different-run' : scenario === 'rollback' ? 'storage-reject' : RUN_ID;
+  if (scenario.startsWith('identity-') || scenario === 'local-takeover-identity') {
+    const identity: WorkerRunIdentityRequest = {
+      kind: 'job-run',
+      jobRunId: RUN_ID,
+      runtimeSecret: scenario === 'identity-wrong' ? 'different-test-secret' : 'runtime-fixture-secret',
+    };
+    return JSON.stringify(identity);
+  }
+  const jobRunId = otherRun
+    ? OTHER_RUN_ID
+    : scenario === 'unknown'
+      ? 'different-run'
+      : scenario === 'rollback'
+        ? 'storage-reject'
+        : RUN_ID;
   const input: WorkerExchangeRequest = {
     type: 'connection-exchange',
     exchange: 'makaio.worker.redeem',

@@ -26,7 +26,7 @@ import {
 import type { CoreBootOptions } from '@makaio/framework/runtime-node';
 import { runWorkflowInWorker } from '@makaio/framework/runtime-node/workflow-worker/worker-entry';
 import { readAllocationScopeSetting } from '@makaio/framework/services/internal/worker-provider-host-binding';
-import * as publicWorkerProvider from '@makaio/framework/services/worker-provider';
+import { digestWorkerBootstrapToken, type WorkerCredentialDigest } from '@makaio/framework/services/worker-provider';
 
 const scopeSetting: NonNullable<CoreBootOptions['workerDispatch']>['scopeSetting'] = readAllocationScopeSetting({
   get: (name) => name === 'worker-host'
@@ -50,16 +50,17 @@ const config: WorkflowWorkerLaunchConfig = WorkflowWorkerLaunchConfigSchema.pars
   cancelSubject: 'workflow.test-run.cancel',
   orderedBusAuth: auth,
 });
+const digest: WorkerCredentialDigest = digestWorkerBootstrapToken('example input');
 console.log(JSON.stringify({
   scopeSetting,
-  publicExports: Object.keys(publicWorkerProvider),
+  digestMatches: digest === 'worker-bootstrap-v1:e065986136506eb4daabc992e5f19bb0df27afe327fcb74b4aab82b169e563f4',
   workerEntryLoaded: typeof runWorkflowInWorker === 'function',
   orderedAuthParsed: config.orderedBusAuth?.kind === 'exchange',
 }));
 `;
 
 it(
-  'loads the installed worker entries and compiles and parses the public launch contract',
+  'loads the installed worker entries and compiles the launch contract and computes the issuer digest',
   async () => {
     const root = await mkdtemp(join(tmpdir(), 'worker-dispatch-scope-'));
     try {
@@ -92,7 +93,7 @@ it(
       );
       expect(JSON.parse(stdout)).toEqual({
         scopeSetting: { kind: 'present', value: 'installation-scope' },
-        publicExports: [],
+        digestMatches: true,
         workerEntryLoaded: true,
         orderedAuthParsed: true,
       });

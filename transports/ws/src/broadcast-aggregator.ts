@@ -14,6 +14,8 @@ export interface BroadcastResult {
   payload: unknown;
 }
 
+type SendToClient = (client: WebSocketLike, data: string) => boolean;
+
 /** Shared fields for all pending broadcast tracking entries */
 interface PendingBroadcastBase {
   results: BroadcastResult[];
@@ -36,6 +38,8 @@ interface ClientPending extends PendingBroadcastBase {
   kind: 'client';
   /** The WebSocket that originated the broadcast */
   sender: WebSocketLike;
+  /** Same registry-aware send used for forwarding and the final reply. */
+  sendToClient: SendToClient;
   /** The sender’s original correlation ID, used only when returning its result. */
   replyCorrelationId: string;
   /**
@@ -93,7 +97,7 @@ function clearPendingTimer(pending: PendingBroadcast): void {
 function deliverBroadcast(
   message: BusBroadcastMessage,
   clients: WebSocketLike[],
-  send: (client: WebSocketLike, data: string) => boolean,
+  send: SendToClient,
 ): Set<WebSocketLike> {
   if (clients.length === 0) return new Set();
   const frame = JSON.stringify(message);
@@ -135,7 +139,7 @@ export class BroadcastAggregator {
     sender: WebSocketLike,
     message: BusBroadcastMessage,
     targetClients: WebSocketLike[],
-    sendToClient: (client: WebSocketLike, data: string) => boolean,
+    sendToClient: SendToClient,
     timeout?: number,
   ): string {
     const correlationId = globalThis.crypto.randomUUID();
@@ -144,6 +148,7 @@ export class BroadcastAggregator {
     const pending: ClientPending = {
       kind: 'client',
       sender,
+      sendToClient,
       replyCorrelationId: message.correlationId,
       results: [],
       pendingClients: deliverBroadcast({ ...message, correlationId }, targetClients, sendToClient),
@@ -169,6 +174,17 @@ export class BroadcastAggregator {
   }
 
   /**
+   * Abandon a client broadcast that lost its sender authorization during fan-out.
+   * @param correlationId - Server-generated correlation ID to discard.
+   */
+  public cancelClientBroadcast(correlationId: string): void {
+    const pending = this.pendingBroadcasts.get(correlationId);
+    if (pending?.kind !== 'client') return;
+    clearPendingTimer(pending);
+    this.pendingBroadcasts.delete(correlationId);
+  }
+
+  /**
    * Start a server-initiated broadcast.
    * @param message - The broadcast message
    * @param targetClients - Clients to send the broadcast to
@@ -179,7 +195,7 @@ export class BroadcastAggregator {
   public startServerBroadcast(
     message: BusBroadcastMessage,
     targetClients: WebSocketLike[],
-    sendToClient: (client: WebSocketLike, data: string) => boolean,
+    sendToClient: SendToClient,
     timeout?: number,
   ): Promise<BroadcastResult[]> {
     const correlationId = message.correlationId;
@@ -351,9 +367,7 @@ export class BroadcastAggregator {
           results: pending.results,
         };
 
-    if (pending.sender.readyState === 1) {
-      pending.sender.send(JSON.stringify(response));
-    }
+    pending.sendToClient(pending.sender, JSON.stringify(response));
 
     if (this.debug) {
       console.info(`[BroadcastAggregator] Broadcast ${correlationId} finalized with ${pending.results.length} results`);

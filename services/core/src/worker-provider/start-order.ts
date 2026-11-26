@@ -60,6 +60,8 @@ export interface LockedWorkerRedemption {
   readonly tokenRevoked: boolean;
   /** Current issuer standing for first use. */
   readonly issuerActive: boolean;
+  /** Opaque issuer key required by the protected connection exchange. */
+  readonly identityRevocationKey?: string;
   readonly maxRuntimeMs: number;
   readonly cancellationWindowMs: number;
   /**

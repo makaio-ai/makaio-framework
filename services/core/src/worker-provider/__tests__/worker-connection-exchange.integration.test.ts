@@ -1,9 +1,10 @@
 import { execFileSync, fork, type ChildProcess } from 'node:child_process';
-import { randomBytes } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
 import { once } from 'node:events';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { isDeepStrictEqual } from 'node:util';
 import { CorePartyKind } from '@makaio/core';
 import { createHostDatabase } from '@makaio/storage-drizzle';
 import { abortableWait } from '@makaio/utils';
@@ -11,15 +12,17 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { getCurrentTest } from 'vitest/suite';
 import { buildExchangeProcesses } from './worker-exchange-process-build.js';
 import { readDispatch } from '../dispatch-store.js';
-import { readRedemptionOwnerRow } from './redemption-owner-fixture.js';
+import { readRedemptionOwnerEndings, readRedemptionOwnerRow } from './redemption-owner-fixture.js';
 import {
   createRestartDatabase,
   openExchangeDatabase,
   prepareExchangeDatabase,
+  terminateExchangeTestListener,
 } from './worker-exchange-restart-storage.js';
 import {
   TEST_EXCHANGE_BUDGET,
   MEASURED_REFUSAL,
+  OTHER_RUN_ID,
   RUN_ID,
   type ExchangeCommand,
   type ExchangeHostStart,
@@ -40,6 +43,11 @@ const refusalScenarios = [
   'unknown',
   'foreign',
   'wrong-secret',
+  'identity-wrong',
+  'identity-missing',
+  'identity-closed',
+  'identity-expired',
+  'identity-revoked',
   'expired',
   'revoked',
   'proof',
@@ -189,6 +197,7 @@ class ExchangeProcess {
           port: number;
           auth: Extract<ExchangeMessage, { kind: 'stock-launch' }>['auth'];
           requireDecoder: boolean;
+          reconnect?: boolean;
         },
   ): void {
     this.child.send(command, (error) => {
@@ -256,21 +265,22 @@ class ExchangeProcess {
  */
 async function connectStock(runtime: ExchangeRuntime, scenario: StockExchangeScenario) {
   const { test, storage, proof } = await prepareCase();
-  const args = scenario === 'stock-dns-retry' ? ['dns-retry'] : [];
+  const holdReconnectDial = scenario === 'stock-reconnect';
+  const args = holdReconnectDial ? ['hold-reconnect-dial'] : scenario === 'stock-dns-retry' ? ['dns-retry'] : [];
   const peer = startPeer(test, 'stock', args, scenario !== 'stock-untrusted');
   const initialHost = startHost(test, runtime, scenario, { database: storage.url, proof });
   let host = initialHost;
-  const replacement =
-    scenario === 'stock-lost' || scenario === 'stock-dropped' || scenario === 'stock-expired'
-      ? startHost(test, runtime, scenario)
-      : undefined;
+  const reconnect = scenario === 'stock-reconnect' || scenario === 'stock-before-sync';
+  const restartable =
+    reconnect || scenario === 'stock-lost' || scenario === 'stock-dropped' || scenario === 'stock-expired';
+  const replacement = restartable ? startHost(test, runtime, scenario) : undefined;
   const [{ port }, { auth }] = await Promise.all([
     host.event('ready'),
     host.event('stock-launch'),
     replacement?.event('host-loaded'),
   ]);
   if (scenario === 'stock-offline') await host.stop(test.timeout);
-  peer.send({ port, auth, requireDecoder: scenario === 'stock-no-decoder' });
+  peer.send({ port, auth, requireDecoder: scenario === 'stock-no-decoder', reconnect });
   return {
     initialHost,
     peer,
@@ -288,10 +298,13 @@ async function connectStock(runtime: ExchangeRuntime, scenario: StockExchangeSce
         peer.send('expire-bootstrap');
         await peer.event('stock-clock-expired');
       }
-      // Module loading is complete, but the replacement opens storage and TLS only after the clock event.
+      // Let the deliberate post-proof interruption be the first failed recovery dial.
+      // Dialing the closed port during startup would consume a backoff step.
+      if (holdReconnectDial) await peer.event('stock-reconnect-dial-held');
       host = replacement;
       host.send({ database: storage.url, proof, expiredAt, port });
       await host.event('ready');
+      if (holdReconnectDial) peer.send('release-reconnect-dial');
       return host;
     },
     async shutdown() {
@@ -346,6 +359,47 @@ describe.each(['node', 'bun'] as const)('stock worker exchange on %s', (runtime)
     expect(recovered.payload).toEqual(payload);
     await expect(running.snapshot()).resolves.toMatchObject({ unchanged: true, redeemed: true, bound: true });
     expect(replacement.count('stock-attempt')).toBe(1);
+  });
+
+  it('rechecks owner status on a fresh identity connection after host loss', async () => {
+    const running = await connectStock(runtime, 'stock-reconnect');
+    const first = await running.peer.event('stock-status');
+    const replacement = await running.restart(true);
+    const next = await running.peer.event('stock-status');
+    expect(next.expiresAt).toBe(first.expiresAt);
+    expect(replacement.count('identity-attempt')).toBe(2);
+    expect(replacement.count('stock-attempt')).toBe(0);
+    await expect(running.snapshot()).resolves.toMatchObject({
+      unchanged: true,
+      redeemed: true,
+      bound: true,
+      issuerKeyMatches: true,
+    });
+  });
+
+  it('uses only identity when the socket drops after the reply but before peer sync', async () => {
+    const running = await connectStock(runtime, 'stock-before-sync');
+    await running.initialHost.event('before-sync');
+    await running.peer.event('valid-bootstrap');
+    const replacement = await running.restart(true);
+    await running.peer.event('stock-status');
+    expect(running.peer.count('stock-status')).toBe(0);
+    expect(replacement.count('identity-attempt')).toBe(1);
+    expect(replacement.count('stock-attempt')).toBe(0);
+    await expect(running.snapshot()).resolves.toMatchObject({ unchanged: true, redeemed: true, bound: true });
+  });
+
+  it('ends the surviving worker after its issued identity is definitively refused', async () => {
+    const running = await connectStock(runtime, 'stock-reconnect');
+    await running.peer.event('stock-status');
+    running.initialHost.send('close-run');
+    await running.initialHost.event('run-closed');
+    const replacement = await running.restart(true);
+    await expect(running.peer.event('stock-stopped')).resolves.toMatchObject({ code: 'WS_AUTHENTICATION_REJECTED' });
+    await running.waitForWorkerExit();
+    expect(replacement.count('identity-attempt')).toBe(1);
+    expect(replacement.count('stock-attempt')).toBe(0);
+    expect(running.peer.count('stock-status')).toBe(0);
   });
 
   it('retries after a connection drops before the owner commit', async () => {
@@ -409,6 +463,9 @@ describe.each(['node', 'bun'] as const)('stock worker exchange on %s', (runtime)
   it('drains an open stock exchange during host shutdown', async () => {
     const running = await connectStock(runtime, 'stock-shutdown');
     await running.initialHost.event('precommit');
+    // Prepare the replay clock while the worker is still waiting on the open exchange.
+    running.peer.send('expire-replay');
+    await running.peer.event('stock-clock-expired');
     const { result, persisted } = await running.shutdown();
     // Both rollback and durable commit without a route are valid shutdown outcomes.
     expect(result).toMatchObject({ aborted: true, routed: false });
@@ -416,9 +473,8 @@ describe.each(['node', 'bun'] as const)('stock worker exchange on %s', (runtime)
       { state: 'ordered', stored: false, bound: false },
       { state: 'redeemed', stored: true, bound: true },
     ]).toContainEqual(persisted);
-    running.peer.send('expire-replay');
     const terminal = await running.peer.event('stock-stopped');
-    // A clean stop can close the socket permanently before the replay bound is reached.
+    // A clean socket close can terminate the worker without checking the replay clock.
     expect(['WS_CONNECTION_UNAVAILABLE', 'WS_CONNECTION_TIMEOUT']).toContain(terminal.code);
     await running.waitForWorkerExit();
     expect(running.peer.count('stock-accepted')).toBe(0);
@@ -532,6 +588,20 @@ async function connect(runtime: ExchangeRuntime, scenario: ExchangeScenario) {
   return {
     host,
     peer,
+    databaseUrl: storage.url,
+    connectOtherRun() {
+      const other = startPeer(test, 'peer', [scenario, certDirectory]);
+      other.send({ port, proof, otherRun: true });
+      return other;
+    },
+    connectIdentity(presentation: 'valid' | 'invalid') {
+      const reconnect = startPeer(test, 'peer', [
+        presentation === 'valid' ? 'local-takeover-identity' : 'identity-wrong',
+        certDirectory,
+      ]);
+      reconnect.send({ port, proof });
+      return reconnect;
+    },
     async snapshot() {
       host.send('snapshot');
       return (await host.event('snapshot')).snapshot;
@@ -539,7 +609,366 @@ async function connect(runtime: ExchangeRuntime, scenario: ExchangeScenario) {
   };
 }
 
+/**
+ * Start two active native TLS hosts sharing one isolated PostgreSQL database.
+ * @param runtime - Native runtime for both hosts.
+ * @param listenerTag - Unique tag to hold the second host's notification reconnect, when supplied.
+ * @param scenario - Test provider and worker mode.
+ * @returns Independent owner and listener processes with supervisor-owned setup.
+ */
+async function startTwoHosts(
+  runtime: ExchangeRuntime,
+  listenerTag?: string,
+  scenario: 'two-host-revoke' | 'stock-listener-outage' = 'two-host-revoke',
+) {
+  const { test, storage, proof } = await prepareCase();
+  const caseId = randomUUID();
+  const topics = { terminal: `test-run-closed:${caseId}`, fence: `test-run-rollback-fence:${caseId}` };
+  const owner = startHost(test, runtime, scenario, {
+    database: storage.url,
+    proof,
+    wake: { role: 'owner', ...topics },
+  });
+  const ownerReady = await owner.event('ready');
+  const listener = startHost(test, runtime, scenario, {
+    database: storage.url,
+    proof,
+    wake: { role: 'listener', ...topics, listenerTag },
+  });
+  const { port } = await listener.event('ready');
+  expect(port).not.toBe(ownerReady.port);
+  return { owner, listener, test, proof, port, database: storage.url };
+}
+
+/**
+ * Establish a worker exchange and verify initial subscription routing.
+ * @param runtime - Native runtime for both hosts.
+ * @param listenerTag - Optional tag to hold recovery.
+ * @returns Both hosts and a worker with a live route.
+ */
+async function connectTwoHosts(runtime: ExchangeRuntime, listenerTag?: string) {
+  const hosts = await startTwoHosts(runtime, listenerTag);
+  const { test, listener, port, proof } = hosts;
+  const peer = startPeer(test, 'peer', ['two-host-revoke', certDirectory]);
+  peer.send({ port, proof });
+  await expect(peer.event('accepted')).resolves.toMatchObject({ principal: CorePartyKind.jobRun });
+  listener.send('probe-delivery');
+  await expect(listener.event('local-delivery')).resolves.toMatchObject({ delivered: true });
+  return { ...hosts, peer };
+}
+
 describe.each(['node', 'bun'] as const)('worker exchange on %s', (runtime) => {
+  it('takes over only the same live run after verifying an identity reconnect', async () => {
+    const {
+      host,
+      peer: incumbent,
+      connectOtherRun,
+      connectIdentity,
+      databaseUrl,
+    } = await connect(runtime, 'local-takeover');
+    await incumbent.event('accepted');
+    const unrelated = connectOtherRun();
+    await unrelated.event('accepted');
+    const sibling = await openExchangeDatabase(databaseUrl);
+    const database = createHostDatabase(sibling.db);
+    const read = (run = RUN_ID) => database.transaction((tx) => readRedemptionOwnerRow(tx, run));
+    try {
+      const before = await read();
+      const issuerKey = before?.booking.identityRevocationKey;
+      expect(issuerKey !== undefined && (await read(OTHER_RUN_ID))?.booking.identityRevocationKey === issuerKey).toBe(
+        true,
+      );
+      const refused = connectIdentity('invalid');
+      await expect(refused.event('closed')).resolves.toMatchObject({ code: 1008, successReplies: 0 });
+      incumbent.send('probe');
+      await expect(incumbent.event('accepted')).resolves.toMatchObject({ principal: CorePartyKind.jobRun });
+
+      incumbent.send('pause-wire');
+      await incumbent.event('local-peer-paused');
+      const replacement = connectIdentity('valid');
+      await expect(replacement.event('local-takeover-identity')).resolves.toMatchObject({
+        expiresAt: before?.stored?.accepted.expiresAt,
+      });
+      await expect(replacement.event('accepted')).resolves.toMatchObject({ principal: CorePartyKind.jobRun });
+      await expect(host.event('local-takeover-published')).resolves.toMatchObject({ retiredDuringPublication: true });
+      await expect(host.event('local-retired')).resolves.toMatchObject({ direct: false, subscribed: false });
+      host.send('release-native-close');
+      incumbent.send('resume-wire');
+      await expect(incumbent.event('closed')).resolves.toMatchObject({ code: 1008, successReplies: 1 });
+      await host.event('local-native-closed');
+
+      host.send('probe-local-route');
+      await expect(host.event('local-route')).resolves.toMatchObject({ delivered: true });
+      await replacement.event('local-route-delivered');
+      replacement.send('probe');
+      await expect(replacement.event('accepted')).resolves.toMatchObject({ principal: CorePartyKind.jobRun });
+      unrelated.send('probe');
+      await expect(unrelated.event('accepted')).resolves.toMatchObject({ principal: CorePartyKind.jobRun });
+      expect(isDeepStrictEqual(await read(), before)).toBe(true);
+      await expect(database.transaction((tx) => readRedemptionOwnerEndings(tx, RUN_ID))).resolves.toHaveLength(0);
+    } finally {
+      await sibling.cleanup();
+    }
+  });
+
+  it('fences the replacement when local invalidation reenters incumbent retirement', async () => {
+    const { host, peer: incumbent, connectIdentity, snapshot } = await connect(runtime, 'local-takeover-invalidates');
+    await incumbent.event('accepted');
+    const replacement = connectIdentity('valid');
+    await expect(host.event('local-retired')).resolves.toMatchObject({ direct: false, subscribed: false });
+    await expect(incumbent.event('closed')).resolves.toMatchObject({ code: 1008, successReplies: 1 });
+    await expect(replacement.event('closed')).resolves.toMatchObject({ code: 1008, successReplies: 0 });
+    await expect(snapshot()).resolves.toMatchObject({ received: 1, advertised: 1, redeemed: true });
+  });
+
+  it('revokes a verified bootstrap while the committed admission is still being returned', async () => {
+    const { host, peer, snapshot } = await connect(runtime, 'local-promotion');
+    await host.event('committed');
+    host.send('close-run');
+    await expect(host.event('local-transition-held')).resolves.toMatchObject({ closed: true, facts: 1 });
+    host.send('release-terminal');
+    await expect(host.event('local-terminal')).resolves.toMatchObject({ closed: true, revoked: true, facts: 1 });
+    await expect(peer.event('closed')).resolves.toMatchObject({ code: 1008, successReplies: 0 });
+    host.send('release');
+    await host.event('exchange-finished');
+    expect(host.count('local-promotion-queued')).toBe(0);
+    await expect(snapshot()).resolves.toMatchObject({ received: 0, advertised: 0 });
+  });
+
+  it.each([
+    'close-run',
+    'rollback-run',
+  ] as const)('publishes a pending bootstrap route only for a live owner after %s', async (command) => {
+    const { host, peer, snapshot, databaseUrl } = await connect(runtime, 'local-promotion');
+    await host.event('committed');
+    const closed = command === 'close-run';
+    host.send(command);
+    await expect(host.event('local-transition-held')).resolves.toMatchObject({
+      closed,
+      revoked: closed,
+      facts: Number(closed),
+    });
+    const sibling = await openExchangeDatabase(databaseUrl);
+    try {
+      const database = createHostDatabase(sibling.db);
+      await expect(database.transaction((tx) => readRedemptionOwnerRow(tx, RUN_ID))).resolves.toMatchObject({
+        state: closed ? 'closed' : 'redeemed',
+        revoked: closed,
+      });
+    } finally {
+      await sibling.cleanup();
+    }
+
+    host.send('release');
+    await host.event('local-promotion-queued');
+    host.send('probe-local-route');
+    await expect(host.event('local-route')).resolves.toMatchObject({ delivered: false });
+    host.send('release-terminal');
+    await expect(host.event('local-terminal')).resolves.toMatchObject({
+      closed,
+      revoked: closed,
+      facts: Number(closed),
+    });
+    if (!closed) {
+      await expect(host.event('local-promotion-reading')).resolves.toMatchObject({ completedTerminalTurns: 1 });
+      await expect(peer.event('accepted')).resolves.toMatchObject({ principal: CorePartyKind.jobRun });
+      host.send('probe-local-route');
+      await expect(host.event('local-route')).resolves.toMatchObject({ delivered: true });
+      await peer.event('local-route-delivered');
+      peer.send('probe');
+      await expect(peer.event('accepted')).resolves.toMatchObject({ principal: CorePartyKind.jobRun });
+      peer.send('drop');
+    }
+    await expect(peer.event('closed')).resolves.toMatchObject(
+      closed ? { code: 1008, successReplies: 0 } : { successReplies: 1 },
+    );
+    if (closed) expect(host.count('local-promotion-reading')).toBe(0);
+    await expect(snapshot()).resolves.toMatchObject({ received: closed ? 0 : 2, advertised: Number(!closed) });
+  });
+
+  it.each([
+    'local-promotion-repeats',
+    'local-promotion-hangs',
+  ] as const)('keeps one published route after %s', async (scenario) => {
+    const { host, peer, snapshot } = await connect(runtime, scenario);
+    await expect(peer.event('accepted')).resolves.toMatchObject({ principal: CorePartyKind.jobRun });
+    await host.event('local-promotion-hook-ended');
+    peer.send('probe');
+    await expect(peer.event('accepted')).resolves.toMatchObject({ principal: CorePartyKind.jobRun });
+    await expect(snapshot()).resolves.toMatchObject({ received: 2, advertised: 1 });
+    peer.send('drop');
+    await expect(peer.event('closed')).resolves.toMatchObject({ successReplies: 1 });
+  });
+
+  it('leaves a promotion unroutable after synchronous host interruption', async () => {
+    const { host, peer, snapshot } = await connect(runtime, 'local-promotion-aborts');
+    await expect(peer.event('closed')).resolves.toMatchObject({ code: 1011, successReplies: 0 });
+    await expect(snapshot()).resolves.toMatchObject({ redeemed: true, received: 0 });
+    expect(host.count('failed')).toBe(0);
+  });
+
+  it.skipIf(dialect !== 'postgres')('retires a live exchange on another host after the owner commits', async () => {
+    const { owner, listener, peer } = await connectTwoHosts(runtime);
+
+    owner.send('rollback-run');
+    // A separate commit on the same PostgreSQL channel fences earlier notifications.
+    await expect(listener.event('remote-rollback-fence')).resolves.toMatchObject({
+      terminalWakes: 0,
+      closed: false,
+      revoked: false,
+      facts: 0,
+    });
+    expect(listener.count('local-retired')).toBe(0);
+    peer.send('probe');
+    await expect(peer.event('accepted')).resolves.toMatchObject({ principal: CorePartyKind.jobRun });
+
+    owner.send('close-run');
+    await owner.event('run-closed');
+    await expect(listener.event('remote-terminal-fact')).resolves.toMatchObject({ facts: 1 });
+    await expect(listener.event('local-retired')).resolves.toMatchObject({ direct: false, subscribed: false });
+    await expect(peer.event('closed')).resolves.toMatchObject({ code: 1008, successReplies: 1 });
+    owner.send('snapshot');
+    listener.send('snapshot');
+    await expect(owner.event('snapshot')).resolves.toMatchObject({ snapshot: { received: 0 } });
+    await expect(listener.event('snapshot')).resolves.toMatchObject({ snapshot: { received: 2 } });
+  });
+
+  it.skipIf(dialect !== 'postgres')(
+    'withdraws exchange routes during listener loss and refuses the missed remote close after resync',
+    async () => {
+      const listenerTag = `worker-exchange-${randomUUID()}`;
+      const { owner, listener, peer, database, test, port, proof } = await connectTwoHosts(runtime, listenerTag);
+      const attemptIdentity = () => {
+        const candidate = startPeer(test, 'peer', ['identity-closed', certDirectory]);
+        candidate.send({ port, proof });
+        return candidate.event('closed');
+      };
+
+      const pending = attemptIdentity();
+      await listener.event('remote-promotion-held');
+      expect(listener.count('remote-listener-disconnected')).toBe(0);
+      await terminateExchangeTestListener(database, listenerTag);
+      await listener.event('remote-reconnect-held');
+      expect(listener.count('remote-listener-disconnected')).toBe(1);
+      await expect(listener.event('local-retired')).resolves.toMatchObject({ direct: false, subscribed: false });
+      await expect(peer.event('closed')).resolves.toMatchObject({ code: 1011, successReplies: 1 });
+      await expect(pending).resolves.toMatchObject({ code: 1011, successReplies: 0 });
+      await expect(attemptIdentity()).resolves.toMatchObject({ code: 1011, successReplies: 0 });
+
+      const legacy = startPeer(test, 'peer', ['legacy', certDirectory]);
+      legacy.send({ port, proof });
+      await expect(legacy.event('accepted')).resolves.toMatchObject({ principal: CorePartyKind.anonymous });
+
+      owner.send('close-run');
+      await owner.event('run-closed');
+      expect(listener.count('remote-resync-reconciled')).toBe(0);
+
+      listener.send('release');
+      await listener.event('remote-reconcile-held');
+      await expect(attemptIdentity()).resolves.toMatchObject({ code: 1011, successReplies: 0 });
+      expect(listener.count('remote-resync-reconciled')).toBe(0);
+
+      listener.send('release-reconcile');
+      await expect(listener.event('remote-resync-reconciled')).resolves.toMatchObject({
+        facts: 1,
+        terminalWakes: 0,
+      });
+      expect(listener.count('remote-listener-disconnected')).toBe(1);
+      await expect(attemptIdentity()).resolves.toMatchObject({ code: 1008, successReplies: 0 });
+    },
+  );
+
+  it.skipIf(dialect !== 'postgres')(
+    'reconnects the stock worker by identity after the latest listener recovery and preserves its expiry',
+    async () => {
+      const listenerTag = `worker-exchange-${randomUUID()}`;
+      const { owner, listener, test, port, database, proof } = await startTwoHosts(
+        runtime,
+        listenerTag,
+        'stock-listener-outage',
+      );
+      const { auth } = await owner.event('stock-launch');
+      const peer = startPeer(test, 'stock', [], true);
+      peer.send({ port, auth, requireDecoder: false, reconnect: true });
+      const first = await peer.event('stock-status');
+
+      await terminateExchangeTestListener(database, listenerTag);
+      await listener.event('remote-reconnect-held');
+      await listener.event('local-retired');
+      listener.send('release');
+      await listener.event('remote-reconcile-held');
+
+      await terminateExchangeTestListener(database, listenerTag);
+      await listener.event('remote-reconnect-held');
+      await listener.event('remote-reconcile-held');
+      expect(listener.count('remote-listener-disconnected')).toBe(2);
+      listener.send('release-reconcile');
+      await listener.event('remote-resync-superseded');
+      const candidate = startPeer(test, 'peer', ['identity-closed', certDirectory]);
+      candidate.send({ port, proof });
+      await expect(candidate.event('closed')).resolves.toMatchObject({ code: 1011, successReplies: 0 });
+      expect(listener.count('identity-attempt')).toBe(0);
+      expect(listener.count('remote-resync-reconciled')).toBe(0);
+
+      listener.send('release-reconcile');
+      await expect(listener.event('remote-resync-reconciled')).resolves.toMatchObject({ facts: 0, terminalWakes: 0 });
+
+      await expect(peer.event('stock-status')).resolves.toMatchObject({ expiresAt: first.expiresAt });
+      expect(peer.count('stock-stopped')).toBe(0);
+      expect(listener.count('stock-attempt')).toBe(1);
+      expect(listener.count('identity-attempt')).toBe(1);
+    },
+  );
+
+  it('retires only the locally revoked run after its terminal commit', async () => {
+    const { host, peer, snapshot, connectOtherRun } = await connect(runtime, 'local-revoke');
+    await peer.event('accepted');
+    const other = connectOtherRun();
+    await other.event('accepted');
+    host.send('rollback-run');
+    await expect(host.event('local-terminal')).resolves.toMatchObject({
+      closed: false,
+      revoked: false,
+      grace: false,
+      facts: 0,
+    });
+    peer.send('probe');
+    await expect(peer.event('accepted')).resolves.toMatchObject({ principal: CorePartyKind.jobRun });
+    host.send('grace-run');
+    await expect(host.event('local-terminal')).resolves.toMatchObject({
+      closed: false,
+      revoked: false,
+      grace: true,
+      facts: 0,
+    });
+    host.send('probe-delivery');
+    await expect(host.event('local-delivery')).resolves.toMatchObject({ delivered: true });
+
+    peer.send('probe-held');
+    await host.event('local-inbound-held');
+    host.send('close-run');
+    await expect(host.event('local-terminal')).resolves.toMatchObject({ closed: true, revoked: true, facts: 1 });
+    await expect(host.event('local-retired')).resolves.toMatchObject({ direct: false, subscribed: false });
+    await expect(peer.event('closed')).resolves.toMatchObject({ code: 1008, successReplies: 1 });
+    expect(host.count('local-retired')).toBe(0);
+    other.send('probe');
+    await expect(other.event('accepted')).resolves.toMatchObject({ principal: CorePartyKind.jobRun });
+    await expect(snapshot()).resolves.toMatchObject({ received: 4 });
+  });
+
+  it('retires a local exchange at its idle expiry without further traffic', async () => {
+    const { host, peer, snapshot, connectOtherRun } = await connect(runtime, 'local-expiry');
+    await expect(peer.event('accepted')).resolves.toMatchObject({ principal: CorePartyKind.jobRun });
+    const other = connectOtherRun();
+    await other.event('accepted');
+    await expect(host.event('local-retired')).resolves.toMatchObject({ direct: false, subscribed: false });
+    await expect(peer.event('closed')).resolves.toMatchObject({ code: 1008, successReplies: 1 });
+    expect(host.count('local-retired')).toBe(0);
+    other.send('probe');
+    await expect(other.event('accepted')).resolves.toMatchObject({ principal: CorePartyKind.jobRun });
+    await expect(snapshot()).resolves.toMatchObject({ redeemed: true, received: 3 });
+  });
+
   it('releases routing only after the owner commit', async () => {
     const { host, peer, snapshot } = await connect(runtime, 'committed');
     await Promise.all([host.event('precommit'), peer.event('preframes')]);

@@ -1,16 +1,21 @@
+import { once } from 'node:events';
 import {
   createBusInstance,
   type BoundaryAccessCheck,
+  type BoundaryAccessPolicy,
   type BusBroadcastMessage,
   type BusEventMessage,
   type BusMessage,
   type BusRequestMessage,
   type BusSubscriptionAckMessage,
+  NO_BOUNDARY_ACCESS_CHECK,
   SUBSCRIPTION_DEFERRED,
 } from '@makaio/bus-core';
-import { createBusNamespace } from '@makaio/core';
+import { CorePartyKind, createBusNamespace } from '@makaio/core';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { WebSocket } from 'ws';
 import { z } from 'zod';
+import { ConnectionExchangeAuth } from '../auth/connection-exchange-auth.js';
 import { HmacAuth } from '../auth/hmac-auth.js';
 import {
   type HmacIdentitySecretRegistrationOptions,
@@ -23,7 +28,7 @@ import { ServerTransport } from '../server-transport.js';
 import type { ClientTransportCodec } from '../types.js';
 import { DEFAULT_CODEC } from '../ws-client-options.js';
 import { WebSocketClientTransport } from '../ws-client-transport.js';
-import { createTestServer } from './test-utils.js';
+import { createTestServer, waitForOpen } from './test-utils.js';
 
 const namespace = 'test';
 const subject = 'updates';
@@ -60,7 +65,7 @@ describe('WebSocket boundary live authorization', () => {
    * @returns Connected transports, peer creation, and the initial registration's revocation callback.
    */
   async function connect(
-    checkBoundaryAccess: BoundaryAccessCheck,
+    checkBoundaryAccess: BoundaryAccessPolicy,
     messageTransform?: ConstructorParameters<typeof WebSocketClientTransport>[0]['messageTransform'],
     codec?: ClientTransportCodec,
   ) {
@@ -213,6 +218,32 @@ describe('WebSocket boundary live authorization', () => {
     await expect(server.send(event)).resolves.toBe(true);
     await expect(server.send({ ...event, namespace: 'other', messageId: 'second' })).resolves.toBe(true);
     await vi.waitFor(() => expect(received).toEqual(['first', 'second']));
+  });
+
+  it('reports event delivery only when a socket write succeeds', async () => {
+    const { server, client, wss, openPeer } = await connect(async () => undefined);
+    const [firstSocket] = wss.clients;
+    if (firstSocket === undefined) throw new Error('First peer socket is not connected');
+    const second = await openPeer();
+    await client.subscribe(pattern);
+    await second.subscribe(pattern);
+
+    const received = Promise.withResolvers<BusMessage>();
+    second.onReceive(async (message) => received.resolve(message));
+    const event: BusEventMessage = { type: 'event', namespace, subject, messageId: 'write-failure', payload };
+    const failedWrite = vi.spyOn(firstSocket, 'send').mockImplementation(() => {
+      throw new Error('WebSocket write failed');
+    });
+    cleanups.push(() => failedWrite.mockRestore());
+
+    await expect(server.send(event)).resolves.toBe(true);
+    await expect(received.promise).resolves.toMatchObject(event);
+    await second.disconnect();
+    await vi.waitFor(() => expect(server.getConnectionCount()).toBe(1));
+
+    await expect(server.send(event)).resolves.toBe(false);
+    await expect(server.send({ type: 'heartbeat', timestamp: 0 })).resolves.toBe(false);
+    expect(failedWrite).toHaveBeenCalledTimes(3);
   });
 
   it.each([
@@ -518,6 +549,366 @@ describe('WebSocket boundary live authorization', () => {
 
     expect(await outcome).toMatchObject({ code: 'WS_POLICY_REJECTED' });
     expect(handler).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['host policy', async () => undefined],
+    ['no host policy', NO_BOUNDARY_ACCESS_CHECK],
+  ] as const)('does not dispatch a forwarded event after sender revocation with %s', async (_mode, check) => {
+    const { server, client, wss, openPeer, revoke } = await connect(check);
+    const recipient = await openPeer();
+    await recipient.subscribe(pattern);
+    const recipientSocket = [...wss.clients].at(-1);
+    if (!recipientSocket) throw new Error('Recipient socket is not connected');
+
+    const send = recipientSocket.send.bind(recipientSocket);
+    const sendSpy = vi.spyOn(recipientSocket, 'send').mockImplementationOnce((frame) => {
+      send(frame);
+      // Revoke on the real wire send, after peer authorization and before local dispatch.
+      revoke();
+    });
+    cleanups.push(() => {
+      sendSpy.mockRestore();
+    });
+
+    const observed = Promise.withResolvers<BusMessage>();
+    recipient.onReceive(async (message) => observed.resolve(message));
+    const locallyReceived = vi.fn();
+    server.onReceive(async (message) => {
+      if (message.type === 'event') locallyReceived(message);
+    });
+    const event: BusEventMessage = {
+      type: 'event',
+      namespace,
+      subject,
+      messageId: 'forwarded-before-revocation',
+      payload,
+    };
+
+    await client.send(event);
+    expect(await observed.promise).toMatchObject({ messageId: event.messageId });
+    expect(locallyReceived).not.toHaveBeenCalled();
+  });
+
+  it('drops a broadcast revoked before recipient selection resumes without host policy', async () => {
+    const { server, client, wss, openPeer, revoke } = await connect(NO_BOUNDARY_ACCESS_CHECK);
+    const [senderSocket] = wss.clients;
+    const recipient = await openPeer();
+    await recipient.subscribe(pattern, undefined, [0]);
+    const recipientSocket = [...wss.clients].at(-1);
+    if (!senderSocket || !recipientSocket) throw new Error('Broadcast sockets are not connected');
+
+    const forwarded = vi.spyOn(recipientSocket, 'send');
+    cleanups.push(() => {
+      forwarded.mockRestore();
+    });
+    const locallyReceived = vi.fn();
+    server.onReceive(async (message) => {
+      if (message.type === 'broadcast') locallyReceived(message);
+    });
+    const revoked = Promise.withResolvers<void>();
+    // The earlier transport listener yields at recipient selection before this listener runs.
+    senderSocket.once('message', () => {
+      revoke();
+      revoked.resolve();
+    });
+    void client
+      .send({
+        type: 'broadcast',
+        namespace,
+        subject,
+        messageId: 'revoked-during-selection',
+        correlationId: 'revoked-during-selection',
+        payload,
+      })
+      .catch(() => undefined);
+
+    await revoked.promise;
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(forwarded).not.toHaveBeenCalled();
+    expect(locallyReceived).not.toHaveBeenCalled();
+  });
+
+  it('cancels the pending broadcast when fan-out invalidates the checked sender', async () => {
+    const { server, client, wss, openPeer } = await connect(async () => undefined);
+    const [senderSocket] = wss.clients;
+    const recipient = await openPeer();
+    await recipient.subscribe(pattern, undefined, [0]);
+    const recipientSocket = [...wss.clients].at(-1);
+    if (!senderSocket || !recipientSocket) throw new Error('Broadcast sockets are not connected');
+
+    const send = recipientSocket.send.bind(recipientSocket);
+    const fanout = vi.spyOn(recipientSocket, 'send').mockImplementationOnce((frame) => {
+      send(frame);
+      // The credentials and socket remain valid, but the grant applied to the old claims.
+      registerPeer({ claims: { access: 'changed' } });
+    });
+    cleanups.push(() => {
+      fanout.mockRestore();
+    });
+    const forwarded = Promise.withResolvers<BusBroadcastMessage>();
+    recipient.onReceive(async (message) => {
+      if (message.type === 'broadcast') forwarded.resolve(message);
+    });
+    const locallyReceived = vi.fn();
+    server.onReceive(async (message) => {
+      if (message.type === 'broadcast') locallyReceived(message);
+    });
+    void client
+      .send({
+        type: 'broadcast',
+        namespace,
+        subject,
+        messageId: 'claim-changed-during-fanout',
+        correlationId: 'claim-changed-during-fanout',
+        timeout: 0,
+        payload,
+      })
+      .catch(() => undefined);
+
+    const outgoing = await forwarded.promise;
+    const replied = vi.spyOn(senderSocket, 'send');
+    cleanups.push(() => {
+      replied.mockRestore();
+    });
+    const replyArrived = Promise.withResolvers<void>();
+    recipientSocket.once('message', () => replyArrived.resolve());
+    server.onBroadcastResults(outgoing.correlationId, [{ nodeId: 'late-local', payload }]);
+    await recipient.send({
+      type: 'broadcast-response',
+      correlationId: outgoing.correlationId,
+      results: [{ nodeId: 'late-peer', payload }],
+    });
+    await replyArrived.promise;
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    expect(locallyReceived).not.toHaveBeenCalled();
+    expect(replied).not.toHaveBeenCalled();
+    expect(wss.clients.size).toBe(2);
+  });
+
+  it('continues notifying connection close observers when one throws', async () => {
+    const { server, client, wss } = await connect(async () => undefined);
+    const observed = vi.fn();
+    server.onConnectionClosed(() => {
+      throw new Error('Observer failure');
+    });
+    server.onConnectionClosed(observed);
+
+    await client.disconnect();
+    await vi.waitFor(() => expect(wss.clients.size).toBe(0));
+    expect(observed).toHaveBeenCalledExactlyOnceWith(expect.any(String));
+  });
+
+  it('refuses a job-run setup without an owner promotion callback', async () => {
+    const { wss, port } = await createTestServer({ host: '127.0.0.1' });
+    const refusal = '{"reject":"rejected"}';
+    const auth = new ConnectionExchangeAuth(new HmacAuth({ secret }), {
+      maxPendingExchanges: 1,
+      maxBytes: 1024,
+      refusal,
+      async admit(_frame, { connectionId }) {
+        return {
+          reply: '{"accepted":true}',
+          caller: { kind: CorePartyKind.jobRun, id: 'case-run' },
+          expiresAt: new Date(Date.now() + 60_000).toISOString(),
+          revocationKey: connectionId,
+          hostSignal: new AbortController().signal,
+        };
+      },
+    });
+    wss.prependListener('connection', (socket) => {
+      auth.register(socket, { encrypted: true }, () => socket.terminate());
+    });
+    const server = new ServerTransport({ websocket: wss, auth, checkBoundaryAccess: NO_BOUNDARY_ACCESS_CHECK });
+    cleanups.push(() => server.disconnect());
+    await server.connect();
+    const socket = new WebSocket(`ws://127.0.0.1:${port}`);
+    cleanups.push(() => socket.terminate());
+    const frames: string[] = [];
+    socket.on('message', (frame) => frames.push(frame.toString()));
+    const close = once(socket, 'close');
+    await waitForOpen(socket);
+    socket.send('{}');
+    await expect(close).resolves.toEqual([1008, expect.any(Buffer)]);
+    expect(frames).toEqual([refusal]);
+  });
+
+  it.each(['active', 'expiring'] as const)('reports response delivery to an %s exchange session', async (session) => {
+    const expiresAt = Date.now() + 60_000;
+    const { wss, port } = await createTestServer({ host: '127.0.0.1' });
+    const auth = new ConnectionExchangeAuth(new HmacAuth({ secret }), {
+      maxPendingExchanges: 1,
+      maxBytes: 1024,
+      refusal: '{}',
+      async admit(_frame, { connectionId }) {
+        return {
+          reply: '{}',
+          caller: { kind: partyKind, id: connectionId },
+          expiresAt: new Date(expiresAt).toISOString(),
+          revocationKey: connectionId,
+          hostSignal: new AbortController().signal,
+        };
+      },
+    });
+    wss.prependListener('connection', (socket) => {
+      auth.register(socket, { encrypted: true }, () => socket.terminate());
+    });
+    const server = new ServerTransport({ websocket: wss, auth, checkBoundaryAccess: NO_BOUNDARY_ACCESS_CHECK });
+    cleanups.push(() => server.disconnect());
+    const routed = Promise.withResolvers<BusRequestMessage>();
+    server.onReceive(async (message) => {
+      if (message.type === 'request') routed.resolve(message);
+    });
+    await server.connect();
+
+    const socket = new WebSocket(`ws://127.0.0.1:${port}`);
+    cleanups.push(() => socket.terminate());
+    const closed = once(socket, 'close');
+    const ready = Promise.withResolvers<void>();
+    const frames: string[] = [];
+    socket.on('message', (frame) => {
+      const data = frame.toString();
+      if (data === '{"type":"subscribe-sync-complete"}') ready.resolve();
+      frames.push(data);
+    });
+    await waitForOpen(socket);
+    socket.send('{}');
+    await ready.promise;
+    frames.length = 0;
+
+    const request: BusRequestMessage = {
+      type: 'request',
+      namespace,
+      subject,
+      payload,
+      messageId: 'exchange-request',
+      correlationId: 'exchange-request',
+    };
+    socket.send(JSON.stringify(request));
+    const { correlationId } = await routed.promise;
+    const clock = vi.spyOn(Date, 'now');
+    cleanups.push(() => clock.mockRestore());
+    const response: BusMessage = {
+      type: 'response',
+      correlationId,
+      result: {
+        /** @returns The wire result, after advancing the clock if this session should expire. */
+        toJSON() {
+          // Serialization runs after the response route is consumed and before the final write guard.
+          if (session === 'expiring') clock.mockReturnValue(expiresAt);
+          return 'handled';
+        },
+      },
+    };
+    const delivered = await server.send(response);
+    if (session === 'active') socket.close(1000);
+    await expect(closed).resolves.toEqual([session === 'active' ? 1000 : 1008, expect.any(Buffer)]);
+    expect(frames).toEqual(
+      session === 'active' ? [JSON.stringify({ type: 'response', correlationId, result: 'handled' })] : [],
+    );
+    expect(delivered).toBe(session === 'active');
+  });
+
+  it('withholds subscription updates from peers during exchange retirement', async () => {
+    const availability = new AbortController();
+    const { wss, port } = await createTestServer({ host: '127.0.0.1' });
+    const auth = new ConnectionExchangeAuth(new HmacAuth({ secret }), {
+      maxPendingExchanges: 2,
+      maxBytes: 1024,
+      refusal: '{}',
+      availability: () => availability.signal,
+      async admit(_frame, { connectionId }) {
+        return {
+          reply: '{}',
+          caller: { kind: partyKind, id: connectionId },
+          expiresAt: new Date(Date.now() + 60_000).toISOString(),
+          revocationKey: connectionId,
+          hostSignal: new AbortController().signal,
+        };
+      },
+    });
+    wss.prependListener('connection', (socket) => {
+      auth.register(socket, { encrypted: true }, () => socket.terminate());
+    });
+    const server = new ServerTransport({ websocket: wss, auth, checkBoundaryAccess: NO_BOUNDARY_ACCESS_CHECK });
+    cleanups.push(() => server.disconnect());
+    await server.connect();
+
+    /** @returns The real peer's frames and native close receipt. */
+    async function openExchange() {
+      const socket = new WebSocket(`ws://127.0.0.1:${port}`);
+      cleanups.push(() => socket.terminate());
+      const closed = once(socket, 'close');
+      const frames: string[] = [];
+      socket.on('message', (data) => frames.push(data.toString()));
+      await waitForOpen(socket);
+      socket.send('{}');
+      await vi.waitFor(() => expect(frames).toContain('{"type":"subscribe-sync-complete"}'));
+      return { frames, closed };
+    }
+
+    const peers = [await openExchange(), await openExchange()];
+    await server.subscribe(pattern);
+    await vi.waitFor(() => {
+      for (const { frames } of peers) expect(frames).toContainEqual(expect.stringContaining(`"${pattern}"`));
+    });
+
+    const retiredPattern = 'test.retired';
+    const update = Promise.withResolvers<void>();
+    const unsubscribeObserver = server.onConnectionClosed(() => {
+      unsubscribeObserver();
+      void server.subscribe(retiredPattern).then(update.resolve, update.reject);
+    });
+    availability.abort();
+    await update.promise;
+
+    for (const { closed, frames } of peers) {
+      await expect(closed).resolves.toEqual([1011, expect.any(Buffer)]);
+      expect(frames).not.toContainEqual(expect.stringContaining(`"${retiredPattern}"`));
+    }
+  });
+
+  it('finishes connection cleanup when the pending broadcast reply fails to send', async () => {
+    const { server, client, wss, openPeer } = await connect(async () => undefined);
+    const [senderSocket] = wss.clients;
+    if (!senderSocket) throw new Error('Sender socket is not connected');
+    const recipient = await openPeer();
+    await recipient.subscribe(pattern, undefined, [0]);
+    const observed = vi.fn();
+    server.onConnectionClosed(observed);
+    const received = Promise.withResolvers<void>();
+    const localResultsReady = Promise.withResolvers<void>();
+    recipient.onReceive(async (message) => {
+      if (message.type === 'broadcast') received.resolve();
+    });
+    server.onReceive(async (message) => {
+      if (message.type !== 'broadcast') return;
+      server.onBroadcastResults(message.correlationId, [{ nodeId: 'local', payload }]);
+      localResultsReady.resolve();
+    });
+
+    const broadcast: BusBroadcastMessage = {
+      type: 'broadcast',
+      namespace,
+      subject,
+      messageId: 'disconnecting-recipient',
+      correlationId: 'disconnecting-recipient',
+      payload,
+    };
+    void client.send(broadcast).catch(() => undefined);
+    await Promise.all([received.promise, localResultsReady.promise]);
+    const sendSpy = vi.spyOn(senderSocket, 'send').mockImplementationOnce(() => {
+      throw new Error('WebSocket write failed');
+    });
+    cleanups.push(() => {
+      sendSpy.mockRestore();
+    });
+
+    await recipient.disconnect();
+    await vi.waitFor(() => expect(wss.clients.size).toBe(1));
+    expect(sendSpy).toHaveBeenCalledWith(expect.stringContaining('"type":"broadcast-response"'));
+    expect(observed).toHaveBeenCalledExactlyOnceWith(expect.any(String));
   });
 
   it.each([

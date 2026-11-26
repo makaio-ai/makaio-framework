@@ -22,7 +22,7 @@ import type { CommittedWorkerOrder, WorkerStartOptions } from './start-order.js'
  * @param order - Locked order and deadline read from the original token row.
  * @returns Whether first redemption is still allowed.
  */
-function mayRedeem(order: CommittedWorkerOrder): boolean {
+export function mayRedeem(order: CommittedWorkerOrder): boolean {
   return order.state === 'ordered' && hasOpenDeadline(order.order.bootstrapDeadlineAt);
 }
 

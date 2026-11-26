@@ -240,6 +240,15 @@ export class ClientRegistry {
   }
 
   /**
+   * Check current membership when sending to a previously selected client.
+   * @param socket - Candidate socket.
+   * @returns Whether the socket is still registered.
+   */
+  public hasClient(socket: WebSocketLike): boolean {
+    return this.clients.has(socket);
+  }
+
+  /**
    * Return all sockets tracked by this registry, including those still
    * authenticating.
    *
@@ -623,7 +632,7 @@ export class ClientRegistry {
 
     // Match the inbound expired-auth lifecycle: reject the socket immediately
     // and let its close listener remove all associated registry state.
-    client.close(1008, 'Authentication expired');
+    if (client.readyState === 1) client.close(1008, 'Authentication expired');
     return false;
   }
 

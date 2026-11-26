@@ -12,6 +12,17 @@ import {
 
 export type BoundaryMessage = BusRequestMessage | BusEventMessage | BusBroadcastMessage;
 
+/**
+ * Close an expired socket if its authentication strategy has not retired it.
+ * @param socket - Rejected socket.
+ * @param auth - Authentication policy that reported expiry.
+ */
+export function closeExpiredAuthentication(socket: WebSocketLike, auth: TransportAuth): void {
+  if (socket.readyState !== 1) return;
+  auth.cleanupSocket(socket);
+  socket.close(1008, 'Authentication expired');
+}
+
 interface BoundPeer {
   readonly call: CallContext;
   readonly connection: TransportReceiveContext;
@@ -97,8 +108,7 @@ export class ServerBoundaryAccess {
   ): BoundPeer | undefined {
     if (socket.readyState !== 1) return undefined;
     if (this.auth?.isSocketAuthenticated?.(socket) === false) {
-      this.auth.cleanupSocket(socket);
-      socket.close(1008, 'Authentication expired');
+      closeExpiredAuthentication(socket, this.auth);
       return undefined;
     }
     const live = this.bind(socket, metadata);
