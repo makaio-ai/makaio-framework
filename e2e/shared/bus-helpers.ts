@@ -135,7 +135,7 @@ interface RaceEventAndProbeOptions {
  * 2. Probe via RPC and return the fast-path result if the condition is already met.
  * 3. Otherwise wait for the event and return the slow-path result.
  * @param subscribe - Installs the event listener and returns its disposer
- * @param probe - Reads the current state
+ * @param probe - Reads the current state; the signal aborts once the wait settles
  * @param options - Timeout and logging label
  * @param fastPathCheck - Receives the probe response; return `TPayload` if the
  *   condition is already met, or `null` to fall through to the slow path
@@ -143,7 +143,7 @@ interface RaceEventAndProbeOptions {
  */
 async function raceEventAndProbe<TState, TPayload>(
   subscribe: (resolve: (payload: TPayload) => void) => () => void,
-  probe: () => Promise<TState>,
+  probe: (signal: AbortSignal) => Promise<TState>,
   options: RaceEventAndProbeOptions,
   fastPathCheck: (probeResult: TState) => TPayload | null,
 ): Promise<TPayload> {
@@ -153,6 +153,7 @@ async function raceEventAndProbe<TState, TPayload>(
 
   const event = Promise.withResolvers<TPayload>();
   const unsubscribe = subscribe(event.resolve);
+  const settled = new AbortController();
   const deadline = Promise.withResolvers<never>();
   const timer = timeoutMs
     ? setTimeout(
@@ -164,14 +165,24 @@ async function raceEventAndProbe<TState, TPayload>(
     // Completion before admission is visible in the state; later completion can reach the listener.
     await Promise.race([waitForSubscriptionPropagation(unsubscribe), deadline.promise]);
     const state = Promise.resolve()
-      .then(probe)
+      .then(() => probe(settled.signal))
       .catch((err: unknown) => {
         const errName = err instanceof Error ? err.constructor.name : err === null ? 'null' : typeof err;
         console.info('[%s] probe not available (%s), waiting for event (waited=%dms)', label, errName, Date.now() - t0);
         return null;
       });
-    const probeResult = await Promise.race([state, deadline.promise]);
+    // An admitted event establishes readiness on its own; a stalled probe must not outlast it.
+    const first = await Promise.race([
+      state.then((probeResult) => ({ source: 'probe' as const, probeResult })),
+      event.promise.then((payload) => ({ source: 'event' as const, payload })),
+      deadline.promise,
+    ]);
+    if (first.source === 'event') {
+      console.info('[%s] event received while the probe was pending (waited=%dms)', label, Date.now() - t0);
+      return first.payload;
+    }
 
+    const { probeResult } = first;
     if (probeResult !== null) {
       const fastResult = fastPathCheck(probeResult);
       if (fastResult !== null) {
@@ -186,6 +197,8 @@ async function raceEventAndProbe<TState, TPayload>(
     return result;
   } finally {
     clearTimeout(timer);
+    // Release a probe that another branch outran instead of leaving its request correlated.
+    settled.abort();
     unsubscribe();
   }
 }
@@ -202,7 +215,7 @@ async function raceEventAndProbe<TState, TPayload>(
 export async function waitForBoot(bus: IMakaioBus, timeoutMs = 30_000): Promise<BootPayload> {
   return raceEventAndProbe(
     (resolve: (payload: BootPayload) => void) => bus.on(BootSubjects.complete, ({ payload }) => resolve(payload)),
-    () => bus.request(bus.own('root'), BootSubjects.getState, {}, { timeout: timeoutMs }),
+    (signal) => bus.request(bus.own('root'), BootSubjects.getState, {}, { timeout: timeoutMs, signal }),
     { timeoutMs, label: 'waitForBoot' },
     (state) =>
       state.complete ? { totalDurationMs: state.totalDurationMs ?? 0, failedServices: state.failedServices } : null,
@@ -223,7 +236,7 @@ export async function waitForRuntimeReady(bus: IMakaioBus, timeoutMs = 30_000): 
   return raceEventAndProbe(
     (resolve: (payload: RuntimeReadyPayload) => void) =>
       bus.on(KernelSubjects.ready, ({ payload }) => resolve({ ready: true, machineId: payload.machineId })),
-    () => bus.request(bus.own('root'), KernelSubjects.isReady, {}, { timeout: timeoutMs }),
+    (signal) => bus.request(bus.own('root'), KernelSubjects.isReady, {}, { timeout: timeoutMs, signal }),
     { timeoutMs, label: 'waitForRuntimeReady' },
     (probeResult) => (probeResult.ready ? { ready: true, machineId: probeResult.machineId } : null),
   );

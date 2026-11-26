@@ -73,6 +73,40 @@ it('receives the completion event when boot finishes after the admitted waiter r
   await expected;
 });
 
+it.for([
+  { mode: 'a shared deadline', waitMs: timeoutMs },
+  { mode: 'no deadline', waitMs: 0 },
+])('returns the admitted completion event and cancels the pending state probe with $mode', async ({ waitMs }, {
+  onTestFinished,
+}) => {
+  const { boot, client, admit, admissionStarted, subscriptions, probes, holdStateProbe } =
+    await connect(onTestFinished);
+  const probeStarted = holdStateProbe();
+  const pending = Symbol('pending');
+  const result = waitForBoot(client, waitMs);
+
+  await admissionStarted;
+  admit.resolve();
+  await expect(subscriptions.mock.results[0]?.value).resolves.toBeUndefined();
+  await probeStarted;
+  const probe = probes.mock.results[0]?.value as Promise<unknown>;
+  const probeOutcome = probe.then(
+    () => 'resolved',
+    () => 'rejected',
+  );
+  const delivered = Promise.withResolvers<void>();
+  onTestFinished(client.on(BootSubjects.complete, () => delivered.resolve()));
+  boot.complete();
+  await delivered.promise;
+
+  // Observe the outcome before any deadline can elapse: the fake clock never advances here.
+  const nextTurn = new Promise<typeof pending>((resolve) => setImmediate(() => resolve(pending)));
+  expect(await Promise.race([result, nextTurn])).toEqual({ totalDurationMs: expect.any(Number), failedServices: [] });
+  // Only cancellation can settle the held probe: its boundary check never returns and no timer fires.
+  const afterCancel = new Promise<typeof pending>((resolve) => setImmediate(() => resolve(pending)));
+  expect(await Promise.race([probeOutcome, afterCancel])).toBe('rejected');
+});
+
 it('times out and removes the listener when subscription admission never settles', async ({ onTestFinished }) => {
   const { client, transport, admissionStarted, stateRequests } = await connect(onTestFinished);
   const unsubscribe = vi.spyOn(transport, 'unsubscribe');

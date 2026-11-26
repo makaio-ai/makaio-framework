@@ -18,6 +18,9 @@ export async function startBootHost(cleanup: (fn: () => Promise<void>) => void) 
   const admissionStarted = Promise.withResolvers<void>();
   const admit = Promise.withResolvers<void>();
   const stateRequests = vi.fn();
+  const stateProbeStarted = Promise.withResolvers<void>();
+  const releaseStateProbe = Promise.withResolvers<void>();
+  let stateProbeHeld = false;
   const { wss, port } = await createTestServer();
   const host = createBusInstance();
   host.registerNamespace(BootNamespace);
@@ -32,6 +35,10 @@ export async function startBootHost(cleanup: (fn: () => Promise<void>) => void) 
       }
       if (target.operation === 'send' && target.namespace === BootNamespace.name && target.subject === 'getState') {
         stateRequests();
+        if (stateProbeHeld) {
+          stateProbeStarted.resolve();
+          await releaseStateProbe.promise;
+        }
       }
       return checkAccess(target, call, connection);
     },
@@ -40,6 +47,7 @@ export async function startBootHost(cleanup: (fn: () => Promise<void>) => void) 
   cleanup(async () => {
     vi.useRealTimers();
     admit.resolve();
+    releaseStateProbe.resolve();
     boot.dispose();
     await server.disconnect();
   });
@@ -52,5 +60,13 @@ export async function startBootHost(cleanup: (fn: () => Promise<void>) => void) 
     admissionStarted: admissionStarted.promise,
     sends,
     stateRequests,
+    /**
+     * Hold every later state probe at the boundary until teardown.
+     * @returns Resolves when the first held probe reached the boundary.
+     */
+    holdStateProbe: (): Promise<void> => {
+      stateProbeHeld = true;
+      return stateProbeStarted.promise;
+    },
   };
 }
