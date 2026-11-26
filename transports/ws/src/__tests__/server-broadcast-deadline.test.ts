@@ -17,20 +17,27 @@ const broadcast: BusBroadcastMessage = {
   payload: {},
 };
 
-/**
- * Open a WebSocket connection and return its server-side endpoint.
- * @param wss - Listening WebSocket server.
- * @param port - Local port assigned to the server.
- * @returns Open server-side socket.
- */
-async function openSocket(wss: WebSocketServer, port: number): Promise<WebSocket> {
-  const connected = new Promise<WebSocket>((resolve) => wss.once('connection', resolve));
-  await waitForOpen(new WebSocket(`ws://127.0.0.1:${port}`));
-  return connected;
-}
-
 describe('inbound broadcast authorization budget', () => {
+  const host = '127.0.0.1';
   const cleanups: Array<() => void | Promise<void>> = [];
+
+  /**
+   * Open a fresh WebSocket connection and track its client through teardown.
+   * @param wss - Listening WebSocket server.
+   * @param port - Local port assigned to the server.
+   * @returns Open server-side socket.
+   */
+  async function openSocket(wss: WebSocketServer, port: number): Promise<WebSocket> {
+    const connected = new Promise<WebSocket>((resolve) => wss.once('connection', resolve));
+    const client = new WebSocket(`ws://${host}:${port}`, { agent: false });
+    const closed = new Promise<void>((resolve) => client.once('close', () => resolve()));
+    cleanups.push(() => {
+      client.terminate();
+      return closed;
+    });
+    await waitForOpen(client);
+    return connected;
+  }
 
   afterEach(async () => {
     while (cleanups.length > 0) await cleanups.pop()?.();
@@ -43,7 +50,7 @@ describe('inbound broadcast authorization budget', () => {
    * @returns The local deliveries and frames that the handler sent.
    */
   async function dispatch(message: BusBroadcastMessage) {
-    const { wss, port } = await createTestServer();
+    const { wss, port } = await createTestServer({ host });
     cleanups.push(() => closeServer(wss));
     const sender = await openSocket(wss, port);
     const recipient = await openSocket(wss, port);
