@@ -1,5 +1,5 @@
 import { existsSync } from 'node:fs';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, extname, join, relative, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -14,7 +14,7 @@ import {
   type WorkflowWorkerConfig,
 } from '@makaio/contracts';
 import type { CallContext } from '@makaio/core';
-import { createLocalLauncher, type Launcher } from '@makaio/subprocess';
+import { createLocalLauncher, type Launcher, type OwnerQuiescence } from '@makaio/subprocess';
 import {
   assertProcessWorkflowSupported,
   runWorkflowOrchestrator,
@@ -25,6 +25,8 @@ import { materializeLocalDirectory } from './local-directory-materializer.js';
 import { writeWorkflowSourceToTempFile } from './workflow-file-loader.js';
 import {
   createProcessStepRunner,
+  snapshotRunModel,
+  type FixedStepAuthority,
   type ProcessStepCheckoutOptions,
   type ProcessStepRunnerOptions,
 } from './process-step-runner.js';
@@ -37,6 +39,7 @@ export type ProcessWorkflowRunOptions = ProcessStepCheckoutOptions & {
   readonly signal: AbortSignal;
   readonly workspace: string;
   readonly model?: ProcessStepRunnerOptions['model'];
+  readonly runModel?: ProcessStepRunnerOptions['runModel'];
 };
 
 /**
@@ -159,22 +162,26 @@ export function runProcessWorkflow(options: ProcessWorkflowRunOptions): Promise<
 interface StepSite {
   readonly launcher: Launcher;
   readonly home: string;
+  readonly workspace: string;
   readonly definition: NonNullable<WorkflowWorkerConfig['definition']>;
-  readonly execute: (source?: CheckoutWorkflowSource, cleanup?: 'after-fixed-operations') => Promise<WorkflowRunResult>;
+  readonly execute: (source?: CheckoutWorkflowSource, fixed?: FixedStepAuthority) => Promise<WorkflowRunResult>;
 }
 
 /**
  * Own the process site and its temporary source through workflow disposal.
  * @param options - Worker-owned launch configuration.
  * @param run - Use the process site to execute the workflow.
+ * @param ownWorkspace - Create and retire a private workspace for this run.
  * @returns The run's result.
  * @typeParam T - Result of the worker-local workflow invocation.
  */
 export async function runWithProcessStepSite<T>(
   options: ProcessWorkflowRunOptions,
   run: (site: StepSite) => Promise<T>,
+  ownWorkspace = false,
 ): Promise<T> {
   const { bus, config, signal, workspace } = options;
+  const runModel = snapshotRunModel(options.runModel);
   const definition = config.definition;
   if (definition === undefined) {
     throw new WorkflowError(WorkflowErrorCode.SNAPSHOT_UNAVAILABLE, 'Worker requires a frozen workflow definition');
@@ -185,21 +192,32 @@ export async function runWithProcessStepSite<T>(
   assertProcessWorkflowSupported(definition);
   const configForTrigger = await resolveAwaitTriggerConfig(config, { definition }, bus, signal);
   const commands = resolveStepCommands();
-  const home = await mkdtemp(join(tmpdir(), 'makaio-workflow-'));
+  const home = await mkdtemp(join(ownWorkspace ? workspace : tmpdir(), 'makaio-workflow-'));
+  const runWorkspace = ownWorkspace ? join(home, 'workspace') : workspace;
   const { launcher: siteLauncher } = createLocalLauncher({
-    workspaceRoot: workspace,
+    workspaceRoot: runWorkspace,
     stepHomeRoot: join(home, 'steps'),
     runtimeHomeRoot: join(home, 'runtime'),
   });
-  let operationClosureUnconfirmed = false;
+  let runtimeClosure: Extract<OwnerQuiescence, { kind: 'unproven' }> | undefined;
   const launcher: Launcher = {
     boundary: siteLauncher.boundary,
     launch: (request) => siteLauncher.launch(request),
-    closeAll: () => siteLauncher.closeAll(),
+    async closeAll() {
+      const steps = await siteLauncher.closeAll();
+      return runtimeClosure ?? steps;
+    },
     async closeOwner(owner) {
-      const evidence = await siteLauncher.closeOwner(owner);
-      operationClosureUnconfirmed ||= owner.kind === 'runtime' && evidence.kind === 'unproven';
-      return evidence;
+      try {
+        const evidence = await siteLauncher.closeOwner(owner);
+        if (owner.kind === 'runtime' && evidence.kind === 'unproven') runtimeClosure ??= evidence;
+        return evidence;
+      } catch (error) {
+        if (owner.kind === 'runtime') {
+          runtimeClosure ??= { kind: 'unproven', boundary: siteLauncher.boundary, reason: 'observation-unavailable' };
+        }
+        throw error;
+      }
     },
   };
   const closeSteps = async (): Promise<void> => {
@@ -210,22 +228,42 @@ export async function runWithProcessStepSite<T>(
   const removeHome = (): Promise<void> => rm(home, { recursive: true, force: true });
   let disposal: Promise<void> | undefined;
   const dispose = (): Promise<void> => (disposal ??= closeSteps().then(removeHome));
-  const execute: StepSite['execute'] = (source, cleanup) =>
-    executeProcessSteps(
-      { ...options, config: configForTrigger },
-      { ...commands, launcher },
+  const execute: StepSite['execute'] = (source, fixed) => {
+    return executeProcessSteps(
+      { ...options, runModel, workspace: runWorkspace, config: configForTrigger },
+      { ...commands, launcher: guardStepLauncher(launcher, fixed?.assertActive), fixed },
       definition,
-      cleanup === 'after-fixed-operations' ? closeSteps : dispose,
+      // The fixed-operation scheduler owns closure evidence and preserves the step result.
+      fixed === undefined ? dispose : undefined,
       source,
     );
+  };
   try {
-    return await run({ launcher, definition, home, execute });
+    if (ownWorkspace) await mkdir(runWorkspace);
+    return await run({ launcher, definition, home, workspace: runWorkspace, execute });
   } finally {
     if (disposal === undefined) {
       const evidence = await launcher.closeAll();
-      if (evidence.kind === 'quiescent' && !operationClosureUnconfirmed) await removeHome();
+      if (evidence.kind === 'quiescent') await removeHome();
     }
   }
+}
+
+/**
+ * Recheck the fixed operation registrations at the process launch boundary.
+ * @param launcher - Worker-owned process launcher.
+ * @param assertActive - Admission guard for steps using contributed operations.
+ * @returns The launcher for the step runner.
+ */
+function guardStepLauncher(launcher: Launcher, assertActive: (() => void) | undefined): Launcher {
+  if (assertActive === undefined) return launcher;
+  return {
+    ...launcher,
+    launch(request) {
+      assertActive();
+      return launcher.launch(request);
+    },
+  };
 }
 
 /**
@@ -233,15 +271,15 @@ export async function runWithProcessStepSite<T>(
  * @param options - Frozen workflow invocation.
  * @param site - Launcher and step commands.
  * @param definition - Frozen definition.
- * @param dispose - Close the step processes after execution.
+ * @param dispose - Optional closure for runs without a separate operation scheduler.
  * @param registeredSource - Reader input for an explicitly selected source.
  * @returns The workflow's terminal result.
  */
 function executeProcessSteps(
   options: ProcessWorkflowRunOptions,
-  site: Pick<ProcessStepRunnerOptions, 'launcher' | 'codeCommand' | 'agentCommand'>,
+  site: Pick<ProcessStepRunnerOptions, 'launcher' | 'codeCommand' | 'agentCommand' | 'fixed'>,
   definition: StepSite['definition'],
-  dispose: () => Promise<void>,
+  dispose: (() => Promise<void>) | undefined,
   registeredSource?: CheckoutWorkflowSource,
 ): Promise<WorkflowRunResult> {
   const { call, bus, config, signal, workspace } = options;
@@ -270,6 +308,15 @@ function executeProcessSteps(
     loaded: { definition },
     signal,
     workspaceRoot: workspace,
-    stepRunner: { ...runner, dispose },
+    stepRunner: {
+      ...runner,
+      async run(config, signal) {
+        // The run owns cancellation of a launched step. Registration retirement only invalidates its result.
+        const result = await runner.run(config, signal);
+        site.fixed?.assertActive();
+        return result;
+      },
+      dispose,
+    },
   });
 }

@@ -86,7 +86,7 @@ async function activateContributions<THostContext extends KernelHostContext>(
       if (processor.filter && !processor.filter(entry.pkg)) continue;
       const config = resolveExtensionEntryConfig(contextHost, name, entry, 'activate');
       const pkgCtx = buildExtensionContext(contextHost, entry, config);
-      await processor.processActivated(name, entry.pkg, pkgCtx);
+      await processor.processActivated(name, entry.pkg, pkgCtx, generation);
       rollback.delete(processor);
       rollback.add(processor);
     }

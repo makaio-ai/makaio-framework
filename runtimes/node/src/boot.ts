@@ -29,6 +29,7 @@
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { createFixedOperationHost } from './workflow-worker/fixed-operation-host.js';
 import { MakaioBus } from '@makaio/bus-core';
 import {
   ExtensionCoordinator,
@@ -914,6 +915,11 @@ export async function bootMakaioRuntimeCore(
     coordinator.registerContributionProcessor(createSurfaceBindingContributionProcessor());
     coordinator.registerContributionProcessor(createArtifactViewBuilderContributionProcessor());
     coordinator.registerContributionProcessor(createToolContributionProcessor());
+    const fixedOperations = createFixedOperationHost<KernelExtensionContext>(
+      () => coordinator.list().map(({ name }) => name),
+      (name) => coordinator.extensionStopBudgetMs(name),
+    );
+    coordinator.registerContributionProcessor(fixedOperations.processor);
     coordinator.registerContributionProcessor(createWorkflowBlockContributionProcessor());
     coordinator.registerContributionProcessor(createTransitionContributionProcessor());
     coordinator.registerContributionProcessor(
@@ -1096,6 +1102,7 @@ export async function bootMakaioRuntimeCore(
       bus,
       coordinator,
       ruleEvaluator,
+      fixedOperations: fixedOperations.host,
       trayEntries: coordinator.trayEntries,
       windowRegistry: coordinator.windowRegistry,
       /**

@@ -17,6 +17,7 @@ export const CheckoutCodeStepInputSchema = z.strictObject({
     checkoutRoot: z.string().min(1),
     workflowPath: z.string().min(1),
     workflowId: z.string().min(1),
+    verifiedPath: z.string().min(1).optional(),
   }),
   step: z.string().min(1),
   workspace: z.string().min(1),

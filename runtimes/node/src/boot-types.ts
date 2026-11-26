@@ -40,6 +40,7 @@ import type { DatabaseBootOptions } from './initialize-node-database.js';
 import type { ExtensionDiscovery } from './extension-discovery.js';
 import type { ExtensionOperatorConfigSnapshot } from './extension-operator-config.js';
 import type { HttpRouteGraphBuilder } from './http-route-graph-builder.js';
+import type { FixedOperationHost } from './workflow-worker/fixed-operation-host.js';
 import type { WorkflowWorkerEntryMode } from './workflow-worker/worker-entry-resolver.js';
 import type { WorkspaceRootResolver } from './workflow-worker/local-directory-materializer.js';
 
@@ -723,6 +724,9 @@ export interface MakaioRuntime {
 
   /** Durable evaluation of rule occasions committed by the host. */
   readonly ruleEvaluator: RuleEvaluator;
+
+  /** Active fixed operations used to check and execute admitted workflows. */
+  readonly fixedOperations?: FixedOperationHost;
 
   /**
    * Shut down all services in reverse startup order.

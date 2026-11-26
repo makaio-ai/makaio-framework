@@ -180,3 +180,15 @@ export type {
   RoutedSubjectSchema,
   SubjectSuggestedFor,
 } from './types/index.js';
+
+export type {
+  ContainmentBoundary,
+  OwnerLaunchOptions,
+  OwnerQuiescence,
+  ProcessLaunchOptions,
+  ProcessOwner,
+  SiteLaunchRefusal,
+  SiteLaunchResult,
+  SiteLaunchStatus,
+  SiteProcessOutcome,
+} from './process-launch.js';
