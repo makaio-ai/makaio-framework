@@ -49,6 +49,7 @@ const localTakeover = scenario === 'local-takeover' || scenario === 'local-takeo
 const runtime = process.argv[3] as ExchangeRuntime;
 const directory = process.argv[4] ?? '';
 const advanceRefusal = process.argv[5] === 'advance-refusal';
+const storageDirectory = process.argv[6] ?? '';
 let resumePort = 0;
 const tls = scenario !== 'plaintext';
 const lifetime = new AbortController();
@@ -117,6 +118,7 @@ async function run(): Promise<void> {
       start: options,
       runtime,
       directory,
+      storageDirectory,
       enabled: scenario === 'boot-protected',
       signal: lifetime.signal,
       release: release.promise,
@@ -801,6 +803,8 @@ function observeBunNativeClose(
 try {
   await run();
 } catch (error) {
+  // The supervisor appends this line to its "stopped before" error; it carries the cause, not launch material.
+  process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
   report({ kind: 'failed', stage: error instanceof Error ? error.name : 'host' });
   process.exitCode = 1;
 } finally {

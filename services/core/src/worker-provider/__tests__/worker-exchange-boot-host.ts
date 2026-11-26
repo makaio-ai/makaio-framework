@@ -2,7 +2,7 @@ import { strictEqual } from 'node:assert';
 import { once } from 'node:events';
 import { readFile } from 'node:fs/promises';
 import { createServer } from 'node:https';
-import { join, resolve } from 'node:path';
+import { join } from 'node:path';
 import type { WebSocketHandler } from 'bun';
 import { MakaioBus } from '@makaio/bus-core';
 import { busContextOf } from '@makaio/bus-core/kernel-api';
@@ -38,6 +38,8 @@ interface BootHostProbe {
   readonly start: ExchangeHostStart;
   readonly runtime: ExchangeRuntime;
   readonly directory: string;
+  /** Absolute path of the framework `storage` directory that holds the migration chains. */
+  readonly storageDirectory: string;
   readonly enabled: boolean;
   readonly signal: AbortSignal;
   readonly release: Promise<void>;
@@ -106,8 +108,9 @@ export async function runExchangeBootHost(probe: BootHostProbe): Promise<void> {
             url: probe.start.database,
             engines: [(await import('../../../../../storage/pg/src/index.js')).storageEngine],
           },
-      centralMigrationsDir: resolve(
-        sqlite ? 'framework/storage/migrations/drizzle' : 'framework/storage/pg/drizzle-postgres',
+      centralMigrationsDir: join(
+        probe.storageDirectory,
+        sqlite ? join('migrations', 'drizzle') : join('pg', 'drizzle-postgres'),
       ),
       signal: probe.signal,
       onTransportReady: () => probe.report({ kind: 'boot-listening', port: listener.port }),
