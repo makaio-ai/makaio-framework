@@ -30,7 +30,7 @@
     "@types/node": "^24.3.0",
     "tsdown": "0.22.0",
     "typescript": "^6.0.3",
-    "vitest": "4.1.10"
+    "vitest": "4.1.11"
   },
   "scripts": {
     "build": "bun build.ts",
