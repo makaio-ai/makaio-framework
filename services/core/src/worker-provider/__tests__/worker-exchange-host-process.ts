@@ -112,7 +112,7 @@ async function run(): Promise<void> {
   const [start]: unknown[] = await once(process, 'message');
   if (lifetime.signal.aborted) return;
   const options = ExchangeHostStartSchema.parse(start);
-  if (scenario === 'boot-protected' || scenario === 'boot-default') {
+  if (scenario === 'boot-protected' || scenario === 'boot-default' || scenario === 'boot-supported') {
     const { runExchangeBootHost } = await import('./worker-exchange-boot-host.js');
     return runExchangeBootHost({
       start: options,
@@ -393,8 +393,8 @@ function observeLocalRetirement(
               await releaseTerminal.promise;
             }
             if (key === undefined) return;
-            transport.invalidateExchangeSessions(key);
-            transport.invalidateExchangeSessions(key);
+            transport.invalidateExchangeSessions(key, RUN_ID);
+            transport.invalidateExchangeSessions(key, RUN_ID);
             releaseInbound();
           });
     void transition

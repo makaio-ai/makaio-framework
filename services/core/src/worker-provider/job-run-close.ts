@@ -10,7 +10,7 @@ import {
   type JobRunErrorCode,
   type JobRunResult,
 } from '@makaio/contracts';
-import { CorePartyKind, type CallContext } from '@makaio/core';
+import { CorePartyKind, type CallContext, type TransportRequestOrigin } from '@makaio/core';
 import {
   checkHostTransactionCommit,
   getHostTransactionQueryContext,
@@ -18,6 +18,7 @@ import {
 } from '@makaio/storage-drizzle';
 import { deepFreeze } from '@makaio/utils';
 import type { CommittedWorkerOrder, WorkerOrderClose, WorkerOrderSource } from './start-order.js';
+import { retireWorkerRunSessionOnCommit } from './worker-run-sessions.js';
 
 /** A close refusal on the host's authoritative run storage. */
 export class JobRunCloseError extends Error {
@@ -36,6 +37,7 @@ export interface JobRunCloseAuthority {
 export interface JobRunAcceptanceBinding {
   readonly call: CallContext;
   readonly result: Readonly<JobRunResult>;
+  readonly reply?: TransportRequestOrigin;
   readonly noteClose: (tx: HostTransaction) => void;
 }
 
@@ -164,6 +166,10 @@ export function bindJobRunClose(
           throw new JobRunCloseError('run-not-running');
         }
         checkHostTransactionCommit(tx, checkCommit);
+        const acceptance = order.redemption?.stored?.accepted;
+        if (acceptance !== undefined) {
+          retireWorkerRunSessionOnCommit(tx, { jobRunId, revocationKey: acceptance.revocationKey }, binding?.reply);
+        }
         binding?.noteClose(tx);
       } catch (error) {
         failClose(tx, error);

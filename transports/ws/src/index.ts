@@ -191,9 +191,9 @@ export {
   CONNECTION_EXCHANGE_PATH,
   ConnectionExchangeAuth,
   ConnectionExchangeConfigurationError,
-  verifyConnectionExchangeIngress,
   type ConnectionExchangeAdmission,
   type ConnectionExchangeSetup,
   type ConnectionExchangeSetupContext,
   type ConnectionExchangeUpgrade,
 } from './auth/connection-exchange-auth.js';
+export { verifyConnectionExchangeIngress } from './auth/connection-exchange-ingress.js';

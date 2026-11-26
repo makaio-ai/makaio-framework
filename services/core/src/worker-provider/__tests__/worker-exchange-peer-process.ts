@@ -2,10 +2,12 @@ import { once } from 'node:events';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import {
+  WorkerExchangeReplySchema,
   WorkerRunIdentityReplySchema,
   type WorkerExchangeRequest,
   type WorkerRunIdentityRequest,
 } from '@makaio/contracts/boundary';
+import { JobRunOutcomeNamespace, OutcomeSubmitResponseSchema } from '@makaio/contracts/workflow';
 import { WebSocket } from 'ws';
 import { z } from 'zod';
 import { waitForCapacityRefusal, waitForSilentClose } from './worker-exchange-capacity-peer.js';
@@ -25,9 +27,9 @@ const directory = process.argv[3] ?? '';
 if (!process.connected) process.exit();
 process.once('disconnect', () => process.exit(process.exitCode ?? 0));
 const [start]: unknown[] = await once(process, 'message');
-const { port, proof, otherRun } = ExchangePeerStartSchema.parse(start);
+const { port, proof, otherRun, host = '127.0.0.1' } = ExchangePeerStartSchema.parse(start);
 const protocol = scenario === 'plaintext' ? 'ws' : 'wss';
-const base = `${protocol}://127.0.0.1:${port}`;
+const base = `${protocol}://${host}:${port}`;
 const ca = scenario === 'untrusted' ? undefined : await readFile(join(directory, 'cert.pem'));
 const connectFrame = z.looseObject({
   type: z.string(),
@@ -35,7 +37,7 @@ const connectFrame = z.looseObject({
   subject: z.string().optional(),
   correlationId: z.string().optional(),
   reject: z.string().optional(),
-  result: z.object({ principal: z.string() }).optional(),
+  result: z.unknown().optional(),
 });
 const request = {
   type: 'request',
@@ -90,7 +92,7 @@ async function runLegacy(): Promise<void> {
  */
 function connectExchange(targetPort = port): WebSocket {
   const path = scenario === 'anonymous' ? '/bus' : '/bus/exchange';
-  return new WebSocket(`${protocol}://127.0.0.1:${targetPort}${path}`, {
+  return new WebSocket(`${protocol}://${host}:${targetPort}${path}`, {
     ca,
     // This header is synthetic and carries no upgrade authority.
     headers: scenario === 'plaintext' ? { 'X-Forwarded-Proto': 'https' } : undefined,
@@ -102,6 +104,7 @@ function connectExchange(targetPort = port): WebSocket {
  * @param socket - Test socket, optionally already open and waiting for its first frame.
  */
 async function runExchange(socket = connectExchange()): Promise<void> {
+  const outcome = bindOutcomeProbe(socket);
   const drop = Promise.withResolvers<void>();
   const dropListener = (message: unknown): void => {
     if (message === 'drop') drop.resolve();
@@ -136,6 +139,13 @@ async function runExchange(socket = connectExchange()): Promise<void> {
       elapsed = performance.now() - sentAt;
       if (reply.reject !== undefined) refusal = encoded;
       else {
+        if (scenario === 'boot-supported') {
+          const result = WorkerExchangeReplySchema.safeParse(reply);
+          if (!result.success || !('payload' in result.data) || !result.data.payload) {
+            report({ kind: 'failed', stage: 'unexpected boot redemption reply' });
+            return;
+          }
+        }
         if (scenario === 'local-takeover-identity') {
           const identityReply = WorkerRunIdentityReplySchema.safeParse(reply);
           if (!identityReply.success || identityReply.data.identity.jobRunId !== RUN_ID) {
@@ -148,6 +158,11 @@ async function runExchange(socket = connectExchange()): Promise<void> {
         successReplies += 1;
       }
     } else if (reply.type === 'subscribe-sync-complete') {
+      if (scenario === 'boot-supported') {
+        if (successReplies !== 1) throw new Error('Expected one accepted boot exchange');
+        report({ kind: 'boot-worker-redeemed' });
+        return;
+      }
       if (localSession && !otherRun) {
         socket.send(JSON.stringify({ type: 'subscribe', subjects: { [LOCAL_DELIVERY_SUBJECT]: [] } }));
       }
@@ -159,10 +174,12 @@ async function runExchange(socket = connectExchange()): Promise<void> {
     ) {
       report({ kind: 'local-route-delivered' });
     } else if (reply.type === 'response') {
-      if (reply.correlationId !== request.correlationId || reply.result === undefined) {
+      if (outcome.handle(reply)) return;
+      const result = z.object({ principal: z.string() }).safeParse(reply.result);
+      if (reply.correlationId !== request.correlationId || !result.success) {
         report({ kind: 'failed', stage: 'unexpected response' });
       } else {
-        report({ kind: 'accepted', bytes, principal: reply.result.principal });
+        report({ kind: 'accepted', bytes, principal: result.data.principal });
       }
       if (!localSession) socket.close();
     }
@@ -195,7 +212,72 @@ async function runExchange(socket = connectExchange()): Promise<void> {
       resolve();
     }),
   );
+  await outcome.stop();
   process.off('message', dropListener);
+}
+
+/**
+ * Exercise the live outcome protocol on the same socket used for bootstrap.
+ * @param socket - Redeeming worker socket.
+ * @returns Response and teardown callbacks.
+ */
+function bindOutcomeProbe(socket: WebSocket) {
+  let submitted = false;
+  const subject = JobRunOutcomeNamespace.subjects.outcome.submit;
+  const send = (correlationId: string, workflowId: string, done?: (error?: Error) => void) =>
+    socket.send(
+      JSON.stringify({
+        type: 'request',
+        namespace: subject.$meta.namespace,
+        subject: subject.subject,
+        correlationId,
+        messageId: correlationId,
+        payload: { result: { jobRunId: RUN_ID, workflowId, status: 'completed' } },
+      }),
+      done,
+    );
+  const listen = (command: unknown) => {
+    if (command === 'submit-rollback') send('rollback', 'rollback');
+    if (command === 'submit-result') {
+      submitted = true;
+      send('outcome', 'workflow');
+    }
+    if (command === 'probe-retiring') {
+      send('retiring', 'workflow');
+      socket.ping();
+    }
+  };
+  process.on('message', listen);
+  return {
+    handle(reply: z.infer<typeof connectFrame>) {
+      const { correlationId, result } = reply;
+      if (correlationId === 'retiring') {
+        report({ kind: 'failed', stage: 'retired connection accepted another request' });
+        return true;
+      }
+      if (correlationId !== 'outcome' && correlationId !== 'rollback') return false;
+      const parsed = OutcomeSubmitResponseSchema.safeParse(result);
+      const outcome = parsed.data;
+      if (correlationId === 'rollback' && outcome?.decision === 'refused' && outcome.code === 'fixture-rollback') {
+        report({ kind: 'outcome-response', decision: 'refused' });
+      } else if (correlationId === 'outcome' && outcome?.decision === 'accepted' && outcome.answer === 'stored') {
+        report({ kind: 'outcome-response', decision: 'accepted' });
+      } else {
+        report({ kind: 'failed', stage: 'unexpected outcome response' });
+      }
+      return true;
+    },
+    async stop() {
+      process.off('message', listen);
+      if (!submitted) return;
+      await new Promise<void>((resolve) => {
+        send('closed', 'workflow', (error) => {
+          report({ kind: 'outcome-after-close', rejected: error !== undefined });
+          resolve();
+        });
+      });
+    },
+  };
 }
 
 /** @returns The single deliberate presentation for the current scenario. */

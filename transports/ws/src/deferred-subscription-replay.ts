@@ -82,47 +82,106 @@ export class DeferredSubscriptionReplay {
 
 type SubscriptionMessage = BusSubscribeMessage | BusUnsubscribeMessage;
 
+/** Work retained while the socket waits for inbound routing. */
+interface QueuedFrame {
+  readonly charge: FrameCharge;
+  readonly apply: () => Promise<void>;
+  readonly result: PromiseWithResolvers<void>;
+}
+
+/** Both byte budgets apply to the same queue. */
+interface FrameCharge {
+  readonly bytes: number;
+  readonly subscriptionBytes: number;
+  readonly maxBytes?: number;
+}
+
 /**
- * Serialize live subscription updates and retries on the same connection.
- * @param socket - The connection owning the subscription state.
+ * Share one byte-bounded queue between live ordered frames and subscription retries.
+ * @param socket - The connection owning the queue.
  * @param options - Policy, authentication, and diagnostic options.
  * @param replay - Pending advertisements owned by the client registry.
- * @param route - Run a subscription through the normal routing path.
- * @param lifetime - Aborted on socket close.
- * @returns A function to enqueue live subscription updates.
+ * @param route - Run a replay through the normal subscription routing path.
+ * @param lifetime - Aborted when the socket is detached.
+ * @returns The socket's enqueue operation.
  */
-export function createSubscriptionQueue(
+export function createInboundQueue(
   socket: WebSocketLike,
   { access, auth, debug }: { access?: ServerBoundaryAccess; auth?: TransportAuth; debug: boolean },
   replay: DeferredSubscriptionReplay,
-  route: (message: SubscriptionMessage, replay?: DeferredSubscriptionReplay) => Promise<void>,
+  route: (message: SubscriptionMessage, replay: DeferredSubscriptionReplay) => Promise<void>,
   lifetime?: AbortSignal,
-): (message: SubscriptionMessage, frameBytes: number) => Promise<void> {
-  let tail = Promise.resolve();
-  let scheduledReplay: Promise<void> | undefined;
+) {
+  const queue = new Set<QueuedFrame>();
+  let draining = false;
   let queuedBytes = 0;
+  let queuedSubscriptionBytes = 0;
+  let scheduledReplay: Promise<void> | undefined;
   const isLive = (): boolean =>
     !lifetime?.aborted && socket.readyState === 1 && auth?.isSocketAuthenticated?.(socket) !== false;
 
+  /** Drain frames in order, releasing each byte reservation at handoff. */
+  async function drain(): Promise<void> {
+    for (const frame of queue) {
+      queue.delete(frame);
+      try {
+        if (isLive()) await frame.apply();
+        frame.result.resolve();
+      } catch (error) {
+        frame.result.reject(error);
+      } finally {
+        release(frame);
+      }
+    }
+    draining = false;
+  }
+
   /**
-   * Append work without letting a failed update block later updates.
-   * @param apply - The next ordered update.
-   * @returns The result of that update.
+   * Return the byte budget of a handed-off or discarded frame.
+   * @param frame - Frame leaving the queue.
    */
-  function enqueue(apply: () => Promise<void>): Promise<void> {
-    const update = tail.then(apply);
-    tail = update.catch(() => undefined);
-    return update;
+  function release(frame: QueuedFrame): void {
+    queuedBytes -= frame.charge.bytes;
+    queuedSubscriptionBytes -= frame.charge.subscriptionBytes;
+  }
+
+  /**
+   * Enqueue work within the socket's subscription and exchange byte budgets.
+   * @param apply - Work ending when the frame has been handed off.
+   * @param charge - Wire bytes and the optional protected exchange limit.
+   * @param overflow - End the connection when the budget is exhausted.
+   * @returns Settlement of the queued work.
+   */
+  function enqueue(apply: () => Promise<void>, charge: FrameCharge, overflow?: () => void): Promise<void> {
+    if (
+      queuedSubscriptionBytes + charge.subscriptionBytes > MAX_QUEUED_SUBSCRIPTION_BYTES ||
+      (charge.maxBytes !== undefined && queuedBytes + charge.bytes > charge.maxBytes)
+    ) {
+      if (isLive()) overflow?.();
+      return Promise.resolve();
+    }
+    const result = Promise.withResolvers<void>();
+    queuedBytes += charge.bytes;
+    queuedSubscriptionBytes += charge.subscriptionBytes;
+    queue.add({ charge, apply, result });
+    if (!draining) {
+      draining = true;
+      queueMicrotask(() => void drain());
+    }
+    return result.promise;
   }
 
   const stopWatching = access?.watchSubscriptionAvailability(() => {
-    scheduledReplay ??= enqueue(async () => {
-      scheduledReplay = undefined;
-      for (const message of replay.snapshot()) {
-        if (!isLive()) break;
-        await route(message, replay);
-      }
-    }).catch((error: unknown) => {
+    scheduledReplay ??= enqueue(
+      async () => {
+        scheduledReplay = undefined;
+        for (const message of replay.snapshot()) {
+          if (!isLive()) break;
+          await route(message, replay);
+        }
+      },
+      { bytes: 0, subscriptionBytes: 0 },
+    ).catch((error: unknown) => {
       if (debug) console.error('[ServerTransport] Failed to replay subscription:', error);
     });
     return scheduledReplay;
@@ -132,22 +191,14 @@ export function createSubscriptionQueue(
     () => {
       stopWatching?.();
       replay.clear();
+      for (const frame of queue) {
+        release(frame);
+        frame.result.resolve();
+      }
+      queue.clear();
     },
     { once: true },
   );
 
-  return async (message, frameBytes) => {
-    if (queuedBytes + frameBytes > MAX_QUEUED_SUBSCRIPTION_BYTES) {
-      if (isLive()) socket.close(1008, 'Queued subscription frames exceed byte limit');
-      return;
-    }
-    queuedBytes += frameBytes;
-    try {
-      await enqueue(async () => {
-        if (isLive()) await route(message, stopWatching === undefined ? undefined : replay);
-      });
-    } finally {
-      queuedBytes -= frameBytes;
-    }
-  };
+  return { enqueue, replay: stopWatching === undefined ? undefined : replay };
 }

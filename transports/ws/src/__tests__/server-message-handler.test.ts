@@ -1874,7 +1874,7 @@ describe('inbound request response-route lifetime', () => {
     registry.trackRequestOrigin(requester, makeRequest('long-lived', 120_000, Date.now() + 120_000));
     vi.advanceTimersByTime(60_001);
 
-    expect(registry.consumeResponseClient('long-lived')).toBe(requester);
+    expect(registry.takeResponseOrigin('long-lived')?.socket).toBe(requester);
   });
 
   it('expires a response route when its propagated deadline elapses', () => {
@@ -1887,7 +1887,7 @@ describe('inbound request response-route lifetime', () => {
     registry.trackRequestOrigin(requester, makeRequest('deadline-expired', 50, Date.now() + 50));
     vi.advanceTimersByTime(50);
 
-    expect(registry.consumeResponseClient('deadline-expired')).toBeUndefined();
+    expect(registry.takeResponseOrigin('deadline-expired')).toBeUndefined();
   });
 
   it('keeps no-timeout request response routes until they are consumed', () => {
@@ -1899,7 +1899,7 @@ describe('inbound request response-route lifetime', () => {
     registry.trackRequestOrigin(requester, makeRequest('no-timeout', 0));
     vi.advanceTimersByTime(86_400_000);
 
-    expect(registry.consumeResponseClient('no-timeout')).toBe(requester);
+    expect(registry.takeResponseOrigin('no-timeout')?.socket).toBe(requester);
   });
 
   it('gives a request with an invalid wire timeout the default response-route lifetime', () => {
@@ -1913,7 +1913,7 @@ describe('inbound request response-route lifetime', () => {
     registry.trackRequestOrigin(requester, makeRequest('invalid-timeout', -1));
     vi.advanceTimersByTime(DEFAULT_REQUEST_TIMEOUT_MS);
 
-    expect(registry.consumeResponseClient('invalid-timeout')).toBeUndefined();
+    expect(registry.takeResponseOrigin('invalid-timeout')).toBeUndefined();
   });
 
   it('tracks the response route when the sender minted a deadline already in the past', () => {
@@ -1930,7 +1930,7 @@ describe('inbound request response-route lifetime', () => {
     registry.trackRequestOrigin(requester, makeRequest('skewed-sender', 30_000, Date.now() - 120_000));
     vi.advanceTimersByTime(29_000);
 
-    expect(registry.consumeResponseClient('skewed-sender')).toBe(requester);
+    expect(registry.takeResponseOrigin('skewed-sender')?.socket).toBe(requester);
   });
 
   it('expires that route on its own relative budget rather than the sender instant', () => {
@@ -1943,7 +1943,7 @@ describe('inbound request response-route lifetime', () => {
     registry.trackRequestOrigin(requester, makeRequest('skewed-expiry', 50, Date.now() - 120_000));
     vi.advanceTimersByTime(50);
 
-    expect(registry.consumeResponseClient('skewed-expiry')).toBeUndefined();
+    expect(registry.takeResponseOrigin('skewed-expiry')).toBeUndefined();
   });
 
   it('removes a cancelled request response route', () => {
@@ -1954,6 +1954,6 @@ describe('inbound request response-route lifetime', () => {
     registry.trackRequestOrigin(requester, makeRequest('cancelled', 0));
     registry.cancelRequestOrigin('cancelled');
 
-    expect(registry.consumeResponseClient('cancelled')).toBeUndefined();
+    expect(registry.takeResponseOrigin('cancelled')).toBeUndefined();
   });
 });

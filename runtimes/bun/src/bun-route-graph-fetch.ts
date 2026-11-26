@@ -11,16 +11,17 @@ export interface BunExchangeUpgradeData {
 
 /**
  * Proof and capacity bound to this listener by host composition.
- * Enable only in tests until session revocation enforces one live connection per run identity.
+ * The boot-owned policy restricts the exchange to one host per database.
  */
 export interface BunExchangeUpgradeOptions {
   /** True only for a listener the composition configured with native TLS. */
   readonly directTls?: true;
   /**
    * Host verifier for an explicitly protected ingress.
+   * It runs synchronously, must return quickly, and must return exactly `true` to accept.
    * The host must establish encrypted peer transport for this upgrade through the protected ingress.
    */
-  readonly verifyIngress?: (request: Request) => boolean;
+  readonly verifyIngress?: (request: Request, peerAddress: string | undefined) => boolean;
   /** Reads admission capacity from this listener's transport before native upgrade. */
   readonly hasPendingCapacity: () => boolean;
 }
@@ -30,6 +31,8 @@ export interface BunExchangeUpgradeOptions {
  * WebSocket connection.
  */
 export interface BunRouteGraphUpgradeServer {
+  /** Native immediate peer address, where available. */
+  readonly peerAddress?: string;
   /**
    * Upgrade a request to the native Bun WebSocket handler.
    * @param request - Incoming HTTP request.
@@ -83,12 +86,12 @@ function isBusWebSocketUpgrade(request: Request): boolean {
  * For boot's `workerExchangeTest` option, use `serveBunWorkerExchangeTest`.
  * It supplies the exchange policy here and installs both native handlers on
  * the server that boot checks.
- * @param routeGraph - Stable route graph facade for HTTP requests.
+ * @param routeGraph - Stable HTTP route graph. Omit it for an exchange-only listener.
  * @param exchange - Evidence policy tied to this specific listener by the composition.
  * @returns Bun-compatible fetch function that upgrades bus WebSocket requests.
  */
 export function createBunRouteGraphFetch(
-  routeGraph: HonoRouteGraph,
+  routeGraph: HonoRouteGraph | undefined,
   exchange?: BunExchangeUpgradeOptions,
 ): BunRouteGraphFetch {
   return (request, server) => {
@@ -96,15 +99,22 @@ export function createBunRouteGraphFetch(
       exchange !== undefined &&
       request.headers.get('upgrade')?.toLowerCase() === 'websocket' &&
       new URL(request.url).pathname === CONNECTION_EXCHANGE_PATH;
-    if (exchangeUpgrade && !exchange.hasPendingCapacity()) {
-      return new Response(null, { status: 503 });
-    }
-    if (exchangeUpgrade || isBusWebSocketUpgrade(request)) {
+    if (exchangeUpgrade || (routeGraph !== undefined && isBusWebSocketUpgrade(request))) {
+      const encrypted =
+        exchangeUpgrade &&
+        (exchange.directTls === true ||
+          verifyConnectionExchangeIngress(
+            request,
+            (target) => exchange.verifyIngress?.(target, server.peerAddress) === true,
+          ));
+      if (exchangeUpgrade && !encrypted && (routeGraph === undefined || exchange.verifyIngress !== undefined)) {
+        return new Response(null, { status: 403 });
+      }
+      if (exchangeUpgrade && !exchange.hasPendingCapacity()) {
+        return new Response(null, { status: 503 });
+      }
       const upgraded = exchangeUpgrade
-        ? server.upgradeExchange?.(request, {
-            [BUN_EXCHANGE_UPGRADE]:
-              exchange.directTls === true || verifyConnectionExchangeIngress(request, exchange.verifyIngress),
-          })
+        ? server.upgradeExchange?.(request, { [BUN_EXCHANGE_UPGRADE]: encrypted })
         : server.upgrade(request);
       if (upgraded) {
         return undefined;
@@ -116,6 +126,6 @@ export function createBunRouteGraphFetch(
       });
     }
 
-    return routeGraph.fetch(request);
+    return routeGraph?.fetch(request) ?? new Response(null, { status: 404 });
   };
 }

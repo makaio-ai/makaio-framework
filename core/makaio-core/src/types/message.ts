@@ -57,6 +57,11 @@ export type InboundAttestingConnectionRole = AttestingRoleIn<'inbound'>;
 /** Attesting roles for connections to the core host. */
 export type OutboundAttestingConnectionRole = AttestingRoleIn<'outbound'>;
 
+/** A locally issued handle for the response route of one inbound request. */
+export interface TransportRequestOrigin {
+  readonly correlationId: string;
+}
+
 /**
  * Trusted context derived locally by the receiving transport.
  *
@@ -64,6 +69,8 @@ export type OutboundAttestingConnectionRole = AttestingRoleIn<'outbound'>;
  * derive its own context from its own transport/session state.
  */
 export interface TransportReceiveContext extends TransportConnectionInfo {
+  /** Response route owned by this request, when the transport provides one. */
+  readonly requestOrigin?: TransportRequestOrigin;
   /**
    * Caller verified or declared by the transport.
    *

@@ -37,14 +37,16 @@
 
 import {
   bootMakaioRuntimeCore,
+  readSingleHostWorkerExchange,
   type CoreBootOptions,
-  type HonoRouteGraph,
   type MakaioRuntime,
 } from '@makaio/runtime-node';
-import type { WebSocketHandler } from 'bun';
-import { createBunRouteGraphFetch, type BunExchangeUpgradeData } from './bun-route-graph-fetch.js';
 import type { BunBusServerTransportProvider } from './bus-server-transport.js';
 import { type BunServer } from './http-server-utils.js';
+
+import { listenForBunWorkerExchange, workerExchangeTestListeners } from './worker-exchange-listener.js';
+
+export { serveBunWorkerExchangeTest } from './worker-exchange-listener.js';
 
 /**
  * Options for {@link bootMakaioRuntime} (Bun platform).
@@ -79,59 +81,6 @@ export interface BunBootMakaioRuntimeOptions extends CoreBootOptions {
   transport: BunBusServerTransportProvider;
 }
 
-/** Native TLS listener inputs for the local worker exchange test seam. */
-interface BunWorkerExchangeTestListenerOptions {
-  readonly hostname: string;
-  readonly port: number;
-  readonly tls: {
-    readonly key: string | Uint8Array<ArrayBuffer>;
-    readonly cert: string | Uint8Array<ArrayBuffer>;
-  };
-}
-
-type BunWorkerExchangeTestServer = BunBootMakaioRuntimeOptions['bunServer'] & {
-  stop(closeActiveConnections?: boolean): Promise<void>;
-  unref(): void;
-};
-
-const workerExchangeTestListeners = new WeakMap<BunServer, BunBusServerTransportProvider>();
-
-/**
- * Start a native TLS listener with exchange-enabled route graph fetch and WebSocket handlers.
- *
- * Pass the returned server and the same transport to `bootMakaioRuntime` with
- * `workerExchangeTest`. Keep the installed handlers for the life of the test.
- * The caller owns the listener and must stop it even if boot fails.
- * @param routeGraph - Stable facade for the host's HTTP routes.
- * @param transport - Transport that will be passed to boot.
- * @param listener - TCP bind and native TLS certificate and key.
- * @returns The listening Bun server.
- * @internal
- */
-export function serveBunWorkerExchangeTest(
-  routeGraph: HonoRouteGraph,
-  transport: BunBusServerTransportProvider,
-  listener: BunWorkerExchangeTestListenerOptions,
-): BunWorkerExchangeTestServer {
-  const fetch = createBunRouteGraphFetch(routeGraph, {
-    directTls: true,
-    hasPendingCapacity: () => transport.hasPendingExchangeCapacity,
-  });
-  const server = Bun.serve<BunExchangeUpgradeData | undefined>({
-    hostname: listener.hostname,
-    port: listener.port,
-    tls: listener.tls,
-    fetch: (request, native) =>
-      fetch(request, {
-        upgrade: (target) => native.upgrade(target, { data: undefined }),
-        upgradeExchange: (target, data) => native.upgrade(target, { data }),
-      }),
-    websocket: transport.createWebSocketHandler() as WebSocketHandler<BunExchangeUpgradeData | undefined>,
-  }) as BunWorkerExchangeTestServer;
-  workerExchangeTestListeners.set(server, transport);
-  return server;
-}
-
 /**
  * Boot the full Makaio runtime against a pre-existing Bun server.
  *
@@ -145,6 +94,7 @@ export function serveBunWorkerExchangeTest(
  * @returns Runtime handle with `port`, `machineId`, and `shutdown()`.
  */
 export async function bootMakaioRuntime(options: BunBootMakaioRuntimeOptions): Promise<MakaioRuntime> {
+  const exchange = readSingleHostWorkerExchange(options);
   const { port, hostname } = options.bunServer;
   if (options.workerExchangeTest !== undefined) {
     // Bun exposes address at runtime but omits it from its published types.
@@ -159,8 +109,13 @@ export async function bootMakaioRuntime(options: BunBootMakaioRuntimeOptions): P
     }
   }
   const createMount = options.createMount ?? (await import('./create-static-mount.js')).defaultCreateMount;
-  return bootMakaioRuntimeCore(options.transport, port, hostname, {
-    ...options,
-    createMount,
-  });
+  return bootMakaioRuntimeCore(
+    options.transport,
+    port,
+    hostname,
+    { ...options, createMount },
+    exchange === undefined
+      ? undefined
+      : (maxBytes) => listenForBunWorkerExchange(options.transport, exchange, maxBytes),
+  );
 }

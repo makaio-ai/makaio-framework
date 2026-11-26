@@ -1,3 +1,4 @@
+import { retireWorkerRunSessionOnCommit } from '../worker-run-sessions.js';
 import { createHash, randomUUID } from 'node:crypto';
 import { isMintedCallContext } from '@makaio/bus-core';
 import type { HostDatabase, HostTransaction, JobRunId, JsonValue, Origin } from '@makaio/contracts';
@@ -42,6 +43,7 @@ export const redemptionOwnerClosedTopic = `test-run-closed:${randomUUID()}`;
 /** Test extension identity for terminal journal facts. */
 export const redemptionJournalOwner = 'test.redemption-owner';
 const endingSubject = `${redemptionJournalOwner}:ended`;
+
 const endingFact = z.strictObject({ jobRunId: JobRunIdSchema, ending: JobRunEndingSchema });
 type EndingFact = z.infer<typeof endingFact>;
 type EndingOrigin = Pick<Origin, 'caller' | 'principal' | 'attestedBy'>;
@@ -207,7 +209,18 @@ async function closeLocked(
   const { query, table } = ownerStorage(tx);
   await write?.(tx, { jobRunId: row.id, ending });
   await query.update(table).set({ state: 'closed', revoked: true, ending }).where(eq(table.id, row.id));
+  retireAcceptedSession(tx, row);
   markTransactionWakeTopic(tx, redemptionOwnerClosedTopic);
+}
+
+/**
+ * Retire the accepted generation of a run after its owner transaction commits.
+ * @param tx - Live owner transaction.
+ * @param row - Locked snapshot of the run.
+ */
+function retireAcceptedSession(tx: HostTransaction, row: OwnerRow): void {
+  if (row.stored === null) return;
+  retireWorkerRunSessionOnCommit(tx, { jobRunId: row.id, revocationKey: row.stored.accepted.revocationKey });
 }
 
 /**
@@ -502,9 +515,10 @@ export async function bookRedemptionOwner(
    * @param tx - Live owner transaction.
    */
   async function revokeIn(tx: HostTransaction): Promise<void> {
-    await lockRow(tx, id);
+    const row = await lockRow(tx, id);
     const { query, table } = ownerStorage(tx);
     await query.update(table).set({ revoked: true }).where(eq(table.id, id));
+    if (row !== undefined) retireAcceptedSession(tx, row);
   }
 
   /**
@@ -627,6 +641,15 @@ export async function bookRedemptionOwner(
     },
     async revoke() {
       await database.transaction(revokeIn);
+    },
+    /** Persist a direct owner revocation without its optional local notification. */
+    async revokeWithoutNotification() {
+      await database.transaction(async (tx) => {
+        const row = await lockRow(tx, id);
+        if (row?.state !== 'redeemed') throw new Error('Expected a redeemed run under the owner lock');
+        const { query, table } = ownerStorage(tx);
+        await query.update(table).set({ revoked: true }).where(eq(table.id, id));
+      });
     },
     revokeIn,
     /**

@@ -221,10 +221,10 @@ export async function serializeDatabaseOperation<T>(db: MakaioDatabase, operatio
  * the callback issues itself are never held back: use the transaction context
  * (`tx`) for them. A statement issued on `db` from inside the callback is not
  * held back either, but on libsql it runs on the handle's other connection
- * and a write meets the transaction's write lock. Postgres handles have no
- * such gate: their transactions are isolated by MVCC on a pooled connection
- * of their own. The nested transactions of one transaction context
- * (savepoints) run one at a time in request order.
+ * and a write meets the transaction's write lock. Ordinary Postgres statements
+ * run outside the transaction queue on separate pooled connections. The nested
+ * transactions of one transaction context (savepoints) run one at a time in
+ * request order.
  *
  * **Constraint:** a transaction callback contains database work only. It must
  * not await work started outside it that uses the same handle (bus requests,
@@ -248,6 +248,24 @@ export async function executeTransaction<T>(
   callback: TransactionCallback<T>,
   signal?: AbortSignal,
 ): Promise<T> {
+  return executeTransactionWithCommit(db, callback, signal);
+}
+
+/**
+ * Use the driver transaction queue through an optional synchronous commit continuation.
+ * @param db - Database handle.
+ * @param callback - Driver transaction work.
+ * @param signal - Lifetime of the transaction work.
+ * @param afterCommit - Non-throwing continuation after successful commit.
+ * @returns Driver transaction result.
+ * @internal
+ */
+export async function executeTransactionWithCommit<T>(
+  db: MakaioDatabase,
+  callback: TransactionCallback<T>,
+  signal?: AbortSignal,
+  afterCommit?: () => void,
+): Promise<T> {
   signal?.throwIfAborted();
   if (isUnboundBunSqliteHandle(db)) {
     throw new Error(
@@ -256,9 +274,11 @@ export async function executeTransaction<T>(
         'with createDatabaseClient instead of a hand-rolled drizzle-orm/bun-sqlite instance.',
     );
   }
-  return serializeDatabaseOperation(db, () => {
+  return serializeDatabaseOperation(db, async () => {
     signal?.throwIfAborted();
-    return db.transaction(callback);
+    const result = await db.transaction(callback);
+    afterCommit?.();
+    return result;
   });
 }
 

@@ -13,6 +13,7 @@ import {
   type WorkerExchangeReply,
   type WorkerRunIdentityRequest,
 } from '@makaio/contracts/boundary';
+import { CorePartyKind } from '@makaio/core';
 import {
   encodeWorkerExchangeReply,
   prepareWorkerRedemption,
@@ -109,9 +110,9 @@ function bindRunPromotion(
 }
 
 /**
- * Wire the named worker exchange to an authorized host without enabling it at boot.
- * Keep this setup test-only until host composition provides verified local
- * takeover and terminal invalidation across participating hosts.
+ * Build the worker exchange for a host that orders route publication and
+ * retirement against its authoritative run state. The supported boot policy
+ * provides that ordering on one host per database.
  * @param host - Authorized dispatch host and order storage.
  * @param options - Host proof verifier and effective transport budget.
  * @returns The explicit setup policy to install on a WebSocket server.
@@ -162,7 +163,7 @@ export function createWorkerConnectionExchange(
             checkExchangeLifetime(operationSignal, deadline);
             const result = await prepared.commit(call, tx);
             if (result.reject === undefined && result.revocationKey !== undefined) {
-              markVerifiedRevocationKey?.(result.revocationKey);
+              markVerifiedRevocationKey?.({ caller: result.party, revocationKey: result.revocationKey });
             }
             return result;
           },
@@ -213,7 +214,10 @@ async function admitIdentity(
   checkExchangeLifetime(signal, deadline);
   const identity = await verifyWorkerRunIdentity(host, request, signal, (key) => {
     markProofVerified();
-    markVerifiedRevocationKey?.(key);
+    markVerifiedRevocationKey?.({
+      caller: { kind: CorePartyKind.jobRun, id: request.jobRunId },
+      revocationKey: key,
+    });
   });
   checkExchangeLifetime(signal, deadline);
   if (identity === undefined || Date.parse(identity.expiresAt) <= Date.now()) return undefined;

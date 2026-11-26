@@ -8,8 +8,13 @@ import type { AddressInfo } from 'node:net';
  * handler after binding to prevent unhandled rejections from post-bind errors.
  * @param server - HTTP server to observe.
  * @param port - Configured port, used in the EADDRINUSE error message.
+ * @param reportError - Post-bind error observer.
  */
-export async function waitForServerListening(server: HttpServer, port: number): Promise<void> {
+export async function waitForServerListening(
+  server: HttpServer,
+  port: number,
+  reportError: (error: Error) => void = (error) => console.error('[HttpServer] Post-bind error:', error),
+): Promise<void> {
   await new Promise<void>((resolve, reject) => {
     if (server.address()) {
       resolve();
@@ -41,9 +46,7 @@ export async function waitForServerListening(server: HttpServer, port: number): 
   // Deliberately leaked: one persistent error handler per server prevents
   // unhandled rejection crashes from post-bind errors (e.g., ECONNRESET).
   // Each composition root calls this once per HTTP server, so no accumulation.
-  server.on('error', (err: Error) => {
-    console.error('[HttpServer] Post-bind error:', err);
-  });
+  server.on('error', reportError);
 }
 
 /**

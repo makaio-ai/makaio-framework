@@ -141,6 +141,7 @@ export {
   getTransactionQueryContext,
   markTransactionRollbackOnly,
   markTransactionWakeTopic,
+  onHostTransactionCommit,
 } from './host-database';
 export { HostTransactionError, type HostTransactionErrorCode, type TransactionQueryContext } from './host-transaction';
 

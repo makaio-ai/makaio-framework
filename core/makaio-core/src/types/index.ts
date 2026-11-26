@@ -23,6 +23,7 @@ export type {
   MessagePayload,
   TransportConnectionInfo,
   TransportReceiveContext,
+  TransportRequestOrigin,
   ConnectionAttestation,
   AttestingConnectionRole,
   InboundAttestingConnectionRole,

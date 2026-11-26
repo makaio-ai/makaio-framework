@@ -93,14 +93,14 @@ export function matchesClaim(claim: DispatchClaim, committed: CommittedWorkerOrd
  * Read a run under the host lock and validate the claim binding.
  * Supervision can finish existing dispatches without a credential reader.
  * @param tx - Live host transaction.
- * @param host - Source and database that own the run.
+ * @param host - Authoritative source of the booked run.
  * @param jobRunId - Run to lock.
  * @param signal - Optional lifetime of a connection exchange using this lock.
  * @returns The locked order and matching claim, if present.
  */
 export async function lockDispatch(
   tx: HostTransaction,
-  host: WorkerStartOptions,
+  host: Pick<WorkerStartOptions, 'source'>,
   jobRunId: JobRunId,
   signal?: AbortSignal,
 ): Promise<{ order: CommittedWorkerOrder; claim: DispatchClaim } | undefined> {

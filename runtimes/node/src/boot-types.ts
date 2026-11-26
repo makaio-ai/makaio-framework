@@ -42,6 +42,7 @@ import type { ExtensionOperatorConfigSnapshot } from './extension-operator-confi
 import type { HttpRouteGraphBuilder } from './http-route-graph-builder.js';
 import type { FixedOperationHost } from './workflow-worker/fixed-operation-host.js';
 import type { WorkflowWorkerEntryMode } from './workflow-worker/worker-entry-resolver.js';
+import type { SingleHostWorkerExchangeOptions } from './worker-exchange-listener.js';
 import type { WorkerExchangeHostTestOptions } from './worker-exchange-host-test-mode.js';
 import type { WorkspaceRootResolver } from './workflow-worker/local-directory-materializer.js';
 
@@ -132,12 +133,12 @@ export interface ServerTransportConnectOptions {
   readonly machineId: string;
   /** Host authorization policy or an explicit opt-out. */
   readonly checkBoundaryAccess: BoundaryAccessPolicy;
-  /** Boot-owned setup when the protected worker exchange test mode is enabled. */
+  /** Boot-owned protected worker exchange setup. */
   readonly workerExchange?: {
     /** Admission policy owned by the boot lifecycle. */
     readonly setup: ConnectionExchangeSetup;
-    /** Loopback address verified by the native boot path. */
-    readonly boundHost: string;
+    /** Native ordinary listener address, when test mode enables loopback authority. */
+    readonly boundHost?: string;
   };
 }
 
@@ -286,6 +287,21 @@ export interface CoreBootOptions {
    * @internal
    */
   readonly workerExchangeTest?: WorkerExchangeHostTestOptions;
+  /**
+   * Enable a protected worker exchange listener. Defaults off. This requires a
+   * single host per database. Leave the option off in a multi-host deployment:
+   * two hosts could both route the same run.
+   * Behind an ingress that terminates TLS and forwards WebSockets, configure
+   * `verifyIngress` to authenticate the immediate ingress and verify that it
+   * accepted this upgrade over TLS.
+   * Closing through the job run capability retires the session automatically.
+   * Owner writes outside that capability must record retirement in the same
+   * transaction using `retireWorkerRunSessionOnCommit` for immediate disconnection.
+   * If the host cannot enforce retirement after a commit, it logs
+   * `WORKER_RUN_SESSION_RETIREMENT_FAILED`, closes all protected exchange
+   * sessions, and refuses new exchanges until the host is restarted.
+   */
+  readonly singleHostWorkerExchange?: SingleHostWorkerExchangeOptions;
 
   /**
    * Host-provided runtime config provider.
@@ -683,6 +699,9 @@ export interface BootMakaioRuntimeOptions extends CoreBootOptions {
  * Handle returned by `bootMakaioRuntime` on successful startup.
  */
 export interface MakaioRuntime {
+  /** Bound address of the boot-owned worker exchange listener, when enabled. */
+  readonly workerExchangeAddress?: TransportReadyInfo;
+
   /**
    * Bound TCP port (read from httpServer).
    */
