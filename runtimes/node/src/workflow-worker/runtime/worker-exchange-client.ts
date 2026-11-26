@@ -21,7 +21,7 @@ import { WebSocket } from 'ws';
 
 const transientSocketCodes = new Set(['EAI_AGAIN', 'ECONNREFUSED', 'ECONNRESET', 'EPIPE', 'ETIMEDOUT']);
 
-/** Owner check bound by a test composition to the synchronized worker bus. */
+/** Owner check bound to the synchronized worker bus. */
 export interface WorkerExchangeSessionCheck {
   /**
    * Read the current standing and original deadline of the caller's run.

@@ -23,10 +23,15 @@ import {
   type OrderedWorkerBootstrapAuth,
   type WorkflowWorkerLaunchConfig,
 } from '@makaio/framework/contracts';
-import type { CoreBootOptions } from '@makaio/framework/runtime-node';
-import { runWorkflowInWorker } from '@makaio/framework/runtime-node/workflow-worker/worker-entry';
+import type { CoreBootOptions, WorkerRunStatusReader } from '@makaio/framework/runtime-node';
+import { runWorkflowInWorker, type WorkerConnectorContext } from '@makaio/framework/runtime-node/workflow-worker/worker-entry';
 import { readAllocationScopeSetting } from '@makaio/framework/services/internal/worker-provider-host-binding';
 import { digestWorkerBootstrapToken, type WorkerCredentialDigest } from '@makaio/framework/services/worker-provider';
+
+// Verify the public connector accepts the same typed status reader exposed by the runtime.
+function connectOrdered(context: WorkerConnectorContext, readRunStatus: WorkerRunStatusReader) {
+  return context.createConnection(undefined, undefined, readRunStatus);
+}
 
 const scopeSetting: NonNullable<CoreBootOptions['workerDispatch']>['scopeSetting'] = readAllocationScopeSetting({
   get: (name) => name === 'worker-host'
