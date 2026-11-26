@@ -295,7 +295,10 @@ async function startListener(probe: BootHostProbe, bindHost = '127.0.0.1') {
     },
     async close() {
       server.unref();
-      await server.stop(true);
+      // Do not await: after WebSocket upgrades Bun's stop promise can stay pending
+      // even with stop(true), which keeps this host alive (see
+      // framework/runtimes/bun/src/host-shutdown.ts, stopBunServerForProcessExit).
+      void server.stop(true);
     },
   };
 }
