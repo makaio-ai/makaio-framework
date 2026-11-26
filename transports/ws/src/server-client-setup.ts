@@ -101,9 +101,10 @@ export async function setupClientConnection(socket: WebSocketLike, deps: ClientS
     auth,
     serverSubscriptions,
     sendSafely,
-    debug,
     onConnectionClosed,
   } = deps;
+  const sensitive = auth?.hasSensitiveFrames?.(socket) ?? false;
+  const debug = deps.debug && !sensitive;
 
   // Mark the socket as authenticating BEFORE attaching the message listener so
   // that no inbound frame can bypass the auth gate in the message handler.
@@ -129,7 +130,7 @@ export async function setupClientConnection(socket: WebSocketLike, deps: ClientS
   );
 
   const messageListener = (event: { data: string | Buffer }): void => {
-    void messageHandler(event.data);
+    if (!auth?.handleSetupFrame?.(event.data, socket)) void messageHandler(event.data);
   };
   const closeListener = (): void => {
     lifetime.abort();
@@ -152,9 +153,9 @@ export async function setupClientConnection(socket: WebSocketLike, deps: ClientS
       console.info(`[ServerTransport] Client disconnected (${registry.size} remaining)`);
     }
   };
-  const errorListener = (event: unknown): void => {
-    if (debug) {
-      console.error('[ServerTransport] Client socket error:', event);
+  const errorListener = (event: Event): void => {
+    if (deps.debug) {
+      console.error('[ServerTransport] Client socket error', socketDiagnostic(event, sensitive));
     }
   };
 
@@ -170,18 +171,15 @@ export async function setupClientConnection(socket: WebSocketLike, deps: ClientS
         }
         socket.send(JSON.stringify(message));
       });
-      // Only remove from the auth-gated set after a successful handshake.
-      // On failure the catch block closes the socket, and the close listener's
-      // removeClient call clears authenticatingClients — keeping the socket
-      // auth-gated until the connection is fully torn down.
-      registry.removeAuthenticating(socket);
     }
 
     if (socket.readyState !== 1) {
       return;
     }
 
-    registry.addClient(socket, auth?.getReceiveContext?.(socket)?.connectionId);
+    const connectionId = completeClientAuthentication(auth, socket);
+    registry.removeAuthenticating(socket);
+    registry.addClient(socket, connectionId);
 
     // Replay server-local handler subscriptions so the client can populate
     // its remoteRequestHandlers for priority-based dispatch.
@@ -198,8 +196,8 @@ export async function setupClientConnection(socket: WebSocketLike, deps: ClientS
       console.info(`[ServerTransport] Client connected (${registry.size} total)`);
     }
   } catch (error) {
-    if (debug) {
-      console.error('[ServerTransport] Client connection setup failed:', error);
+    if (deps.debug) {
+      console.error('[ServerTransport] Client connection setup failed', socketDiagnostic(error, sensitive));
     }
     if (socket.readyState >= 2) return;
     // A timeout or unknown crypto/custom-auth failure is not evidence of a
@@ -209,6 +207,44 @@ export async function setupClientConnection(socket: WebSocketLike, deps: ClientS
       (error.code === 'WS_AUTHENTICATION_REJECTED' || error.code === 'WS_POLICY_REJECTED');
     socket.close(refused ? 1008 : 1011, refused ? 'Authentication failed' : 'Connection setup failed');
   }
+}
+
+/**
+ * Project a transport failure into log fields without retaining the event or its cause.
+ * @param failure - Socket error event or thrown setup failure.
+ * @param sensitive - Omit diagnostic text throughout the exchange socket's lifetime.
+ * @returns The permitted diagnostic fields for this socket.
+ */
+function socketDiagnostic(failure: unknown, sensitive: boolean) {
+  const error =
+    typeof failure === 'object' && failure !== null && 'error' in failure ? (failure.error ?? failure) : failure;
+  const code = typeof error === 'object' && error !== null && 'code' in error ? error.code : undefined;
+  const details = {
+    class: error instanceof Error ? error.constructor.name : 'Event',
+    code: typeof code === 'number' || (typeof code === 'string' && /^\w+$/.test(code)) ? code : undefined,
+  };
+  if (sensitive || typeof error !== 'object' || error === null || !('message' in error)) return details;
+  if (typeof error.message !== 'string') return details;
+  const message = (error.message.split(/\r?\n/, 1)[0] ?? '')
+    .replace(/\b(unknown identity\s+).*/i, '$1[redacted]')
+    .replace(/\b(?:bearer|basic)\s+\S+/gi, '[redacted]')
+    .replace(
+      /\b(?:authorization|cookie|password|secret|token|api[_-]?key)\s*[:=]\s*(?:"[^"]*"|'[^']*'|\S+)/gi,
+      '[redacted]',
+    )
+    .replace(/\b[a-z][a-z\d+.-]*:\/\/\S+/gi, '[redacted]');
+  return { ...details, message };
+}
+
+/**
+ * Finalize authentication and retrieve its trusted route identifier in one turn.
+ * @param auth - Server authentication policy, when configured.
+ * @param socket - Open client socket awaiting registration.
+ * @returns The authenticated connection ID, when available.
+ */
+function completeClientAuthentication(auth: TransportAuth | undefined, socket: WebSocketLike): string | undefined {
+  auth?.completeServerAuthentication?.(socket);
+  return auth?.getReceiveContext?.(socket)?.connectionId;
 }
 
 /**

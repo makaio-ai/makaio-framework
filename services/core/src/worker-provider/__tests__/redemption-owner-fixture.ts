@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import type { HostDatabase, HostTransaction, JobRunId } from '@makaio/contracts';
+import type { HostDatabase, HostTransaction, JobRunId, JsonValue } from '@makaio/contracts';
 import type { PartyRef } from '@makaio/core';
 import type { StorageDatabaseContext } from '@makaio/storage-conformance';
 import {
@@ -23,7 +23,9 @@ import type {
 const rows = defineDualTable('redemption_test_order', (c) => ({
   id: c.text('id').primaryKey(),
   state: c.text('state').$type<CommittedWorkerOrder['state']>().notNull(),
-  booking: c.jsonCol<{ order: StartOrder; owner: PartyRef; payload: typeof payload }>('booking').notNull(),
+  booking: c
+    .jsonCol<{ order: StartOrder; owner: PartyRef; payload: JsonValue; includeDeadline?: true }>('booking')
+    .notNull(),
   tokenDigest: c.text('token_digest'),
   generation: c.text('generation').notNull(),
   revoked: c.bool('revoked').notNull(),
@@ -36,15 +38,19 @@ const payload = { order: { inputs: ['first', 'second'] } };
  * Read the booked digests without acquiring the database's write lock.
  * @param executor - Standalone database reader.
  * @param id - Order to look up.
+ * @param signal - Lifetime of the credential read.
  * @returns The booked credential digests when redemption is enabled.
  */
 async function readCredentials(
   executor: RawSqlExecutor,
   id: JobRunId,
+  signal: AbortSignal,
 ): Promise<WorkerRedemptionCredentials | undefined> {
+  signal.throwIfAborted();
   const [row] = await executor.all<{ token_digest: string | null; runtime_digest: string | null }>(sql`
     SELECT token_digest, stored ->> 'runtimeDigest' AS runtime_digest FROM redemption_test_order WHERE id = ${id}
   `);
+  signal.throwIfAborted();
   return row?.token_digest == null
     ? undefined
     : { tokenDigest: row.token_digest, runtimeDigest: row.runtime_digest ?? undefined };
@@ -116,9 +122,11 @@ async function accept(tx: HostTransaction, row: typeof rows.sqlite.$inferSelect,
  */
 export function redemptionOwnerSource(executor: RawSqlExecutor, token: string): AtomicRedemptionWorkerOrderSource {
   return {
-    readRedemptionCredentials: (runId) => readCredentials(executor, runId),
-    async lockOrder(tx, id) {
+    readRedemptionCredentials: (runId, signal) => readCredentials(executor, runId, signal),
+    async lockOrder(tx, id, signal) {
+      signal?.throwIfAborted();
       const row = await lockRow(tx, id);
+      signal?.throwIfAborted();
       if (row === undefined) return undefined;
       return {
         order: row.booking.order,
@@ -136,7 +144,8 @@ export function redemptionOwnerSource(executor: RawSqlExecutor, token: string): 
                 issuerActive: true,
                 maxRuntimeMs: 120_000,
                 cancellationWindowMs: 10_000,
-                payload: row.booking.payload,
+                preparePayload: (latestResultAt) =>
+                  row.booking.includeDeadline ? { order: row.booking.payload, latestResultAt } : row.booking.payload,
                 stored: row.stored ?? undefined,
                 accept: (ownerTx, result) => accept(ownerTx, row, result),
               },
@@ -154,6 +163,7 @@ export function redemptionOwnerSource(executor: RawSqlExecutor, token: string): 
  * @param owner - Identity of the test extension that owns the run.
  * @param token - Volatile bootstrap material.
  * @param legacy - Whether the original booking uses separate binding.
+ * @param reply - Test order content when the owner includes the result deadline.
  */
 export async function bookRedemptionOwner(
   database: HostDatabase,
@@ -161,9 +171,17 @@ export async function bookRedemptionOwner(
   owner: PartyRef,
   token: string,
   legacy: boolean,
+  reply?: JsonValue,
 ) {
   const tokenDigest = digestWorkerBootstrapToken(token);
-  const booking = deepFreeze(structuredClone({ order, owner, payload }));
+  const booking = deepFreeze(
+    structuredClone({
+      order,
+      owner,
+      payload: reply ?? payload,
+      ...(reply === undefined ? {} : { includeDeadline: true as const }),
+    }),
+  );
   const id = booking.order.jobRunId;
   await database.transaction(async (tx) => {
     const { query, table } = ownerStorage(tx);
@@ -187,6 +205,16 @@ export async function bookRedemptionOwner(
     await query.update(table).set({ revoked: true }).where(eq(table.id, id));
   }
 
+  /**
+   * Read the owner's row in the same snapshot as the related dispatch.
+   * @param tx - Current storage transaction.
+   */
+  async function readIn(tx: HostTransaction) {
+    const { query, table } = ownerStorage(tx);
+    const [row] = await query.select().from(table).where(eq(table.id, id));
+    return row;
+  }
+
   return {
     /**
      * Use the same owner adapter with an independent reader over the same database.
@@ -203,12 +231,9 @@ export async function bookRedemptionOwner(
       const row = await lockRow(tx, id);
       if (row === undefined) throw new Error('Test owner row is missing');
     },
+    readIn,
     async read() {
-      return database.transaction(async (tx) => {
-        const { query, table } = ownerStorage(tx);
-        const [row] = await query.select().from(table).where(eq(table.id, id));
-        return row;
-      });
+      return database.transaction(readIn);
     },
     async close() {
       await database.transaction(async (tx) => {

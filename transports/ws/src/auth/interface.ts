@@ -17,6 +17,21 @@ import type { TransportReceiveContext } from '@makaio/core';
  */
 export interface TransportAuth {
   /**
+   * Whether raw frame diagnostics must be suppressed for this socket.
+   * @param socket - Server-side connection.
+   * @returns Whether its setup protocol carries credentials.
+   */
+  hasSensitiveFrames?(socket: WebSocketLike): boolean;
+
+  /**
+   * Consume a raw pre-authentication frame before ordinary bus parsing.
+   * @param data - Frame data from the accepted socket.
+   * @param socket - Server-side connection.
+   * @returns Whether setup consumed or discarded the frame.
+   */
+  handleSetupFrame?(data: string | Buffer, socket: WebSocketLike): boolean;
+
+  /**
    * Authenticate a client connection.
    *
    * Called during the pre-connect phase after the WebSocket is open but before
@@ -35,6 +50,13 @@ export interface TransportAuth {
    * @throws Error if authentication fails
    */
   authenticateServer(socket: WebSocketLike, send: (message: unknown) => void): Promise<void>;
+
+  /**
+   * Finalize authenticated setup in the same turn as route registration.
+   * @param socket - Server-side connection about to become routable.
+   * @throws If the originating setup was cancelled.
+   */
+  completeServerAuthentication?(socket: WebSocketLike): void;
 
   /**
    * Handle incoming message during authentication phase.

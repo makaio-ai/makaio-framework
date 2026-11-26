@@ -31,9 +31,15 @@ import type { IMakaioBus } from '@makaio/bus-core';
 import { randomUUID } from 'node:crypto';
 import { MAKAIO_LOOPBACK_PARTY_KIND, type TransportReceiveContext } from '@makaio/core';
 import { startBusServer, HonoWebSocketBridge, type BusServer } from '@makaio/bus-server';
-import { createWebSocketCloseEvent, DispatchingAuth } from '@makaio/bus-transport-websocket';
-import type { TransportAuth, WebSocketCloseEvent, WebSocketLike } from '@makaio/bus-transport-websocket';
+import { ConnectionExchangeAuth, createWebSocketCloseEvent, DispatchingAuth } from '@makaio/bus-transport-websocket';
+import type {
+  ConnectionExchangeSetup,
+  TransportAuth,
+  WebSocketCloseEvent,
+  WebSocketLike,
+} from '@makaio/bus-transport-websocket';
 import type { ServerTransportConnectOptions, ServerTransportProvider } from '@makaio/runtime-node';
+import { BUN_EXCHANGE_UPGRADE } from './bun-route-graph-fetch.js';
 
 /**
  * Configuration options for {@link BunBusServerTransportProvider}.
@@ -47,6 +53,11 @@ export interface BunBusServerTransportOptions {
    * identity is loaded.
    */
   auth?: TransportAuth;
+  /**
+   * Explicit exchange policy for upgrades tagged by the host fetch handler.
+   * Enable only in tests until session revocation enforces one live connection per run identity.
+   */
+  connectionExchange?: ConnectionExchangeSetup;
 
   /**
    * Loopback transport registry name for in-process cross-client relay.
@@ -110,7 +121,9 @@ class LoopbackReceiveContextAuth implements TransportAuth {
 export interface RawServerWebSocket {
   send(data: string | ArrayBufferView | ArrayBufferLike, compress?: boolean): number;
   close(code?: number, reason?: string): void;
+  terminate?(): void;
   readonly readyState: number;
+  readonly data?: unknown;
 }
 
 /**
@@ -328,6 +341,7 @@ export class BunBusServerTransportProvider implements ServerTransportProvider {
    * between the guard check and the first `await`.
    */
   private connecting = false;
+  private readonly exchange?: ConnectionExchangeAuth;
 
   /**
    * @param options - Transport configuration.
@@ -335,6 +349,10 @@ export class BunBusServerTransportProvider implements ServerTransportProvider {
   public constructor(options: BunBusServerTransportOptions) {
     this.options = options;
     this.bridge = new HonoWebSocketBridge();
+    if (options.connectionExchange !== undefined) {
+      if (options.auth === undefined) throw new Error('Connection exchange requires explicit legacy authentication');
+      this.exchange = new ConnectionExchangeAuth(options.auth, options.connectionExchange);
+    }
   }
 
   /**
@@ -347,6 +365,11 @@ export class BunBusServerTransportProvider implements ServerTransportProvider {
    */
   public get dispatchingAuth(): DispatchingAuth | undefined {
     return this.options.auth instanceof DispatchingAuth ? this.options.auth : undefined;
+  }
+
+  /** @returns Whether the native listener can accept another unconfirmed exchange. */
+  public get hasPendingExchangeCapacity(): boolean {
+    return this.busReady && (this.exchange?.hasPendingCapacity ?? false);
   }
 
   /**
@@ -364,7 +387,7 @@ export class BunBusServerTransportProvider implements ServerTransportProvider {
    *   arrive as `ArrayBuffer` rather than Node `Buffer`.
    */
   public createWebSocketHandler(): BunWebSocketHandler {
-    const bridge = this.bridge;
+    const { bridge, exchange } = this;
     const isBusReady = (): boolean => this.busReady;
     const adapters = new WeakMap<RawServerWebSocket, BunServerWebSocketAdapter>();
 
@@ -376,6 +399,18 @@ export class BunBusServerTransportProvider implements ServerTransportProvider {
           return;
         }
         const adapter = new BunServerWebSocketAdapter(ws);
+        const upgrade = ws.data;
+        if (typeof upgrade === 'object' && upgrade !== null && BUN_EXCHANGE_UPGRADE in upgrade) {
+          if (exchange === undefined || ws.terminate === undefined) {
+            ws.close(1008, 'Authentication failed');
+            return;
+          }
+          const terminate = ws.terminate.bind(ws);
+          if (!exchange.register(adapter, { encrypted: upgrade[BUN_EXCHANGE_UPGRADE] === true }, terminate)) {
+            terminate();
+            return;
+          }
+        }
         adapters.set(ws, adapter);
         bridge.accept(adapter);
       },
@@ -406,6 +441,7 @@ export class BunBusServerTransportProvider implements ServerTransportProvider {
         bus,
         checkBoundaryAccess: options.checkBoundaryAccess,
         auth:
+          this.exchange ??
           this.options.auth ??
           (isLoopbackAuthorityHost(this.options.loopbackAuthorityHost) ? new LoopbackReceiveContextAuth() : undefined),
         loopbackName: this.options.loopbackName ?? DEFAULT_LOOPBACK_NAME,
@@ -436,8 +472,8 @@ export class BunBusServerTransportProvider implements ServerTransportProvider {
   private async stopBusServer(reason: string): Promise<void> {
     this.busReady = false;
     if (this.busServer) {
-      await this.busServer.stop().catch((err: unknown) => {
-        console.error(`[BunBusServerTransport] Failed to stop bus server during ${reason}:`, err);
+      await this.busServer.stop().catch(() => {
+        console.error(`[BunBusServerTransport] Failed to stop bus server during ${reason}`);
       });
       this.busServer = null;
     }

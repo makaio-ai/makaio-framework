@@ -95,15 +95,20 @@ export function matchesClaim(claim: DispatchClaim, committed: CommittedWorkerOrd
  * @param tx - Live host transaction.
  * @param host - Source and database that own the run.
  * @param jobRunId - Run to lock.
+ * @param signal - Optional lifetime of a connection exchange using this lock.
  * @returns The locked order and matching claim, if present.
  */
 export async function lockDispatch(
   tx: HostTransaction,
   host: WorkerStartOptions,
   jobRunId: JobRunId,
+  signal?: AbortSignal,
 ): Promise<{ order: CommittedWorkerOrder; claim: DispatchClaim } | undefined> {
-  const order = await host.source.lockOrder(tx, jobRunId);
+  signal?.throwIfAborted();
+  const order = await host.source.lockOrder(tx, jobRunId, signal);
+  signal?.throwIfAborted();
   const claim = await readDispatch(tx, jobRunId);
+  signal?.throwIfAborted();
   return order !== undefined && claim !== undefined && matchesClaim(claim, order) ? { order, claim } : undefined;
 }
 

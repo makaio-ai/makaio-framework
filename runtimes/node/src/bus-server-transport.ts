@@ -11,9 +11,17 @@
 import { randomUUID } from 'node:crypto';
 import type { IncomingMessage, Server as HttpServer } from 'node:http';
 import type { Duplex } from 'node:stream';
+import { TLSSocket } from 'node:tls';
 import type { IMakaioBus } from '@makaio/bus-core';
 import { startBusServer, type BusServer, type TransportAuth } from '@makaio/bus-server';
-import { DispatchingAuth, type WebSocketLike } from '@makaio/bus-transport-websocket';
+import {
+  CONNECTION_EXCHANGE_PATH,
+  ConnectionExchangeAuth,
+  DispatchingAuth,
+  verifyConnectionExchangeIngress,
+  type ConnectionExchangeSetup,
+  type WebSocketLike,
+} from '@makaio/bus-transport-websocket';
 import { MAKAIO_LOOPBACK_PARTY_KIND, type TransportReceiveContext } from '@makaio/core';
 import { WebSocketServer } from 'ws';
 import type { ServerTransportConnectOptions, ServerTransportProvider } from './boot-types.js';
@@ -39,14 +47,21 @@ function isBusUpgradeRequest(req: IncomingMessage): boolean {
  * Create the `/bus` upgrade handler for an HTTP server.
  * @param getWss - Returns the current bus WebSocket server instance
  * @param isBusReady - Returns whether the bus server has finished startup
+ * @param exchange - Optional host exchange policy and upgrade verification.
  * @returns Upgrade handler that accepts canonical and LAN fallback bus upgrades
  */
 function createBusUpgradeHandler(
   getWss: () => WebSocketServer | null,
   isBusReady: () => boolean,
+  exchange?: {
+    auth: ConnectionExchangeAuth;
+    websocket: WebSocketServer;
+    verifyIngress?: (request: IncomingMessage) => boolean;
+  },
 ): (req: IncomingMessage, socket: Duplex, head: Buffer) => void {
   return (req: IncomingMessage, socket: Duplex, head: Buffer): void => {
-    if (!isBusUpgradeRequest(req)) {
+    const exchangeUpgrade = exchange !== undefined && req.url?.split('?')[0] === CONNECTION_EXCHANGE_PATH;
+    if (!exchangeUpgrade && !isBusUpgradeRequest(req)) {
       // Do NOT destroy the socket — other upgrade listeners (e.g., Vite HMR)
       // may handle it.
       return;
@@ -57,7 +72,21 @@ function createBusUpgradeHandler(
       return;
     }
 
-    wss.handleUpgrade(req, socket, head, (ws) => {
+    if (!exchangeUpgrade) {
+      wss.handleUpgrade(req, socket, head, (ws) => wss.emit('connection', ws, req));
+      return;
+    }
+    if (!exchange.auth.hasPendingCapacity) {
+      socket.end('HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\nContent-Length: 0\r\n\r\n');
+      return;
+    }
+    const encrypted =
+      (socket instanceof TLSSocket && socket.encrypted) || verifyConnectionExchangeIngress(req, exchange.verifyIngress);
+    exchange.websocket.handleUpgrade(req, socket, head, (ws) => {
+      if (!exchange.auth.register(ws, { encrypted }, () => ws.terminate())) {
+        ws.terminate();
+        return;
+      }
       wss.emit('connection', ws, req);
     });
   };
@@ -77,6 +106,18 @@ export interface BusServerTransportOptions {
    * identity is loaded.
    */
   auth?: TransportAuth;
+  /**
+   * Opt-in exchange. Ordinary upgrades must have an explicit authentication strategy.
+   * Enable only in tests until session revocation enforces one live connection per run identity.
+   */
+  connectionExchange?: {
+    readonly setup: ConnectionExchangeSetup;
+    /**
+     * Host verifier for a protected ingress, invoked for the accepted upgrade.
+     * The host must establish encrypted peer transport for this upgrade through the protected ingress.
+     */
+    readonly verifyIngress?: (request: IncomingMessage) => boolean;
+  };
   /**
    * Loopback transport registry name for in-process cross-client relay.
    *
@@ -151,6 +192,9 @@ export class BusServerTransportProvider implements ServerTransportProvider {
   /** Active `ws` server instance. Set during connect, cleared on disconnect. */
   private websocketServer: WebSocketServer | null = null;
 
+  /** Dedicated native receive limit for the exchange path. */
+  private exchangeWebSocketServer: WebSocketServer | null = null;
+
   /** HTTP server that currently owns the active upgrade handler. */
   private upgradeHandlerServer: HttpServer | null = null;
 
@@ -203,18 +247,27 @@ export class BusServerTransportProvider implements ServerTransportProvider {
     this.connecting = true;
 
     try {
+      const setup = this.options.connectionExchange;
+      const legacy = this.options.auth;
+      if (setup !== undefined && legacy === undefined) {
+        throw new Error('Connection exchange requires explicit legacy authentication');
+      }
+      const exchange =
+        setup !== undefined && legacy !== undefined ? this.createExchangeServer(legacy, setup) : undefined;
       const websocketServer = new WebSocketServer({ noServer: true });
       this.websocketServer = websocketServer;
 
       const upgradeHandler = createBusUpgradeHandler(
         () => this.websocketServer,
         () => this.busReady,
+        exchange,
       );
       this.options.httpServer.on('upgrade', upgradeHandler);
       this.upgradeHandlerServer = this.options.httpServer;
       this.upgradeHandler = upgradeHandler;
 
       const auth =
+        exchange?.auth ??
         this.options.auth ??
         (isLoopbackListener(this.options.httpServer) ? new LoopbackReceiveContextAuth() : undefined);
       this.busServer = await startBusServer({
@@ -248,14 +301,30 @@ export class BusServerTransportProvider implements ServerTransportProvider {
   }
 
   /**
+   * Create the separately bounded native server for exchange upgrades.
+   * @param legacy - Auth policy handling ordinary upgrades.
+   * @param options - Host policy handling exchange upgrades.
+   * @returns Upgrade wiring feeding the shared framework bus server.
+   */
+  private createExchangeServer(
+    legacy: TransportAuth,
+    options: NonNullable<BusServerTransportOptions['connectionExchange']>,
+  ) {
+    const auth = new ConnectionExchangeAuth(legacy, options.setup);
+    const websocket = new WebSocketServer({ noServer: true, maxPayload: options.setup.maxBytes });
+    this.exchangeWebSocketServer = websocket;
+    return { auth, websocket, verifyIngress: options.verifyIngress };
+  }
+
+  /**
    * Stop the bus server and mark the transport as not ready.
    * @param reason - Context string used in error log messages.
    */
   private async stopBusServer(reason: string): Promise<void> {
     this.busReady = false;
     if (this.busServer) {
-      await this.busServer.stop().catch((err: unknown) => {
-        console.error(`[BusServerTransport] Failed to stop bus server during ${reason}:`, err);
+      await this.busServer.stop().catch(() => {
+        console.error(`[BusServerTransport] Failed to stop bus server during ${reason}`);
       });
       this.busServer = null;
     }
@@ -282,18 +351,20 @@ export class BusServerTransportProvider implements ServerTransportProvider {
    * @param reason - Context string used in error log messages.
    */
   private async stopWebSocketServer(reason: string): Promise<void> {
-    if (this.websocketServer) {
+    for (const server of [this.websocketServer, this.exchangeWebSocketServer]) {
+      if (server === null) continue;
       await new Promise<void>((resolve, reject) => {
-        this.websocketServer!.close((err) => (err ? reject(err) : resolve()));
+        server.close((err) => (err ? reject(err) : resolve()));
       }).catch((err: unknown) => {
         // ws library (v8.x) throws this message when close() is called on
         // an already-stopped server. Not officially documented — fragile match.
         if (err instanceof Error && err.message === 'The server is not running') {
           return;
         }
-        console.error(`[BusServerTransport] Failed to close WebSocket server during ${reason}:`, err);
+        console.error(`[BusServerTransport] Failed to close WebSocket server during ${reason}`);
       });
-      this.websocketServer = null;
     }
+    this.websocketServer = null;
+    this.exchangeWebSocketServer = null;
   }
 }

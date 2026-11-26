@@ -24,6 +24,7 @@ interface TransactionState {
   readonly driver: DriverTransaction;
   /** Query surface bound to the driver transaction. */
   readonly context: TransactionQueryContext;
+  readonly signal: AbortSignal | undefined;
   /** Set once the `transaction(fn)` callback settled. */
   finished: boolean;
   /** Error that causes a fulfilled callback to roll back. */
@@ -59,16 +60,23 @@ function transactionFinishedError(): HostTransactionError {
  * @param host - Facade that owns the transaction.
  * @param db - Handle the transaction was opened on.
  * @param tx - Driver transaction handed out by `executeTransaction`.
+ * @param signal - Lifetime of the transaction's work, up to commit.
  * @returns The minted transaction and its state.
  */
-function mintHostTransaction(host: HostDatabase, db: MakaioDatabase, tx: DriverTransaction): MintedTransaction {
+function mintHostTransaction(
+  host: HostDatabase,
+  db: MakaioDatabase,
+  tx: DriverTransaction,
+  signal: AbortSignal | undefined,
+): MintedTransaction {
   const {
     select,
     insert,
     update,
     delete: remove,
-  } = createGuardedTransactionView(tx, () => {
-    if (state.finished) throw transactionFinishedError();
+  } = createGuardedTransactionView(tx, (afterExecution) => {
+    if (!afterExecution && state.finished) throw transactionFinishedError();
+    signal?.throwIfAborted();
   });
   const context: TransactionQueryContext = Object.freeze({
     dialect: getDatabaseDialect(db),
@@ -80,7 +88,7 @@ function mintHostTransaction(host: HostDatabase, db: MakaioDatabase, tx: DriverT
   // The single sanctioned assertion: `HostTransaction` is an opaque brand that only
   // the storage owner may mint, so no structurally valid value exists to build it from.
   const hostTx = Object.freeze({}) as HostTransaction;
-  const state: TransactionState = { host, db, driver: tx, context, finished: false, wakeTopics: new Set() };
+  const state: TransactionState = { host, db, driver: tx, context, signal, finished: false, wakeTopics: new Set() };
   transactions.set(hostTx, state);
   return { hostTx, state };
 }
@@ -93,6 +101,7 @@ function mintHostTransaction(host: HostDatabase, db: MakaioDatabase, tx: DriverT
  * @param host - Facade that owns the transaction.
  * @param db - Handle the transaction runs on.
  * @param fn - Callback the minted `HostTransaction` is handed to.
+ * @param signal - Lifetime of the transaction's work, up to commit.
  * @returns Whatever `fn` resolved to.
  * @typeParam T - Result type of `fn`.
  */
@@ -100,36 +109,44 @@ async function runHostTransaction<T>(
   host: HostDatabase,
   db: MakaioDatabase,
   fn: (hostTx: HostTransaction) => Promise<T>,
+  signal: AbortSignal | undefined,
 ): Promise<T> {
   let committedTopics: ReadonlySet<string> | undefined;
 
-  const result = await executeTransaction(db, async (tx) => {
-    const { hostTx, state } = mintHostTransaction(host, db, tx);
-    let fnResult: T;
-    try {
-      fnResult = await fn(hostTx);
-    } finally {
-      state.finished = true;
-    }
-
-    if (state.rollbackCause !== undefined) throw state.rollbackCause;
-
-    const { wakeTopics } = state;
-    if (wakeTopics.size > 0) {
-      const signals = getDatabaseSignals(db);
-      if (signals.kind === 'database-notify') {
-        // Original driver transaction parameter, not the guarded view (whose
-        // authorization already ended above) and not the raw SQL executor —
-        // the portable select pattern of `transaction-locks.ts`.
-        for (const topic of wakeTopics) {
-          await tx.select({ notified: signals.notifyExpression(topic) }).from(sql.raw('(SELECT 1) AS wake_anchor'));
-        }
+  const result = await executeTransaction(
+    db,
+    async (tx) => {
+      signal?.throwIfAborted();
+      const { hostTx, state } = mintHostTransaction(host, db, tx, signal);
+      let fnResult: T;
+      try {
+        fnResult = await fn(hostTx);
+      } finally {
+        state.finished = true;
       }
-      committedTopics = wakeTopics;
-    }
 
-    return fnResult;
-  });
+      if (state.rollbackCause !== undefined) throw state.rollbackCause;
+      signal?.throwIfAborted();
+
+      const { wakeTopics } = state;
+      if (wakeTopics.size > 0) {
+        const signals = getDatabaseSignals(db);
+        if (signals.kind === 'database-notify') {
+          // Original driver transaction parameter, not the guarded view (whose
+          // authorization already ended above) and not the raw SQL executor —
+          // the portable select pattern of `transaction-locks.ts`.
+          for (const topic of wakeTopics) {
+            await tx.select({ notified: signals.notifyExpression(topic) }).from(sql.raw('(SELECT 1) AS wake_anchor'));
+            signal?.throwIfAborted();
+          }
+        }
+        committedTopics = wakeTopics;
+      }
+
+      return fnResult;
+    },
+    signal,
+  );
 
   if (committedTopics !== undefined) {
     deliverLocalWakeTopics(db, committedTopics);
@@ -163,7 +180,7 @@ async function runHostTransaction<T>(
  */
 export function createHostDatabase(db: MakaioDatabase): HostDatabase {
   const host: HostDatabase = {
-    transaction: (fn) => runHostTransaction(host, db, fn),
+    transaction: (fn, options) => runHostTransaction(host, db, fn, options?.signal),
   };
   registerHostDatabaseHandle(host, db);
   return host;
@@ -241,7 +258,9 @@ export function getPostgresHostTransactionSession(tx: HostTransaction, db: Makai
   }
   const executeLive = async (query: SQL): Promise<object> => {
     requireTransactionState(tx);
+    state.signal?.throwIfAborted();
     const result = await execute.call(driver, query);
+    state.signal?.throwIfAborted();
     if (typeof result !== 'object' || result === null || Array.isArray(result)) {
       throw new HostTransactionError('transaction-result-invalid', 'Expected a PostgreSQL query result');
     }

@@ -237,12 +237,18 @@ export async function serializeDatabaseOperation<T>(db: MakaioDatabase, operatio
  * constraint remains the contract there.
  * @param db - Makaio database instance
  * @param callback - Transaction work to execute
+ * @param signal - Optional lifetime to check before opening the driver transaction.
  * @returns Result returned by the callback
  * @throws ReentrantOperationError when called from inside work holding the handle.
  * @throws Error when `db` is a bun-sqlite handle whose `transaction()` was never
  *   bound to this atomicity contract (see {@link isUnboundBunSqliteHandle}).
  */
-export async function executeTransaction<T>(db: MakaioDatabase, callback: TransactionCallback<T>): Promise<T> {
+export async function executeTransaction<T>(
+  db: MakaioDatabase,
+  callback: TransactionCallback<T>,
+  signal?: AbortSignal,
+): Promise<T> {
+  signal?.throwIfAborted();
   if (isUnboundBunSqliteHandle(db)) {
     throw new Error(
       'executeTransaction received an unbound bun-sqlite handle: its transaction() commits at the ' +
@@ -250,7 +256,10 @@ export async function executeTransaction<T>(db: MakaioDatabase, callback: Transa
         'with createDatabaseClient instead of a hand-rolled drizzle-orm/bun-sqlite instance.',
     );
   }
-  return serializeDatabaseOperation(db, () => db.transaction(callback));
+  return serializeDatabaseOperation(db, () => {
+    signal?.throwIfAborted();
+    return db.transaction(callback);
+  });
 }
 
 const operationTails = new WeakMap<MakaioDatabase, Promise<void>>();

@@ -1,5 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type { HostDatabase } from '@makaio/contracts';
+import type { CallContext } from '@makaio/core';
+import type { ConnectionExchangeSetup } from '@makaio/bus-transport-websocket';
 import type { StartWorkerResult, WorkerDispatchCapability } from '@makaio/contracts/capabilities';
 import type { BoundedShutdownStep, ContributionProcessor } from '@makaio/kernel';
 import { boundedWait, outerBoundMs } from '@makaio/utils';
@@ -13,10 +15,17 @@ import {
 } from '@makaio/services-core/internal/worker-provider-host-binding';
 import type { WorkerDispatchHostOptions } from './boot-types.js';
 import { resourceStep, resourceStepStopBudgetMs } from './runtime-stop-budget.js';
+import { createWorkerConnectionExchange, type WorkerConnectionExchangeOptions } from './worker-connection-exchange.js';
 
 interface BoundWorkerDispatch {
   readonly capability: WorkerDispatchCapability;
   readonly contributionProcessor: ContributionProcessor;
+  /**
+   * Build an exchange on the same dispatch, observation signal and storage.
+   * @param supervisionCall - Host authority for provider observation.
+   * @param options - Host policy for worker proof and the reply budget.
+   */
+  connectionExchange(supervisionCall: CallContext, options: WorkerConnectionExchangeOptions): ConnectionExchangeSetup;
 }
 
 /**
@@ -89,6 +98,8 @@ export function bindWorkerDispatch(
   return {
     capability: createWorkerDispatch(host),
     contributionProcessor: createWorkerProviderContributionProcessor(providers),
+    connectionExchange: (supervisionCall, exchangeOptions) =>
+      createWorkerConnectionExchange({ ...host, supervisionCall }, exchangeOptions),
   };
 }
 

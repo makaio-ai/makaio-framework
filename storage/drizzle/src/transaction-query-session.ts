@@ -56,6 +56,9 @@ type ExecutorShape = (typeof EXECUTOR_SHAPES)[number];
 /** A function of unknown signature. */
 type UnknownFunction = (...args: unknown[]) => unknown;
 
+/** Validate query execution, or discard its result when a transaction's caller aborted. */
+type CheckLifetime = (afterExecution?: true) => void;
+
 /** Drizzle session surface the guard needs: the one point every prepared query is created through. */
 interface PreparingSession {
   /**
@@ -158,7 +161,7 @@ function runSurfacingRevocation(execute: () => unknown): unknown {
 function delegateTo(
   target: unknown,
   methods: readonly string[],
-  assertActive: () => void,
+  assertActive: CheckLifetime,
 ): Record<string, UnknownFunction> | undefined {
   if (!isRecord(target)) return undefined;
   const delegate: Record<string, UnknownFunction> = {};
@@ -186,7 +189,7 @@ function delegateTo(
  *   wrappers that match its synchronicity.
  * @throws A plain `Error` when the prepared query matches no known driver shape.
  */
-function guardExecutor(query: Record<string, unknown>, assertActive: () => void): ExecutorShape {
+function guardExecutor(query: Record<string, unknown>, assertActive: CheckLifetime): ExecutorShape {
   const shape = EXECUTOR_SHAPES.find(({ field }) => field in query);
   if (shape === undefined) {
     throw new Error(
@@ -223,7 +226,7 @@ function guardExecutor(query: Record<string, unknown>, assertActive: () => void)
 function buildTerminalMethod(
   original: UnknownFunction,
   query: Record<string, unknown>,
-  assertActive: () => void,
+  assertActive: CheckLifetime,
   isAsyncDriver: boolean,
 ): UnknownFunction {
   if (!isAsyncDriver) {
@@ -234,7 +237,9 @@ function buildTerminalMethod(
   }
   return async (...args: unknown[]): Promise<unknown> => {
     assertActive();
-    return runSurfacingRevocation(() => Reflect.apply(original, query, args));
+    const result = await runSurfacingRevocation(() => Reflect.apply(original, query, args));
+    assertActive(true);
+    return result;
   };
 }
 
@@ -250,7 +255,7 @@ function buildTerminalMethod(
  * @returns The same prepared query.
  * @throws A plain `Error` when the prepared query matches no known driver shape.
  */
-function guardPreparedQuery(query: unknown, assertActive: () => void): unknown {
+function guardPreparedQuery(query: unknown, assertActive: CheckLifetime): unknown {
   if (!isRecord(query)) {
     throw new Error('Cannot guard prepared query: the session returned a non-object.');
   }
@@ -276,7 +281,7 @@ function guardPreparedQuery(query: unknown, assertActive: () => void): unknown {
 function guardEntryPoint<TMethod extends (...args: never[]) => unknown>(
   method: TMethod,
   receiver: object,
-  assertActive: () => void,
+  assertActive: CheckLifetime,
 ): TMethod {
   return new Proxy(method, {
     apply: (target, _thisArg, args: unknown[]): unknown => {
@@ -296,11 +301,11 @@ function guardEntryPoint<TMethod extends (...args: never[]) => unknown>(
  * the statement on the handle), and every execution still checks before it
  * reaches the driver, see {@link guardPreparedQuery}.
  * @param tx - Drizzle transaction context handed out by `executeTransaction`.
- * @param assertActive - Throws when the transaction ended.
+ * @param assertActive - Checks whether execution remains authorized, or whether an in-flight result may be used.
  * @returns `select`, `insert`, `update` and `delete` of the guarded view.
  * @throws A plain `Error` when the transaction exposes no session that prepares queries.
  */
-export function createGuardedTransactionView(tx: DriverTransaction, assertActive: () => void): EntryPoints {
+export function createGuardedTransactionView(tx: DriverTransaction, assertActive: CheckLifetime): EntryPoints {
   // `session` is a non-public field of Drizzle's database class (not in its type
   // declarations); reading it through an `in` check yields `unknown` for the guard below.
   const session: unknown = 'session' in tx ? tx.session : undefined;

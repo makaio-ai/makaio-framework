@@ -9,7 +9,7 @@ import type {
 import type { StartValueVisibility } from '@makaio/contracts/capabilities';
 import { CorePartyKind, type CallContext } from '@makaio/core';
 import { getHostTransactionQueryContext, markTransactionRollbackOnly } from '@makaio/storage-drizzle';
-import { abortableWait, deepFreeze } from '@makaio/utils';
+import { abortableWait, canonicalStringify, deepFreeze } from '@makaio/utils';
 import type { ObservationWatch } from './allocation-observation-signal.js';
 import {
   digestWorkerBootstrapToken,
@@ -24,6 +24,8 @@ import {
   type PreparedDispatchProof,
   type UnresolvedDispatchCorrelation,
 } from './redemption-binding.js';
+import { withinPreparationDeadline } from './redemption-deadline.js';
+import { encodeWorkerExchangeReply, WorkerExchangeReplyTooLargeError } from './redemption-reply.js';
 import { hasOpenDeadline, lockDispatch } from './start-claim.js';
 import type {
   CommittedWorkerOrder,
@@ -42,6 +44,8 @@ export interface WorkerRedemptionPresentation {
 /** The dispatch host and its in-process authority for provider supervision. */
 export interface WorkerRedemptionHost extends WorkerStartOptions {
   readonly supervisionCall: CallContext;
+  /** Effective message ceiling when the host has a stricter transport limit. */
+  readonly exchangeReplyByteLimit?: number;
 }
 
 /** Safe failure from transaction work. The transport exposes only the exchange disposition. */
@@ -85,18 +89,11 @@ type AllocationEvidence = {
 };
 
 const rejected: ConnectionExchangeRejected = Object.freeze({ reject: 'rejected' });
-const maxTimerDelayMs = 2 ** 31 - 1;
-
-interface PreparationLifetime {
-  readonly signal: AbortSignal;
-  readonly expiresAt: number;
-  /** Tighten the active deadline without extending it. */
-  shorten(deadline: number): void;
-}
 
 /**
  * Classify storage failures after proof, including wrapped driver errors.
  * Rejection is limited to unreadable candidates, SQLSTATE class 22 data errors, and constraint violations.
+ * Dispatch and owner fixture constraints in both dialects are checked at statement execution.
  * Infrastructure and programming errors remain retryable, even when typed.
  * @param error - Failure from the owner or dispatch store.
  * @returns Safe disposition for an exchange that has already proved its allocation.
@@ -119,14 +116,17 @@ function storageDisposition(error: unknown): WorkerRedemptionError['code'] {
  * @param host - Host dispatch and order storage.
  * @param tx - Live host transaction.
  * @param attempt - Hashed presentation.
+ * @param signal - Current exchange lifetime.
  * @returns The locked order if the token still authorizes this attempt.
  */
 async function verifyOrder(
   host: WorkerStartOptions,
   tx: HostTransaction,
   attempt: RedemptionAttempt,
+  signal: AbortSignal,
 ): Promise<VerifiedOrder | undefined> {
-  const locked = await lockDispatch(tx, host, attempt.jobRunId);
+  const locked = await lockDispatch(tx, host, attempt.jobRunId, signal);
+  signal.throwIfAborted();
   const redemption = locked?.order.redemption;
   const tokenMatches = matchesWorkerCredential(redemption?.tokenDigest, attempt.tokenDigest);
   const runtimeMatches = matchesWorkerCredential(redemption?.stored?.runtimeDigest, attempt.runtimeDigest);
@@ -216,56 +216,6 @@ async function prepareEvidence(
 }
 
 /**
- * Bound all preparation work, including the first credential lookup.
- * @param deadline - Trusted absolute connection deadline in milliseconds since the epoch.
- * @param hostSignal - Host operation lifetime.
- * @param work - Preparation work with access to the same deadline guard.
- * @returns Prepared work, or undefined when the attempt's lifetime ends.
- */
-async function withinPreparationDeadline<T>(
-  deadline: number,
-  hostSignal: AbortSignal,
-  work: (lifetime: PreparationLifetime) => Promise<T | undefined>,
-): Promise<T | undefined> {
-  const controller = new AbortController();
-  const signal = AbortSignal.any([hostSignal, controller.signal]);
-  let expiresAt = deadline;
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  /** Arm against the absolute deadline, including dates beyond the platform timer range. */
-  function arm(): void {
-    const remaining = expiresAt - Date.now();
-    if (!(remaining > 0)) controller.abort();
-    else timer = setTimeout(arm, Math.min(remaining, maxTimerDelayMs));
-  }
-  const lifetime: PreparationLifetime = {
-    signal,
-    get expiresAt() {
-      return expiresAt;
-    },
-    shorten(bound) {
-      signal.throwIfAborted();
-      expiresAt = Math.min(expiresAt, bound);
-      clearTimeout(timer);
-      arm();
-    },
-  };
-  arm();
-  try {
-    if (signal.aborted) return undefined;
-    const prepared = await abortableWait(
-      Promise.resolve().then(() => work(lifetime)),
-      signal,
-    );
-    return !signal.aborted && expiresAt > Date.now() ? prepared : undefined;
-  } catch (error) {
-    if (!signal.aborted && expiresAt > Date.now()) throw error;
-    return undefined;
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
-/**
  * Compute the result to persist using the booking's timing and reply.
  * @param order - Locked committed order.
  * @param redemption - Redemption fields of the locked order.
@@ -298,9 +248,25 @@ function firstResult(
       party: { kind: CorePartyKind.jobRun, id: order.order.jobRunId },
       expiresAt: expiresAt.toISOString(),
       revocationKey: `worker-run:${order.order.jobRunId}`,
-      payload: structuredClone(redemption.payload),
+      payload: structuredClone(redemption.preparePayload(expiresAt.toISOString())),
     },
   };
+}
+
+/**
+ * Distinguish an oversized reply discovered before any mutations.
+ * @param accepted - Proposed acceptance.
+ * @param byteLimit - Effective transport budget.
+ * @returns The typed business refusal, when the encoded frame does not fit.
+ */
+function checkReplyBudget(accepted: StoredWorkerRedemption['accepted'], byteLimit: number | undefined) {
+  try {
+    encodeWorkerExchangeReply(accepted, byteLimit);
+  } catch (error) {
+    if (error instanceof WorkerExchangeReplyTooLargeError) return error;
+    throw error;
+  }
+  return undefined;
 }
 
 /**
@@ -309,6 +275,7 @@ function firstResult(
  * @param current - Owner row reloaded under its lock.
  * @param attempt - Hashed presentation.
  * @param evidence - Proof prepared outside the transaction.
+ * @param host - Host lifetime and reply budget.
  * @returns The stored acceptance or a generic rejection.
  */
 async function commitRedemption(
@@ -316,25 +283,48 @@ async function commitRedemption(
   current: VerifiedOrder,
   attempt: RedemptionAttempt,
   evidence: AllocationEvidence,
+  host: WorkerRedemptionHost,
 ) {
+  host.operationSignal.throwIfAborted();
   const { locked, redemption } = current;
   const { stored } = redemption;
   const { platformThrough } = evidence;
   if (platformThrough !== undefined && !(platformThrough > Date.now())) return rejected;
   if (stored !== undefined) {
     const ref = locked.claim.boundAllocation;
-    return ref !== null &&
-      sameReference(ref, evidence.ref) &&
-      (!stored.requiresPlatformProof || platformThrough !== undefined)
-      ? deepFreeze(structuredClone(stored.accepted))
-      : rejected;
+    if (
+      ref === null ||
+      !sameReference(ref, evidence.ref) ||
+      (stored.requiresPlatformProof && platformThrough === undefined)
+    )
+      return rejected;
+    const tooLarge = checkReplyBudget(stored.accepted, host.exchangeReplyByteLimit);
+    if (tooLarge !== undefined) return tooLarge;
+    return deepFreeze(structuredClone(stored.accepted));
   }
   const result = firstResult(locked.order, redemption, attempt, platformThrough !== undefined);
-  if (result === undefined || evidence.first === undefined || !(await bindDispatchProof(tx, locked, evidence.first)))
-    return rejected;
-  const committed = await redemption.accept(tx, result);
-  if (committed === undefined) throw new Error('Run redemption update lost its lock condition');
+  if (result === undefined || evidence.first === undefined) return rejected;
+  const frozen = deepFreeze(result);
+  const tooLarge = checkReplyBudget(frozen.accepted, host.exchangeReplyByteLimit);
+  if (tooLarge !== undefined) return tooLarge;
+  host.operationSignal.throwIfAborted();
+  if (!hasOpenDeadline(locked.order.order.bootstrapDeadlineAt)) return rejected;
+  if (!(await bindDispatchProof(tx, locked, evidence.first))) return rejected;
+  host.operationSignal.throwIfAborted();
+  const committed = await redemption.accept(tx, frozen);
+  host.operationSignal.throwIfAborted();
+  if (committed === undefined || canonicalStringify(committed) !== canonicalStringify(frozen)) {
+    throw new Error('Run redemption update changed the prepared reply');
+  }
   return deepFreeze(structuredClone(committed.accepted));
+}
+
+/**
+ * Stop a redemption transaction whose effective setup deadline has elapsed.
+ * @param expiresAt - Effective exchange deadline in epoch milliseconds.
+ */
+function checkCommitDeadline(expiresAt: number): void {
+  if (expiresAt <= Date.now()) throw new Error('Run redemption deadline elapsed');
 }
 
 /**
@@ -348,7 +338,7 @@ async function commitRedemption(
  * @returns A commit callback that rechecks authority under the run lock.
  */
 function makeCommit(
-  host: WorkerStartOptions,
+  host: WorkerRedemptionHost,
   call: CallContext,
   attempt: RedemptionAttempt,
   target: RedemptionTarget,
@@ -366,16 +356,21 @@ function makeCommit(
       if (host.operationSignal.aborted) {
         throw new WorkerRedemptionError('rejected', 'Run redemption host stopped');
       }
+      let result: Awaited<ReturnType<typeof commitRedemption>>;
       try {
-        const locked = await verifyOrder(host, tx, attempt);
+        const locked = await verifyOrder(host, tx, attempt, host.operationSignal);
+        checkCommitDeadline(expiresAt);
         if (locked === undefined || !matchesTarget(locked, target)) return rejected;
-        return await commitRedemption(tx, locked, attempt, evidence);
+        result = await commitRedemption(tx, locked, attempt, evidence, host);
+        if ('party' in result) checkCommitDeadline(expiresAt);
       } catch (error) {
         const code = expiresAt > Date.now() ? storageDisposition(error) : 'rejected';
         const failure = new WorkerRedemptionError(code, 'Run redemption commit failed');
         markTransactionRollbackOnly(tx, failure);
         throw failure;
       }
+      if (result instanceof WorkerExchangeReplyTooLargeError) throw result;
+      return result;
     },
   });
 }
@@ -397,14 +392,19 @@ async function readVerifiedOrder(
   try {
     const { source } = host;
     if (signal.aborted || typeof source.readRedemptionCredentials !== 'function') return undefined;
-    const { tokenDigest, runtimeDigest } = (await source.readRedemptionCredentials(attempt.jobRunId)) ?? {};
+    const { tokenDigest, runtimeDigest } = (await source.readRedemptionCredentials(attempt.jobRunId, signal)) ?? {};
+    signal.throwIfAborted();
     const tokenMatches = matchesWorkerCredential(tokenDigest, attempt.tokenDigest);
     const runtimeMatches = matchesWorkerCredential(runtimeDigest, attempt.runtimeDigest);
-    if (signal.aborted || !tokenMatches || (runtimeDigest !== undefined && !runtimeMatches)) return undefined;
+    if (!tokenMatches || (runtimeDigest !== undefined && !runtimeMatches)) return undefined;
     // Replay proof requires the stored runtime digest to remain present.
     // A matching digest that appeared after first-use proof can begin replay.
     if (proof !== undefined && proof.first === undefined && runtimeDigest === undefined) return undefined;
-    return await host.database.transaction(async (tx) => (signal.aborted ? undefined : verifyOrder(host, tx, attempt)));
+    const verified = await host.database.transaction(async (tx) => await verifyOrder(host, tx, attempt, signal), {
+      signal,
+    });
+    signal.throwIfAborted();
+    return verified;
   } catch (error) {
     if (proof === undefined || storageDisposition(error) === 'rejected') return undefined;
     throw new WorkerRedemptionError('retryable', 'Run redemption storage read failed');
@@ -478,7 +478,7 @@ async function prepareObservedEvidence(
  * verification. Preparation performs no writes. Durable observations belong
  * to supervision and have effect independently of the exchange outcome.
  * The transport must release its session only after commit.
- * @param host - Host dispatch, order storage and in-process supervision authority.
+ * @param hostOptions - Host dispatch, order storage and in-process supervision authority.
  * @param call - Kernel-minted anonymous boundary call.
  * @param presentation - Worker credentials, used only to derive digests.
  * @param visibility - Host-selected allocation verification policy.
@@ -487,13 +487,14 @@ async function prepareObservedEvidence(
  * @returns A rejection or storage work returning the final reply.
  */
 export async function prepareWorkerRedemption(
-  host: WorkerRedemptionHost,
+  hostOptions: WorkerRedemptionHost,
   call: CallContext,
   presentation: WorkerRedemptionPresentation,
   visibility: StartValueVisibility,
   connectionDeadline: number,
 ): Promise<ConnectionExchangeResult> {
-  const { supervisionCall } = host;
+  const host = Object.freeze({ ...hostOptions });
+  const { supervisionCall, operationSignal } = host;
   if (
     !isMintedCallContext(call) ||
     call.caller.kind !== CorePartyKind.anonymous ||
@@ -503,7 +504,8 @@ export async function prepareWorkerRedemption(
     ownCarrierOf(supervisionCall)?.kind !== CorePartyKind.host ||
     !presentation.oneTimeToken ||
     !presentation.runtimeSecret ||
-    !Number.isFinite(connectionDeadline)
+    !Number.isFinite(connectionDeadline) ||
+    operationSignal?.aborted !== false
   )
     return rejected;
   const { jobRunId, oneTimeToken, runtimeSecret } = presentation;
@@ -515,7 +517,7 @@ export async function prepareWorkerRedemption(
   const policy = Object.freeze({ ...visibility });
   const watch = host.allocationObservation.watch(jobRunId);
   try {
-    const prepared = await withinPreparationDeadline(connectionDeadline, host.operationSignal, async (lifetime) => {
+    const prepared = await withinPreparationDeadline(connectionDeadline, operationSignal, async (lifetime) => {
       const changed = watch.changed();
       const current = await readVerifiedOrder(host, attempt, lifetime.signal);
       if (current === undefined) return undefined;

@@ -24,6 +24,7 @@ import { buildSubscribeMessage, buildUnsubscribeMessage, type SubscriptionEntry 
 import { authorizedRecipients, projectBoundaryMessage, ServerBoundaryAccess } from './server-boundary-access.js';
 import { ClientRegistry } from './client-registry.js';
 import { setupClientConnection, routeRequestToClients } from './server-client-setup.js';
+import { ConnectionExchangeAuth } from './auth/connection-exchange-auth.js';
 import {
   resolveHmacIdentityAllowedSubscriptionSubjects,
   resolveHmacIdentityRequiredSubscriptionFilters,
@@ -182,6 +183,8 @@ export class ServerTransport implements BusTransport {
       this.connectionListener = null;
     }
 
+    // Native close events may arrive after shutdown has started.
+    if (this.auth instanceof ConnectionExchangeAuth) this.auth.abortPendingExchanges();
     const socketsToClose = this.registry.getAllSockets();
     for (const client of socketsToClose) {
       client.close();
