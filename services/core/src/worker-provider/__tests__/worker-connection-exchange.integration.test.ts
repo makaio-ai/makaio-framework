@@ -1,17 +1,23 @@
 import { execFileSync, fork, type ChildProcess } from 'node:child_process';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { once } from 'node:events';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { createConnection } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 import { CorePartyKind } from '@makaio/core';
+import { HmacAuth, WebSocketClientTransport } from '@makaio/bus-transport-websocket';
+import { WORKER_REDEMPTION_EXCHANGE, WorkerExchangeReplySchema } from '@makaio/contracts/boundary';
+import { WebSocket } from 'ws';
 import { createHostDatabase } from '@makaio/storage-drizzle';
 import { abortableWait } from '@makaio/utils';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { getCurrentTest } from 'vitest/suite';
 import { buildExchangeProcesses } from './worker-exchange-process-build.js';
 import { readDispatch } from '../dispatch-store.js';
+import { fixtureToken } from './ordered-worker-fixture.js';
+import { TEST_RUNTIME_SECRET } from './worker-exchange-host-storage.js';
 import { readRedemptionOwnerEndings, readRedemptionOwnerRow } from './redemption-owner-fixture.js';
 import {
   createRestartDatabase,
@@ -520,15 +526,134 @@ describe.each(['node', 'bun'] as const)('stock worker exchange on %s', (runtime)
   });
 });
 
+describe.each(['node', 'bun'] as const)('public boot worker exchange on %s', (runtime) => {
+  // Node receives the resolved socket address, so localhost can resolve to an accepted literal.
+  const rejectedHosts = ['0.0.0.0', ...(runtime === 'bun' ? (['localhost'] as const) : [])] as const;
+  it.each(rejectedHosts)('rejects %s before binding the worker exchange', async (rejectBindHost) => {
+    const { test, storage, proof } = await prepareCase(false);
+    const host = startHost(test, runtime, 'boot-protected', { database: storage.url, proof, rejectBindHost });
+    const { port, message, transportRegistered } = await host.event('boot-rejected');
+    expect(message).toBe(
+      rejectBindHost === 'localhost'
+        ? 'Worker exchange test mode requires a loopback listener with a matching Bun socket address'
+        : 'Worker exchange test mode requires a loopback listener',
+    );
+    expect(transportRegistered).toBe(false);
+    expect(host.count('boot-listening')).toBe(0);
+    const socket = createConnection({ host: rejectBindHost === '0.0.0.0' ? '127.0.0.1' : rejectBindHost, port });
+    test.context.onTestFinished(() => {
+      socket.destroy();
+    });
+    // events.once rejects on the socket error while waiting for a successful connection.
+    await expect(once(socket, 'connect')).rejects.toMatchObject({ code: 'ECONNREFUSED' });
+  });
+
+  it.each([
+    ['keeps exchange off by default', 'boot-default'],
+    ['admits an opted-in worker after startup', 'admit'],
+    ['admits an opted-in worker without explicit auth', 'loopback-auth'],
+    ['admits an opted-in worker on IPv4-mapped loopback', 'mapped-loopback'],
+    ['preserves the live route on owner rollback', 'rollback'],
+    ['retires the live route on owner commit', 'commit'],
+  ] as const)('%s', async (_description, outcome) => {
+    const scenario = outcome === 'boot-default' ? 'boot-default' : 'boot-protected';
+    const { test, storage, proof } = await prepareCase(false);
+    const omitLegacyAuth = outcome === 'loopback-auth';
+    const bindHost = outcome === 'mapped-loopback' ? '::ffff:127.0.0.1' : undefined;
+    const host = startHost(test, runtime, scenario, { database: storage.url, proof, omitLegacyAuth, bindHost });
+    const { port } = await host.event('boot-listening');
+    await host.event('boot-owner-held');
+    const ca = await readFile(join(certDirectory, 'cert.pem'));
+    function present() {
+      const ws = new WebSocket(`wss://127.0.0.1:${port}/bus/exchange`, { ca, handshakeTimeout: 1_000 });
+      ws.on('error', () => {});
+      test.context.onTestFinished(() => ws.terminate());
+      ws.on('open', () =>
+        ws.send(
+          JSON.stringify({
+            type: 'connection-exchange',
+            exchange: WORKER_REDEMPTION_EXCHANGE,
+            presented: { jobRunId: RUN_ID, oneTimeToken: fixtureToken, runtimeSecret: TEST_RUNTIME_SECRET, proof },
+          }),
+        ),
+      );
+      return ws;
+    }
+
+    if (scenario === 'boot-protected') {
+      const [code] = await abortableWait(once(present(), 'close'), test.context.signal);
+      expect(code).toBe(1011);
+    }
+    host.send('release');
+    await host.event('ready');
+    host.send('boot-snapshot');
+    await expect(host.event('boot-snapshot')).resolves.toMatchObject({
+      reads: 0,
+      proofChecks: 0,
+      promotions: 0,
+      accepted: false,
+      bound: false,
+    });
+
+    const legacy = new WebSocketClientTransport({
+      url: `wss://127.0.0.1:${port}/bus`,
+      auth: omitLegacyAuth ? undefined : new HmacAuth({ secret: 'shared-test-credential' }),
+      autoReconnect: false,
+      createWebSocket: (endpoint) => new WebSocket(endpoint, { ca }),
+    });
+    test.context.onTestFinished(() => legacy.disconnect());
+    await legacy.connect();
+    await abortableWait(legacy.ready, test.context.signal);
+    await legacy.disconnect();
+
+    const ws = present();
+    const sync = Promise.withResolvers<void>();
+    ws.on('message', (raw) => {
+      if (JSON.parse(String(raw)).type === 'subscribe-sync-complete') sync.resolve();
+    });
+    if (scenario === 'boot-default') {
+      const closed = new Promise<number>((resolve) => ws.once('close', resolve));
+      await expect(abortableWait(closed, test.context.signal)).resolves.toBe(1006);
+    } else {
+      const [raw] = await abortableWait(once(ws, 'message'), test.context.signal);
+      expect(WorkerExchangeReplySchema.parse(JSON.parse(String(raw)))).toMatchObject({
+        payload: { order: 'boot-order' },
+      });
+      await abortableWait(sync.promise, test.context.signal);
+    }
+    host.send('boot-snapshot');
+    const snapshot = await host.event('boot-snapshot');
+    if (scenario === 'boot-default') {
+      expect(snapshot).toMatchObject({ reads: 0, proofChecks: 0, promotions: 0, accepted: false, bound: false });
+    } else {
+      expect(snapshot.reads).toBeGreaterThan(0);
+      expect(snapshot).toMatchObject({ proofChecks: 1, promotions: 1, accepted: true, bound: true });
+      if (outcome === 'rollback') {
+        host.send('boot-rollback');
+        await expect(host.event('boot-ending')).resolves.toMatchObject({ closed: false, connections: 1 });
+        expect(ws.readyState).toBe(WebSocket.OPEN);
+      }
+      if (outcome === 'commit') {
+        const closed = abortableWait(once(ws, 'close'), test.context.signal);
+        host.send('boot-close');
+        await expect(host.event('boot-ending')).resolves.toMatchObject({ closed: true, connections: 0 });
+        const [code] = await closed;
+        expect(code).toBe(1008);
+      }
+    }
+  });
+});
+
 /**
  * Own one database for one test, including any replacement host.
+ * @param seed - Whether to migrate the smaller non-boot fixture instead of leaving storage to full boot.
  * @returns Current test, isolated storage and independent allocation proof.
  */
-async function prepareCase() {
+async function prepareCase(seed = true) {
   const test = getCurrentTest();
   if (test === undefined) throw new Error('Exchange process setup requires a current test');
   const started = performance.now();
-  const storage = await createRestartDatabase(certDirectory);
+  const storage = await createRestartDatabase(certDirectory, seed);
   reportTiming('case database', started);
   test.context.onTestFinished(() => storage.cleanup());
   return { test, storage, proof: randomBytes(16).toString('hex') };

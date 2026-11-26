@@ -56,24 +56,37 @@ const refused: WorkerExchangeReply = { type: 'connection-exchange-result', rejec
  * Validate the host's exchange policy before accepting any worker work.
  * @param host - Host lifetime and reply constraints.
  * @param options - Explicit worker proof and promotion policy.
- * @returns The configured effective reply limit.
+ * @returns The exchange wire policy.
  */
-function checkExchangeConfiguration(host: WorkerRedemptionHost, options: WorkerConnectionExchangeOptions): number {
+function checkExchangeConfiguration(host: WorkerRedemptionHost, options: WorkerConnectionExchangeOptions) {
   if (!(host.operationSignal instanceof AbortSignal)) {
     throw new ConnectionExchangeConfigurationError('WS_INVALID_EXCHANGE_HOST_SIGNAL');
   }
   if (typeof options.withRunPromotion !== 'function') {
     throw new ConnectionExchangeConfigurationError('WS_MISSING_WORKER_PROMOTION');
   }
+  return workerConnectionExchangePolicy(options, host.exchangeReplyByteLimit);
+}
+
+/**
+ * Resolve the wire policy shared by the boot delegate and the bound exchange.
+ * @param options - Configured capacity and byte limit.
+ * @param replyLimit - Optional stricter limit from dispatch.
+ * @returns The exchange wire policy.
+ */
+export function workerConnectionExchangePolicy(
+  options: Pick<WorkerConnectionExchangeOptions, 'maxBytes' | 'maxPendingExchanges'>,
+  replyLimit?: number,
+) {
   const maxBytes = Math.min(
     options.maxBytes ?? WORKER_EXCHANGE_MAX_BYTES,
-    host.exchangeReplyByteLimit ?? WORKER_EXCHANGE_MAX_BYTES,
+    replyLimit ?? WORKER_EXCHANGE_MAX_BYTES,
     WORKER_EXCHANGE_MAX_BYTES,
   );
   if (!Number.isSafeInteger(maxBytes) || maxBytes < Buffer.byteLength(JSON.stringify(refused))) {
     throw new RangeError('Invalid worker connection exchange budget');
   }
-  return maxBytes;
+  return { maxBytes, maxPendingExchanges: options.maxPendingExchanges, refusal: JSON.stringify(refused) };
 }
 
 /**
@@ -108,13 +121,12 @@ export function createWorkerConnectionExchange(
   options: WorkerConnectionExchangeOptions,
 ): ConnectionExchangeSetup {
   const base: WorkerRedemptionHost = Object.freeze({ ...host, requireIssuerIdentityKey: true });
-  const maxBytes = checkExchangeConfiguration(base, options);
+  const policy = checkExchangeConfiguration(base, options);
+  const { maxBytes } = policy;
   const withRunPromotion = options.withRunPromotion.bind(options);
   const verifyProof = options.verifyProof.bind(options);
   return {
-    maxBytes,
-    maxPendingExchanges: options.maxPendingExchanges,
-    refusal: JSON.stringify(refused),
+    ...policy,
     async admit(frame, context) {
       const { connectionId, deadline, signal, markProofVerified, markVerifiedRevocationKey } = context;
       const request = parseRequest(frame);

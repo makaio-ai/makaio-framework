@@ -8,7 +8,7 @@ import type {
 } from '@makaio/bus-core';
 import type { RegistrableBusNamespaceDefinition } from '@makaio/core';
 import type { FrameworkModuleResolver } from './framework-module-resolver.js';
-import type { DispatchingAuth, TransportAuth } from '@makaio/bus-transport-websocket';
+import type { ConnectionExchangeSetup, DispatchingAuth, TransportAuth } from '@makaio/bus-transport-websocket';
 import type { BridgeBrowserOptions } from './create-static-mount.js';
 import type {
   ExtensionConfigProvider,
@@ -42,6 +42,7 @@ import type { ExtensionOperatorConfigSnapshot } from './extension-operator-confi
 import type { HttpRouteGraphBuilder } from './http-route-graph-builder.js';
 import type { FixedOperationHost } from './workflow-worker/fixed-operation-host.js';
 import type { WorkflowWorkerEntryMode } from './workflow-worker/worker-entry-resolver.js';
+import type { WorkerExchangeHostTestOptions } from './worker-exchange-host-test-mode.js';
 import type { WorkspaceRootResolver } from './workflow-worker/local-directory-materializer.js';
 
 /** Host adapters for the committed dispatch capability. */
@@ -131,6 +132,13 @@ export interface ServerTransportConnectOptions {
   readonly machineId: string;
   /** Host authorization policy or an explicit opt-out. */
   readonly checkBoundaryAccess: BoundaryAccessPolicy;
+  /** Boot-owned setup when the protected worker exchange test mode is enabled. */
+  readonly workerExchange?: {
+    /** Admission policy owned by the boot lifecycle. */
+    readonly setup: ConnectionExchangeSetup;
+    /** Loopback address verified by the native boot path. */
+    readonly boundHost: string;
+  };
 }
 
 /**
@@ -268,6 +276,16 @@ export interface CoreBootOptions {
   readonly database?: DatabaseBootOptions;
   /** Host configuration for committed worker orders. Extensions supply providers through `workerProviders`. */
   readonly workerDispatch?: WorkerDispatchHostOptions;
+  /**
+   * Opt into protected worker exchange for local tests with ordered dispatch. Defaults off.
+   *
+   * This test seam is unsupported in production and carries no stability guarantee.
+   * Node attaches its own upgrade handler and checks the resolved socket address.
+   * Bun callers must pass the native server from `serveBunWorkerExchangeTest` and the
+   * same transport. The server's configured loopback literal must match its bound address.
+   * @internal
+   */
+  readonly workerExchangeTest?: WorkerExchangeHostTestOptions;
 
   /**
    * Host-provided runtime config provider.

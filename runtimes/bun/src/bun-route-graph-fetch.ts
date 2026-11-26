@@ -79,6 +79,10 @@ function isBusWebSocketUpgrade(request: Request): boolean {
  * `server.upgrade(request)`. This wrapper keeps that infrastructure concern at
  * the Bun platform boundary while all non-WebSocket HTTP requests continue to
  * flow through the stable {@link HonoRouteGraph.fetch} facade.
+ *
+ * For boot's `workerExchangeTest` option, use `serveBunWorkerExchangeTest`.
+ * It supplies the exchange policy here and installs both native handlers on
+ * the server that boot checks.
  * @param routeGraph - Stable route graph facade for HTTP requests.
  * @param exchange - Evidence policy tied to this specific listener by the composition.
  * @returns Bun-compatible fetch function that upgrades bus WebSocket requests.

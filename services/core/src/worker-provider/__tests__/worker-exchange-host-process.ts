@@ -111,6 +111,19 @@ async function run(): Promise<void> {
   const [start]: unknown[] = await once(process, 'message');
   if (lifetime.signal.aborted) return;
   const options = ExchangeHostStartSchema.parse(start);
+  if (scenario === 'boot-protected' || scenario === 'boot-default') {
+    const { runExchangeBootHost } = await import('./worker-exchange-boot-host.js');
+    return runExchangeBootHost({
+      start: options,
+      runtime,
+      directory,
+      enabled: scenario === 'boot-protected',
+      signal: lifetime.signal,
+      release: release.promise,
+      stopped: stopped.promise,
+      report,
+    });
+  }
   const { database, proof, expiredAt, port } = options;
   resumePort = port ?? 0;
   const storageStart = performance.now();

@@ -1,10 +1,15 @@
 import type { WebSocketHandler } from 'bun';
 import { expect, test } from 'bun:test';
+import { once } from 'node:events';
 import { mkdtemp, rm } from 'node:fs/promises';
+import { createConnection } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { KernelExtensionContext } from '@makaio/kernel';
-import { type MakaioRuntime } from '@makaio/runtime-node';
+import { createHonoRouteGraph, type MakaioRuntime } from '@makaio/runtime-node';
+import { MakaioBus } from '@makaio/bus-core';
+import { busContextOf } from '@makaio/bus-core/kernel-api';
+import { Hono } from 'hono';
 import {
   childProvider,
   dispatchProbeDiscovery,
@@ -13,7 +18,8 @@ import {
   source,
   writeOrder,
 } from '../../../node/src/__tests__/worker-dispatch-boot-fixture.js';
-import { bootMakaioRuntime, BunBusServerTransportProvider } from '../index.js';
+import { bootMakaioRuntime, BunBusServerTransportProvider, createBunRouteGraphFetch } from '../index.js';
+import type { BunBootMakaioRuntimeOptions } from '../boot.js';
 
 test('Bun dispatches and drains a worker from an extension contribution', async () => {
   const home = await mkdtemp(join(tmpdir(), 'bun-worker-dispatch-'));
@@ -92,5 +98,64 @@ test('Bun dispatches and drains a worker from an extension contribution', async 
         }
       }
     }
+  }
+});
+
+test('Bun rejects worker exchange test mode when the running fetch cannot upgrade it', async () => {
+  const home = await mkdtemp(join(tmpdir(), 'bun-worker-exchange-'));
+  const transport = new BunBusServerTransportProvider({});
+  const server = Bun.serve({
+    port: 0,
+    hostname: '127.0.0.1',
+    fetch: createBunRouteGraphFetch(createHonoRouteGraph(new Hono())),
+    websocket: transport.createWebSocketHandler() as WebSocketHandler<undefined>,
+  });
+  const { port } = server;
+  let runtime: MakaioRuntime | undefined;
+  let bootEntered = false;
+  try {
+    await expect(
+      bootMakaioRuntime({
+        bunServer: server as BunBootMakaioRuntimeOptions['bunServer'],
+        transport,
+        makaioHome: home,
+        onCancellationBudget: () => {
+          bootEntered = true;
+        },
+        workerDispatch: {
+          scopeSetting: { kind: 'absent' },
+          connection: () => ({ busAuth: { kind: 'none' } }),
+          source,
+        },
+        workerExchangeTest: {
+          maxPendingExchanges: 1,
+          async verifyProof() {
+            throw new Error('Unexpected proof verification');
+          },
+          async withRunPromotion() {
+            throw new Error('Unexpected run promotion');
+          },
+        },
+      }).then((started) => {
+        runtime = started;
+      }),
+    ).rejects.toThrow('Worker exchange test mode requires a Bun exchange-capable fetch');
+    expect(bootEntered).toBe(false);
+    expect(busContextOf(MakaioBus).transportRegistry.getTransport('websocket')).toBeUndefined();
+  } finally {
+    try {
+      await runtime?.shutdown();
+    } finally {
+      await server.stop(true);
+      await rm(home, { recursive: true, force: true });
+    }
+  }
+
+  if (port === undefined) throw new Error('Bun listener unavailable');
+  const socket = createConnection({ host: '127.0.0.1', port });
+  try {
+    await expect(once(socket, 'connect')).rejects.toHaveProperty('code', 'ECONNREFUSED');
+  } finally {
+    socket.destroy();
   }
 });

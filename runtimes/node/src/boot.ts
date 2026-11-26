@@ -60,6 +60,7 @@ import { setupWriteJournal } from './write-journal-boot.js';
 import { CliNamespace } from '@makaio/kernel/cli';
 import { RuntimeSubjects, RuntimeNamespace } from './bus/runtime/namespace.js';
 import { BusServerTransportProvider } from './bus-server-transport.js';
+import { prepareWorkerExchangeHostTestMode } from './worker-exchange-host-test-mode.js';
 import { FileConfigStorage } from './file-config-storage.js';
 import { NodeRuntimeProvider } from './node-runtime-provider.js';
 import { loadOrCreateMachineIdentity } from '@makaio/machine-identity';
@@ -288,9 +289,11 @@ export async function bootMakaioRuntimeCore(
   const peerSigningKeyResolver = options.peerSigningKeyResolver;
 
   const startGate = new JournalStartBarrier(options.journalStartupWaitTimeoutMs);
+  const workerExchange = prepareWorkerExchangeHostTestMode(options.workerExchangeTest, boundHost);
   const rights = createCoordinatorRights(MakaioBus, 'host');
   /** Reject inbound work as soon as boot is cancelled. */
   const closeOnAbort = (): void => {
+    workerExchange?.close();
     rights.closeBoundary();
     startGate.close(options.signal?.reason);
   };
@@ -369,7 +372,8 @@ export async function bootMakaioRuntimeCore(
     const notifySubscriptionAvailability = async (): Promise<void> => {
       await Promise.all([...subscriptionAvailabilityListeners].map((retry) => retry()));
     };
-    const hostCaller = bus.own('observer').caller;
+    const supervisorCall = bus.own('observer');
+    const hostCaller = supervisorCall.caller;
     const stopActivationObserver = bus.on(ExtensionSubjects.stateChanged, ({ call, payload }) => {
       if (
         rights.isBoundaryReady() &&
@@ -394,7 +398,11 @@ export async function bootMakaioRuntimeCore(
         subscriptionAvailabilityListeners.delete(retry);
       };
     };
-    await transport.connect(bus, { machineId, checkBoundaryAccess: boundaryCheck });
+    await transport.connect(bus, {
+      machineId,
+      checkBoundaryAccess: boundaryCheck,
+      ...(workerExchange === undefined ? {} : { workerExchange: { setup: workerExchange.setup, boundHost } }),
+    });
     const transportDisconnected = Promise.withResolvers<void>();
     shutdownSteps.push(
       resourceStep('bus transport', async () => {
@@ -1021,6 +1029,7 @@ export async function bootMakaioRuntimeCore(
     startGate.open();
     rights.openBoundary();
     await notifySubscriptionAvailability();
+    workerExchange?.open(workerDispatch, supervisorCall, database);
     // ORIGIN: Startup announces that the extension start phase is complete.
     await bus.emit(bus.own('start'), KernelSubjects.phase.servicesReady, { machineId });
     const allExtensions = coordinator.list();
@@ -1110,6 +1119,7 @@ export async function bootMakaioRuntimeCore(
        * @returns Completion of the runtime shutdown sequence.
        */
       shutdown() {
+        workerExchange?.close();
         rights.closeBoundary();
         startGate.close(new Error('The journal host is shutting down.'));
         return shutdownSequence.run();
@@ -1117,6 +1127,7 @@ export async function bootMakaioRuntimeCore(
       stopBudgetMs: shutdownSequence.budgetMs,
     };
   } catch (err) {
+    workerExchange?.close();
     rights.closeBoundary();
     startGate.close(err);
     reportOperatorConfig?.();

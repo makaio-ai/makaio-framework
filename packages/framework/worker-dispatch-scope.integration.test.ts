@@ -23,7 +23,8 @@ import {
   type OrderedWorkerBootstrapAuth,
   type WorkflowWorkerLaunchConfig,
 } from '@makaio/framework/contracts';
-import type { CoreBootOptions, WorkerRunStatusReader } from '@makaio/framework/runtime-node';
+import { bootMakaioRuntime, type BootMakaioRuntimeOptions, type CoreBootOptions, type WorkerRunStatusReader } from '@makaio/framework/runtime-node';
+import { serveBunWorkerExchangeTest, type BunBootMakaioRuntimeOptions } from '@makaio/framework/runtime-bun';
 import { runWorkflowInWorker, type WorkerConnectorContext } from '@makaio/framework/runtime-node/workflow-worker/worker-entry';
 import { readAllocationScopeSetting } from '@makaio/framework/services/internal/worker-provider-host-binding';
 import { digestWorkerBootstrapToken, type WorkerCredentialDigest } from '@makaio/framework/services/worker-provider';
@@ -32,6 +33,16 @@ import { digestWorkerBootstrapToken, type WorkerCredentialDigest } from '@makaio
 function connectOrdered(context: WorkerConnectorContext, readRunStatus: WorkerRunStatusReader) {
   return context.createConnection(undefined, undefined, readRunStatus);
 }
+
+// Both native boot entry points share the same optional test policy.
+const nodeBoot: Pick<BootMakaioRuntimeOptions, 'workerExchangeTest'> = {
+  workerExchangeTest: {
+    maxPendingExchanges: 2,
+    async verifyProof() { return undefined; },
+    async withRunPromotion(_database, _run, signal) { signal.throwIfAborted(); },
+  },
+};
+const bunBoot: Pick<BunBootMakaioRuntimeOptions, 'workerExchangeTest'> = nodeBoot;
 
 const scopeSetting: NonNullable<CoreBootOptions['workerDispatch']>['scopeSetting'] = readAllocationScopeSetting({
   get: (name) => name === 'worker-host'
@@ -58,6 +69,8 @@ const config: WorkflowWorkerLaunchConfig = WorkflowWorkerLaunchConfigSchema.pars
 const digest: WorkerCredentialDigest = digestWorkerBootstrapToken('example input');
 console.log(JSON.stringify({
   scopeSetting,
+  bunTestListener: typeof serveBunWorkerExchangeTest,
+  bootTestPolicy: typeof bootMakaioRuntime === 'function' && bunBoot.workerExchangeTest?.maxPendingExchanges,
   digestMatches: digest === 'worker-bootstrap-v1:e065986136506eb4daabc992e5f19bb0df27afe327fcb74b4aab82b169e563f4',
   workerEntryLoaded: typeof runWorkflowInWorker === 'function',
   orderedAuthParsed: config.orderedBusAuth?.kind === 'exchange',
@@ -65,7 +78,7 @@ console.log(JSON.stringify({
 `;
 
 it(
-  'loads the installed worker entries and compiles the launch contract and computes the issuer digest',
+  'loads installed worker and host entries and verifies their public contracts',
   async () => {
     const root = await mkdtemp(join(tmpdir(), 'worker-dispatch-scope-'));
     try {
@@ -96,8 +109,21 @@ it(
       const { stdout } = await runInstalledPackageSetupStage('consumer', () =>
         execFileAsync(process.execPath, ['consumer.mjs'], { cwd: consumerRoot, signal, timeout: RUNTIME_TIMEOUT_MS }),
       );
+      const { stdout: bunBootExport } = await runInstalledPackageSetupStage('consumer', () =>
+        execFileAsync(
+          'bun',
+          [
+            '--eval',
+            "import { bootMakaioRuntime, serveBunWorkerExchangeTest } from '@makaio/framework/runtime-bun'; console.log(typeof bootMakaioRuntime, typeof serveBunWorkerExchangeTest);",
+          ],
+          { cwd: consumerRoot, signal, timeout: RUNTIME_TIMEOUT_MS },
+        ),
+      );
+      expect(bunBootExport.trim()).toBe('function function');
       expect(JSON.parse(stdout)).toEqual({
         scopeSetting: { kind: 'present', value: 'installation-scope' },
+        bootTestPolicy: 2,
+        bunTestListener: 'function',
         digestMatches: true,
         workerEntryLoaded: true,
         orderedAuthParsed: true,

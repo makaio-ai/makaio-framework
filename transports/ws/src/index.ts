@@ -79,6 +79,7 @@ export { ServerTransport } from './server-transport.js';
 // Only WebSocket-specific helpers are exported here; generic correlation and
 // serialization helpers live at the @makaio/bus-core boundary.
 export { extractSocketErrorMessage } from './transport-helpers.js';
+export { isLoopbackAddress } from './loopback-address.js';
 
 // Export authentication implementations
 export { HmacAuth } from './auth/index.js';
