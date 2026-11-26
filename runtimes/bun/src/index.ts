@@ -82,6 +82,8 @@ export {
 } from './bus-server-transport.js';
 export {
   createBunRouteGraphFetch,
+  type BunExchangeUpgradeData,
+  type BunExchangeUpgradeOptions,
   type BunRouteGraphFetch,
   type BunRouteGraphUpgradeServer,
 } from './bun-route-graph-fetch.js';

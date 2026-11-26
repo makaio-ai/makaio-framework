@@ -34,7 +34,10 @@ export interface HostDatabase {
    * or a write participant) uses the transaction it was given.
    * @typeParam T - Value the callback resolves with.
    * @param fn - Callback that performs the database work using the open transaction.
+   * @param options - Optional caller lifetime. An abort skips work still in the
+   * host queue and rolls back active work before commit. Once storage hands off
+   * to commit, the commit runs to completion.
    * @returns The value `fn` resolved with, after the transaction committed.
    */
-  transaction<T>(fn: (tx: HostTransaction) => Promise<T>): Promise<T>;
+  transaction<T>(fn: (tx: HostTransaction) => Promise<T>, options?: { readonly signal?: AbortSignal }): Promise<T>;
 }

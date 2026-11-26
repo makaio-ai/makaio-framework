@@ -62,8 +62,13 @@ export interface LockedWorkerRedemption {
   readonly issuerActive: boolean;
   readonly maxRuntimeMs: number;
   readonly cancellationWindowMs: number;
-  /** Credential-free exchange response pinned at booking. */
-  readonly payload: JsonValue;
+  /**
+   * Build the final, credential-free exchange response solely from the locked
+   * booking and the computed result deadline.
+   * @param latestResultAt - The same deadline as the admitted session expiry.
+   * @returns The opaque reply payload to check and persist.
+   */
+  preparePayload(latestResultAt: string): JsonValue;
   readonly stored?: StoredWorkerRedemption;
   /**
    * Conditionally consume the token and persist the identity and reply on the
@@ -107,8 +112,9 @@ interface WorkerOrderMaterialSource<Order extends CommittedWorkerOrder = Committ
    * Keep closed orders readable while their dispatches may still be supervised.
    * @param tx - The shared host transaction.
    * @param jobRunId - Order to lock and read.
+   * @param signal - Optional lifetime of a connection exchange using this lock.
    */
-  lockOrder(tx: HostTransaction, jobRunId: JobRunId): Promise<Order | undefined>;
+  lockOrder(tx: HostTransaction, jobRunId: JobRunId, signal?: AbortSignal): Promise<Order | undefined>;
   /**
    * Check local start material availability without reading its plaintext.
    * @param order - Locked order awaiting a start claim.
@@ -134,9 +140,10 @@ export interface AtomicRedemptionWorkerOrderSource extends WorkerOrderMaterialSo
    * transaction. This screens presentations before the authoritative check
    * through `lockOrder` and is mandatory for an owner offering atomic redemption.
    * @param jobRunId - Run whose credential digests are requested.
+   * @param signal - Exchange lifetime. Discard results if the driver cannot stop an aborted query.
    * @returns The digests from the owner row for an atomic redemption booking.
    */
-  readRedemptionCredentials(jobRunId: JobRunId): Promise<WorkerRedemptionCredentials | undefined>;
+  readRedemptionCredentials(jobRunId: JobRunId, signal: AbortSignal): Promise<WorkerRedemptionCredentials | undefined>;
 }
 
 /** Adapter supplied by the host that owns the committed order and the volatile token. */

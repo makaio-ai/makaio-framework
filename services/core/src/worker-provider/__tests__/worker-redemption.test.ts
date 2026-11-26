@@ -3,6 +3,7 @@ import { pathToFileURL } from 'node:url';
 import { Worker } from 'node:worker_threads';
 import { createBusInstance } from '@makaio/bus-core';
 import { callFromReceive } from '@makaio/bus-core/kernel-api';
+import { ConnectionExchangeConfigurationError } from '@makaio/bus-transport-websocket';
 import type { HostDatabase, ProviderAllocationRef } from '@makaio/contracts';
 import type {
   ConnectionExchangeAccepted,
@@ -21,6 +22,7 @@ import {
 } from '@makaio/storage-conformance';
 import { sql } from 'drizzle-orm';
 import { afterEach, beforeAll, describe, expect, expectTypeOf, it, onTestFinished, vi } from 'vitest';
+import { createWorkerConnectionExchange } from '../../../../../runtimes/node/src/worker-connection-exchange.js';
 import {
   prepareWorkerRedemption,
   WorkerRedemptionError,
@@ -448,6 +450,23 @@ describe(`worker redemption owner storage (${config.dialect})`, () => {
     return startFixture({ constructContext, executor: getContext().executor }, id, mode, configureManaged);
   }
 
+  it('fails at binding with a classified error if the host signal is missing', async () => {
+    const { host } = await start('missing-host-signal');
+    const binding = { ...host };
+    Reflect.deleteProperty(binding, 'operationSignal');
+    expect(() =>
+      createWorkerConnectionExchange(binding, {
+        maxPendingExchanges: 1,
+        verifyProof: async () => undefined,
+      }),
+    ).toThrow(
+      expect.toSatisfy(
+        (error: unknown) =>
+          error instanceof ConnectionExchangeConfigurationError && error.code === 'WS_INVALID_EXCHANGE_HOST_SIGNAL',
+      ),
+    );
+  });
+
   /**
    * Use the same persisted owner through an independent connection.
    * @param fixture - Booked run and host authority.
@@ -742,9 +761,9 @@ describe(`worker redemption owner storage (${config.dialect})`, () => {
     const owner = fixture.owner.sourceFor(getContext().executor);
     const source: AtomicRedemptionWorkerOrderSource = {
       ...owner,
-      readRedemptionCredentials(jobRunId) {
+      readRedemptionCredentials(jobRunId, signal) {
         credentialReads++;
-        return owner.readRedemptionCredentials(jobRunId);
+        return owner.readRedemptionCredentials(jobRunId, signal);
       },
     };
     const pending = prepare(
@@ -821,10 +840,10 @@ describe(`worker redemption owner storage (${config.dialect})`, () => {
     const source = fixture.owner.sourceFor(getContext().executor);
     const reader: AtomicRedemptionWorkerOrderSource = {
       ...source,
-      async readRedemptionCredentials(jobRunId) {
+      async readRedemptionCredentials(jobRunId, signal) {
         entered.resolve();
         await release.promise;
-        return source.readRedemptionCredentials(jobRunId);
+        return source.readRedemptionCredentials(jobRunId, signal);
       },
     };
     vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] });
@@ -913,9 +932,9 @@ describe(`worker redemption owner storage (${config.dialect})`, () => {
     const malformedId = 'malformed run id';
     const source: AtomicRedemptionWorkerOrderSource = {
       ...owner,
-      async readRedemptionCredentials(jobRunId) {
+      async readRedemptionCredentials(jobRunId, signal) {
         if (jobRunId === malformedId) throw new Error('Malformed identifier');
-        return owner.readRedemptionCredentials(jobRunId);
+        return owner.readRedemptionCredentials(jobRunId, signal);
       },
     };
     const peer = { ...fixture, host: { ...fixture.host, source } };
@@ -940,13 +959,13 @@ describe(`worker redemption owner storage (${config.dialect})`, () => {
     let platformChecks = 0;
     const source: AtomicRedemptionWorkerOrderSource = {
       ...owner,
-      async readRedemptionCredentials(jobRunId) {
+      async readRedemptionCredentials(jobRunId, signal) {
         if (++reads === 2) {
           expect(platformChecks).toBe(1);
           if (when === 'after') vi.setSystemTime(connectionDeadline);
           throw new Error('Unexpected credential reread failure');
         }
-        return owner.readRedemptionCredentials(jobRunId);
+        return owner.readRedemptionCredentials(jobRunId, signal);
       },
     };
     const policy: StartValueVisibility = {
@@ -1010,14 +1029,14 @@ describe(`worker redemption owner storage (${config.dialect})`, () => {
     let locks = 0;
     const source: AtomicRedemptionWorkerOrderSource = {
       ...owner,
-      async readRedemptionCredentials(jobRunId) {
-        const credentials = await owner.readRedemptionCredentials(jobRunId);
+      async readRedemptionCredentials(jobRunId, signal) {
+        const credentials = await owner.readRedemptionCredentials(jobRunId, signal);
         if (++reads === 2 && when === 'during') await removeStored();
         return credentials;
       },
-      async lockOrder(tx, jobRunId) {
+      async lockOrder(tx, jobRunId, signal) {
         locks++;
-        return owner.lockOrder(tx, jobRunId);
+        return owner.lockOrder(tx, jobRunId, signal);
       },
     };
     const policy: StartValueVisibility = {
@@ -1044,9 +1063,9 @@ describe(`worker redemption owner storage (${config.dialect})`, () => {
     let reads = 0;
     const source: AtomicRedemptionWorkerOrderSource = {
       ...owner,
-      async readRedemptionCredentials(jobRunId) {
+      async readRedemptionCredentials(jobRunId, signal) {
         if (++reads === 2) throw new Error('Unexpected credential reread failure');
-        return owner.readRedemptionCredentials(jobRunId);
+        return owner.readRedemptionCredentials(jobRunId, signal);
       },
     };
     const peer = { ...fixture, host: { ...fixture.host, source } };
@@ -1177,6 +1196,70 @@ describe(`worker redemption owner storage (${config.dialect})`, () => {
     await expect(fixture.readDispatch()).resolves.toEqual(dispatch);
     const retry = await (await prepare(fixture, id)).exchange();
     expect(retry).toHaveProperty('party.id', id);
+  });
+
+  it.each([
+    'callback-entry',
+    'owner-lock',
+    'owner-write',
+  ] as const)('rolls back redemption when the connection deadline elapses at %s', async (phase) => {
+    const id = `commit-deadline-${phase}`;
+    const fixture = await start(id);
+    const order = await fixture.owner.read();
+    const dispatch = await fixture.readDispatch();
+    const owner = fixture.owner.sourceFor(getContext().executor);
+    const deadline = fixture.deadline - 1;
+    const lockRequested = Promise.withResolvers<void>();
+    const resumeLock = Promise.withResolvers<void>();
+    let committing = false;
+    let wroteOwner = false;
+    const source: AtomicRedemptionWorkerOrderSource = {
+      ...owner,
+      async lockOrder(tx, jobRunId, signal) {
+        if (committing && phase === 'owner-lock') {
+          lockRequested.resolve();
+          await resumeLock.promise;
+        }
+        const locked = await owner.lockOrder(tx, jobRunId, signal);
+        if (locked?.redemption === undefined || !committing) return locked;
+        const { redemption } = locked;
+        return {
+          ...locked,
+          redemption: {
+            ...redemption,
+            async accept(commitTx, result) {
+              const saved = await redemption.accept(commitTx, result);
+              wroteOwner = saved !== undefined;
+              if (phase === 'owner-write') vi.setSystemTime(deadline);
+              return saved;
+            },
+          },
+        };
+      },
+    };
+    const peer = { ...fixture, host: { ...fixture.host, source } };
+    const prepared = await prepare(peer, id, {}, localPolicy, deadline);
+    expectPrepared(prepared);
+    committing = true;
+    if (phase === 'callback-entry') vi.setSystemTime(deadline);
+    const pending = prepared.exchange();
+    const refusal = expect(pending).rejects.toMatchObject({
+      name: 'WorkerRedemptionError',
+      code: 'rejected',
+      message: 'Run redemption commit failed',
+    });
+    if (phase === 'owner-lock') {
+      try {
+        await Promise.race([lockRequested.promise, pending]);
+        vi.setSystemTime(deadline);
+      } finally {
+        resumeLock.resolve();
+      }
+    }
+    await refusal;
+    expect(wroteOwner).toBe(phase === 'owner-write');
+    await expect(fixture.owner.read()).resolves.toEqual(order);
+    await expect(fixture.readDispatch()).resolves.toEqual(dispatch);
   });
 
   it.each([-1, 0, 1])('classifies a typed commit failure at deadline %+i ms and rolls back', async (offset) => {
@@ -1750,7 +1833,7 @@ describe(`worker redemption owner storage (${config.dialect})`, () => {
     const exchange = await prepare(fixture, 'deadline-before-commit');
     expectPrepared(exchange);
     vi.setSystemTime(fixture.deadline);
-    await expect(exchange.exchange()).resolves.toEqual({ reject: 'rejected' });
+    await expect(exchange.exchange()).rejects.toMatchObject({ name: 'WorkerRedemptionError', code: 'rejected' });
     await expect(fixture.readDispatch()).resolves.toMatchObject({ boundAllocation: null });
     await expect(fixture.owner.read()).resolves.toMatchObject({ state: 'ordered', stored: null });
   });
@@ -1789,20 +1872,40 @@ describe(`worker redemption owner storage (${config.dialect})`, () => {
     await expect(fixture.owner.read()).resolves.toEqual(before);
   });
 
-  it('maps a thrown platform verifier error to generic rejection', async () => {
+  it('refuses an anonymous exchange when a JavaScript host omits its required signal', async () => {
+    const id = 'missing-operation-signal';
+    const fixture = await start(id);
+    const order = await fixture.owner.read();
+    const dispatch = await fixture.readDispatch();
+    const host = { ...fixture.host };
+    expect(Reflect.deleteProperty(host, 'operationSignal')).toBe(true);
+
+    await expect(prepare({ ...fixture, host }, id)).resolves.toHaveProperty('prepared', { reject: 'rejected' });
+    await expect(fixture.owner.read()).resolves.toEqual(order);
+    await expect(fixture.readDispatch()).resolves.toEqual(dispatch);
+  });
+
+  it('refuses an untyped verifier failure without exposing its details', async () => {
     const fixture = await start('proof-error');
-    const exchange = await prepare(
+    const before = await fixture.owner.read();
+    const { prepared: refusal } = await prepare(fixture, 'proof-error', { token: 'unknown' });
+    let verifications = 0;
+    const verification = prepare(
       fixture,
       'proof-error',
       {},
       {
         kind: 'externally-visible',
         async verifyPlatform() {
+          verifications += 1;
           throw new Error('Sensitive verifier detail');
         },
       },
     );
-    await expect(exchange.exchange()).resolves.toEqual({ reject: 'rejected' });
+    expect(refusal).toStrictEqual({ reject: 'rejected' });
+    expect((await verification).prepared).toStrictEqual(refusal);
+    expect(verifications).toBe(1);
+    await expect(fixture.owner.read()).resolves.toEqual(before);
     await expect(fixture.readDispatch()).resolves.toMatchObject({ boundAllocation: null });
   });
 

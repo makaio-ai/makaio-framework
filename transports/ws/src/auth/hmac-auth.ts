@@ -9,6 +9,7 @@
  * Uses Web Crypto API for HMAC computation (browser and Node.js compatible).
  */
 
+import { DEFAULT_AUTH_CHALLENGE_TIMEOUT_MS } from './auth-deadline.js';
 import { attestationForRole, type Party, type TransportReceiveContext } from '@makaio/core';
 import type { TransportAuth } from './interface.js';
 import { resolveHmacIdentityAttestingRole } from './identity-secret-registry.js';
@@ -170,7 +171,7 @@ export class HmacAuth implements TransportAuth {
   public constructor(options: HmacAuthOptions) {
     this.secret = options.secret;
     this.algorithm = options.algorithm ?? 'sha256';
-    this.challengeTimeout = options.challengeTimeout ?? 5000;
+    this.challengeTimeout = options.challengeTimeout ?? DEFAULT_AUTH_CHALLENGE_TIMEOUT_MS;
     this.identityId = options.identityId;
     this.resolveSecret = options.resolveSecret;
     this.resolveParty = options.resolveParty;

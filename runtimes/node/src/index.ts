@@ -222,3 +222,5 @@ export {
   PiscinaCodeExecutionProvider,
 } from './code-execution/index.js';
 export type { PiscinaCodeExecutionProviderOptions } from './code-execution/index.js';
+
+export { createWorkerConnectionExchange, type WorkerConnectionExchangeOptions } from './worker-connection-exchange.js';

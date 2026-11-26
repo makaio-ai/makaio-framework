@@ -111,6 +111,9 @@ async function contend(input: SqliteContenderInput): Promise<ConnectionExchangeA
     assert.equal(entered, false, 'SQLite must reject the transaction before entering the exchange callback');
     // A failed BEGIN can leave an unfinished statement in the native driver.
     await db.$client.reconnect();
+    // A fresh presentation has not passed independent proof, even with matching digests.
+    assert.deepEqual(await prepare(), { reject: 'rejected' });
+    await db.$client.reconnect();
     const retryable = assert.rejects(pending, (error) => {
       assert.ok(error instanceof WorkerRedemptionError);
       assert.equal(error.code, 'retryable');

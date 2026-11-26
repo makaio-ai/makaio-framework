@@ -184,3 +184,14 @@ declare module '@makaio/bus-core' {
     websocket: BusTransport;
   }
 }
+
+export {
+  CONNECTION_EXCHANGE_PATH,
+  ConnectionExchangeAuth,
+  ConnectionExchangeConfigurationError,
+  verifyConnectionExchangeIngress,
+  type ConnectionExchangeAdmission,
+  type ConnectionExchangeSetup,
+  type ConnectionExchangeSetupContext,
+  type ConnectionExchangeUpgrade,
+} from './auth/connection-exchange-auth.js';
