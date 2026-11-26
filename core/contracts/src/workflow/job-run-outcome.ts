@@ -1,21 +1,17 @@
-import { createBusNamespace, ExtensionNameSchema, type CallContext, type SchemaRecord } from '@makaio/core';
+import {
+  createBusNamespace,
+  ExtensionNameSchema,
+  hostLocalRequest,
+  journalSubject,
+  MAKAIO_JOB_RUN_PARTY_KIND,
+  type CallContext,
+  type SchemaRecord,
+} from '@makaio/core';
 import { z } from 'zod';
+import type { StartOrder } from '../capabilities/worker/ordered-dispatch.js';
 import type { HostTransaction } from '../host-database/index.js';
-import { JsonValueSchema, rejectingLossyJsonValues } from '../shared/index.js';
-import type { JobRunId } from './identifiers.js';
-import { WorkflowRunResultSchema } from './worker.js';
-
-/** The engine derives the job run from the authenticated caller. */
-export const OutcomeSubmitRequestSchema = z.strictObject({
-  /**
-   * Worker outcome whose identity the engine checks against the authenticated caller.
-   * The shared artifact data parser can discard own `__proto__` keys during JSON validation.
-   */
-  result: WorkflowRunResultSchema,
-});
-
-/** Worker submission body. */
-export type OutcomeSubmitRequest = z.infer<typeof OutcomeSubmitRequestSchema>;
+import { JsonValueSchema, rejectingLossyJsonValues, type JsonValue } from '../shared/index.js';
+import { JobRunIdSchema, type JobRunId } from './identifiers.js';
 
 /** Refusal codes reserved for the engine. */
 export const CoreOutcomeRefusalCodeSchema = z.enum([
@@ -27,6 +23,8 @@ export const CoreOutcomeRefusalCodeSchema = z.enum([
   'run-unknown',
   /** The authenticated caller does not own the run. */
   'not-own-job-run',
+  /** The authenticated caller sent an invalid outcome payload. */
+  'outcome-invalid',
   /** A different outcome has already been submitted. */
   'outcome-conflict',
   /** The submitted outcome exceeds the accepted size. */
@@ -44,6 +42,28 @@ const OpaqueOutcomeDataSchema = rejectingLossyJsonValues(JsonValueSchema, {
   extraArrayKey: 'Outcome arrays cannot carry extra fields',
 });
 
+const resultFields = {
+  jobRunId: JobRunIdSchema,
+  workflowId: z.string().min(1),
+  submission: OpaqueOutcomeDataSchema.optional(),
+};
+
+/** Terminal result sent by an ordered worker. */
+export const JobRunResultSchema = z.discriminatedUnion('status', [
+  z.strictObject({ ...resultFields, status: z.literal('completed') }),
+  z.strictObject({ ...resultFields, status: z.literal('failed'), error: z.string() }),
+  z.strictObject({ ...resultFields, status: z.literal('cancelled'), reason: z.string().optional() }),
+]);
+
+/** The complete result used when comparing a submission to the durable receipt. */
+export type JobRunResult = z.infer<typeof JobRunResultSchema>;
+
+/** The receiver checks `payload.result.jobRunId` against the authenticated caller. */
+export const OutcomeSubmitRequestSchema = z.strictObject({ result: JobRunResultSchema });
+
+/** Worker submission body. */
+export type OutcomeSubmitRequest = z.infer<typeof OutcomeSubmitRequestSchema>;
+
 const RefusalBaseSchema = z.strictObject({
   decision: z.literal('refused'),
   /** Whether the same submission may be retried. */
@@ -52,7 +72,11 @@ const RefusalBaseSchema = z.strictObject({
   detail: OpaqueOutcomeDataSchema.optional(),
 });
 
-/** First acceptance, replay of an acceptance, or a refusal with its origin. */
+/**
+ * First acceptance, authorized replay, or a refusal with its origin.
+ * Replay checks the run proof before reading the receipt. After revocation,
+ * replay returns `not-own-job-run`; the committed outcome and first answer remain stored.
+ */
 export const OutcomeSubmitResponseSchema = z.union([
   z.strictObject({
     decision: z.literal('accepted'),
@@ -99,7 +123,10 @@ export type OutcomeSubmitResponse =
 
 /** Schema record for the job-run outcome subject. */
 export const JobRunOutcomeSchemas = {
-  'outcome.submit': { request: OutcomeSubmitRequestSchema, response: OutcomeSubmitResponseSchema },
+  'outcome.submit': journalSubject(
+    hostLocalRequest({ request: OutcomeSubmitRequestSchema, response: OutcomeSubmitResponseSchema }),
+    { suggestedFor: { send: [MAKAIO_JOB_RUN_PARTY_KIND] } },
+  ),
 } satisfies SchemaRecord;
 
 /** Engine-owned namespace for worker outcome submission. Register it with the engine. */
@@ -110,10 +137,8 @@ export const JobRunEndingSchema = z.discriminatedUnion('kind', [
   z.strictObject({
     /** The runtime supplied a terminal result. */
     kind: z.literal('result'),
-    /** Worker result checked against the run identity during close.
-     * The shared artifact data parser can discard own `__proto__` keys during JSON validation.
-     */
-    result: WorkflowRunResultSchema,
+    /** Worker result checked against the run identity during close. */
+    result: JobRunResultSchema,
   }),
   z.strictObject({
     /** The acceptance owner closed without a worker result. */
@@ -140,6 +165,8 @@ export const JobRunErrorCodeSchema = z.enum([
   'result-run-mismatch',
   /** The ending is incompatible with the current state. */
   'ending-invalid',
+  /** The submitted result already has a committed receipt. */
+  'outcome-already-stored',
   /** The engine is present but not active. */
   'engine-not-active',
   /** The engine is unavailable on this host. */
@@ -148,15 +175,23 @@ export const JobRunErrorCodeSchema = z.enum([
 /** Close capability error codes. */
 export type JobRunErrorCode = z.infer<typeof JobRunErrorCodeSchema>;
 
-/** Inputs owned by the acceptance owner for its transactional close. */
-export interface CloseJobRunInput {
+interface CloseJobRunTransaction {
   /** Open host transaction owned by the acceptance handler. */
   readonly tx: HostTransaction;
   /** Run to close, checked against the result identity when ending.kind is 'result'. */
   readonly jobRunId: JobRunId;
-  /** Terminal decision to persist. */
-  readonly ending: JobRunEnding;
 }
+
+/** Inputs owned by the acceptance owner for its transactional close. */
+export type CloseJobRunInput = CloseJobRunTransaction &
+  (
+    | {
+        readonly ending: Extract<JobRunEnding, { kind: 'result' }>;
+        /** First response to persist with the authenticated result. */
+        readonly answer: JsonValue;
+      }
+    | { readonly ending: Extract<JobRunEnding, { kind: 'no-result' }>; readonly answer?: never }
+  );
 
 /** Transactional close exposed to the bound acceptance owner. */
 export interface JobRunCapability {
@@ -167,3 +202,25 @@ export interface JobRunCapability {
    */
   close(call: CallContext, input: CloseJobRunInput): Promise<void>;
 }
+
+/** Owner disposition after processing an authenticated result. */
+export type JobRunOwnerDecision =
+  | { readonly decision: 'accepted' }
+  | { readonly decision: 'refused'; readonly code: string; readonly retryable: boolean; readonly detail?: JsonValue };
+
+/** The immutable booking and validated worker result presented to the owner. */
+export interface JobRunAcceptance {
+  /** Original authenticated call, preserved by the host. */
+  readonly call: CallContext;
+  /** Booking verified against the authenticated run. */
+  readonly order: StartOrder;
+  /** Validated result. The host binds its close capability to this value and call. */
+  readonly result: Readonly<JobRunResult>;
+  /** Close authority scoped to this invocation. */
+  readonly jobRuns: JobRunCapability;
+  /** Lifetime of the owner generation. Delivery timeouts are independent. */
+  readonly signal: AbortSignal;
+}
+
+/** Handler bound to one extension activation. */
+export type JobRunOutcomeHandler = (submission: JobRunAcceptance) => Promise<JobRunOwnerDecision>;

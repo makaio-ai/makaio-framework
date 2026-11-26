@@ -28,7 +28,9 @@ import { hasOpenDeadline } from '../start-claim.js';
 import type {
   CommittedWorkerOrder,
   StartOrder,
+  StoredJobRunOutcome,
   StoredWorkerRedemption,
+  WorkerOrderClose,
   AtomicRedemptionWorkerOrderSource,
   WorkerRedemptionCredentials,
 } from '../start-order.js';
@@ -102,6 +104,8 @@ const rows = defineDualTable('redemption_test_order', (c) => ({
   stored: c.jsonCol<StoredWorkerRedemption>('stored'),
   cancellationDeadlineAt: c.text('cancellation_deadline_at'),
   ending: c.jsonCol<JobRunEnding>('ending'),
+  receipt: c.jsonCol<StoredJobRunOutcome>('receipt'),
+  effects: c.int4('effects').notNull().default(0),
 }));
 type OwnerRow = typeof rows.sqlite.$inferSelect;
 const schema = defineDialectSchema({ rows: rows.sqlite }, { rows: rows.postgres });
@@ -146,6 +150,8 @@ export async function migrateRedemptionOwner(
       CHECK (id <> 'storage-reject' OR stored IS NULL)
     )
   `);
+  await context.executor.run(sql`ALTER TABLE redemption_test_order ADD COLUMN receipt ${jsonType}`);
+  await context.executor.run(sql`ALTER TABLE redemption_test_order ADD COLUMN effects integer NOT NULL DEFAULT 0`);
 }
 
 /**
@@ -233,7 +239,7 @@ function expiredEnding(row: OwnerRow): JobRunEnding | undefined {
  * @returns The refusal code, if the result cannot close this run.
  */
 function refuseResult(row: OwnerRow, ending: Extract<JobRunEnding, { kind: 'result' }>): JobRunErrorCode | undefined {
-  if (ending.result.executionId !== row.id) return 'result-run-mismatch';
+  if (ending.result.jobRunId !== row.id) return 'result-run-mismatch';
   if (row.state !== 'redeemed' || row.revoked || expiredEnding(row) !== undefined) return 'run-not-running';
   if ((ending.result.status === 'cancelled') !== (row.cancellationDeadlineAt !== null)) return 'ending-invalid';
   return undefined;
@@ -320,11 +326,91 @@ async function accept(tx: HostTransaction, row: OwnerRow, stored: StoredWorkerRe
 }
 
 /**
+ * Record a tentative owner effect that must roll back with a rejected result.
+ * @param tx - Owner's transaction.
+ * @param jobRunId - Authoritative run row.
+ */
+export async function noteTestOwnerEffect(tx: HostTransaction, jobRunId: JobRunId): Promise<void> {
+  const { query, table } = ownerStorage(tx);
+  await query
+    .update(table)
+    .set({ effects: sql`${table.effects} + 1` })
+    .where(eq(table.id, jobRunId));
+}
+
+/**
+ * Apply an authorized end inside the locked test owner's transaction.
+ * @param tx - Owner transaction holding the run lock.
+ * @param row - Locked authoritative row.
+ * @param update - Terminal decision from the close authority.
+ * @param options - Fixture journal and replay-proof policy.
+ * @returns Whether the owner generation and state still permit the update.
+ */
+async function acceptOutcome(
+  tx: HostTransaction,
+  row: OwnerRow,
+  update: WorkerOrderClose,
+  options: TestOutcomeStorage,
+) {
+  const { query, table } = ownerStorage(tx);
+  const result = update.kind === 'result';
+  const ending: JobRunEnding = result ? { kind: 'result', result: update.receipt.result } : update;
+  const [changed] = await query
+    .update(table)
+    .set({
+      state: 'closed',
+      ending,
+      revoked: !(result && options.keepProof),
+      receipt: result ? update.receipt : null,
+    })
+    .where(
+      and(
+        eq(table.id, row.id),
+        eq(table.generation, row.generation),
+        eq(table.state, row.state),
+        isNull(table.receipt),
+      ),
+    )
+    .returning({ id: table.id });
+  if (changed === undefined) return false;
+  await options.write(tx, { jobRunId: row.id, ending });
+  markTransactionWakeTopic(tx, redemptionOwnerClosedTopic);
+  return true;
+}
+
+interface TestOutcomeStorage {
+  readonly write: EndingWriter;
+  readonly keepProof: boolean;
+}
+
+/**
+ * Add the real SQL outcome operations to the test source.
+ * @param executor - Standalone reader against the same database.
+ * @param token - Volatile bootstrap material.
+ * @param origin - Journal provenance stamped by the owner.
+ * @param keepProof - Whether this test deliberately keeps proof valid for replay.
+ * @returns Order source using the same run lock for all transitions.
+ */
+export function testOutcomeOwnerSource(
+  executor: RawSqlExecutor,
+  token: string,
+  origin: EndingOrigin,
+  keepProof: boolean,
+) {
+  return redemptionOwnerSource(executor, token, { write: bindEndingWriter(origin), keepProof });
+}
+
+/**
  * Read the persisted test owner's booking and apply its conditional redemption.
  * @param executor - Standalone reader on the same database as the owner.
  * @param token - Volatile bootstrap material for the original dispatcher.
+ * @param outcome - Optional outcome acceptance storage for the fixture.
  */
-export function redemptionOwnerSource(executor: RawSqlExecutor, token: string): AtomicRedemptionWorkerOrderSource {
+export function redemptionOwnerSource(
+  executor: RawSqlExecutor,
+  token: string,
+  outcome?: TestOutcomeStorage,
+): AtomicRedemptionWorkerOrderSource {
   return {
     readRedemptionCredentials: (runId, signal) => readCredentials(executor, runId, signal),
     async lockOrder(tx, id, signal) {
@@ -338,6 +424,15 @@ export function redemptionOwnerSource(executor: RawSqlExecutor, token: string): 
         orderDigest: row.id,
         state: row.state,
         runtimeInputs: { workerManifest: { contributionRefs: [] } },
+        ...(outcome && {
+          outcome: {
+            stored: row.receipt ?? undefined,
+            resultDeadlineAt: row.stored?.accepted.expiresAt,
+            cancellationDeadlineAt: row.cancellationDeadlineAt ?? undefined,
+            accept: (ownerTx: HostTransaction, ending: WorkerOrderClose) =>
+              acceptOutcome(ownerTx, row, ending, outcome),
+          },
+        }),
         redemption:
           row.tokenDigest === null
             ? undefined

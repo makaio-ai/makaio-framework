@@ -32,7 +32,9 @@ export {
 export {
   AuthorityRequestDeliveryError,
   OutcomeDeliveryError,
+  submitJobRunOutcomeWithAck,
   submitOutcomeWithAck,
+  JobRunOutcomeDeliveryError,
   requestAuthorityWithRetry,
   submitWithAck,
   DELIVERED_DECISIONS,

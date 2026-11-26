@@ -1,4 +1,4 @@
-import { strictEqual } from 'node:assert';
+import { strictEqual, throws } from 'node:assert';
 import { once } from 'node:events';
 import { readFile } from 'node:fs/promises';
 import { createServer } from 'node:https';
@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import type { WebSocketHandler } from 'bun';
 import { MakaioBus } from '@makaio/bus-core';
 import { busContextOf } from '@makaio/bus-core/kernel-api';
+import { JobRunOutcomeNamespace } from '@makaio/contracts/workflow';
 import { HmacAuth, ServerTransport } from '@makaio/bus-transport-websocket';
 import { readIssuerIdentityKey } from '../issuer-identity-key.js';
 import { serializeByKey } from '@makaio/storage-drizzle';
@@ -150,6 +151,7 @@ export async function runExchangeBootHost(probe: BootHostProbe): Promise<void> {
           }
         : undefined,
     });
+    throws(() => host?.bus.on(JobRunOutcomeNamespace.subjects.outcome.submit, () => {}), /already has a handler/);
     const ctx = activeContext(host);
     if (probe.enabled) {
       const dispatch = ctx.workerDispatch;

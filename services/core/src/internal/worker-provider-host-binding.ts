@@ -16,3 +16,5 @@ export { verifyWorkerRunIdentity } from '../worker-provider/verify-run-identity.
 export type { WorkerStartOptions } from '../worker-provider/start-order.js';
 export { createWorkerProviderContributionProcessor } from '../worker-provider/worker-provider-contribution-processor.js';
 export { encodeWorkerExchangeReply, WorkerExchangeReplyTooLargeError } from '../worker-provider/redemption-reply.js';
+
+export { createJobRunOutcomeReceiver } from '../worker-provider/job-run-outcome-receiver.js';

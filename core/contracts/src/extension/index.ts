@@ -290,3 +290,5 @@ export type {
   ExtensionWorkerProvidersContribution,
   WorkerProviderContribution,
 } from './contributions/worker-provider-types.js';
+
+export type { ExtensionJobRunOutcomeContribution } from './contributions/job-run-outcome-types.js';

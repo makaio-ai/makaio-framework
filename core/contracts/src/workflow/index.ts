@@ -316,15 +316,20 @@ export {
   JobRunErrorCodeSchema,
   JobRunOutcomeNamespace,
   JobRunOutcomeSchemas,
+  JobRunResultSchema,
   OutcomeSubmitRequestSchema,
   OutcomeSubmitResponseSchema,
 } from './job-run-outcome.js';
 export type {
   CloseJobRunInput,
   CoreOutcomeRefusalCode,
+  JobRunAcceptance,
   JobRunCapability,
   JobRunEnding,
   JobRunErrorCode,
+  JobRunResult,
+  JobRunOutcomeHandler,
+  JobRunOwnerDecision,
   OutcomeSubmitRequest,
   OutcomeSubmitResponse,
 } from './job-run-outcome.js';

@@ -1891,6 +1891,7 @@ export type {
   ExtensionFieldTypeEntry,
   ExtensionIdentity,
   ExtensionInitOptions,
+  ExtensionJobRunOutcomeContribution,
   ExtensionName,
   ExtensionOperatorConfigEntry,
   ExtensionOperatorConfigFailure,
@@ -2310,15 +2311,20 @@ export {
   JobRunErrorCodeSchema,
   JobRunOutcomeNamespace,
   JobRunOutcomeSchemas,
+  JobRunResultSchema,
   OutcomeSubmitRequestSchema,
   OutcomeSubmitResponseSchema,
 } from './workflow/job-run-outcome.js';
 export type {
   CloseJobRunInput,
   CoreOutcomeRefusalCode,
+  JobRunAcceptance,
   JobRunCapability,
   JobRunEnding,
   JobRunErrorCode,
+  JobRunOutcomeHandler,
+  JobRunOwnerDecision,
+  JobRunResult,
   OutcomeSubmitRequest,
   OutcomeSubmitResponse,
 } from './workflow/job-run-outcome.js';

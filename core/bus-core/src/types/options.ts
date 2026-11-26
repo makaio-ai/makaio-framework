@@ -23,10 +23,7 @@ export const DEFAULT_REQUEST_TIMEOUT_MS = 60_000;
  */
 export const DEFAULT_READINESS_TIMEOUT_MS = 1_500;
 
-/**
- * Options for subscribing to events/requests via on().
- */
-export interface OnOptions {
+interface OnHandlerOptions {
   /**
    * Explicit handler registry target for wildcard subjects.
    *
@@ -36,24 +33,6 @@ export interface OnOptions {
    * option to preserve the historical ambiguous wildcard behavior.
    */
   handlerKind?: 'event' | 'request' | 'both';
-  /**
-   * Declarative payload filter for smart-routing.
-   *
-   * Applied both locally (before handler invocation) and can be sent
-   * to transports for server-side filtering.
-   *
-   * All conditions are ANDed together.
-   * @example
-   * ```typescript
-   * bus.on(Subjects.message, handler, {
-   *   filter: {
-   *     agentId: 'agent-123',
-   *     status: { $in: ['active', 'pending'] },
-   *   }
-   * });
-   * ```
-   */
-  filter?: PayloadFilter;
   /**
    * Handler priority for middleware-style ordering.
    *
@@ -73,6 +52,41 @@ export interface OnOptions {
    */
   priority?: number;
 }
+
+/** Options for subscribing to events and requests via `on()`. */
+export type OnOptions = OnHandlerOptions &
+  (
+    | {
+        /**
+         * Reserve an exact host-local request for one handler. Wildcard registrations remain
+         * available for other subjects and do not receive the reserved request.
+         */
+        exclusive: true;
+        /** An exclusive handler must be eligible for every request to its subject. */
+        filter?: never;
+      }
+    | {
+        exclusive?: false;
+        /**
+         * Declarative payload filter for smart-routing.
+         *
+         * Applied both locally (before handler invocation) and can be sent
+         * to transports for server-side filtering.
+         *
+         * All conditions are ANDed together.
+         * @example
+         * ```typescript
+         * bus.on(Subjects.message, handler, {
+         *   filter: {
+         *     agentId: 'agent-123',
+         *     status: { $in: ['active', 'pending'] },
+         *   }
+         * });
+         * ```
+         */
+        filter?: PayloadFilter;
+      }
+  );
 
 /**
  * Options for emitting events.

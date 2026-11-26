@@ -37,6 +37,7 @@ import { VisionNamespace } from './capabilities/vision/namespace.js';
 import { VoiceNamespace } from './capabilities/voice/namespace.js';
 import { RulesNamespace } from './rules/namespace.js';
 import { WorkflowBlocksNamespace } from './workflow-blocks/namespace.js';
+import { JobRunOutcomeNamespace } from './workflow/job-run-outcome.js';
 import { WorkerNamespace } from './worker/namespace.js';
 
 import { MessageStorageNamespace } from './session/message-storage-namespace.js';
@@ -79,6 +80,7 @@ export const FrameworkContractNamespaces: readonly RegistrableBusNamespaceDefini
   MaterializationNamespace,
   HarnessNamespace,
   HostNamespace,
+  JobRunOutcomeNamespace,
   JournalNamespace,
   McpNamespace,
   NativeSessionSupervisorNamespace,

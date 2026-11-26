@@ -169,7 +169,11 @@ async function start(
       if (commit === undefined) throw new Error('Expected a prepared bootstrap');
       return (tx: HostTransaction) => commit(anonymous, tx);
     },
-    endIn: (tx: HostTransaction, ending: JobRunEnding) => lifecycle.capability.close(call, { tx, jobRunId, ending }),
+    endIn: (tx: HostTransaction, ending: JobRunEnding) =>
+      lifecycle.capability.close(
+        call,
+        ending.kind === 'result' ? { tx, jobRunId, ending, answer: null } : { tx, jobRunId, ending },
+      ),
   };
 }
 
@@ -239,11 +243,11 @@ async function contend<T>(
 
 /**
  * Build a result in the current close contract's shape.
- * @param executionId - Run identity carried by the result.
+ * @param jobRunId - Run identity carried by the result.
  * @param status - Disposition proposed by the worker.
  */
-function result(executionId: string, status: 'completed' | 'cancelled' = 'completed'): JobRunEnding {
-  return { kind: 'result', result: { executionId, workflowId: 'test-workflow', status } };
+function result(jobRunId: string, status: 'completed' | 'cancelled' = 'completed'): JobRunEnding {
+  return { kind: 'result', result: { jobRunId, workflowId: 'test-workflow', status } };
 }
 
 /**
