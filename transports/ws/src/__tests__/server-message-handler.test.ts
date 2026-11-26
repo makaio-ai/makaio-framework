@@ -73,16 +73,18 @@ describe('createInboundMessageHandler', () => {
   });
 
   it.each([0, 20, 40])('charges send authorization against the inbound budget of %i ms', async (timeout) => {
-    vi.useFakeTimers();
     const socket = new MockWebSocket();
     const requests: BusRequestMessage[] = [];
+    const entered = Promise.withResolvers<void>();
+    const released = Promise.withResolvers<void>();
+    let now = 1_000;
     const access = new ServerBoundaryAccess('websocket', undefined, async () => {
-      await Promise.resolve();
-      vi.setSystemTime(Date.now() + 20);
-      return undefined;
+      entered.resolve();
+      await released.promise;
     });
     const deps = makeDeps({
       access,
+      now: () => now,
       handlers: new Set([
         async (message) => {
           if (message.type === 'request') requests.push(message);
@@ -95,7 +97,7 @@ describe('createInboundMessageHandler', () => {
     });
     deps.registry.addClient(socket);
     const handler = createInboundMessageHandler(socket, deps);
-    await handler(
+    const pending = handler(
       JSON.stringify({
         type: 'request',
         namespace: 'test',
@@ -106,6 +108,11 @@ describe('createInboundMessageHandler', () => {
         timeout,
       }),
     );
+    const authorizing = await Promise.race([entered.promise.then(() => true), pending.then(() => false)]);
+    now += 20;
+    released.resolve();
+    await pending;
+    expect(authorizing).toBe(true);
 
     if (timeout === 20) {
       expect(requests).toHaveLength(0);

@@ -1,52 +1,65 @@
 import {
   DEFAULT_REQUEST_TIMEOUT_MS,
   resolveInboundRequestBudget,
-  serializeTransportError,
   TimeoutError,
+  type BusBroadcastMessage,
   type BusMessage,
   type BusRequestMessage,
 } from '@makaio/bus-core';
+import { sendRejectedMessage } from './server-boundary-access.js';
 import type { WebSocketLike } from './types.js';
 
-interface InboundRequestBudget {
-  /** Original relative wire budget, in milliseconds. */
-  timeout: number;
+export interface InboundBudget {
+  /** Effective timeout at ingress, in milliseconds. */
+  readonly timeout: number;
   /** Deadline on the receiving host's clock. */
-  deadline: number;
+  readonly deadline: number;
+  /** Clock used to measure elapsed authorization time. */
+  readonly now: () => number;
 }
 
 /**
  * Anchor the relative wire budget before the transport awaits authorization.
  * @param message - Incoming frame.
- * @returns Bounded request budget, if applicable.
+ * @param normalizeBroadcastTimeout - The server's broadcast timeout policy.
+ * @param now - Clock used throughout the lifetime of the budget.
+ * @returns Bounded request or broadcast budget, if applicable.
  */
-export function anchorInboundRequestBudget(message: BusMessage): InboundRequestBudget | undefined {
-  if (message.type !== 'request') return undefined;
-  const timeout = resolveInboundRequestBudget(message.timeout) ?? DEFAULT_REQUEST_TIMEOUT_MS;
-  return timeout > 0 ? { timeout, deadline: Date.now() + timeout } : undefined;
+export function anchorInboundBudget(
+  message: BusMessage,
+  normalizeBroadcastTimeout: (timeout: unknown) => number,
+  now: () => number = Date.now,
+): InboundBudget | undefined {
+  if (message.type !== 'request' && message.type !== 'broadcast') return undefined;
+  const timeout =
+    message.type === 'broadcast'
+      ? normalizeBroadcastTimeout(message.timeout)
+      : (resolveInboundRequestBudget(message.timeout) ?? DEFAULT_REQUEST_TIMEOUT_MS);
+  return timeout > 0 ? { timeout, deadline: now() + timeout, now } : undefined;
 }
 
 /**
- * Charge transport time to the request before handing it to the bus.
- * @param request - Incoming request.
+ * Charge authorization time before dispatch or fan-out.
+ * @param message - Incoming request or broadcast.
  * @param budget - Budget anchored at the transport boundary.
  * @param socket - Requesting connection.
- * @param send - Safe callback for sending an expired request's response.
- * @returns Request carrying the remaining timeout, or undefined after expiry.
+ * @param send - Safe callback for sending the timeout response.
+ * @returns Message carrying the remaining timeout, or undefined after expiry.
  */
-export function prepareInboundRequest(
-  request: BusRequestMessage,
-  budget: InboundRequestBudget | undefined,
+export function prepareInboundMessage<T extends BusRequestMessage | BusBroadcastMessage>(
+  message: T,
+  budget: InboundBudget | undefined,
   socket: WebSocketLike,
   send: (socket: WebSocketLike, frame: string) => void,
-): BusRequestMessage | undefined {
-  if (budget === undefined) return { ...request, timeout: 0 };
-  const remaining = budget.deadline - Date.now();
-  if (remaining > 0) return { ...request, timeout: remaining };
-  const error = new TimeoutError(`${request.namespace}.${request.subject}`, budget.timeout);
-  send(
+): (T & { timeout: number }) | undefined {
+  if (budget === undefined) return { ...message, timeout: 0 };
+  const remaining = budget.deadline - budget.now();
+  if (remaining > 0) return { ...message, timeout: remaining };
+  sendRejectedMessage(
+    message,
     socket,
-    JSON.stringify({ type: 'response', correlationId: request.correlationId, error: serializeTransportError(error) }),
+    send,
+    new TimeoutError(`${message.namespace}.${message.subject}`, budget.timeout),
   );
   return undefined;
 }

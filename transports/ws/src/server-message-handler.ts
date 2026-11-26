@@ -29,7 +29,7 @@ import {
   type ServerBoundaryAccess,
 } from './server-boundary-access.js';
 import { createSubscriptionQueue, type DeferredSubscriptionReplay } from './deferred-subscription-replay.js';
-import { anchorInboundRequestBudget, prepareInboundRequest } from './inbound-request-budget.js';
+import { anchorInboundBudget, prepareInboundMessage, type InboundBudget } from './inbound-request-budget.js';
 import type { TransportAuth, WebSocketLike } from './types.js';
 import type { BroadcastAggregator } from './broadcast-aggregator.js';
 import type { ClientRegistry, ClientSubscriptionUpdate } from './client-registry.js';
@@ -97,6 +97,8 @@ export interface MessageHandlerDeps {
   auth: TransportAuth | undefined;
   /** Normalized broadcast timeout in milliseconds. */
   normalizeBroadcastTimeout: (timeout: unknown) => number;
+  /** Clock for measuring inbound authorization time. Defaults to Date.now. */
+  now?: () => number;
   /** Safe send callback: delivers serialized data to one client without propagating socket errors. */
   sendSafely: (client: WebSocketLike, data: string) => boolean;
   /** Enable debug logging. */
@@ -405,6 +407,7 @@ async function routeSubscriptionMessage(
  * @param deps - Handler dependencies.
  * @param receiveContext - Authentication-derived receive context.
  * @param currentSender - Revalidate the sender before forwarding and local dispatch.
+ * @param budget - Deadline anchored before send authorization.
  * @returns Resolves after the broadcast is dispatched or discarded.
  */
 async function routeBroadcastMessage(
@@ -413,6 +416,7 @@ async function routeBroadcastMessage(
   deps: MessageHandlerDeps,
   receiveContext: TransportReceiveContext | undefined,
   currentSender: () => unknown,
+  budget: InboundBudget | undefined,
 ): Promise<void> {
   if (typeof message.correlationId !== 'string' || typeof message.subject !== 'string') {
     if (deps.debug) console.warn('[ServerTransport] Malformed broadcast message: missing correlationId or subject');
@@ -423,17 +427,18 @@ async function routeBroadcastMessage(
   const candidates = deps.registry.getInterestedClients(subject, message.payload, socket);
   const targetClients = (await authorizedRecipients(deps, candidates, message))();
   if (!currentSender()) return;
-  const timeout = deps.normalizeBroadcastTimeout(message.timeout);
+  const localMessage = prepareInboundMessage(message, budget, socket, deps.sendSafely);
+  if (localMessage === undefined) return;
   const outgoing = restampForClientFanout(message, receiveContext);
   const local = deps.broadcastAggregator.startClientBroadcast(
     socket,
     outgoing,
     targetClients,
     deps.sendSafely,
-    timeout,
+    budget?.timeout ?? 0,
   );
   if (!currentSender()) return deps.broadcastAggregator.cancelClientBroadcast(local);
-  await invokeHandlers({ ...message, correlationId: local }, deps.handlers, { debug: deps.debug, receiveContext });
+  await invokeHandlers({ ...localMessage, correlationId: local }, deps.handlers, { debug: deps.debug, receiveContext });
 }
 
 /**
@@ -456,7 +461,7 @@ export async function routeMessage(
 ): Promise<void> {
   if (handleCorrelationMessage(message, deps, socket)) return;
 
-  const requestBudget = anchorInboundRequestBudget(message);
+  const budget = anchorInboundBudget(message, deps.normalizeBroadcastTimeout, deps.now);
   const restriction = resolveSubjectRestriction(deps.auth?.getAuthenticatedIdentityId?.(socket));
 
   if (rejectDisallowedSubject(message, socket, deps, restriction)) return;
@@ -482,7 +487,7 @@ export async function routeMessage(
     return;
   }
   if (message.type === 'broadcast') {
-    await routeBroadcastMessage(message, socket, deps, receiveContext, currentSender);
+    await routeBroadcastMessage(message, socket, deps, receiveContext, currentSender, budget);
     return;
   }
 
@@ -494,7 +499,7 @@ export async function routeMessage(
   }
 
   if (message.type === 'request') {
-    const request = prepareInboundRequest(message, requestBudget, socket, deps.sendSafely);
+    const request = prepareInboundMessage(message, budget, socket, deps.sendSafely);
     if (request === undefined) return;
     deps.registry.trackRequestOrigin(socket, request);
     message = request;
