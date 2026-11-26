@@ -18,6 +18,6 @@ export function setupWriteJournal(
   rights: CoordinatorRights['hostRights'],
   credentialResolver: ExtensionCoordinator['credentials']['activeResolver'],
   policy?: WriteJournalPolicy,
-) {
+): ReturnType<typeof createWriteJournal> | undefined {
   return policy === undefined ? undefined : createWriteJournal(database, bus, rights, policy, credentialResolver);
 }
