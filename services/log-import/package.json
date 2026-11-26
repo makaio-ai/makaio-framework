@@ -37,7 +37,7 @@
     "@makaio/storage-drizzle": "workspace:*",
     "drizzle-orm": "0.45.4",
     "type-fest": "^4.31.0",
-    "zod": "4.4.3"
+    "zod": "4.6.6"
   },
   "devDependencies": {
     "@libsql/client": "^0.17.4",

@@ -80,7 +80,7 @@
     "@makaio/sdk": "workspace:*",
     "@makaio/utils": "workspace:*",
     "@modelcontextprotocol/sdk": "^1.29.0",
-    "zod": "4.4.3",
+    "zod": "4.6.6",
     "zod-to-json-schema": "^3.25.1"
   },
   "devDependencies": {

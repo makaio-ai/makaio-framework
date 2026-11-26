@@ -29,7 +29,7 @@
     "@makaio/kernel": "workspace:*",
     "@makaio/service-base": "workspace:*",
     "hono": "^4.13.16",
-    "zod": "4.4.3"
+    "zod": "4.6.6"
   },
   "devDependencies": {
     "@makaio/build-tooling": "workspace:*",

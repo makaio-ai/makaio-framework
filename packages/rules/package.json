@@ -17,7 +17,7 @@
     "@makaio/contracts": "workspace:*",
     "@makaio/expression": "workspace:*",
     "minimatch": "^10.0.3",
-    "zod": "4.4.3"
+    "zod": "4.6.6"
   },
   "devDependencies": {
     "@makaio/build-tooling": "workspace:*",
