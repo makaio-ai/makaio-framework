@@ -21,9 +21,12 @@ export type {
 export type {
   AtomicRedemptionWorkerOrderSource,
   CommittedWorkerOrder,
+  LockedWorkerOutcome,
   LockedWorkerRedemption,
+  StoredJobRunOutcome,
   SeparateBindingWorkerOrderSource,
   StoredWorkerRedemption,
+  WorkerOrderClose,
   WorkerOrderSource,
   WorkerRedemptionCredentials,
 } from './start-order.js';

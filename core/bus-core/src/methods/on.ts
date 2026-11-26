@@ -48,26 +48,22 @@ export async function waitForSubscriptionPropagation(cleanup: (() => void) | nul
 /**
  * Add a handler to a handler map with priority-based ordering.
  * @param context - Makaio bus context
- * @param owner - Party that registers the handler (carrier of the bus instance `on` was called on)
  * @param mapKey - Which handler map to add to
  * @param fullSubjectKey - Full subject key including namespace (used for map storage/lookup)
- * @param handler - Handler to add
- * @param priority - Handler priority (higher runs first, default: 0)
+ * @param entry - Handler and its registration metadata
  */
 function addToHandlerMap(
   context: MakaioBusContext,
-  owner: PartyRef,
   mapKey: HandlerMapKey,
   fullSubjectKey: string,
-  handler: AnyHandler,
-  priority: number,
+  entry: HandlerEntry<AnyHandler>,
 ): void {
   const map = context[mapKey];
   if (!map.has(fullSubjectKey)) {
     map.set(fullSubjectKey, []);
   }
   const entries = map.get(fullSubjectKey)!;
-  insertSorted(entries, { handler, priority, owner } as HandlerEntry<AnyHandler>);
+  insertSorted(entries, entry);
 }
 
 /**
@@ -75,18 +71,18 @@ function addToHandlerMap(
  * @param context - Makaio bus context
  * @param mapKey - Which handler map to remove from
  * @param fullSubjectKey - Full subject key including namespace (used for map storage/lookup)
- * @param handler - Handler to remove
+ * @param entry - Registration to remove, even if the callback has since been registered again
  */
 function removeFromHandlerMap(
   context: MakaioBusContext,
   mapKey: HandlerMapKey,
   fullSubjectKey: string,
-  handler: AnyHandler,
+  entry: HandlerEntry<AnyHandler>,
 ): void {
   const map = context[mapKey];
   const entries = map.get(fullSubjectKey);
   if (entries) {
-    const index = entries.findIndex((entry) => entry.handler === handler);
+    const index = entries.findIndex((registered) => registered === entry);
     if (index !== -1) {
       entries.splice(index, 1);
     }
@@ -94,6 +90,34 @@ function removeFromHandlerMap(
       map.delete(fullSubjectKey);
     }
   }
+}
+
+/**
+ * Protect an exclusive local request from a competing registration.
+ * @param context - Shared bus state.
+ * @param fullSubjectKey - Exact subject or subscription pattern.
+ * @param options - Subscription options supplied by the caller.
+ * @param isExactRequest - Whether this handler serves one specific request.
+ * @returns Whether this registration reserves the dispatcher slot.
+ */
+function checkRequestReservation(
+  context: MakaioBusContext,
+  fullSubjectKey: string,
+  options: OnOptions | undefined,
+  isExactRequest: boolean,
+): boolean {
+  const exclusive = options?.exclusive === true;
+  const existing = context.requestHandlers.get(fullSubjectKey);
+  if (exclusive && options.filter !== undefined) {
+    throw new TypeError('Exclusive handlers cannot use a payload filter');
+  }
+  if (exclusive && (!isExactRequest || !context.namespaceRegistry.isHostLocalRequestSubject(fullSubjectKey))) {
+    throw new Error('Exclusive handlers require an exact host-local request');
+  }
+  if (existing?.[0]?.exclusive || (exclusive && existing?.length)) {
+    throw new Error(`Request "${fullSubjectKey}" already has a handler`);
+  }
+  return exclusive;
 }
 
 /**
@@ -128,6 +152,8 @@ export function on<T extends SubjectDefinition>(
   const isRequest = subjectDefinition.$meta.isRequest;
   const isWildcard = subject.includes(WildcardSubjectKey) || subject.includes(':');
   const isAmbiguousWildcard = isWildcard && !isRequest;
+
+  const exclusive = checkRequestReservation(context, fullSubjectKey, options, isRequest && !isWildcard);
 
   if (!isWildcard) {
     warnIfUnregistered(context, subjectDefinition, fullSubjectKey);
@@ -164,9 +190,10 @@ export function on<T extends SubjectDefinition>(
               : ['eventHandlers'];
 
   // Add handler to appropriate map(s) using fullSubjectKey for storage
-  const priority = options?.priority ?? 0;
+  const entry: HandlerEntry<AnyHandler> = { handler: effectiveHandler, owner, priority: options?.priority ?? 0 };
+  if (exclusive) entry.exclusive = true;
   for (const mapKey of maps) {
-    addToHandlerMap(context, owner, mapKey, fullSubjectKey, effectiveHandler, priority);
+    addToHandlerMap(context, mapKey, fullSubjectKey, entry);
   }
 
   // Design: Handler-level payload filters (options.filter) are applied locally
@@ -199,7 +226,7 @@ export function on<T extends SubjectDefinition>(
   // Return unsubscribe function that cleans up from all registered maps
   const unsubscribe: OnCleanup = (): void => {
     for (const mapKey of maps) {
-      removeFromHandlerMap(context, mapKey, fullSubjectKey, effectiveHandler);
+      removeFromHandlerMap(context, mapKey, fullSubjectKey, entry);
     }
 
     // Push updated advertised state to all transports after handler removal.

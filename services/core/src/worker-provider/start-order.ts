@@ -1,7 +1,9 @@
 import type {
   HostDatabase,
   HostTransaction,
+  JobRunEnding,
   JobRunId,
+  JobRunResult,
   JsonValue,
   ProviderAllocationRef,
   WorkerRuntimeConnection,
@@ -82,6 +84,35 @@ export interface LockedWorkerRedemption {
   accept(tx: HostTransaction, result: StoredWorkerRedemption): Promise<StoredWorkerRedemption | undefined>;
 }
 
+/** One durable receipt on the committed run. */
+export interface StoredJobRunOutcome {
+  readonly result: JobRunResult;
+  readonly answer: JsonValue;
+}
+
+/** Terminal update conditionally applied by the repository owning the locked row. */
+export type WorkerOrderClose =
+  | { readonly kind: 'result'; readonly receipt: StoredJobRunOutcome }
+  | Extract<JobRunEnding, { kind: 'no-result' }>;
+
+/** Outcome storage belonging to the same row used by redemption and supervision. */
+export interface LockedWorkerOutcome {
+  readonly stored?: StoredJobRunOutcome;
+  /** Authoritative result deadline, in ISO format. */
+  readonly resultDeadlineAt?: string;
+  /** During cancellation only a cancelled result can close, before this deadline. */
+  readonly cancellationDeadlineAt?: string;
+  /**
+   * Persist the ending, including any receipt, in the given owner transaction.
+   * The row must still have the locked generation and state. Write the journal
+   * and apply identity ending in the same transaction.
+   * @param tx - The transaction holding the run lock.
+   * @param ending - Terminal update authorized by the close capability.
+   * @returns Whether the conditional write won.
+   */
+  accept(tx: HostTransaction, ending: WorkerOrderClose): Promise<boolean>;
+}
+
 /** Host-owned order snapshot joined to its original token deadline in the same transaction. */
 export interface CommittedWorkerOrder {
   readonly order: StartOrder;
@@ -98,6 +129,8 @@ export interface CommittedWorkerOrder {
    * assign the allocation to the run.
    */
   readonly redemption?: LockedWorkerRedemption;
+  /** Authoritative terminal writer and receipt for an owner offering outcome acceptance. */
+  readonly outcome?: LockedWorkerOutcome;
 }
 
 /** Credential digests for an advisory read before acquiring the owner lock. */

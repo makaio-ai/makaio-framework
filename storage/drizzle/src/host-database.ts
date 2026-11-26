@@ -27,8 +27,12 @@ interface TransactionState {
   readonly signal: AbortSignal | undefined;
   /** Set once the `transaction(fn)` callback settled. */
   finished: boolean;
+  /** Set only once the driver acknowledges commit. */
+  committed?: true;
   /** Error that causes a fulfilled callback to roll back. */
   rollbackCause?: Error;
+  /** Synchronous authorization checks at commit handoff. */
+  commitChecks?: Array<() => void>;
   /** Topics marked on this transaction via `markTransactionWakeTopic`, deduplicated. Fresh per minted transaction. */
   readonly wakeTopics: Set<string>;
 }
@@ -111,7 +115,7 @@ async function runHostTransaction<T>(
   fn: (hostTx: HostTransaction) => Promise<T>,
   signal: AbortSignal | undefined,
 ): Promise<T> {
-  let committedTopics: ReadonlySet<string> | undefined;
+  let prepared: TransactionState | undefined;
 
   const result = await executeTransaction(
     db,
@@ -140,16 +144,18 @@ async function runHostTransaction<T>(
             signal?.throwIfAborted();
           }
         }
-        committedTopics = wakeTopics;
       }
 
+      for (const check of state.commitChecks ?? []) check();
+      prepared = state;
       return fnResult;
     },
     signal,
   );
 
-  if (committedTopics !== undefined) {
-    deliverLocalWakeTopics(db, committedTopics);
+  if (prepared !== undefined) {
+    prepared.committed = true;
+    if (prepared.wakeTopics.size > 0) deliverLocalWakeTopics(db, prepared.wakeTopics);
   }
   return result;
 }
@@ -325,4 +331,25 @@ export function markTransactionWakeTopic(tx: HostTransaction, topic: string): vo
  */
 export function markTransactionRollbackOnly(tx: HostTransaction, cause: Error): void {
   requireTransactionState(tx).rollbackCause ??= cause;
+}
+
+/**
+ * Add a synchronous check to the transaction's commit handoff.
+ * @param tx - Open host transaction.
+ * @param check - Authorization check that throws to roll back.
+ * @internal
+ */
+export function checkHostTransactionCommit(tx: HostTransaction, check: () => void): void {
+  const state = requireTransactionState(tx);
+  (state.commitChecks ??= []).push(check);
+}
+
+/**
+ * Inspect whether the driver acknowledged a transaction's commit.
+ * @param tx - A handle previously minted by the database.
+ * @returns True only for a committed transaction.
+ * @internal
+ */
+export function didHostTransactionCommit(tx: HostTransaction): boolean {
+  return transactions.get(tx)?.committed === true;
 }

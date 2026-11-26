@@ -1,3 +1,4 @@
+import type { ExtensionJobRunOutcomeContribution } from './contributions/job-run-outcome-types.js';
 import type { z } from 'zod';
 import type { MakaioBusLike, RegistrableBusNamespaceDefinition } from '@makaio/core';
 import type { ExtensionManifest, StorageManifest } from './manifest.js';
@@ -549,6 +550,9 @@ export interface MakaioExtension<THostContext extends ExtensionContext = NodeExt
    * selection while preserving resolution for outstanding allocations.
    */
   readonly workerProviders?: ExtensionWorkerProvidersContribution<THostContext>;
+
+  /** Accept outcomes for runs booked under this extension's identity. */
+  readonly jobRunOutcomes?: ExtensionJobRunOutcomeContribution<THostContext>;
 
   /**
    * Facet namespace definitions contributed by this extension.

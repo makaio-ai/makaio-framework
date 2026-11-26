@@ -1,6 +1,7 @@
 import type { CallContext, ExtensionName } from '@makaio/core';
 import { describe, expect, expectTypeOf, it } from 'vitest';
 import type { HostTransaction } from '../../host-database/index.js';
+import { JobRunResultSchema, type ExtensionContext, type ExtensionJobRunOutcomeContribution } from '../../index.js';
 import { WorkerSchemas } from '../../worker/schemas.js';
 import {
   CoreOutcomeRefusalCodeSchema,
@@ -12,9 +13,10 @@ import {
   type JobRunCapability,
   type CloseJobRunInput,
   type OutcomeSubmitResponse,
+  type JobRunResult,
 } from '../job-run-outcome.js';
 
-const result = { status: 'completed', executionId: 'run', workflowId: 'workflow' };
+const result = { status: 'completed', jobRunId: 'run', workflowId: 'workflow' } satisfies JobRunResult;
 
 describe('job run result contract', () => {
   it('uses the engine subject and checks identity from the result envelope', () => {
@@ -23,15 +25,16 @@ describe('job run result contract', () => {
     expect(OutcomeSubmitRequestSchema.parse({ result })).toEqual({ result });
     expect(OutcomeSubmitRequestSchema.safeParse({ result, jobRunId: 'run' }).success).toBe(false);
     expect(OutcomeSubmitRequestSchema.safeParse({ result: { ...result, output: null } }).success).toBe(false);
-    expect(OutcomeSubmitRequestSchema.safeParse({ result: { ...result, jobRunId: 'run' } }).success).toBe(false);
+    expect(OutcomeSubmitRequestSchema.safeParse({ result: { ...result, executionId: 'run' } }).success).toBe(false);
   });
 
   it('rejects a worker outcome whose result belongs to another execution', () => {
     const schema = WorkerSchemas['control.outcome.submit'].request;
-    const envelope = { executionId: result.executionId, result };
+    const legacy = { status: 'completed', executionId: 'run', workflowId: 'workflow' };
+    const envelope = { executionId: legacy.executionId, result: legacy };
     expect(schema.parse(envelope)).toEqual(envelope);
     expect(schema.safeParse({ ...envelope, executionId: 'another-run' }).success).toBe(false);
-    expect(schema.safeParse({ ...envelope, jobRunId: result.executionId }).success).toBe(false);
+    expect(schema.safeParse({ ...envelope, jobRunId: legacy.executionId }).success).toBe(false);
   });
 
   it.each(['accepted', 'duplicate'] as const)('carries the stored answer in the %s branch', (decision) => {
@@ -91,6 +94,19 @@ describe('job run result contract', () => {
     expect(OutcomeSubmitResponseSchema.safeParse({ ...core, retryable: undefined }).success).toBe(false);
   });
 
+  it.each([
+    { status: 'completed' },
+    { status: 'failed', error: 'failure' },
+    { status: 'cancelled', reason: 'cancelled' },
+  ])('preserves a JSON submission on $status and rejects lossy data', (status) => {
+    const submission = { drafts: [null, { text: 'value' }] };
+    const input = { result: { ...result, ...status, submission } };
+    expect(OutcomeSubmitRequestSchema.parse(input)).toEqual(input);
+    expect(OutcomeSubmitRequestSchema.safeParse({ result: { ...input.result, submission: new Date() } }).success).toBe(
+      false,
+    );
+  });
+
   it('validates workflow terminal results and close reasons', () => {
     expect(
       OutcomeSubmitRequestSchema.safeParse({ result: { ...result, status: 'failed', error: 'failure' } }).success,
@@ -113,5 +129,22 @@ describe('job run result contract', () => {
     expect(JobRunEndingSchema.parse({ kind: 'result', result })).toEqual({ kind: 'result', result });
     expect(JobRunEndingSchema.parse(ending)).toEqual(ending);
     expect(JobRunEndingSchema.safeParse({ ...ending, result }).success).toBe(false);
+  });
+
+  it('requires an answer only for a result close', () => {
+    type CloseBase = Pick<CloseJobRunInput, 'tx' | 'jobRunId'>;
+    type ResultClose = CloseBase & { ending: { kind: 'result'; result: JobRunResult } };
+    type NoResultClose = CloseBase & { ending: { kind: 'no-result'; outcome: 'lost'; cause: string } };
+    expectTypeOf<ResultClose & { answer: null }>().toMatchTypeOf<CloseJobRunInput>();
+    expectTypeOf<ResultClose>().not.toMatchTypeOf<CloseJobRunInput>();
+    expectTypeOf<NoResultClose>().toMatchTypeOf<CloseJobRunInput>();
+    expectTypeOf<NoResultClose & { answer: null }>().not.toMatchTypeOf<CloseJobRunInput>();
+  });
+
+  it('exposes the outcome family from the existing contracts root', () => {
+    expect(JobRunResultSchema.parse(result)).toEqual(result);
+    expectTypeOf<ExtensionJobRunOutcomeContribution<ExtensionContext>>().toEqualTypeOf<
+      import('../../extension/index.js').ExtensionJobRunOutcomeContribution<ExtensionContext>
+    >();
   });
 });

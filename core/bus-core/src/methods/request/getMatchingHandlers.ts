@@ -18,6 +18,8 @@ export function getMatchingHandlerEntries(
   fullSubjectKey: string,
 ): Array<HandlerEntry<RequestHandler<unknown, unknown>>> {
   const { requestHandlers } = context;
+  const exact = requestHandlers.get(fullSubjectKey);
+  if (exact?.[0]?.exclusive) return exact;
   const matchingArrays: Array<Array<HandlerEntry<RequestHandler<unknown, unknown>>>> = [];
 
   for (const [pattern, entries] of requestHandlers) {

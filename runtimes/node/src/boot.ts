@@ -454,6 +454,7 @@ export async function bootMakaioRuntimeCore(
     // 5. Runtime resource bus handlers
     // -----------------------------------------------------------------------
     const runtimeResourceCleanups: Array<() => void> = [
+      ...(workerDispatch === undefined ? [] : [workerDispatch.registerOutcomeReceiver(bus)]),
       bus.on(RuntimeSubjects.database, (ctx) => {
         ctx.setResult({ db });
       }),
@@ -915,7 +916,10 @@ export async function bootMakaioRuntimeCore(
     // -----------------------------------------------------------------------
     // The adapter contribution processor is registered by prepareAdapterRuntime()
     // (above, before load) so the adapter subsystem composes as one unit.
-    if (workerDispatch) coordinator.registerContributionProcessor(workerDispatch.contributionProcessor);
+    if (workerDispatch) {
+      coordinator.registerContributionProcessor(workerDispatch.contributionProcessor);
+      coordinator.registerContributionProcessor(workerDispatch.outcomeContributionProcessor);
+    }
     coordinator.registerContributionProcessor(createLogImportContributionProcessor());
     coordinator.registerContributionProcessor(createArtifactKindContributionProcessor());
     coordinator.registerContributionProcessor(createArtifactLifecycleHookContributionProcessor());

@@ -1,3 +1,4 @@
+import type { IMakaioBus } from '@makaio/bus-core';
 import { randomUUID } from 'node:crypto';
 import type { HostDatabase } from '@makaio/contracts';
 import type { CallContext } from '@makaio/core';
@@ -7,6 +8,7 @@ import type { BoundedShutdownStep, ContributionProcessor } from '@makaio/kernel'
 import { boundedWait, outerBoundMs } from '@makaio/utils';
 import {
   AllocationObservationSignal,
+  createJobRunOutcomeReceiver,
   createWorkerDispatch,
   createWorkerProviderContributionProcessor,
   finishLocalAllocation,
@@ -20,6 +22,9 @@ import { createWorkerConnectionExchange, type WorkerConnectionExchangeOptions } 
 export interface BoundWorkerDispatch {
   readonly capability: WorkerDispatchCapability;
   readonly contributionProcessor: ContributionProcessor;
+  readonly outcomeContributionProcessor: ContributionProcessor;
+  /** Install outcome intake on the boot-owned bus. */
+  readonly registerOutcomeReceiver: (bus: IMakaioBus) => () => void;
   /**
    * Build an exchange on the same dispatch, observation signal and storage.
    * @param supervisionCall - Host authority for provider observation.
@@ -54,6 +59,7 @@ export function bindWorkerDispatch(
   );
   if (options === undefined) return undefined;
   const providers = new WorkerProviderRegistry();
+  const outcomes = createJobRunOutcomeReceiver({ database, source: options.source });
   const operations = new AbortController();
   const drained = new AbortController();
   const localCleanup = new AbortController();
@@ -98,6 +104,8 @@ export function bindWorkerDispatch(
   return {
     capability: createWorkerDispatch(host),
     contributionProcessor: createWorkerProviderContributionProcessor(providers),
+    outcomeContributionProcessor: outcomes.contributionProcessor,
+    registerOutcomeReceiver: outcomes.register,
     connectionExchange: (supervisionCall, exchangeOptions) =>
       createWorkerConnectionExchange({ ...host, supervisionCall }, exchangeOptions),
   };

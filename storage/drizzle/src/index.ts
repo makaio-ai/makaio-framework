@@ -134,7 +134,9 @@ export { defineDialectSchema, resolveSchema, type DialectSchema, type PostgresTw
 
 // Host-owned transaction database — guarded queries, wake and rollback marking, and errors
 export {
+  checkHostTransactionCommit,
   createHostDatabase,
+  didHostTransactionCommit,
   getHostTransactionQueryContext,
   getTransactionQueryContext,
   markTransactionRollbackOnly,

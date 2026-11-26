@@ -1,5 +1,22 @@
-import type { IMakaioBus } from '@makaio/bus-core';
-import { WorkerSubjects, type OutcomeAckDecision, type WorkflowRunResult } from '@makaio/contracts';
+import {
+  ConnectionLostError,
+  getFullSubjectForSubjectDefinition,
+  isNoHandlerErrorForSubject,
+  TimeoutError,
+  type IMakaioBus,
+} from '@makaio/bus-core';
+import { WebSocketConnectionError } from '@makaio/bus-transport-websocket';
+import {
+  JobRunOutcomeNamespace,
+  OutcomeSubmitRequestSchema,
+  OutcomeSubmitResponseSchema,
+  WorkerSubjects,
+  type OutcomeAckDecision,
+  type OutcomeSubmitRequest,
+  type OutcomeSubmitResponse,
+  type WorkflowRunResult,
+} from '@makaio/contracts';
+import { deepFreeze } from '@makaio/utils';
 import type { CallContext } from '@makaio/core';
 
 // ─────────────────────────────────────────────────────────────
@@ -221,12 +238,7 @@ async function waitForReconnect(
   signal: AbortSignal | undefined,
 ): Promise<void> {
   signal?.throwIfAborted();
-  let reconnecting: Promise<void>;
-  try {
-    reconnecting = reconnect();
-  } catch {
-    return;
-  }
+  const reconnecting = reconnect();
 
   await new Promise<void>((resolve, reject) => {
     const timeoutId = setTimeout(finish, timeout);
@@ -244,7 +256,7 @@ async function waitForReconnect(
     // stopped waiting; connection shutdown remains the host's responsibility.
     void reconnecting.then(
       () => finish(),
-      () => finish(),
+      (error: unknown) => finish(error),
     );
     signal?.addEventListener('abort', onAbort, { once: true });
     if (signal?.aborted) onAbort();
@@ -258,6 +270,7 @@ async function waitForReconnect(
  * @param deadline - Absolute time when delivery must stop.
  * @param reconnect - Optional reconnect callback.
  * @param signal - Optional caller-owned cancellation signal.
+ * @param isTerminalReconnect - Optional classification for a reconnect refusal.
  * @returns Whether time remains for the retry request.
  */
 async function waitAndReconnect(
@@ -266,6 +279,7 @@ async function waitAndReconnect(
   deadline: number,
   reconnect: OutcomeReconnect | undefined,
   signal: AbortSignal | undefined,
+  isTerminalReconnect?: (error: unknown) => boolean,
 ): Promise<boolean> {
   const rawDelay = config.baseDelayMs * Math.pow(2, attempt - 1);
   const remainingBeforeSleep = deadline - Date.now();
@@ -280,8 +294,9 @@ async function waitAndReconnect(
   if (reconnect !== undefined) {
     try {
       await waitForReconnect(reconnect, remainingBeforeReconnect, signal);
-    } catch {
+    } catch (error) {
       signal?.throwIfAborted();
+      if (isTerminalReconnect?.(error)) throw error;
       // Reconnect failure is non-fatal; the retry will fail again if the
       // transport is still down.
     }
@@ -300,6 +315,7 @@ async function waitAndReconnect(
  * @param createDeadlineError - Builds the caller-specific deadline failure.
  * @param options - Retry, reconnect, and cancellation behavior.
  * @param isTerminalError - Identifies a received, non-retryable failure.
+ * @param isTerminalReconnect - Optional classification for a reconnect refusal.
  * @returns The first response that completes before the deadline.
  */
 async function retryAuthorityRequest<TResponse>(
@@ -307,6 +323,7 @@ async function retryAuthorityRequest<TResponse>(
   createDeadlineError: () => Error,
   options: OutcomeSubmitOptions | undefined,
   isTerminalError: (error: unknown) => boolean,
+  isTerminalReconnect?: (error: unknown) => boolean,
 ): Promise<TResponse> {
   const config = resolveRetryConfig(options?.retry);
   const reconnect = options?.reconnect;
@@ -319,7 +336,7 @@ async function retryAuthorityRequest<TResponse>(
     const remaining = deadline - Date.now();
     if (remaining <= 0) throw createDeadlineError();
     if (attempt > 0) {
-      const canRetry = await waitAndReconnect(attempt, config, deadline, reconnect, signal);
+      const canRetry = await waitAndReconnect(attempt, config, deadline, reconnect, signal, isTerminalReconnect);
       if (!canRetry) throw createDeadlineError();
     }
     try {
@@ -433,5 +450,71 @@ export async function submitOutcomeWithAck(
         : new OutcomeDeliveryError(decision, payload.result, reason),
     options,
     (error) => (error instanceof OutcomeDeliveryError ? error.reason : undefined),
+  );
+}
+
+/** A typed refusal from the ordered job run's outcome authority. */
+export class JobRunOutcomeDeliveryError extends Error {
+  /** A refused proof leaves receipt delivery unconfirmed even if the run closed successfully. */
+  public readonly reason: 'authority-rejected' | 'receipt-unconfirmed';
+
+  /** @param refusal - Validated refusal received from the outcome authority. */
+  public constructor(public readonly refusal: Extract<OutcomeSubmitResponse, { decision: 'refused' }>) {
+    const unconfirmed = refusal.code === 'not-own-job-run';
+    super(unconfirmed ? 'Job run outcome submitted, receipt unconfirmed' : `Job run outcome refused: ${refusal.code}`);
+    this.reason = unconfirmed ? 'receipt-unconfirmed' : 'authority-rejected';
+    this.name = 'JobRunOutcomeDeliveryError';
+  }
+}
+
+/**
+ * Distinguish retryable transport interruption from an explicit refusal or an unknown fault.
+ * @param error - Error from sending or reconnecting.
+ * @returns Whether delivery may be attempted again.
+ */
+function isOutcomeTransportInterruption(error: unknown): boolean {
+  return (
+    error instanceof ConnectionLostError ||
+    error instanceof TimeoutError ||
+    (error instanceof WebSocketConnectionError &&
+      (error.code === 'WS_CONNECTION_UNAVAILABLE' ||
+        error.code === 'WS_CONNECTION_TIMEOUT' ||
+        error.code === 'WS_HANDSHAKE_TIMEOUT'))
+  );
+}
+
+/**
+ * Submit one ordered job run's immutable outcome over its authenticated connection.
+ * @param call - Worker-local bus attribution.
+ * @param bus - Worker bus connected to the outcome authority.
+ * @param payload - Terminal result addressed to its booked job run.
+ * @param options - Bounded delivery and reconnection policy.
+ * @returns Durable acknowledgment, including the owner's first response.
+ * @throws {@link JobRunOutcomeDeliveryError} On refusal. A refused run proof leaves the receipt unconfirmed.
+ */
+export async function submitJobRunOutcomeWithAck(
+  call: CallContext,
+  bus: IMakaioBus,
+  payload: OutcomeSubmitRequest,
+  options?: OutcomeSubmitOptions,
+): Promise<Extract<OutcomeSubmitResponse, { decision: 'accepted' | 'duplicate' }>> {
+  const subject = JobRunOutcomeNamespace.subjects.outcome.submit;
+  const fullSubject = getFullSubjectForSubjectDefinition(subject);
+  const snapshot = deepFreeze(OutcomeSubmitRequestSchema.parse(payload));
+  return await retryAuthorityRequest(
+    async (timeout, signal) => {
+      const response = await bus.request(call, subject, snapshot, { timeout, signal });
+      const decision = OutcomeSubmitResponseSchema.parse(response);
+      if (decision.decision === 'refused') throw new JobRunOutcomeDeliveryError(decision);
+      return decision;
+    },
+    () => new AuthorityRequestDeliveryError(),
+    options,
+    // A connected peer can still be waiting for the outcome receiver's advertisement during boot.
+    (error) =>
+      error instanceof JobRunOutcomeDeliveryError
+        ? !error.refusal.retryable
+        : !isOutcomeTransportInterruption(error) && !isNoHandlerErrorForSubject(error, fullSubject),
+    (error) => !isOutcomeTransportInterruption(error),
   );
 }
