@@ -18,8 +18,10 @@ import {
   type WorkerCredentialDigest,
 } from './credential-digest.js';
 import { DispatchCandidateReadError, sameReference } from './dispatch-store.js';
+import { readIssuerIdentityKey } from './issuer-identity-key.js';
 import {
   bindDispatchProof,
+  mayRedeem,
   prepareDispatchProof,
   type PreparedDispatchProof,
   type UnresolvedDispatchCorrelation,
@@ -44,6 +46,8 @@ export interface WorkerRedemptionPresentation {
 /** The dispatch host and its in-process authority for provider supervision. */
 export interface WorkerRedemptionHost extends WorkerStartOptions {
   readonly supervisionCall: CallContext;
+  /** Require the locked issuer identity for protected connection exchange. */
+  readonly requireIssuerIdentityKey?: true;
   /** Effective message ceiling when the host has a stricter transport limit. */
   readonly exchangeReplyByteLimit?: number;
 }
@@ -80,6 +84,7 @@ interface RedemptionAttempt {
 interface VerifiedOrder {
   readonly locked: NonNullable<Awaited<ReturnType<typeof lockDispatch>>>;
   readonly redemption: LockedWorkerRedemption;
+  readonly revocationKey: string;
 }
 
 type AllocationEvidence = {
@@ -120,7 +125,7 @@ function storageDisposition(error: unknown): WorkerRedemptionError['code'] {
  * @returns The locked order if the token still authorizes this attempt.
  */
 async function verifyOrder(
-  host: WorkerStartOptions,
+  host: WorkerRedemptionHost,
   tx: HostTransaction,
   attempt: RedemptionAttempt,
   signal: AbortSignal,
@@ -138,24 +143,23 @@ async function verifyOrder(
     !tokenMatches
   )
     return undefined;
-  if (
-    locked.order.state === 'ordered' &&
-    redemption.stored === undefined &&
-    redemption.issuerActive &&
-    hasOpenDeadline(locked.order.order.bootstrapDeadlineAt)
-  ) {
-    return { locked, redemption };
-  }
-  if (
-    locked.order.state !== 'redeemed' ||
-    redemption.stored === undefined ||
-    !hasOpenDeadline(redemption.stored.accepted.expiresAt) ||
+  const { order, claim } = locked;
+  const { stored } = redemption;
+  if (stored === undefined) {
+    if (!redemption.issuerActive || !mayRedeem(order)) return undefined;
+  } else if (
+    order.state !== 'redeemed' ||
+    !hasOpenDeadline(stored.accepted.expiresAt) ||
     !runtimeMatches ||
-    locked.claim.boundAllocation === null ||
-    locked.claim.settled !== null
-  )
+    claim.boundAllocation === null ||
+    claim.settled !== null
+  ) {
     return undefined;
-  return { locked, redemption };
+  }
+  const revocationKey = host.requireIssuerIdentityKey
+    ? readIssuerIdentityKey(redemption)
+    : `worker-run:${order.order.jobRunId}`;
+  return revocationKey === undefined ? undefined : { locked, redemption, revocationKey };
 }
 
 /**
@@ -193,7 +197,7 @@ async function prepareReplay(
  * @returns Proof for the current or winning binding, pending correlation, or rejection.
  */
 async function prepareEvidence(
-  host: WorkerStartOptions,
+  host: WorkerRedemptionHost,
   supervisionCall: CallContext,
   current: VerifiedOrder,
   policy: StartValueVisibility,
@@ -217,15 +221,13 @@ async function prepareEvidence(
 
 /**
  * Compute the result to persist using the booking's timing and reply.
- * @param order - Locked committed order.
- * @param redemption - Redemption fields of the locked order.
+ * @param current - Locked booking, redemption and selected revocation key.
  * @param attempt - Hashed presentation.
  * @param requiresPlatformProof - Whether replay must verify platform proof.
  * @returns The initial identity and reply, if the timing is valid.
  */
 function firstResult(
-  order: CommittedWorkerOrder,
-  redemption: LockedWorkerRedemption,
+  { locked: { order }, redemption, revocationKey }: VerifiedOrder,
   attempt: RedemptionAttempt,
   requiresPlatformProof: boolean,
 ): StoredWorkerRedemption | undefined {
@@ -247,7 +249,7 @@ function firstResult(
     accepted: {
       party: { kind: CorePartyKind.jobRun, id: order.order.jobRunId },
       expiresAt: expiresAt.toISOString(),
-      revocationKey: `worker-run:${order.order.jobRunId}`,
+      revocationKey,
       payload: structuredClone(redemption.preparePayload(expiresAt.toISOString())),
     },
   };
@@ -302,7 +304,7 @@ async function commitRedemption(
     if (tooLarge !== undefined) return tooLarge;
     return deepFreeze(structuredClone(stored.accepted));
   }
-  const result = firstResult(locked.order, redemption, attempt, platformThrough !== undefined);
+  const result = firstResult(current, attempt, platformThrough !== undefined);
   if (result === undefined || evidence.first === undefined) return rejected;
   const frozen = deepFreeze(result);
   const tooLarge = checkReplyBudget(frozen.accepted, host.exchangeReplyByteLimit);
@@ -384,7 +386,7 @@ function makeCommit(
  * @returns The verified snapshot, or undefined if the presentation is rejected.
  */
 async function readVerifiedOrder(
-  host: WorkerStartOptions,
+  host: WorkerRedemptionHost,
   attempt: RedemptionAttempt,
   signal: AbortSignal,
   proof?: AllocationEvidence,

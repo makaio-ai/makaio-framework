@@ -10,18 +10,48 @@ import {
   buildPostgresOptionsUrl,
   ensurePostgresEngineRegistered,
 } from '../../../../../storage/conformance/src/harness/postgres-config.js';
+import {
+  openPostgresWithHeldListener,
+  type HeldListenerOptions,
+} from '../../../../../storage/pg/src/__tests__/held-listener-fixture.js';
+import { POSTGRES_WAKE_CHANNEL } from '../../../../../storage/pg/src/signal-listener.js';
 import { migrateRedemptionOwner } from './redemption-owner-fixture.js';
 
 /**
  * Open an isolated database in the parent or either generation of host.
  * @param url - Database endpoint owned by the test.
+ * @param heldListener - Optional test-only control of its PostgreSQL signal connection.
  * @returns Storage with the underlying driver lifetime.
  */
-export async function openExchangeDatabase(url: string) {
+export async function openExchangeDatabase(url: string, heldListener?: HeldListenerOptions) {
   const dialect = url.startsWith('file:') ? 'sqlite' : 'postgres';
   if (dialect === 'postgres') ensurePostgresEngineRegistered();
-  const { db, close } = await createDatabaseClient({ url });
+  const { db, close } =
+    heldListener === undefined
+      ? await createDatabaseClient({ url })
+      : await openPostgresWithHeldListener(url, heldListener);
   return { db, dialect, executor: getRawSqlExecutor(db), cleanup: async () => void (await close()) } as const;
+}
+
+/**
+ * Terminate the single dedicated signal connection of this exchange test.
+ * @param url - The case's isolated PostgreSQL endpoint.
+ * @param applicationName - This case's unique tag on its listener only.
+ */
+export async function terminateExchangeTestListener(url: string, applicationName: string): Promise<void> {
+  const storage = await openExchangeDatabase(url);
+  try {
+    const rows = await storage.executor.all<{ terminated: boolean }>(sql`
+      SELECT pg_terminate_backend((
+        SELECT pid FROM pg_stat_activity
+        WHERE datname = current_database() AND application_name = ${applicationName}
+          AND state = 'idle' AND query = ${`LISTEN ${POSTGRES_WAKE_CHANNEL}`}
+      )) AS terminated
+    `);
+    if (rows[0]?.terminated !== true) throw new Error('Could not terminate the tagged worker exchange listener');
+  } finally {
+    await storage.cleanup();
+  }
 }
 
 /**
@@ -31,9 +61,11 @@ export async function openExchangeDatabase(url: string) {
 async function migrate(url: string): Promise<void> {
   const storage = await openExchangeDatabase(url);
   try {
-    const dispatch = readCentralChain(storage.dialect).find(({ tag }) => tag.endsWith('_worker-dispatch'));
-    if (dispatch === undefined) throw new Error('Missing worker dispatch migration');
-    await applyMigrations(storage.db, [dispatch]);
+    const migrations = readCentralChain(storage.dialect).filter(
+      ({ tag }) => tag.endsWith('_worker-dispatch') || tag.endsWith('_journal-core'),
+    );
+    if (migrations.length !== 2) throw new Error('Missing worker exchange fixture migrations');
+    await applyMigrations(storage.db, migrations);
     await migrateRedemptionOwner(storage);
     // Native SQLite readers of the copy cannot see the template's WAL.
     if (storage.dialect === 'sqlite') await storage.executor.all(sql`PRAGMA wal_checkpoint(TRUNCATE)`);

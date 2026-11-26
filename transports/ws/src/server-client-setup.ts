@@ -29,6 +29,7 @@ import type { ClientRegistry } from './client-registry.js';
 import { createInboundMessageHandler, invokeSubscriptionUpdates } from './server-message-handler.js';
 import { buildSubscribeMessage, type SubscriptionEntry } from './subscribe-message.js';
 import { WebSocketConnectionError } from './connection-error.js';
+import { ConnectionExchangeAuth } from './auth/connection-exchange-auth.js';
 
 const DEFAULT_CLIENT_BROADCAST_TIMEOUT_MS = 5_000;
 const MAX_CLIENT_BROADCAST_TIMEOUT_MS = 60_000;
@@ -132,16 +133,14 @@ export async function setupClientConnection(socket: WebSocketLike, deps: ClientS
   const messageListener = (event: { data: string | Buffer }): void => {
     if (!auth?.handleSetupFrame?.(event.data, socket)) void messageHandler(event.data);
   };
-  const closeListener = (): void => {
-    lifetime.abort();
+  const removeClient = (): void => {
+    if (lifetime.signal.aborted) return;
     // Keep the authenticated owner before cleanup removes its socket context.
     const connectionId = auth?.getReceiveContext?.(socket)?.connectionId;
     auth?.cleanupSocket(socket);
     const subscriptionUpdates = registry.removeClient(socket);
-    if (connectionId !== undefined) onConnectionClosed(connectionId);
     socket.removeEventListener('message', messageListener);
-    socket.removeEventListener('close', closeListener);
-    socket.removeEventListener('error', errorListener);
+    lifetime.abort();
     correlations.rejectAll(new ConnectionLostError('websocket'));
     broadcastAggregator.handleClientDisconnect(socket);
     void invokeSubscriptionUpdates(subscriptionUpdates, handlers, {
@@ -152,40 +151,40 @@ export async function setupClientConnection(socket: WebSocketLike, deps: ClientS
     if (debug) {
       console.info(`[ServerTransport] Client disconnected (${registry.size} remaining)`);
     }
+    if (connectionId !== undefined) onConnectionClosed(connectionId);
   };
   const errorListener = (event: Event): void => {
     if (deps.debug) {
       console.error('[ServerTransport] Client socket error', socketDiagnostic(event, sensitive));
     }
   };
+  const closeListener = (): void => {
+    socket.removeEventListener('close', closeListener);
+    socket.removeEventListener('error', errorListener);
+    removeClient();
+  };
 
   socket.addEventListener('message', messageListener);
   socket.addEventListener('close', closeListener);
   socket.addEventListener('error', errorListener);
 
-  try {
-    if (auth) {
-      await auth.authenticateServer(socket, (message: unknown) => {
-        if (socket.readyState !== 1) {
-          throw new Error(`Cannot send auth message: socket not ready (state: ${socket.readyState})`);
-        }
-        socket.send(JSON.stringify(message));
-      });
-    }
-
-    if (socket.readyState !== 1) {
-      return;
-    }
-
+  const publishClient = (): void => {
+    if (socket.readyState !== 1 || lifetime.signal.aborted) return;
     const connectionId = completeClientAuthentication(auth, socket);
+    if (socket.readyState !== 1 || lifetime.signal.aborted) return;
     registry.removeAuthenticating(socket);
     registry.addClient(socket, connectionId);
+    if (auth instanceof ConnectionExchangeAuth) {
+      auth.scheduleSessionExpiry(socket);
+      if (lifetime.signal.aborted) return;
+    }
 
     // Replay server-local handler subscriptions so the client can populate
     // its remoteRequestHandlers for priority-based dispatch.
     if (serverSubscriptions.size > 0) {
       const initMessage = buildSubscribeMessage(serverSubscriptions);
       sendSafely(socket, JSON.stringify(initMessage));
+      if (lifetime.signal.aborted || socket.readyState !== 1) return;
     }
 
     // Signal that initial subscribe sync is complete. The client resolves its
@@ -194,6 +193,34 @@ export async function setupClientConnection(socket: WebSocketLike, deps: ClientS
 
     if (debug) {
       console.info(`[ServerTransport] Client connected (${registry.size} total)`);
+    }
+  };
+
+  try {
+    if (auth instanceof ConnectionExchangeAuth) {
+      auth.bindExchangeRetirement(socket, (code = 1008) => {
+        try {
+          removeClient();
+        } finally {
+          if (socket.readyState === 1) {
+            socket.close(code, code === 1011 ? 'Connection temporarily unavailable' : 'Authentication ended');
+          }
+        }
+      });
+      if (lifetime.signal.aborted) return;
+    }
+    if (auth) {
+      await auth.authenticateServer(socket, (message: unknown) => {
+        if (socket.readyState !== 1) {
+          throw new Error(`Cannot send auth message: socket not ready (state: ${socket.readyState})`);
+        }
+        socket.send(JSON.stringify(message));
+      });
+    }
+    if (auth instanceof ConnectionExchangeAuth) {
+      await auth.promoteServerConnection(socket, publishClient, () => registry.getAllSockets());
+    } else {
+      publishClient();
     }
   } catch (error) {
     if (deps.debug) {
@@ -257,6 +284,8 @@ export interface RequestRoutingDeps {
   registry: ClientRegistry;
   /** The tracker owned by the socket selected for this request attempt. */
   correlationsFor: (client: WebSocketLike) => CorrelationTracker | undefined;
+  /** Final guarded socket write. Returns false if no frame was sent. */
+  sendSafely: (client: WebSocketLike, frame: string) => boolean;
   /** Caller cancellation: rejects the in-flight attempt and ends routing. */
   signal: AbortSignal;
 }
@@ -304,7 +333,7 @@ export async function routeRequestToClients(
   timeout: number,
   deps: RequestRoutingDeps,
 ): Promise<unknown> {
-  const { registry, correlationsFor, signal } = deps;
+  const { registry, correlationsFor, sendSafely, signal } = deps;
   const fullSubject = `${requestMsg.namespace}.${requestMsg.subject}`;
   // One deadline for the whole routing, anchored before anything else runs: the
   // budget is measured from the moment the transport accepts the request, so
@@ -372,11 +401,9 @@ export async function routeRequestToClients(
     const frame = `${envelope.slice(0, -1)},"timeout":${attemptBudget}}`;
 
     const correlations = correlationsFor(targetClient);
-    if (correlations === undefined || targetClient.readyState !== 1) continue;
+    if (correlations === undefined || !registry.hasClient(targetClient) || targetClient.readyState !== 1) continue;
     const response = correlations.track(attemptCorrelationId, attemptBudget, signal);
-    try {
-      targetClient.send(frame);
-    } catch {
+    if (!sendSafely(targetClient, frame)) {
       // The frame did not leave; release the pending attempt before trying the next socket.
       correlations.cancel(attemptCorrelationId);
       await response.catch(() => undefined);

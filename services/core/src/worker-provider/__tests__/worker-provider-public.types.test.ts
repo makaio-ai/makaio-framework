@@ -26,7 +26,7 @@ const imports = `
 
 it('exposes the host dispatch contract without composition controls', () => {
   expectTypeOf<WorkerProvider.WorkerDispatchCapability>().toEqualTypeOf<WorkerDispatchCapability>();
-  expectTypeOf<keyof typeof WorkerProvider>().toEqualTypeOf<never>();
+  expectTypeOf<keyof typeof WorkerProvider>().toEqualTypeOf<'digestWorkerBootstrapToken'>();
 
   const options: ts.CompilerOptions = { module: ts.ModuleKind.NodeNext, noResolve: true, noLib: true, types: [] };
   const host = ts.createCompilerHost(options);

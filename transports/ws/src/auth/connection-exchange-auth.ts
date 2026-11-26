@@ -1,5 +1,5 @@
 import { DEFAULT_READINESS_TIMEOUT_MS } from '@makaio/bus-core';
-import type { TransportReceiveContext } from '@makaio/core';
+import { CorePartyKind, type TransportReceiveContext } from '@makaio/core';
 import { abortableWait } from '@makaio/utils';
 import { WebSocketConnectionError } from '../connection-error.js';
 import type { WebSocketLike } from '../types.js';
@@ -40,6 +40,15 @@ export interface ConnectionExchangeAdmission {
   readonly revocationKey: string;
   /** Host lifetime checked again at route registration. */
   readonly hostSignal: AbortSignal;
+  /**
+   * Recheck owner authority and call `publish` synchronously under the same
+   * host-local ordering boundary as terminal commit and invalidation.
+   * Resolve without calling it to refuse promotion. Do not publish inside a SQL
+   * transaction. The first completed publication settles the transport setup.
+   * The host releases its ordering boundary once publication returns.
+   * Required for `CorePartyKind.jobRun` admissions and optional for other parties.
+   */
+  readonly withPromotion?: (publish: () => void) => Promise<void>;
 }
 
 /** Trusted metadata for one presentation attempt. */
@@ -49,6 +58,8 @@ export interface ConnectionExchangeSetupContext {
   readonly signal: AbortSignal;
   /** Allow interruptions to be classified as retryable once the credentials and proof passed. */
   markProofVerified(): void;
+  /** Record the issuer key once verified under the authoritative owner lock. */
+  markVerifiedRevocationKey?(key: string): void;
 }
 
 /** Server-side exchange policy. Configure only on hosts with a verified setup handler. */
@@ -58,6 +69,12 @@ export interface ConnectionExchangeSetup {
   readonly maxBytes: number;
   readonly refusal: string;
   /**
+   * Optional host-owned exchange generation. An aborted signal makes its
+   * pending and live exchanges temporarily unavailable. Return a fresh signal
+   * only after the host has reconciled durable authority.
+   */
+  readonly availability?: () => AbortSignal;
+  /**
    * Resolve the presentation and finish the durable exchange.
    * @param frame - Size-bounded setup message.
    * @param context - Host connection ID, deadline and cancellation signal.
@@ -66,13 +83,23 @@ export interface ConnectionExchangeSetup {
   admit(frame: string, context: ConnectionExchangeSetupContext): Promise<ConnectionExchangeAdmission | undefined>;
 }
 
+interface PendingAdmission extends ConnectionExchangeAdmission {
+  readonly connectionId: string;
+  readonly deadline: number;
+  readonly setupSignal: AbortSignal;
+}
+
 interface ExchangeState {
   readonly upgrade: ConnectionExchangeUpgrade;
   readonly lifetime: AbortController;
   readonly terminate: () => void;
   input?: PromiseWithResolvers<string | Buffer>;
-  admission?: ConnectionExchangeAdmission & { connectionId: string };
-  session?: Omit<ConnectionExchangeAdmission, 'reply' | 'hostSignal'> & { connectionId: string };
+  admission?: PendingAdmission;
+  pendingRevocationKey?: string;
+  session?: Pick<PendingAdmission, 'caller' | 'expiresAt' | 'revocationKey' | 'connectionId'>;
+  availability?: AbortSignal;
+  retire?: (code?: 1008 | 1011) => void;
+  expiryTimer?: ReturnType<typeof setTimeout>;
 }
 
 /** The exchange was enabled without valid host configuration. */
@@ -83,12 +110,15 @@ export class ConnectionExchangeConfigurationError extends Error {
   public constructor(
     public readonly code:
       | 'WS_INVALID_EXCHANGE_CAPACITY'
-      | 'WS_INVALID_EXCHANGE_HOST_SIGNAL' = 'WS_INVALID_EXCHANGE_CAPACITY',
+      | 'WS_INVALID_EXCHANGE_HOST_SIGNAL'
+      | 'WS_MISSING_WORKER_PROMOTION' = 'WS_INVALID_EXCHANGE_CAPACITY',
   ) {
     super(
-      code === 'WS_INVALID_EXCHANGE_CAPACITY'
-        ? 'Connection exchange requires a positive integer maxPendingExchanges'
-        : 'Connection exchange requires a host abort signal',
+      {
+        WS_INVALID_EXCHANGE_CAPACITY: 'Connection exchange requires a positive integer maxPendingExchanges',
+        WS_INVALID_EXCHANGE_HOST_SIGNAL: 'Connection exchange requires a host abort signal',
+        WS_MISSING_WORKER_PROMOTION: 'Worker connection exchange requires an owner promotion boundary',
+      }[code],
     );
     this.name = 'ConnectionExchangeConfigurationError';
   }
@@ -216,11 +246,20 @@ export class ConnectionExchangeAuth implements TransportAuth {
       markProofVerified() {
         proofVerified = true;
       },
+      markVerifiedRevocationKey(key: string) {
+        if (!setupSignal.aborted) state.pendingRevocationKey = key;
+      },
     });
     if (state.upgrade.encrypted && typeof frame === 'string' && Buffer.byteLength(frame) <= this.setup.maxBytes) {
       try {
         const admission = await abortableWait(this.setup.admit(frame, context), setupSignal);
-        if (admission !== undefined) return { ...admission, connectionId };
+        if (
+          admission !== undefined &&
+          (admission.caller.kind !== CorePartyKind.jobRun || typeof admission.withPromotion === 'function')
+        ) {
+          context.markVerifiedRevocationKey(admission.revocationKey);
+          return { ...admission, connectionId, deadline: context.deadline, setupSignal };
+        }
       } catch (error) {
         if (proofVerified) throw error;
       }
@@ -230,6 +269,89 @@ export class ConnectionExchangeAuth implements TransportAuth {
     throw new WebSocketConnectionError('WS_AUTHENTICATION_REJECTED', 'Connection exchange refused');
   }
 
+  /**
+   * Publish the reply and route in one synchronous continuation after the
+   * host's final authority check, if this admission has one.
+   * @param socket - Pending socket.
+   * @param publish - Transport finalization and route registration.
+   * @param localSockets - Existing socket registry snapshot on this host.
+   */
+  public async promoteServerConnection(
+    socket: WebSocketLike,
+    publish: () => void,
+    localSockets?: () => Iterable<WebSocketLike>,
+  ): Promise<void> {
+    const state = this.states.get(socket);
+    const admission = state?.admission;
+    const withPromotion = admission?.withPromotion;
+    if (state === undefined || admission === undefined || withPromotion === undefined) {
+      publish();
+      return;
+    }
+
+    this.assertPromotion(socket, state, admission);
+    const signal = AbortSignal.any([admission.setupSignal, admission.hostSignal]);
+    const publication = Promise.withResolvers<void>();
+    let mayPublish = true;
+    const refuse = (error: unknown): void => {
+      mayPublish = false;
+      publication.reject(error);
+    };
+
+    // Attach the wait before invoking host code. The callback is single-use
+    // even if native send reenters it, and hook settlement cannot revoke success.
+    const finished = abortableWait(publication.promise, signal);
+    void Promise.resolve()
+      .then(() => {
+        signal.throwIfAborted();
+        return withPromotion.call(admission, () => {
+          if (!mayPublish) return;
+          mayPublish = false;
+          try {
+            this.assertPromotion(socket, state, admission);
+            if (localSockets !== undefined && admission.caller.kind === CorePartyKind.jobRun) {
+              this.retireRunPredecessors(admission, localSockets());
+            }
+            this.assertPromotion(socket, state, admission);
+            publish();
+            publication.resolve();
+          } catch (error) {
+            refuse(error);
+          }
+        });
+      })
+      .then(() => {
+        if (mayPublish) {
+          refuse(new WebSocketConnectionError('WS_AUTHENTICATION_REJECTED', 'Connection exchange refused'));
+        }
+      }, refuse);
+
+    try {
+      await finished;
+    } finally {
+      mayPublish = false;
+    }
+  }
+
+  /**
+   * Detach routes of the same verified run before publishing its replacement.
+   * @param admission - Incoming admission under the host's promotion boundary.
+   * @param localSockets - Existing sockets tracked by this transport.
+   */
+  private retireRunPredecessors(admission: PendingAdmission, localSockets: Iterable<WebSocketLike>): void {
+    for (const socket of localSockets) {
+      const existing = this.states.get(socket);
+      const session = existing?.session;
+      if (
+        session?.caller.kind === CorePartyKind.jobRun &&
+        session.caller.id === admission.caller.id &&
+        session.revocationKey === admission.revocationKey
+      ) {
+        existing?.retire?.();
+      }
+    }
+  }
+
   public completeServerAuthentication(socket: WebSocketLike): void {
     const state = this.states.get(socket);
     if (state === undefined) {
@@ -237,14 +359,83 @@ export class ConnectionExchangeAuth implements TransportAuth {
       return;
     }
     const admission = state.admission;
-    state.admission = undefined;
     if (admission === undefined) throw new Error('Missing committed exchange admission');
-    const { reply, hostSignal, ...session } = admission;
-    hostSignal.throwIfAborted();
-    state.lifetime.signal.throwIfAborted();
-    socket.send(reply);
-    state.session = session;
+    this.assertPromotion(socket, state, admission);
+    socket.send(admission.reply);
+    this.assertPromotion(socket, state, admission);
+    const { caller, expiresAt, revocationKey, connectionId } = admission;
+    state.session = { caller, expiresAt, revocationKey, connectionId };
+    state.admission = undefined;
+    state.pendingRevocationKey = undefined;
     this.releasePending(socket);
+  }
+
+  /**
+   * Confirm eligibility before publication and after potentially reentrant native send.
+   * @param socket - Connection being promoted.
+   * @param state - State owned by the socket.
+   * @param admission - Exact acceptance authorized for promotion.
+   */
+  private assertPromotion(socket: WebSocketLike, state: ExchangeState, admission: PendingAdmission): void {
+    state.availability?.throwIfAborted();
+    admission.hostSignal.throwIfAborted();
+    admission.setupSignal.throwIfAborted();
+    state.lifetime.signal.throwIfAborted();
+    const now = Date.now();
+    if (state.admission !== admission || socket.readyState !== 1 || now >= admission.deadline) {
+      throw new Error('Connection exchange promotion interrupted');
+    }
+    if (!(Date.parse(admission.expiresAt) > now)) {
+      throw new WebSocketConnectionError('WS_AUTHENTICATION_REJECTED', 'Connection exchange expired');
+    }
+  }
+
+  /**
+   * Bind shared cleanup before reading exchange credentials.
+   * @param socket - Upgraded client socket.
+   * @param retire - Remove local state and initiate the classified close.
+   */
+  public bindExchangeRetirement(socket: WebSocketLike, retire: (code?: 1008 | 1011) => void): void {
+    const state = this.states.get(socket);
+    if (state === undefined) return;
+    state.retire = retire;
+    const generation = this.setup.availability?.();
+    if (generation === undefined) return;
+    // Each socket owns its listener without growing the host signal's listener list.
+    const availability = AbortSignal.any([generation]);
+    state.availability = generation;
+    if (availability.aborted) retire(1011);
+    else availability.addEventListener('abort', () => retire(1011), { once: true, signal: state.lifetime.signal });
+  }
+
+  /**
+   * Retire an accepted identity when its original deadline elapses.
+   * @param socket - Socket that has just joined the route registry.
+   */
+  public scheduleSessionExpiry(socket: WebSocketLike): void {
+    const state = this.states.get(socket);
+    if (state?.session === undefined) return;
+    const deadline = Date.parse(state.session.expiresAt);
+    const checkExpiry = (): void => {
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) state.retire?.();
+      else state.expiryTimer = setTimeout(checkExpiry, Math.min(remaining, 2 ** 31 - 1));
+    };
+    checkExpiry();
+  }
+
+  /**
+   * Retire a live exchange socket or fence a verified pending admission.
+   * @param socket - Candidate from the local client registry.
+   * @param key - Committed revocation key.
+   */
+  public invalidateSession(socket: WebSocketLike, key: string): void {
+    const state = this.states.get(socket);
+    if (state?.session?.revocationKey === key) {
+      state.retire?.();
+    } else if (state?.pendingRevocationKey === key) {
+      state.lifetime.abort(new WebSocketConnectionError('WS_AUTHENTICATION_REJECTED', 'Connection exchange refused'));
+    }
   }
 
   public hasSensitiveFrames(socket: WebSocketLike): boolean {
@@ -280,10 +471,26 @@ export class ConnectionExchangeAuth implements TransportAuth {
     };
   }
 
+  /**
+   * Recheck exchange authentication at a final routing boundary.
+   * @param socket - Candidate socket for local delivery.
+   * @returns Whether an exchange session may still receive frames. Legacy sockets are unaffected.
+   */
+  public isExchangeAvailable(socket: WebSocketLike): boolean {
+    return !this.states.has(socket) || this.isSocketAuthenticated(socket);
+  }
+
   public isSocketAuthenticated(socket: WebSocketLike): boolean {
     const state = this.states.get(socket);
     if (state === undefined) return this.legacy.isSocketAuthenticated?.(socket) ?? true;
-    return state.session !== undefined && Date.parse(state.session.expiresAt) > Date.now();
+    if (state.availability?.aborted) {
+      state.retire?.(1011);
+      return false;
+    }
+    if (state.session === undefined) return false;
+    if (Date.parse(state.session.expiresAt) > Date.now()) return true;
+    state.retire?.();
+    return false;
   }
 
   public getAuthenticatedIdentityId(socket: WebSocketLike): string | undefined {
@@ -295,10 +502,13 @@ export class ConnectionExchangeAuth implements TransportAuth {
     if (state === undefined) this.legacy.cleanupSocket(socket);
     else {
       this.releasePending(socket);
-      state.lifetime.abort();
+      clearTimeout(state.expiryTimer);
+      state.retire = undefined;
       state.input = undefined;
       state.admission = undefined;
+      state.pendingRevocationKey = undefined;
       state.session = undefined;
+      state.lifetime.abort();
     }
   }
 

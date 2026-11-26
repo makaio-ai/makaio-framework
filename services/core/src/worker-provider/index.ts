@@ -8,6 +8,7 @@ export type {
   WorkerDispatchCapability,
 } from '@makaio/contracts/capabilities';
 export type { AllocationScopeSetting } from './allocation-scope-source.js';
+export { digestWorkerBootstrapToken, type WorkerCredentialDigest } from './credential-digest.js';
 export type {
   DispatchBinding,
   OrderedProvisionOutcome,

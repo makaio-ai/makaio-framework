@@ -13,7 +13,13 @@ import { McpServerBridgeService } from '@makaio/subsystem-mcp-http-server';
 import { ToolRegistry } from '@makaio/services-core/tools';
 import type { WorkerRuntimeContributions } from './worker-contributions.js';
 import { createWorkerBusAuth } from '../worker-bus-auth.js';
-import { WorkerExchangeClient } from './worker-exchange-client.js';
+import { WorkerExchangeClient, type WorkerExchangeSessionCheck } from './worker-exchange-client.js';
+
+/** Explicit session owner for the local exchange composition. */
+type WorkerSessionComposition = {
+  check(bus: IMakaioBus): WorkerExchangeSessionCheck;
+  onTerminal(error: unknown): void;
+};
 
 /** Synchronously acquired connection ownership, including an unfinished connect. */
 export interface BootstrapRuntimeConnection {
@@ -62,14 +68,18 @@ export interface WorkerRuntimeHandle {
  * the socket instead of authenticating it against the process-global secret.
  * The host owns the credential's identity and its authenticated claims.
  * @param config - Bus connection configuration from the workflow worker config.
+ * @param sessions - Local test composition for the synchronized owner check.
  * @returns A handle with the bus instance, connect and close methods.
  */
-export function createWorkerBus(config: {
-  readonly busUrl?: string;
-  readonly busAuth: WorkflowWorkerBusAuth | OrderedWorkerBootstrapAuth;
-  readonly identityId?: string;
-  readonly namespaces?: readonly RegistrableBusNamespaceDefinition[];
-}): BootstrapRuntimeConnection {
+export function createWorkerBus(
+  config: {
+    readonly busUrl?: string;
+    readonly busAuth: WorkflowWorkerBusAuth | OrderedWorkerBootstrapAuth;
+    readonly identityId?: string;
+    readonly namespaces?: readonly RegistrableBusNamespaceDefinition[];
+  },
+  sessions?: WorkerSessionComposition,
+): BootstrapRuntimeConnection {
   const bus = createBusInstance();
   // The worker hosts the workflow contract locally without loading the workflow engine extension.
   bus.registerNamespaces([...FrameworkContractNamespaces, WorkflowNamespace]);
@@ -85,7 +95,7 @@ export function createWorkerBus(config: {
 
   const transport =
     config.busAuth.kind === 'exchange'
-      ? new WorkerExchangeClient(config.busUrl, config.busAuth)
+      ? new WorkerExchangeClient(config.busUrl, config.busAuth, sessions?.check(bus), sessions?.onTerminal)
       : new WebSocketClientTransport({
           url: config.busUrl ?? '',
           attestingRole: 'core-uplink',

@@ -12,9 +12,8 @@
  * remain subscribed.
  *
  * Lifecycle invariants:
- * - Direct subscribers live in one {@link RegistrationSet}: registering the
- *   same listener function twice yields two independent entries, each
- *   removed independently.
+ * - Each subscriber type has a {@link RegistrationSet}. Registering the same
+ *   listener twice yields two independently removable entries.
  * - `ready()` never owns a long-lived promise. Closed: a fresh, caller-owned
  *   rejection. Already listening: a resolved promise. Otherwise: a waiter is
  *   enqueued and a connection attempt is ensured. A confirmed `LISTEN`
@@ -31,16 +30,17 @@
  * - The first `'error'`/`'end'` (or a failed `connect()`/`LISTEN`) of a
  *   connection concludes it exactly once, merged by connection identity;
  *   later events of the same connection are swallowed by its still-attached
- *   handlers until release has completed.
+ *   handlers until release has completed. Only a lost, confirmed `LISTEN`
+ *   notifies disconnect observers.
  * - A concluded connection schedules at most one retry timer with bounded
  *   exponential backoff, unless closed; retries continue until success or
  *   close, and success resets the backoff. A confirmed `LISTEN` that follows
  *   an earlier confirmed `LISTEN` of this capability emits a `resynced`
  *   event; the very first confirmed `LISTEN` does not.
  * - `close()` is idempotent and memoized: mark closed, clear a pending retry
- *   timer, reject and clear waiters, clear the subscriber set, release every
+ *   timer, reject and clear waiters, clear the subscriber sets, release every
  *   owned connection (current and still-releasing) and await them. After
- *   close, `subscribe()` throws and `ready()` rejects.
+ *   close, subscription methods throw and `ready()` rejects.
  * - No connection is opened before the first `subscribe()`/`ready()` call.
  * - No internal path (attempts, releases, retry timers, notification
  *   handling) produces an unhandled rejection; subscriber delivery goes
@@ -138,7 +138,7 @@ const MAX_RECONNECT_DELAY_MS = 30_000;
 /** Caps the exponent so the backoff computation never overflows. */
 const MAX_BACKOFF_EXPONENT = 10;
 
-/** Rejection reason used by every pending or future `ready()`/`subscribe()` call once `close()` was called. */
+/** Rejection reason used by pending or future `ready()` calls once `close()` was called. */
 const CLOSED_REASON = 'createPostgresDatabaseSignals: ready() rejects because close() was called.';
 
 /** One connection owned from creation until its release has fully settled. */
@@ -173,6 +173,8 @@ interface ListenerState {
   readonly options: PostgresDatabaseSignalsOptions;
   /** Direct subscribers of this capability. */
   readonly subscribers: RegistrationSet<(event: DatabaseSignal) => void>;
+  /** Observers of detected loss of an established listener connection. */
+  readonly disconnectListeners: RegistrationSet<() => void>;
   /** Set once `close()` has been called; permanent. */
   closed: boolean;
   /** Whether {@link ListenerState.current} has a confirmed `LISTEN`. */
@@ -202,6 +204,7 @@ function createListenerState(options: PostgresDatabaseSignalsOptions): ListenerS
   return {
     options,
     subscribers: createRegistrationSet(),
+    disconnectListeners: createRegistrationSet(),
     closed: false,
     listening: false,
     everListened: false,
@@ -280,7 +283,9 @@ async function attemptConnection(state: ListenerState): Promise<void> {
   function conclude(error: Error | undefined): void {
     if (concluded) return;
     concluded = true;
-    if (isCurrent()) {
+    const current = isCurrent();
+    const disconnected = current && state.listening;
+    if (current) {
       state.current = undefined;
       state.listening = false;
     }
@@ -293,7 +298,12 @@ async function attemptConnection(state: ListenerState): Promise<void> {
         error,
       );
     }
-    if (!state.closed) scheduleRetry(state);
+    if (!state.closed) {
+      scheduleRetry(state);
+      if (disconnected) {
+        invokeListenersSafely(state.disconnectListeners.snapshot(), undefined, 'database signal disconnected');
+      }
+    }
   }
 
   /**
@@ -400,7 +410,7 @@ function ready(state: ListenerState): Promise<void> {
 
 /**
  * Tear down a lifecycle: mark it closed, cancel a pending retry, reject and
- * clear every waiting `ready()` call, clear the subscriber set, and release
+ * clear every waiting `ready()` call, clear the subscriber sets, and release
  * every owned connection — the current one and any still settling from an
  * earlier failure — before resolving. Idempotent and memoized.
  * @param state - Lifecycle state to close.
@@ -418,6 +428,7 @@ function closeListener(state: ListenerState): Promise<void> {
   for (const waiter of state.waiters) waiter.reject(closedError);
   state.waiters.clear();
   state.subscribers.clear();
+  state.disconnectListeners.clear();
   state.closePromise = (async () => {
     const pending = [...state.releasing];
     const current = state.current;
@@ -459,6 +470,12 @@ export function createPostgresDatabaseSignals(options: PostgresDatabaseSignalsOp
       const remove = state.subscribers.add(listener);
       ensureConnectionAttempt(state);
       return remove;
+    },
+    onDisconnect(listener: () => void): () => void {
+      if (state.closed) {
+        throw new Error('createPostgresDatabaseSignals: onDisconnect() was called after close().');
+      }
+      return state.disconnectListeners.add(listener);
     },
     ready: () => ready(state),
     close: () => closeListener(state),

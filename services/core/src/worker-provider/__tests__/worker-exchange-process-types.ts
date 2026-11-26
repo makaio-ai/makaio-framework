@@ -18,7 +18,10 @@ export type StockExchangeScenario =
   | 'stock-retry'
   | 'stock-deadline'
   | 'stock-shutdown'
-  | 'stock-no-decoder';
+  | 'stock-no-decoder'
+  | 'stock-reconnect'
+  | 'stock-listener-outage'
+  | 'stock-before-sync';
 
 /** One independent host and client scenario. */
 export type ExchangeScenario =
@@ -32,6 +35,16 @@ export type ExchangeScenario =
   | 'dropped-digest'
   | 'dropped-commit'
   | 'host-aborted'
+  | 'local-revoke'
+  | 'local-promotion'
+  | 'local-promotion-aborts'
+  | 'local-promotion-hangs'
+  | 'local-promotion-repeats'
+  | 'two-host-revoke'
+  | 'local-takeover'
+  | 'local-takeover-invalidates'
+  | 'local-takeover-identity'
+  | 'local-expiry'
   | 'storage-interrupted'
   | 'storage-read-interrupted'
   | 'deadline-after-begin'
@@ -40,6 +53,11 @@ export type ExchangeScenario =
   | 'foreign'
   | 'unknown'
   | 'wrong-secret'
+  | 'identity-wrong'
+  | 'identity-missing'
+  | 'identity-closed'
+  | 'identity-expired'
+  | 'identity-revoked'
   | 'revoked'
   | 'expired'
   | 'proof'
@@ -61,12 +79,22 @@ export const ExchangeHostStartSchema = z.strictObject({
   proof: z.string(),
   expiredAt: z.number().optional(),
   port: z.number().optional(),
+  wake: z
+    .strictObject({
+      role: z.enum(['owner', 'listener']),
+      terminal: z.string(),
+      fence: z.string(),
+      listenerTag: z.string().optional(),
+    })
+    .optional(),
 });
 export type ExchangeHostStart = z.infer<typeof ExchangeHostStartSchema>;
+export type ExchangeWakeScope = NonNullable<ExchangeHostStart['wake']>;
 
 export const ExchangePeerStartSchema = z.strictObject({
   port: z.number(),
   proof: z.string(),
+  otherRun: z.boolean().optional(),
 });
 export type ExchangePeerStart = z.infer<typeof ExchangePeerStartSchema>;
 
@@ -81,6 +109,7 @@ export interface ExchangeSnapshot {
   readonly advertised: number;
   readonly noCredentials: boolean;
   readonly digestReadFollowups?: number;
+  readonly issuerKeyMatches?: boolean;
 }
 
 export type ExchangeMessage =
@@ -91,6 +120,34 @@ export type ExchangeMessage =
   | { kind: 'stock-launch'; auth: StockLaunchAuth }
   | { kind: 'stock-attempt' }
   | { kind: 'stock-dns-interrupted' }
+  | { kind: 'stock-reconnect-dial-held' }
+  | { kind: 'identity-attempt' }
+  | { kind: 'before-sync' }
+  | { kind: 'valid-bootstrap' }
+  | { kind: 'run-closed' }
+  | { kind: 'local-terminal'; closed: boolean; revoked: boolean; grace: boolean; facts: number }
+  | { kind: 'local-transition-held'; closed: boolean; revoked: boolean; grace: boolean; facts: number }
+  | { kind: 'local-promotion-queued' }
+  | { kind: 'local-promotion-reading'; completedTerminalTurns: number }
+  | { kind: 'local-promotion-hook-ended' }
+  | { kind: 'local-route'; delivered: boolean }
+  | { kind: 'local-route-delivered' }
+  | { kind: 'local-takeover-published'; retiredDuringPublication: boolean }
+  | { kind: 'local-takeover-identity'; expiresAt: string }
+  | { kind: 'local-peer-paused' }
+  | { kind: 'local-native-closed' }
+  | { kind: 'local-retired'; direct: boolean; subscribed: boolean }
+  | { kind: 'local-delivery'; delivered: boolean }
+  | { kind: 'local-inbound-held' }
+  | { kind: 'remote-rollback-fence'; terminalWakes: number; closed: boolean; revoked: boolean; facts: number }
+  | { kind: 'remote-terminal-fact'; facts: number }
+  | { kind: 'remote-listener-disconnected' }
+  | { kind: 'remote-reconnect-held' }
+  | { kind: 'remote-reconcile-held' }
+  | { kind: 'remote-promotion-held' }
+  | { kind: 'remote-resync-superseded' }
+  | { kind: 'remote-resync-reconciled'; facts: number; terminalWakes: number }
+  | { kind: 'stock-status'; expiresAt: string }
   | { kind: 'stock-clock-expired' }
   | { kind: 'stock-accepted'; payload: JsonValue | undefined; principal: string }
   | { kind: 'stock-stopped'; code: string; decoderRequired?: boolean }
@@ -118,15 +175,31 @@ export type ExchangeMessage =
 export type ExchangeCommand =
   | 'snapshot'
   | 'release'
+  | 'release-terminal'
+  | 'release-reconcile'
+  | 'release-native-close'
+  | 'pause-wire'
+  | 'resume-wire'
   | 'drop'
   | 'stop'
   | 'abort-host'
+  | 'close-run'
+  | 'rollback-run'
+  | 'grace-run'
+  | 'probe'
+  | 'probe-held'
+  | 'probe-delivery'
+  | 'probe-local-route'
   | 'stop-transport'
   | 'replay'
   | 'present'
   | 'expire-input'
+  | 'release-reconnect-dial'
   | 'expire-bootstrap'
   | 'expire-replay';
+
+export const OTHER_RUN_ID = 'other-run';
+export const LOCAL_DELIVERY_SUBJECT = 'exchangeTest.localDelivery';
 
 /** Keep a real refusal release window in one process test per host and dialect. */
 export const MEASURED_REFUSAL = 'proof-interrupted';

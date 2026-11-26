@@ -20,6 +20,7 @@ import { isRecord } from '@makaio/utils';
 import {
   allowsSubscriptionPattern,
   authorizedRecipients,
+  closeExpiredAuthentication,
   forwardAuthorizedEvent,
   restampForClientFanout,
   reportRejectedReply,
@@ -403,7 +404,8 @@ async function routeSubscriptionMessage(
  * @param socket - Socket that sent the message.
  * @param deps - Handler dependencies.
  * @param receiveContext - Authentication-derived receive context.
- * @param currentSender - Revalidate the sender at dispatch when access is enforced.
+ * @param currentSender - Revalidate the sender before forwarding and local dispatch.
+ * @returns Resolves after the broadcast is dispatched or discarded.
  */
 async function routeBroadcastMessage(
   message: BusBroadcastMessage,
@@ -419,17 +421,18 @@ async function routeBroadcastMessage(
 
   const subject = getSubjectFromBusMessage(message) ?? undefined;
   const candidates = deps.registry.getInterestedClients(subject, message.payload, socket);
-  const targetClients = await authorizedRecipients(deps, candidates, message);
-  if (deps.access && !currentSender()) return;
+  const targetClients = (await authorizedRecipients(deps, candidates, message))();
+  if (!currentSender()) return;
   const timeout = deps.normalizeBroadcastTimeout(message.timeout);
   const outgoing = restampForClientFanout(message, receiveContext);
   const local = deps.broadcastAggregator.startClientBroadcast(
     socket,
     outgoing,
-    targetClients(),
+    targetClients,
     deps.sendSafely,
     timeout,
   );
+  if (!currentSender()) return deps.broadcastAggregator.cancelClientBroadcast(local);
   await invokeHandlers({ ...message, correlationId: local }, deps.handlers, { debug: deps.debug, receiveContext });
 }
 
@@ -460,7 +463,10 @@ export async function routeMessage(
   const currentSender =
     isSubjectBearingMessage(message) && deps.access
       ? await deps.access.authorizeSend(message, socket, deps.sendSafely)
-      : () => ({ connection: deps.auth?.getReceiveContext?.(socket) });
+      : () => {
+          if (deps.auth?.isSocketAuthenticated?.(socket) === false) return undefined;
+          return { connection: deps.auth?.getReceiveContext?.(socket) };
+        };
   if (currentSender === undefined) return;
   const sender = currentSender();
   if (sender === undefined) return;
@@ -481,7 +487,7 @@ export async function routeMessage(
   }
 
   if (message.type === 'event') {
-    if (await forwardAuthorizedEvent(message, socket, deps, receiveContext, currentSender)) {
+    if ((await forwardAuthorizedEvent(message, socket, deps, receiveContext, currentSender)) && currentSender()) {
       await invokeHandlers(message, deps.handlers, { debug: deps.debug, receiveContext });
     }
     return;
@@ -568,8 +574,7 @@ export function createInboundMessageHandler(
         if (debug) {
           console.warn('[ServerTransport] Closing socket with expired authentication');
         }
-        auth.cleanupSocket(socket);
-        socket.close(1008, 'Authentication expired');
+        closeExpiredAuthentication(socket, auth);
         return;
       }
 

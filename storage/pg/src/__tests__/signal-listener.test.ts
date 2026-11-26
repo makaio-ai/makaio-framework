@@ -298,8 +298,12 @@ afterEach(() => {
 describe('createPostgresDatabaseSignals lifecycle (fake client)', () => {
   it('opens no connection before the first subscribe() or ready() call', async () => {
     const { capability, factory } = createCapability();
+    const disconnected = vi.fn();
+    capability.onDisconnect!(disconnected);
     expect(factory.connections).toHaveLength(0);
     await capability.close();
+    expect(disconnected).not.toHaveBeenCalled();
+    expect(() => capability.onDisconnect!(disconnected)).toThrow(/close/);
   });
 
   it(
@@ -308,6 +312,8 @@ describe('createPostgresDatabaseSignals lifecycle (fake client)', () => {
     async () => {
       const { capability, factory } = createCapability();
       try {
+        const disconnected = vi.fn();
+        capability.onDisconnect!(disconnected);
         const readyA = capability.ready();
         const readyB = capability.ready();
         let settled = false;
@@ -345,29 +351,47 @@ describe('createPostgresDatabaseSignals lifecycle (fake client)', () => {
         // Already listening: ready() resolves at once, no new connection attempt.
         await expect(capability.ready()).resolves.toBeUndefined();
         expect(factory.connections).toHaveLength(3);
+        const connection = factory.connections[2]!;
+        connection.delayEnd();
+        const closing = capability.close();
+        connection.emitEnd();
+        connection.resolveEnd();
+        await closing;
+        expect(disconnected).not.toHaveBeenCalled();
       } finally {
         await capability.close();
       }
     },
   );
 
-  it('emits no resynced event on the first confirmed LISTEN, and exactly one on a later reconnect', async () => {
+  it('reports each established listener loss, with no extra signal during a failed reconnect', async () => {
     const { capability, factory } = createCapability();
-    const resyncEvents: DatabaseSignal[] = [];
+    const events: Array<'disconnected' | 'resynced'> = [];
     try {
+      capability.onDisconnect!(() => {
+        events.push('disconnected');
+      });
       capability.subscribe((event) => {
-        if (event.kind === 'resynced') resyncEvents.push(event);
+        if (event.kind === 'resynced') events.push(event.kind);
       });
       await flush();
       await succeedAttempt(factory.connections[0]!);
-      expect(resyncEvents).toHaveLength(0);
+      expect(events).toEqual([]);
 
       factory.connections[0]!.emitEnd();
+      expect(events).toEqual(['disconnected']);
       await flush();
       await vi.advanceTimersByTimeAsync(250);
       expect(factory.connections).toHaveLength(2);
-      await succeedAttempt(factory.connections[1]!);
-      expect(resyncEvents).toHaveLength(1);
+      await failAttempt('connectFailure', factory.connections[1]!, new Error('reconnect failed'));
+      expect(events).toEqual(['disconnected']);
+
+      await vi.advanceTimersByTimeAsync(500);
+      expect(factory.connections).toHaveLength(3);
+      await succeedAttempt(factory.connections[2]!);
+      expect(events).toEqual(['disconnected', 'resynced']);
+      factory.connections[2]!.emitEnd();
+      expect(events).toEqual(['disconnected', 'resynced', 'disconnected']);
     } finally {
       await capability.close();
     }
@@ -395,20 +419,27 @@ describe('createPostgresDatabaseSignals lifecycle (fake client)', () => {
         connection.emitEnd();
       },
     },
-  ])('$name concludes the connection exactly once, scheduling exactly one retry', async ({ trigger }) => {
+  ])('$name reports one loss and schedules exactly one retry', async ({ trigger }) => {
     const { capability, factory } = createCapability();
     try {
       capability.subscribe(() => undefined);
+      const disconnected = vi.fn();
+      const unsubscribe = capability.onDisconnect!(disconnected);
       await flush();
       await succeedAttempt(factory.connections[0]!);
 
       trigger(factory.connections[0]!);
+      expect(disconnected).toHaveBeenCalledTimes(1);
       await flush();
 
       await vi.advanceTimersByTimeAsync(249);
       expect(factory.connections).toHaveLength(1); // exactly one retry, not yet due
       await vi.advanceTimersByTimeAsync(1);
       expect(factory.connections).toHaveLength(2); // exactly one retry scheduled, not two
+      await succeedAttempt(factory.connections[1]!);
+      unsubscribe();
+      factory.connections[1]!.emitEnd();
+      expect(disconnected).toHaveBeenCalledTimes(1);
     } finally {
       await capability.close();
     }

@@ -11,7 +11,7 @@ import { CorrelationTracker, NoHandlerError, TimeoutError, type BusRequestMessag
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ClientRegistry } from '../client-registry.js';
 import { ServerBoundaryAccess } from '../server-boundary-access.js';
-import { routeRequestToClients } from '../server-client-setup.js';
+import { routeRequestToClients, type RequestRoutingDeps } from '../server-client-setup.js';
 import { MockWebSocket } from './test-helpers.js';
 
 const SUBJECT = 'test.action';
@@ -21,6 +21,11 @@ describe('routeRequestToClients', () => {
   let correlations: CorrelationTracker;
   let route: AbortController;
   let sockets: MockWebSocket[];
+
+  const sendSafely: RequestRoutingDeps['sendSafely'] = (client, frame) => {
+    client.send(frame);
+    return true;
+  };
 
   /**
    * Build a server-initiated request envelope for `test.action`.
@@ -41,6 +46,7 @@ describe('routeRequestToClients', () => {
     return routeRequestToClients(request, timeout, {
       registry,
       correlationsFor: () => correlations,
+      sendSafely,
       signal: route.signal,
     }).then(
       (value: unknown) => value,
@@ -129,6 +135,7 @@ describe('routeRequestToClients', () => {
         access,
         registry,
         correlationsFor: () => correlations,
+        sendSafely,
         signal: route.signal,
       }),
     ).rejects.toBeInstanceOf(TimeoutError);

@@ -13,6 +13,9 @@ export {
   WORKER_REDEMPTION_EXCHANGE,
   WorkerExchangeReplySchema,
   WorkerExchangeRequestSchema,
+  WorkerRunIdentityReplySchema,
+  WorkerRunIdentityRequestSchema,
   type WorkerExchangeReply,
   type WorkerExchangeRequest,
+  type WorkerRunIdentityRequest,
 } from './worker-exchange.js';
