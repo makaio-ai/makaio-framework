@@ -1364,18 +1364,22 @@ export type {
   WorkflowDefinitionPathSegment,
 } from './workflow/index.js';
 export {
+  OrderedWorkerBootstrapAuthSchema,
   WorkflowWorkerBusAuthSchema,
   WorkflowWorkerSourceSchema,
   WorkflowTriggerModeSchema,
   WorkflowWorkerConfigSchema,
+  WorkflowWorkerLaunchConfigSchema,
   WorkflowRunResultSchema,
   WorkerContributionManifestSchema,
 } from './workflow/index.js';
 export type {
+  OrderedWorkerBootstrapAuth,
   WorkflowWorkerBusAuth,
   WorkflowWorkerSource,
   WorkflowTriggerMode,
   WorkflowWorkerConfig,
+  WorkflowWorkerLaunchConfig,
   WorkerRuntimeContext,
   WorkflowRunResult,
   WorkflowRunnerCompletion,

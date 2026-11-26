@@ -282,11 +282,12 @@ export async function connectOnce(deps: ConnectionDeps, signal: AbortSignal): Pr
   const onClose = (event: unknown): void => attempt.abort(connectionClosedError(event));
   const onError = (event: Event): void =>
     attempt.abort(
-      new WebSocketConnectionError(
-        'WS_CONNECTION_UNAVAILABLE',
-        `WebSocket connection failed — ${extractSocketErrorMessage(event)}`,
-        { cause: event },
-      ),
+      deps.auth?.classifyClientSocketError?.(event) ??
+        new WebSocketConnectionError(
+          'WS_CONNECTION_UNAVAILABLE',
+          `WebSocket connection failed — ${extractSocketErrorMessage(event)}`,
+          { cause: event },
+        ),
     );
   const dispose = (failure: unknown): unknown => {
     // Readiness belongs to this attempt even before its factory yields a socket.
@@ -375,7 +376,7 @@ async function acquireAndEstablishSocket(
  * @param signal - Owning attempt's cancellation and deadline signal.
  */
 async function establishSocket(socket: WebSocketLike, deps: ConnectionDeps, signal: AbortSignal): Promise<void> {
-  await waitForSocketOpen(socket, undefined, signal);
+  await waitForSocketOpen(socket, undefined, signal, deps.auth?.classifyClientSocketError?.bind(deps.auth));
   signal.throwIfAborted();
   if (deps.auth) {
     await deps.auth.authenticateClient((message: unknown) => {

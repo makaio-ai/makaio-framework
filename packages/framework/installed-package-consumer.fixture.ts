@@ -152,6 +152,8 @@ export interface PrepareInstalledPackageConsumerOptions {
   readonly consumerName: string;
   /** Shared tarball injected from the global setup (`inject('installedFrameworkTarball')`). */
   readonly tarball: string | undefined;
+  /** Optional peer packages required by the entry points this consumer loads. */
+  readonly optionalPeers?: readonly string[];
   /** Deadline shared by the suite's initial installation. */
   readonly signal: AbortSignal;
   /** Maximum duration of the initial tarball installation. */
@@ -186,7 +188,7 @@ export async function prepareInstalledPackageConsumer(
     JSON.stringify({ name: options.consumerName, private: true, type: 'module' }),
   );
   await runInstalledPackageSetupStage('install', () =>
-    execFileAsync('npm', [...INSTALLED_PACKAGE_CONSUMER_INSTALL_ARGUMENTS, tarball], {
+    execFileAsync('npm', [...INSTALLED_PACKAGE_CONSUMER_INSTALL_ARGUMENTS, tarball, ...(options.optionalPeers ?? [])], {
       cwd: consumerRoot,
       timeout: options.installTimeoutMs,
       signal: options.signal,

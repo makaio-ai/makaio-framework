@@ -24,6 +24,24 @@ export const WorkflowWorkerBusAuthSchema = z.discriminatedUnion('kind', [
 
 export type WorkflowWorkerBusAuth = z.infer<typeof WorkflowWorkerBusAuthSchema>;
 
+/** Ephemeral authentication material for the ordered worker's private start channel. */
+export const OrderedWorkerBootstrapAuthSchema = z
+  .strictObject({
+    kind: z.literal('exchange'),
+    jobRunId: z.string().min(1),
+    oneTimeToken: z.string().min(1),
+    bootstrapDeadlineAt: z.iso.datetime({ offset: true }),
+    /** Host-supplied upper bound for recovery after the presentation may have reached the host. */
+    replayDeadlineAt: z.iso.datetime({ offset: true }),
+    proof: JsonValueSchema,
+  })
+  .refine((auth) => Date.parse(auth.replayDeadlineAt) >= Date.parse(auth.bootstrapDeadlineAt), {
+    path: ['replayDeadlineAt'],
+    message: 'Worker replay deadline precedes the bootstrap deadline',
+  });
+
+export type OrderedWorkerBootstrapAuth = z.infer<typeof OrderedWorkerBootstrapAuthSchema>;
+
 // ─────────────────────────────────────────────────────────────
 // Worker Source
 // ─────────────────────────────────────────────────────────────
@@ -130,6 +148,16 @@ export const WorkflowWorkerConfigSchema = z.object({
 });
 
 export type WorkflowWorkerConfig = z.infer<typeof WorkflowWorkerConfigSchema>;
+
+/** Stock worker launch input on the provider's private channel. Enable exchange only in tests. */
+export const WorkflowWorkerLaunchConfigSchema = WorkflowWorkerConfigSchema.extend({
+  orderedBusAuth: OrderedWorkerBootstrapAuthSchema.optional(),
+}).refine((config) => config.orderedBusAuth === undefined || config.busAuth.kind === 'none', {
+  message: 'Ordered worker bootstrap cannot carry legacy credentials',
+  path: ['busAuth'],
+});
+
+export type WorkflowWorkerLaunchConfig = z.infer<typeof WorkflowWorkerLaunchConfigSchema>;
 
 // ─────────────────────────────────────────────────────────────
 // Worker Runtime Context (ephemeral, worker-local)

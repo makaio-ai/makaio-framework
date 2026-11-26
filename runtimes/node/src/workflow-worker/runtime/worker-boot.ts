@@ -5,17 +5,22 @@ import {
   FrameworkContractNamespaces,
   FrameworkStorageNamespaces,
   WorkflowNamespace,
+  type OrderedWorkerBootstrapAuth,
   type WorkflowWorkerBusAuth,
+  type JsonValue,
 } from '@makaio/contracts';
 import { McpServerBridgeService } from '@makaio/subsystem-mcp-http-server';
 import { ToolRegistry } from '@makaio/services-core/tools';
 import type { WorkerRuntimeContributions } from './worker-contributions.js';
 import { createWorkerBusAuth } from '../worker-bus-auth.js';
+import { WorkerExchangeClient } from './worker-exchange-client.js';
 
 /** Synchronously acquired connection ownership, including an unfinished connect. */
 export interface BootstrapRuntimeConnection {
   /** Fresh isolated bus, owned until close or successful transfer. */
   readonly bus: IMakaioBus;
+  /** Committed order returned by the optional bootstrap exchange. */
+  readonly bootstrapPayload?: JsonValue | undefined;
   /**
    * Connect authentication and subscription readiness.
    * @param signal - Cancellation of this pre-registration connection phase.
@@ -32,6 +37,8 @@ export interface BootstrapRuntimeConnection {
 export interface WorkerRuntimeBusHandle {
   /** The isolated bus instance for this worker. */
   bus: IMakaioBus;
+  /** Committed order returned by the optional bootstrap exchange. */
+  readonly bootstrapPayload?: JsonValue | undefined;
   /** Disconnect the bus and release resources. */
   close(): void | Promise<void>;
 }
@@ -59,7 +66,7 @@ export interface WorkerRuntimeHandle {
  */
 export function createWorkerBus(config: {
   readonly busUrl?: string;
-  readonly busAuth: WorkflowWorkerBusAuth;
+  readonly busAuth: WorkflowWorkerBusAuth | OrderedWorkerBootstrapAuth;
   readonly identityId?: string;
   readonly namespaces?: readonly RegistrableBusNamespaceDefinition[];
 }): BootstrapRuntimeConnection {
@@ -68,7 +75,7 @@ export function createWorkerBus(config: {
   bus.registerNamespaces([...FrameworkContractNamespaces, WorkflowNamespace]);
   bus.registerNamespaces([...FrameworkStorageNamespaces, ...(config.namespaces ?? [])]);
 
-  if (!config.busUrl) {
+  if (!config.busUrl && config.busAuth.kind !== 'exchange') {
     return {
       bus,
       connect: async (signal) => signal.throwIfAborted(),
@@ -76,21 +83,25 @@ export function createWorkerBus(config: {
     };
   }
 
-  const auth = createWorkerBusAuth(
-    config.busAuth.kind === 'hmac' ? config.busAuth.secret : undefined,
-    config.identityId,
-  );
-
-  const transport = new WebSocketClientTransport({
-    url: config.busUrl,
-    attestingRole: 'core-uplink',
-    auth,
-    autoReconnect: false,
-  });
+  const transport =
+    config.busAuth.kind === 'exchange'
+      ? new WorkerExchangeClient(config.busUrl, config.busAuth)
+      : new WebSocketClientTransport({
+          url: config.busUrl ?? '',
+          attestingRole: 'core-uplink',
+          auth: createWorkerBusAuth(
+            config.busAuth.kind === 'hmac' ? config.busAuth.secret : undefined,
+            config.identityId,
+          ),
+          autoReconnect: false,
+        });
 
   bus.registerTransport(transport);
   return {
     bus,
+    get bootstrapPayload() {
+      return transport instanceof WorkerExchangeClient ? transport.bootstrapPayload : undefined;
+    },
     async connect(signal) {
       try {
         signal.throwIfAborted();

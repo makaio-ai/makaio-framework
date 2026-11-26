@@ -49,9 +49,15 @@ export async function sendEncoded(message: BusMessage, codec: ClientTransportCod
  * @param ws - WebSocket to wait on
  * @param timeoutMs - Maximum time to wait for the `open` event; omit for no bound
  * @param signal - Cancellation signal for the owning connection attempt.
+ * @param classifyError - Optional owner policy for native error events.
  * @returns Promise that resolves when the socket is open
  */
-export function waitForSocketOpen(ws: WebSocketLike, timeoutMs?: number, signal?: AbortSignal): Promise<void> {
+export function waitForSocketOpen(
+  ws: WebSocketLike,
+  timeoutMs?: number,
+  signal?: AbortSignal,
+  classifyError?: (event: Event) => WebSocketConnectionError,
+): Promise<void> {
   if (signal?.aborted) return Promise.reject(signal.reason);
   if (ws.readyState === 1) {
     return Promise.resolve();
@@ -77,11 +83,12 @@ export function waitForSocketOpen(ws: WebSocketLike, timeoutMs?: number, signal?
     const onError = (event: Event): void => {
       cleanup();
       reject(
-        new WebSocketConnectionError(
-          'WS_CONNECTION_UNAVAILABLE',
-          `WebSocket connection failed — ${extractSocketErrorMessage(event)}`,
-          { cause: event },
-        ),
+        classifyError?.(event) ??
+          new WebSocketConnectionError(
+            'WS_CONNECTION_UNAVAILABLE',
+            `WebSocket connection failed — ${extractSocketErrorMessage(event)}`,
+            { cause: event },
+          ),
       );
     };
     const onClose = (event: unknown): void => {

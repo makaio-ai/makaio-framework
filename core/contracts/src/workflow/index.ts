@@ -196,18 +196,22 @@ export type {
   WorkflowDefinitionPathSegment,
 } from './projection.js';
 export {
+  OrderedWorkerBootstrapAuthSchema,
   WorkflowWorkerBusAuthSchema,
   WorkflowWorkerSourceSchema,
   WorkflowTriggerModeSchema,
   WorkflowWorkerConfigSchema,
+  WorkflowWorkerLaunchConfigSchema,
   WorkflowRunResultSchema,
   WorkerContributionManifestSchema,
 } from './worker.js';
 export type {
+  OrderedWorkerBootstrapAuth,
   WorkflowWorkerBusAuth,
   WorkflowWorkerSource,
   WorkflowTriggerMode,
   WorkflowWorkerConfig,
+  WorkflowWorkerLaunchConfig,
   WorkerRuntimeContext,
   WorkflowRunResult,
   WorkflowRunnerCompletion,

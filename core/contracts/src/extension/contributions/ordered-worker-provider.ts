@@ -40,7 +40,9 @@ export interface OrderedProvisionRequest {
   readonly runtimeInputs: WorkerRuntimeInputs;
   readonly preserveWorkspace?: boolean;
   readonly continues?: ProviderAllocationRef;
+  /** Volatile start credential passed through the provider's private launch channel. */
   readonly oneTimeToken: string;
+  /** Bus endpoint and legacy credentials. Omit the legacy credentials when launching with exchange auth. */
   readonly connection: WorkerRuntimeConnection;
 }
 

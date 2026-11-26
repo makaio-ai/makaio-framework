@@ -4,7 +4,7 @@ export { ThinWorkflowPiscinaRunner } from './thin-workflow-piscina-runner.js';
 export { materializeWorkerTask, type MaterializedWorkerTask } from './worker-task-materialization.js';
 export { PiscinaPoolRunner, type PiscinaPoolRunnerOptions } from './runtime/piscina-pool-runner.js';
 export { resolveWorkflowWorkerEntry } from './worker-entry-resolver.js';
-export { createWorkerBusAuth } from './worker-bus-auth.js';
+export { createOrderedWorkerBusAuth, createWorkerBusAuth } from './worker-bus-auth.js';
 export { createNodeWorkflowRunner, createNodeWorkflowRunnerPackageOptions } from './node-workflow-runner-factory.js';
 export type {
   IWorkflowRunner,
