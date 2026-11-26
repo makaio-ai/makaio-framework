@@ -10,6 +10,7 @@ import {
   TEST_EXCHANGE_BUDGET,
   TEST_SUBJECT,
   type ExchangeMessage,
+  ExchangePeerStartSchema,
   type ExchangeScenario,
 } from './worker-exchange-process-types.js';
 
@@ -17,8 +18,8 @@ const scenario = process.argv[2] as ExchangeScenario;
 const directory = process.argv[3] ?? '';
 if (!process.connected) process.exit();
 process.once('disconnect', () => process.exit(process.exitCode ?? 0));
-const [port] = await once(process, 'message');
-if (typeof port !== 'number') throw new Error('Missing test listener endpoint');
+const [start]: unknown[] = await once(process, 'message');
+const { port, proof } = ExchangePeerStartSchema.parse(start);
 const protocol = scenario === 'plaintext' ? 'ws' : 'wss';
 const base = `${protocol}://127.0.0.1:${port}`;
 const ca = scenario === 'untrusted' ? undefined : await readFile(join(directory, 'cert.pem'));
@@ -165,7 +166,7 @@ function presentation(): string {
       jobRunId,
       oneTimeToken: scenario === 'foreign' ? 'other-run-token' : 'initial-token',
       runtimeSecret: scenario === 'wrong-secret' ? 'different-test-secret' : 'runtime-fixture-secret',
-      proof: scenario === 'proof' ? 'another-allocation' : jobRunId,
+      proof: scenario === 'proof' || scenario === 'proof-replay' ? 'another-allocation' : proof,
     },
   };
   const frame = JSON.stringify(input);

@@ -1,12 +1,10 @@
+import { createHash, randomBytes } from 'node:crypto';
 import { createBusInstance } from '@makaio/bus-core';
 import { callFromReceive } from '@makaio/bus-core/kernel-api';
 import type { HostTransaction, ProviderAllocationRef } from '@makaio/contracts';
+import type { OrderedWorkerProvider } from '@makaio/contracts/extension';
 import { createHostDatabase } from '@makaio/storage-drizzle';
-import { applyMigrations } from '@makaio/storage-migrations';
-import { canonicalStringify } from '@makaio/utils';
-import { readCentralChain } from '../../../../../storage/conformance/src/harness/chains.js';
-import { createPostgresConfig } from '../../../../../storage/conformance/src/harness/postgres-config.js';
-import { createSqliteConfig } from '../../../../../storage/conformance/src/harness/sqlite-config.js';
+import { abortableWait, canonicalStringify } from '@makaio/utils';
 import type { StoredWorkerRedemption } from '../start-order.js';
 import { createWorkerDispatch } from '../start-ordered-worker.js';
 import { readDispatch } from '../dispatch-store.js';
@@ -14,11 +12,34 @@ import { WorkerExchangeReplyTooLargeError } from '../redemption-reply.js';
 import { prepareWorkerRedemption, type WorkerRedemptionHost } from '../redeem-worker.js';
 import { WorkerProviderRegistry } from '../provider-registry.js';
 import { AllocationObservationSignal } from '../allocation-observation-signal.js';
-import { bookRedemptionOwner, migrateRedemptionOwner } from './redemption-owner-fixture.js';
-import { controllableProvider, fixtureToken, handleFor, processBoundProvider } from './ordered-worker-fixture.js';
-import { RUN_ID, TEST_EXCHANGE_BUDGET, type ExchangeScenario } from './worker-exchange-process-types.js';
+import { bookRedemptionOwner, readRedemptionOwnerRow, redemptionOwnerSource } from './redemption-owner-fixture.js';
+import {
+  controllableProvider,
+  fixtureToken,
+  handleFor,
+  orderSourceFixture,
+  processBoundProvider,
+} from './ordered-worker-fixture.js';
+import {
+  RUN_ID,
+  TEST_EXCHANGE_BUDGET,
+  type ExchangeScenario,
+  type StockLaunchAuth,
+} from './worker-exchange-process-types.js';
+import { openExchangeDatabase } from './worker-exchange-restart-storage.js';
+import { bindExchangeShutdown } from './worker-exchange-shutdown.js';
+import { createOrderedWorkerBusAuth } from '../../../../../runtimes/node/src/workflow-worker/worker-bus-auth.js';
 
 export const TEST_RUNTIME_SECRET = 'runtime-fixture-secret';
+
+/**
+ * Bind the private proof to the observed allocation without storing the proof.
+ * @param proof - Per-allocation start material.
+ * @returns Fixed-width digest used only by the test's proof verifier.
+ */
+export function allocationProofDigest(proof: string): string {
+  return createHash('sha256').update('allocation-proof:').update(proof).digest('hex');
+}
 
 interface ExchangePauses {
   readonly beforeCommit: () => Promise<void>;
@@ -28,28 +49,35 @@ interface ExchangePauses {
   readonly duringCommit: () => Promise<void>;
 }
 
+interface StockLaunch {
+  readonly resume: boolean;
+  send(auth: StockLaunchAuth): void;
+}
+
+type ExchangeStorage = Awaited<ReturnType<typeof openExchangeDatabase>>;
+
 /**
  * Create one host-owned booking and run the real dispatch and redemption services.
  * @param scenario - Independent storage and transport case.
  * @param pauses - Test barriers for owner commit and provider correlation.
  * @param operationSignal - Host shutdown lifetime.
+ * @param url - Prepared test database endpoint.
+ * @param proof - Independent allocation evidence.
+ * @param expiredAt - Original expiry for a replacement host.
+ * @param launch - Independent stock worker launch and durable restart settings.
  */
 export async function setupExchangeStorage(
   scenario: ExchangeScenario,
   pauses: ExchangePauses,
   operationSignal: AbortSignal,
+  url: string,
+  proof: string,
+  expiredAt: number | undefined,
+  launch?: StockLaunch,
 ) {
-  const config =
-    process.env['MAKAIO_STORAGE_TEST_DIALECT'] === 'postgres'
-      ? createPostgresConfig(process.env['MAKAIO_STORAGE_TEST_URL'] ?? '')
-      : createSqliteConfig();
-  const storage = await config.createDatabaseContext({ applyCentralChain: false });
+  const storage = await openExchangeDatabase(url);
   try {
-    // Each process needs the real dispatch schema and its persisted test owner.
-    const dispatch = readCentralChain(storage.dialect).find(({ tag }) => tag.endsWith('_worker-dispatch'));
-    if (dispatch === undefined) throw new Error('Missing worker dispatch migration');
-    await applyMigrations(storage.db, [dispatch]);
-    return await book(scenario, pauses, operationSignal, storage);
+    return await book(scenario, pauses, operationSignal, storage, proof, expiredAt, launch);
   } catch (error) {
     await storage.cleanup();
     throw error;
@@ -62,29 +90,34 @@ export async function setupExchangeStorage(
  * @param pauses - Event barriers for the requested scenario.
  * @param operationSignal - Owning host lifetime.
  * @param storage - Isolated test database.
+ * @param proof - Independent allocation evidence.
+ * @param expiredAt - Original expiry for a replacement host.
+ * @param launch - Stock worker launch channel, when used.
  */
 async function book(
   scenario: ExchangeScenario,
   pauses: ExchangePauses,
   operationSignal: AbortSignal,
-  storage: Awaited<ReturnType<ReturnType<typeof createSqliteConfig>['createDatabaseContext']>>,
+  storage: ExchangeStorage,
+  proof: string,
+  expiredAt: number | undefined,
+  launch?: StockLaunch,
 ) {
   const bus = createBusInstance();
   const ownerCall = bus.own('start');
   const supervisionCall = bus.own('observer');
   const database = createHostDatabase(storage.db);
-  await migrateRedemptionOwner(storage);
   const jobRunId = scenario === 'rollback' ? 'storage-reject' : RUN_ID;
   const expiresAt = new Date(Date.now() + 60_000).toISOString();
   const control = controllableProvider();
   const allocation: ProviderAllocationRef = {
     version: 1,
     providerId: control.provider.id,
-    providerData: { allocation: jobRunId },
+    providerData: { proofDigest: allocationProofDigest(proof) },
   };
   const outcome = { kind: 'allocated' as const, allocationRef: allocation, handle: handleFor(jobRunId) };
   let visible = scenario !== 'correlation';
-  const provider = {
+  const processBound = {
     ...processBoundProvider(control.provider),
     async proveLocalLive() {
       if (!visible) {
@@ -97,26 +130,61 @@ async function book(
       return { allocationRef: allocation, expiresAt };
     },
   };
+  const managed = launch === undefined ? undefined : await orderSourceFixture(database, 'provider-managed', jobRunId);
+  const managedProvider: OrderedWorkerProvider = {
+    ...control.provider,
+    async provision(call, request, signal) {
+      if (launch === undefined || launch.resume) throw new Error('Unexpected provisioning');
+      launch.send(
+        scenario === 'stock-legacy'
+          ? { kind: 'hmac', secret: 'shared-test-credential' }
+          : createOrderedWorkerBusAuth(
+              request,
+              scenario === 'stock-refused' ? randomBytes(16).toString('hex') : proof,
+              new Date(Date.parse(expiresAt) + 120_000).toISOString(),
+            ),
+      );
+      return await abortableWait(control.provider.provision(call, request, signal), signal);
+    },
+  };
+  const provider = managed === undefined ? processBound : managedProvider;
+  if (managed !== undefined) {
+    control.allocations.push(allocation);
+    control.proveUniqueness();
+  }
   const providers = new WorkerProviderRegistry();
   await providers.replace(
     supervisionCall,
-    { owner: 'example', key: 'primary', managedScopeConfirmed: false, providers: [provider] },
+    { owner: 'example', key: 'primary', managedScopeConfirmed: managed !== undefined, providers: [provider] },
     operationSignal,
   );
-  const order = {
-    jobRunId,
-    workerProviderId: provider.id,
-    bootstrapDeadlineAt: expiresAt,
-    allocationLifetime: provider.allocationLifetime,
-  };
-  const owner = await bookRedemptionOwner(
-    database,
-    order,
-    { kind: ownerCall.caller.kind, id: ownerCall.caller.id },
-    fixtureToken,
-    false,
-    replyOrder(scenario),
-  );
+  const order =
+    managed === undefined
+      ? {
+          jobRunId,
+          workerProviderId: provider.id,
+          bootstrapDeadlineAt: expiresAt,
+          allocationLifetime: processBound.allocationLifetime,
+        }
+      : {
+          ...managed.order,
+          bootstrapDeadlineAt:
+            scenario === 'stock-offline'
+              ? new Date(Date.now() + 2_000).toISOString()
+              : scenario === 'stock-lost' || scenario === 'stock-expired'
+                ? new Date(Date.now() + 4_000).toISOString()
+                : managed.order.bootstrapDeadlineAt,
+        };
+  const owner = launch?.resume
+    ? undefined
+    : await bookRedemptionOwner(
+        database,
+        order,
+        { kind: ownerCall.caller.kind, id: ownerCall.caller.id },
+        fixtureToken,
+        false,
+        replyOrder(scenario),
+      );
   const foreign =
     scenario === 'foreign'
       ? await bookRedemptionOwner(
@@ -127,10 +195,11 @@ async function book(
           false,
         )
       : undefined;
-  const source = owner.sourceFor(storage.executor);
+  const source = owner?.sourceFor(storage.executor) ?? redemptionOwnerSource(storage.executor, '');
   const commitBoundary = scenario === 'dropped-commit' ? instrumentCommit(storage, pauses.duringCommit) : undefined;
   let digestReadFollowups = 0;
   let proofReadCount = 0;
+  let stockRetryCount = 0;
   const host: WorkerRedemptionHost = {
     source: {
       ...source,
@@ -160,8 +229,19 @@ async function book(
             ...redemption,
             async accept(ownerTx: HostTransaction, result: StoredWorkerRedemption) {
               if (scenario === 'storage-interrupted') throw new Error('Test write interrupted');
+              if (scenario === 'stock-retry' && stockRetryCount++ === 0) throw new Error('Test write interrupted');
+              if (scenario === 'stock-deadline') {
+                if (stockRetryCount++ === 1) await pauses.beforeCommit();
+                throw new Error('Test write interrupted');
+              }
               const winner = await redemption.accept(ownerTx, result);
-              if (scenario === 'committed' || scenario === 'dropped' || scenario === 'transport-stopped') {
+              if (
+                scenario === 'committed' ||
+                scenario === 'dropped' ||
+                scenario === 'transport-stopped' ||
+                ((scenario === 'stock-dropped' || scenario === 'stock-expired') && !launch?.resume) ||
+                scenario === 'stock-shutdown'
+              ) {
                 await pauses.beforeCommit();
               }
               commitBoundary?.();
@@ -176,28 +256,34 @@ async function book(
     database,
     providers,
     operationSignal,
-    scopeSetting: { kind: 'absent' },
+    scopeSetting: managed?.options.scopeSetting ?? { kind: 'absent' },
     processIncarnation: 'test-incarnation',
     handles: new Map(),
     connection: () => ({ busAuth: { kind: 'none' } }),
   };
-  const dispatched = createWorkerDispatch(host).startOrderedWorker(ownerCall, order, operationSignal);
-  if (scenario === 'correlation') {
+  const shutdown =
+    scenario === 'stock-shutdown' ? await bindExchangeShutdown(bus, host, provider, storage.cleanup) : undefined;
+  const dispatch = shutdown?.capability ?? createWorkerDispatch(host);
+  const dispatched = launch?.resume ? undefined : dispatch.startOrderedWorker(ownerCall, order, operationSignal);
+  if (shutdown !== undefined) void dispatched?.catch(() => undefined);
+  if (shutdown !== undefined) {
+    await control.exposed.getPromise();
+  } else if (scenario === 'correlation' && dispatched !== undefined) {
     await Promise.race([
       control.exposed.getPromise(),
       dispatched.then(() => {
         throw new Error('Expected provisioning to remain pending');
       }),
     ]);
-  } else {
+  } else if (dispatched !== undefined) {
     control.answer.resolve(outcome);
     const dispatch = await dispatched;
     if (dispatch.kind !== 'unknown' || dispatch.reason !== 'dispatch-unresolved') {
       throw new Error('Dispatch did not leave assignment to redemption');
     }
   }
-  if (scenario === 'revoked') await owner.revoke();
-  if (scenario === 'wrong-secret' || scenario === 'stored-over' || scenario === 'over') {
+  if (scenario === 'revoked') await owner?.revoke();
+  if (scenario === 'wrong-secret' || scenario === 'proof-replay' || scenario === 'stored-over' || scenario === 'over') {
     const anonymous = callFromReceive(undefined, undefined, undefined, () => {});
     const prepared = await prepareWorkerRedemption(
       scenario === 'over' ? { ...host, exchangeReplyByteLimit: TEST_EXCHANGE_BUDGET } : host,
@@ -218,7 +304,7 @@ async function book(
         await commit(anonymous, tx);
       } catch (error) {
         if (!(error instanceof WorkerExchangeReplyTooLargeError) || error.code !== 'reply-too-large') throw error;
-        const row = await owner.readIn(tx);
+        const row = await readRedemptionOwnerRow(tx, jobRunId);
         const claim = await readDispatch(tx, jobRunId);
         if (row?.stored != null || claim?.boundAllocation != null)
           throw new Error('Reply budget checked after writing');
@@ -229,14 +315,15 @@ async function book(
   }
   const read = () =>
     database.transaction(async (tx) => ({
-      owner: await owner.readIn(tx),
+      owner: await readRedemptionOwnerRow(tx, jobRunId),
       dispatch: await readDispatch(tx, jobRunId),
       foreign: await foreign?.readIn(tx),
     }));
   const initial = canonicalStringify(await read());
-  if (scenario === 'expired') {
-    const now = Date.parse(expiresAt);
-    Date.now = () => now;
+  if (scenario === 'expired' || expiredAt !== undefined) {
+    const now = Date.now;
+    const adjustment = Math.max(0, (expiredAt ?? Date.parse(expiresAt)) - now());
+    Date.now = () => now() + adjustment;
   }
   return {
     bus,
@@ -244,11 +331,14 @@ async function book(
     read,
     initial,
     expiresAt,
+    shutdown,
+    excludesProof: (encoded: string) => !encoded.includes(proof),
     digestReadFollowups: () => digestReadFollowups,
     async cleanup() {
       control.answer.resolve(outcome);
-      await dispatched.catch(() => undefined);
-      await storage.cleanup();
+      await dispatched?.catch(() => undefined);
+      if (shutdown !== undefined) await shutdown.run();
+      else await storage.cleanup();
     },
   };
 }
@@ -260,10 +350,7 @@ async function book(
  * @param pause - Release controlled by the process supervisor.
  * @returns Arms the boundary for the transaction that persists the accepted order.
  */
-function instrumentCommit(
-  storage: Awaited<ReturnType<ReturnType<typeof createSqliteConfig>['createDatabaseContext']>>,
-  pause: () => Promise<void>,
-): () => void {
+function instrumentCommit(storage: Pick<ExchangeStorage, 'db'>, pause: () => Promise<void>): () => void {
   let armed = false;
   const transact = storage.db.transaction.bind(storage.db);
   storage.db.transaction = (callback, config) =>

@@ -60,7 +60,9 @@ async function readCredentials(
  * Apply the test owner's private schema to the isolated host database.
  * @param context - Real storage conformance database.
  */
-export async function migrateRedemptionOwner(context: StorageDatabaseContext): Promise<void> {
+export async function migrateRedemptionOwner(
+  context: Pick<StorageDatabaseContext, 'dialect' | 'executor'>,
+): Promise<void> {
   const jsonType = sql.raw(context.dialect === 'postgres' ? 'jsonb' : 'text');
   const boolType = sql.raw(context.dialect === 'postgres' ? 'boolean' : 'integer');
   await context.executor.run(sql`
@@ -79,6 +81,18 @@ export async function migrateRedemptionOwner(context: StorageDatabaseContext): P
 function ownerStorage(tx: HostTransaction) {
   const query = getTransactionQueryContext(tx);
   return { query, table: resolveSchema(query, schema).rows };
+}
+
+/**
+ * Inspect the test owner's row from a live transaction.
+ * @param tx - Current storage transaction.
+ * @param id - Stored order to read.
+ * @returns The persisted row.
+ */
+export async function readRedemptionOwnerRow(tx: HostTransaction, id: JobRunId) {
+  const { query, table } = ownerStorage(tx);
+  const [row] = await query.select().from(table).where(eq(table.id, id));
+  return row;
 }
 
 /**
@@ -210,9 +224,7 @@ export async function bookRedemptionOwner(
    * @param tx - Current storage transaction.
    */
   async function readIn(tx: HostTransaction) {
-    const { query, table } = ownerStorage(tx);
-    const [row] = await query.select().from(table).where(eq(table.id, id));
-    return row;
+    return readRedemptionOwnerRow(tx, id);
   }
 
   return {

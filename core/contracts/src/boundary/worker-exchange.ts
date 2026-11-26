@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { JsonValueSchema, type JsonValue } from '../shared/json-value.js';
+import { JsonValueSchema } from '../shared/json-value.js';
 
 /** The smaller default message limit of the supported WebSocket hosts (Bun, 16 MiB). */
 export const WORKER_EXCHANGE_MAX_BYTES = 16 * 1024 * 1024;
@@ -22,7 +22,11 @@ export const WorkerExchangeRequestSchema = z.strictObject({
 /** Bootstrap request on the worker setup connection. */
 export type WorkerExchangeRequest = z.infer<typeof WorkerExchangeRequestSchema>;
 
+/** A committed opaque payload or the generic refusal. */
+export const WorkerExchangeReplySchema = z.union([
+  z.strictObject({ type: z.literal('connection-exchange-result'), payload: JsonValueSchema }),
+  z.strictObject({ type: z.literal('connection-exchange-result'), reject: z.literal('rejected') }),
+]);
+
 /** Reply containing only the opaque application payload or a generic refusal. */
-export type WorkerExchangeReply =
-  | { readonly type: 'connection-exchange-result'; readonly payload: JsonValue }
-  | { readonly type: 'connection-exchange-result'; readonly reject: 'rejected' };
+export type WorkerExchangeReply = Readonly<z.infer<typeof WorkerExchangeReplySchema>>;

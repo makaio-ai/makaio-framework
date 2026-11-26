@@ -8,6 +8,7 @@
 
 import type { WebSocketLike } from '../types.js';
 import type { TransportReceiveContext } from '@makaio/core';
+import type { WebSocketConnectionError } from '../connection-error.js';
 
 /**
  * Transport authentication strategy.
@@ -16,6 +17,13 @@ import type { TransportReceiveContext } from '@makaio/core';
  * Auth messages are handled during a pre-connect phase before normal message flow begins.
  */
 export interface TransportAuth {
+  /**
+   * Classify a client socket failure without retaining its event or socket.
+   * @param event - Native WebSocket error event.
+   * @returns Safe connection failure for the caller's retry policy.
+   */
+  classifyClientSocketError?(event: Event): WebSocketConnectionError;
+
   /**
    * Whether raw frame diagnostics must be suppressed for this socket.
    * @param socket - Server-side connection.

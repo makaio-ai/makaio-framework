@@ -8,9 +8,10 @@ import { createBusNamespace } from '@makaio/core';
 import { HmacAuth } from '@makaio/bus-transport-websocket';
 import { canonicalStringify } from '@makaio/utils';
 import { z } from 'zod';
+import { resourceStep } from '../../../../../runtimes/node/src/runtime-stop-budget.js';
 import { createWorkerConnectionExchange } from '../../../../../runtimes/node/src/worker-connection-exchange.js';
 import type { BunExchangeUpgradeData } from '../../../../../runtimes/bun/src/bun-route-graph-fetch.js';
-import { setupExchangeStorage, TEST_RUNTIME_SECRET } from './worker-exchange-host-storage.js';
+import { allocationProofDigest, setupExchangeStorage, TEST_RUNTIME_SECRET } from './worker-exchange-host-storage.js';
 import { fixtureToken } from './ordered-worker-fixture.js';
 import {
   advanceRefusalClock,
@@ -19,6 +20,7 @@ import {
 } from './worker-exchange-controlled-clock.js';
 import {
   TEST_EXCHANGE_BUDGET,
+  ExchangeHostStartSchema,
   type ExchangeMessage,
   type ExchangeRuntime,
   type ExchangeScenario,
@@ -28,11 +30,13 @@ const scenario = process.argv[2] as ExchangeScenario;
 const runtime = process.argv[3] as ExchangeRuntime;
 const directory = process.argv[4] ?? '';
 const advanceRefusal = process.argv[5] === 'advance-refusal';
+let resumePort = 0;
 const tls = scenario !== 'plaintext';
 const lifetime = new AbortController();
 const release = Promise.withResolvers<void>();
 const stopped = Promise.withResolvers<void>();
 const stopTransport = Promise.withResolvers<void>();
+const finished = Promise.withResolvers<void>();
 const hmacSecret = 'shared-test-credential';
 
 /** Release all test barriers and cancel work when the supervisor goes away. */
@@ -61,9 +65,25 @@ function report(message: ExchangeMessage): void {
   if (process.connected) process.send?.(message, undefined, undefined, () => {});
 }
 
+/**
+ * Report relative timings only on explicit diagnostic runs.
+ * @param phase - Completed startup phase.
+ * @param started - Start time on the same monotonic clock.
+ */
+function reportPhase(phase: string, started = 0): void {
+  if (process.env['WORKER_EXCHANGE_TIMINGS'] === '1') report({ kind: 'phase', phase, ms: performance.now() - started });
+}
+
 /** Start the host, then keep it alive until the supervisor releases it. */
 async function run(): Promise<void> {
   if (lifetime.signal.aborted) return;
+  reportPhase('host modules');
+  report({ kind: 'host-loaded' });
+  const [start]: unknown[] = await once(process, 'message');
+  if (lifetime.signal.aborted) return;
+  const { database, proof, expiredAt, port } = ExchangeHostStartSchema.parse(start);
+  resumePort = port ?? 0;
+  const storageStart = performance.now();
   const fixture = await setupExchangeStorage(
     scenario,
     {
@@ -88,9 +108,19 @@ async function run(): Promise<void> {
       },
     },
     lifetime.signal,
+    database,
+    proof,
+    expiredAt,
+    scenario.startsWith('stock-')
+      ? {
+          resume: resumePort !== 0,
+          send: (auth) => report({ kind: 'stock-launch', auth }),
+        }
+      : undefined,
   );
+  reportPhase('storage and booking', storageStart);
   try {
-    if (!lifetime.signal.aborted) await serveExchange(fixture);
+    if (!lifetime.signal.aborted) await serveExchange(fixture, expiredAt);
   } finally {
     await fixture.cleanup();
   }
@@ -99,10 +129,14 @@ async function run(): Promise<void> {
 /**
  * Serve the isolated exchange until stop or supervisor disconnect.
  * @param fixture - Booted host and isolated storage.
+ * @param expiredAt - Controlled expiry for a replacement host.
  */
-async function serveExchange(fixture: Awaited<ReturnType<typeof setupExchangeStorage>>): Promise<void> {
+async function serveExchange(
+  fixture: Awaited<ReturnType<typeof setupExchangeStorage>>,
+  expiredAt: number | undefined,
+): Promise<void> {
   const { bus, host, expiresAt } = fixture;
-  const setup = bindExchange(host, expiresAt);
+  const setup = bindExchange(host, expiresAt, fixture.shutdown);
   const { subjects } = bus.registerNamespace(
     createBusNamespace('exchangeTest', {
       ping: { request: z.object({}), response: z.object({ principal: z.string() }) },
@@ -120,15 +154,23 @@ async function serveExchange(fixture: Awaited<ReturnType<typeof setupExchangeSto
     return undefined;
   };
   let pendingSignal: AbortSignal | undefined;
-  const observedSetup = observeExchange(setup, host.database, (signal) => {
+  const observedSetup = observeExchange(setup, fixture, (signal) => {
     pendingSignal = signal;
   });
   const startListener = () => listen(auth, observedSetup, bus, checkBoundaryAccess);
   let listener = await startListener();
   reportSnapshots(fixture, () => ({ received, advertised }));
   if (scenario === 'silent') controlFirstExchangeInputTimeout(() => report({ kind: 'input-window' }));
-  if (advanceRefusal) advanceRefusalClock();
+  if (advanceRefusal || (scenario === 'stock-expired' && expiredAt !== undefined)) advanceRefusalClock();
   report({ kind: 'ready', port: listener.port });
+  if (fixture.shutdown !== undefined) {
+    fixture.shutdown.steps.push(resourceStep('bus transport', () => listener.close()));
+    await stopped.promise;
+    await fixture.shutdown.run();
+    if (pendingSignal !== undefined) await finished.promise;
+    report({ kind: 'shutdown-finished', aborted: pendingSignal?.aborted === true, routed: received !== 0 });
+    return;
+  }
   try {
     if (scenario === 'transport-stopped') {
       await Promise.race([stopTransport.promise, stopped.promise]);
@@ -152,27 +194,35 @@ async function serveExchange(fixture: Awaited<ReturnType<typeof setupExchangeSto
  * Exercise the binding contract before opening the listener.
  * @param host - Real storage and dispatch host.
  * @param expiresAt - Expiry for the fixture's verified allocation proof.
+ * @param shutdown - Real host composition in the shutdown case.
  */
-function bindExchange(host: Parameters<typeof createWorkerConnectionExchange>[0], expiresAt: string) {
-  return createWorkerConnectionExchange(host, {
+function bindExchange(
+  host: Parameters<typeof createWorkerConnectionExchange>[0],
+  expiresAt: string,
+  shutdown: Awaited<ReturnType<typeof setupExchangeStorage>>['shutdown'],
+) {
+  const options: Parameters<typeof createWorkerConnectionExchange>[1] = {
     maxPendingExchanges: 1,
     maxBytes: TEST_EXCHANGE_BUDGET,
     async verifyProof(proof, allocation) {
       if (scenario === 'proof-interrupted') throw new Error('Verifier unavailable');
-      return proof === allocation.providerData['allocation'] ? expiresAt : undefined;
+      return typeof proof === 'string' && allocationProofDigest(proof) === allocation.providerData['proofDigest']
+        ? expiresAt
+        : undefined;
     },
-  });
+  };
+  return shutdown?.connectionExchange(host.supervisionCall, options) ?? createWorkerConnectionExchange(host, options);
 }
 
 /**
  * Observe each real admission and control the first transaction in deadline cases.
  * @param setup - Worker exchange under test.
- * @param database - Database facade used by the real admission.
+ * @param fixture - Storage and database facade used by the real admission.
  * @param observeSignal - Exposes the active lifetime to the shutdown barrier.
  */
 function observeExchange(
   setup: ReturnType<typeof createWorkerConnectionExchange>,
-  database: Parameters<typeof createWorkerConnectionExchange>[0]['database'],
+  fixture: Awaited<ReturnType<typeof setupExchangeStorage>>,
   observeSignal: (signal: AbortSignal) => void,
 ): ReturnType<typeof createWorkerConnectionExchange> {
   let deadlinePhase: 'start' | 'finish' | undefined =
@@ -180,6 +230,7 @@ function observeExchange(
   return {
     ...setup,
     async admit(frame, context) {
+      if (scenario.startsWith('stock-')) report({ kind: 'stock-attempt' });
       observeSignal(context.signal);
       if (scenario === 'dropped' || scenario === 'dropped-digest' || scenario === 'dropped-commit') {
         context.signal.addEventListener('abort', () => report({ kind: 'peer-gone' }), { once: true });
@@ -191,7 +242,7 @@ function observeExchange(
           markProofVerified() {
             context.markProofVerified();
             if (deadlinePhase !== undefined) {
-              restoreClock = expireInTransaction(database, context.deadline, deadlinePhase);
+              restoreClock = expireInTransaction(fixture.host.database, context.deadline, deadlinePhase);
               deadlinePhase = undefined;
             }
           },
@@ -200,9 +251,17 @@ function observeExchange(
           report({ kind: 'committed' });
           await release.promise;
         }
+        if (scenario === 'stock-lost' && resumePort === 0 && admission !== undefined) {
+          const result = (await fixture.read()).owner?.stored?.accepted;
+          if (result?.payload === undefined || result.expiresAt === undefined)
+            throw new Error('Missing committed order');
+          report({ kind: 'stock-winner', payload: result.payload, expiresAt: result.expiresAt });
+          await release.promise;
+        }
         return admission;
       } finally {
         restoreClock?.();
+        finished.resolve();
         report({ kind: 'exchange-finished' });
       }
     },
@@ -237,7 +296,10 @@ function reportSnapshots(
                 'latestResultAt' in payload &&
                 payload.latestResultAt === accepted?.expiresAt,
               ...counters(),
-              noCredentials: !encoded.includes(fixtureToken) && !encoded.includes(TEST_RUNTIME_SECRET),
+              noCredentials:
+                !encoded.includes(fixtureToken) &&
+                !encoded.includes(TEST_RUNTIME_SECRET) &&
+                fixture.excludesProof(encoded),
               ...(scenario === 'dropped-digest' ? { digestReadFollowups: fixture.digestReadFollowups() } : {}),
             },
           });
@@ -261,12 +323,15 @@ async function listen(
   bus: Awaited<ReturnType<typeof setupExchangeStorage>>['bus'],
   checkBoundaryAccess: (intent: { operation: string }) => Promise<undefined>,
 ) {
+  const readStart = performance.now();
   const keys = tls
     ? {
         key: await readFile(join(directory, 'key.pem')),
         cert: await readFile(join(directory, 'cert.pem')),
       }
     : undefined;
+  reportPhase('TLS input', readStart);
+  const listenerStart = performance.now();
   if (runtime === 'bun') {
     const [
       { serve },
@@ -287,7 +352,7 @@ async function listen(
       hasPendingCapacity: () => transport.hasPendingExchangeCapacity,
     });
     const server = serve({
-      port: 0,
+      port: resumePort,
       hostname: '127.0.0.1',
       tls: keys,
       fetch: (request, server) =>
@@ -298,6 +363,7 @@ async function listen(
       websocket: transport.createWebSocketHandler() as WebSocketHandler<BunExchangeUpgradeData | undefined>,
     });
     await transport.connect(bus, { machineId: 'test', checkBoundaryAccess });
+    reportPhase('listener', listenerStart);
     if (server.port === undefined) throw new Error('Bun listener missing');
     return {
       port: server.port,
@@ -311,13 +377,14 @@ async function listen(
     };
   }
   const server = keys === undefined ? createHttpServer() : createHttpsServer(keys);
-  server.listen(0, '127.0.0.1');
+  server.listen(resumePort, '127.0.0.1');
   await once(server, 'listening');
   const address = server.address();
   if (address === null || typeof address === 'string') throw new Error('Host listener missing');
   const { BusServerTransportProvider } = await import('../../../../../runtimes/node/src/bus-server-transport.js');
   const transport = new BusServerTransportProvider({ httpServer: server, auth, connectionExchange: { setup } });
   await transport.connect(bus, { machineId: 'test', checkBoundaryAccess });
+  reportPhase('listener', listenerStart);
   return {
     port: address.port,
     async close() {

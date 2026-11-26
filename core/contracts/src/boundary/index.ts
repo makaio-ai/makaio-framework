@@ -11,6 +11,7 @@ export type { BoundaryKind, BoundaryKindContribution, MakaioBoundaryKind, PartyK
 export {
   WORKER_EXCHANGE_MAX_BYTES,
   WORKER_REDEMPTION_EXCHANGE,
+  WorkerExchangeReplySchema,
   WorkerExchangeRequestSchema,
   type WorkerExchangeReply,
   type WorkerExchangeRequest,

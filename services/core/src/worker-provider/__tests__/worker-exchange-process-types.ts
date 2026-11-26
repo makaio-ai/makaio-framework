@@ -1,5 +1,28 @@
+import { z } from 'zod';
+import type { JsonValue, WorkflowWorkerBusAuth } from '@makaio/contracts';
+import type { OrderedWorkerBootstrapAuth } from '@makaio/contracts/workflow';
+
+export type StockLaunchAuth = WorkflowWorkerBusAuth | OrderedWorkerBootstrapAuth;
+
+/** Stock client process cases use the ordered launch channel. */
+export type StockExchangeScenario =
+  | 'stock-success'
+  | 'stock-dns-retry'
+  | 'stock-refused'
+  | 'stock-untrusted'
+  | 'stock-lost'
+  | 'stock-legacy'
+  | 'stock-dropped'
+  | 'stock-expired'
+  | 'stock-offline'
+  | 'stock-retry'
+  | 'stock-deadline'
+  | 'stock-shutdown'
+  | 'stock-no-decoder';
+
 /** One independent host and client scenario. */
 export type ExchangeScenario =
+  | StockExchangeScenario
   | 'capacity'
   | 'silent'
   | 'committed'
@@ -20,6 +43,7 @@ export type ExchangeScenario =
   | 'revoked'
   | 'expired'
   | 'proof'
+  | 'proof-replay'
   | 'proof-interrupted'
   | 'plaintext'
   | 'untrusted'
@@ -31,6 +55,20 @@ export type ExchangeScenario =
   | 'stored-over'
   | 'anonymous'
   | 'legacy';
+
+export const ExchangeHostStartSchema = z.strictObject({
+  database: z.string(),
+  proof: z.string(),
+  expiredAt: z.number().optional(),
+  port: z.number().optional(),
+});
+export type ExchangeHostStart = z.infer<typeof ExchangeHostStartSchema>;
+
+export const ExchangePeerStartSchema = z.strictObject({
+  port: z.number(),
+  proof: z.string(),
+});
+export type ExchangePeerStart = z.infer<typeof ExchangePeerStartSchema>;
 
 export type ExchangeRuntime = 'node' | 'bun';
 
@@ -46,9 +84,19 @@ export interface ExchangeSnapshot {
 }
 
 export type ExchangeMessage =
+  | { kind: 'host-loaded' }
   | { kind: 'ready'; port: number }
   | { kind: 'restarted'; port: number }
   | { kind: 'transport-stopped'; abortedBeforeRelease: boolean }
+  | { kind: 'stock-launch'; auth: StockLaunchAuth }
+  | { kind: 'stock-attempt' }
+  | { kind: 'stock-dns-interrupted' }
+  | { kind: 'stock-clock-expired' }
+  | { kind: 'stock-accepted'; payload: JsonValue | undefined; principal: string }
+  | { kind: 'stock-stopped'; code: string; decoderRequired?: boolean }
+  | { kind: 'shutdown-finished'; aborted: boolean; routed: boolean }
+  | { kind: 'phase'; phase: string; ms: number }
+  | { kind: 'stock-winner'; payload: JsonValue; expiresAt: string }
   | { kind: 'precommit' }
   | { kind: 'pending-correlation' }
   | { kind: 'preframes' }
@@ -76,7 +124,9 @@ export type ExchangeCommand =
   | 'stop-transport'
   | 'replay'
   | 'present'
-  | 'expire-input';
+  | 'expire-input'
+  | 'expire-bootstrap'
+  | 'expire-replay';
 
 /** Keep a real refusal release window in one process test per host and dialect. */
 export const MEASURED_REFUSAL = 'proof-interrupted';

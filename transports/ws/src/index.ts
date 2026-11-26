@@ -58,6 +58,7 @@ export type { WebSocketCloseEvent, WebSocketLike, WebSocketServerLike, Transport
 export { createWebSocketCloseEvent } from './types.js';
 export { WebSocketConnectionError } from './connection-error.js';
 export type { WebSocketConnectionErrorCode } from './connection-error.js';
+export { defaultReconnectDelay } from './ws-client-reconnect.js';
 
 // Export client/server-specific options and types
 export type { ClientTransportCodec } from './types.js';

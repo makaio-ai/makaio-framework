@@ -17,7 +17,14 @@ const RUNTIME_TIMEOUT_MS = 60_000;
 const OPERATIONS_TIMEOUT_MS = INSTALL_TIMEOUT_MS + COMPILE_TIMEOUT_MS + RUNTIME_TIMEOUT_MS;
 
 const CONSUMER = `
+import {
+  OrderedWorkerBootstrapAuthSchema,
+  WorkflowWorkerLaunchConfigSchema,
+  type OrderedWorkerBootstrapAuth,
+  type WorkflowWorkerLaunchConfig,
+} from '@makaio/framework/contracts';
 import type { CoreBootOptions } from '@makaio/framework/runtime-node';
+import { runWorkflowInWorker } from '@makaio/framework/runtime-node/workflow-worker/worker-entry';
 import { readAllocationScopeSetting } from '@makaio/framework/services/internal/worker-provider-host-binding';
 import * as publicWorkerProvider from '@makaio/framework/services/worker-provider';
 
@@ -27,11 +34,32 @@ const scopeSetting: NonNullable<CoreBootOptions['workerDispatch']>['scopeSetting
     : undefined,
 }, 'worker-host');
 
-console.log(JSON.stringify({ scopeSetting, publicExports: Object.keys(publicWorkerProvider) }));
+const auth: OrderedWorkerBootstrapAuth = OrderedWorkerBootstrapAuthSchema.parse({
+  kind: 'exchange',
+  jobRunId: 'test-run',
+  oneTimeToken: 'test-token',
+  bootstrapDeadlineAt: '2030-01-01T00:00:00Z',
+  replayDeadlineAt: '2030-01-01T00:01:00Z',
+  proof: null,
+});
+const config: WorkflowWorkerLaunchConfig = WorkflowWorkerLaunchConfigSchema.parse({
+  source: { kind: 'definition', workflowId: 'test-workflow' },
+  workflowId: 'test-workflow',
+  executionId: 'test-run',
+  coordinatorSessionId: 'test-session',
+  cancelSubject: 'workflow.test-run.cancel',
+  orderedBusAuth: auth,
+});
+console.log(JSON.stringify({
+  scopeSetting,
+  publicExports: Object.keys(publicWorkerProvider),
+  workerEntryLoaded: typeof runWorkflowInWorker === 'function',
+  orderedAuthParsed: config.orderedBusAuth?.kind === 'exchange',
+}));
 `;
 
 it(
-  'constructs a boot scope setting through the installed internal entry and keeps the public entry type-only',
+  'loads the installed worker entries and compiles and parses the public launch contract',
   async () => {
     const root = await mkdtemp(join(tmpdir(), 'worker-dispatch-scope-'));
     try {
@@ -40,6 +68,7 @@ it(
         root,
         consumerName: 'worker-dispatch-scope-consumer',
         tarball: inject('installedFrameworkTarball'),
+        optionalPeers: ['@modelcontextprotocol/sdk@^1.29.0'],
         signal,
         installTimeoutMs: INSTALL_TIMEOUT_MS,
       });
@@ -64,6 +93,8 @@ it(
       expect(JSON.parse(stdout)).toEqual({
         scopeSetting: { kind: 'present', value: 'installation-scope' },
         publicExports: [],
+        workerEntryLoaded: true,
+        orderedAuthParsed: true,
       });
     } finally {
       await rm(root, { recursive: true, force: true });

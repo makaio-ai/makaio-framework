@@ -3,8 +3,9 @@ import { waitForSubscriptionPropagation } from '@makaio/bus-core';
 import {
   WorkflowError,
   WorkflowErrorCode,
-  WorkflowWorkerConfigSchema,
+  WorkflowWorkerLaunchConfigSchema,
   createWorkflowCancelSubject,
+  type OrderedWorkerBootstrapAuth,
   type WorkerContributionManifest,
   type WorkflowRunResult,
   type WorkflowWorkerConfig,
@@ -25,6 +26,7 @@ import {
 import { runLoadedWorkflowLocally } from './in-process-workflow-runner.js';
 import { loadWorkflowFromConfig } from './workflow-loader.js';
 import { bindFileStepRequests } from './file-step-requests.js';
+import { deepFreeze } from '@makaio/utils';
 
 // ─────────────────────────────────────────────────────────────
 // Module overview
@@ -56,7 +58,7 @@ import { bindFileStepRequests } from './file-step-requests.js';
  * verified local realization returned by materialization.
  */
 export interface WorkflowWorkerRunParamsBase {
-  /** Raw workflow worker configuration (will be validated by Zod schema). */
+  /** Raw workflow worker launch configuration, validated in the worker. */
   readonly config: unknown;
   /** Verified workspace root supplied by the host's materializer. */
   readonly workspaceRoot?: string;
@@ -127,7 +129,7 @@ export type WorkerConnector = (context: WorkerConnectorContext) => Promise<Conne
  * Execute a complete workflow inside an isolated worker context.
  *
  * Implements the full worker lifecycle:
- * 1. Parse and validate `config` against `WorkflowWorkerConfigSchema`
+ * 1. Parse and validate `config` against `WorkflowWorkerLaunchConfigSchema`
  * 2. Boot an isolated bus instance (with optional WebSocket transport)
  * 3. Subscribe cancellation routing and run any admission supplied by the host
  * 4. Load worker-local contributions from verified materialization output
@@ -168,40 +170,39 @@ async function runWorkerTask(
   connector: WorkerConnector,
   taskKind: 'admitted' | 'unbound' | 'caller-local-file',
 ): Promise<WorkflowRunResult> {
-  const config = WorkflowWorkerConfigSchema.parse(params.config);
+  let { orderedBusAuth, ...config } = WorkflowWorkerLaunchConfigSchema.parse(params.config);
+  const requiresOrderDecoder = orderedBusAuth !== undefined;
+  const contributionEntrypoints = Object.freeze([...params.contributionEntrypoints]);
+  const { workspaceRoot } = params;
   const callerLocalFile = taskKind === 'caller-local-file';
   if (callerLocalFile && (config.source.kind !== 'path' || config.terminalAuthority === 'authority')) {
     throw new WorkflowError(WorkflowErrorCode.NOT_EXECUTABLE, 'Caller-local execution requires a host-owned file task');
   }
 
   const abortController = new AbortController();
-  const abortFromParent = (): void => abortController.abort();
-  const signal = params.signal ?? abortController.signal;
-
-  if (signal !== abortController.signal) {
-    if (signal.aborted) {
-      abortController.abort();
-    } else {
-      signal.addEventListener('abort', abortFromParent, { once: true });
-    }
-  }
+  const removeParentAbort = followParentAbort(params.signal, abortController);
 
   let handle: WorkerRuntimeBusHandle | undefined;
   let runtime: WorkerRuntimeHandle | undefined;
   let release: (() => void) | undefined;
 
   try {
-    if (params.contributionEntrypoints.length !== params.manifest.contributionRefs.length) {
+    if (contributionEntrypoints.length !== params.manifest.contributionRefs.length) {
       throw new Error('Worker contribution materialization does not match the declared contribution identity set.');
     }
 
-    const connected = await connector(createWorkerConnectorContext(config, abortController));
+    const connectorContext = createWorkerConnectorContext(config, abortController, orderedBusAuth);
+    orderedBusAuth = undefined;
+    const connected = await connector(connectorContext);
     handle = connected.connection;
     release = connected.release;
+    if (requiresOrderDecoder) {
+      throw new WorkflowError(WorkflowErrorCode.NOT_EXECUTABLE, 'Ordered worker requires a bound order decoder');
+    }
 
     // Step 4: Import only the entrypoints verified by materialization. Import
     // failures are fatal — workers never proceed with a partial set.
-    const contributions = await loadWorkerRuntimeContributions(params.contributionEntrypoints, {
+    const contributions = await loadWorkerRuntimeContributions(contributionEntrypoints, {
       bus: handle.bus,
       signal: abortController.signal,
     });
@@ -227,7 +228,7 @@ async function runWorkerTask(
         loaded: fileHostRoute ? bindFileStepRequests(loaded, handle.bus, call) : loaded,
         bus: handle.bus,
         signal: abortController.signal,
-        workspaceRoot: params.workspaceRoot,
+        workspaceRoot,
       });
     }
     // Piscina tasks receive the frozen definition and source from their host executor.
@@ -236,12 +237,12 @@ async function runWorkerTask(
       config,
       bus: handle.bus,
       signal: abortController.signal,
-      workspace: params.workspaceRoot ?? process.cwd(),
+      workspace: workspaceRoot ?? process.cwd(),
       ...(connected.stepModel === undefined ? {} : { model: connected.stepModel }),
     };
-    return await runPiscinaProcessTask(processRun, params.workspaceRoot, taskKind, connector);
+    return await runPiscinaProcessTask(processRun, workspaceRoot, taskKind, connector);
   } finally {
-    signal.removeEventListener('abort', abortFromParent);
+    removeParentAbort();
     try {
       release?.();
     } finally {
@@ -252,6 +253,19 @@ async function runWorkerTask(
       }
     }
   }
+}
+
+/**
+ * Follow parent cancellation for as long as the worker task owns its controller.
+ * @param signal - Parent cancellation lifetime, when supplied.
+ * @param controller - Worker-local cancellation, also controlled by the bus.
+ * @returns Listener cleanup for the worker's finally block.
+ */
+function followParentAbort(signal: AbortSignal | undefined, controller: AbortController): () => void {
+  const abort = (): void => controller.abort();
+  if (signal?.aborted) abort();
+  else signal?.addEventListener('abort', abort, { once: true });
+  return () => signal?.removeEventListener('abort', abort);
 }
 
 /**
@@ -279,21 +293,30 @@ function runPiscinaProcessTask(
  * Prepare the per-run connection factory and cancellation routing.
  * @param config - Validated worker execution configuration.
  * @param controller - Controller shared with the orchestrator.
+ * @param orderedBusAuth - Private bootstrap material to consume at connection creation.
  * @returns Connector inputs bound to this worker.
  */
 function createWorkerConnectorContext(
   config: WorkflowWorkerConfig,
   controller: AbortController,
+  orderedBusAuth?: OrderedWorkerBootstrapAuth,
 ): WorkerConnectorContext {
+  const { busUrl, cancelSubject } = config;
+  let exchange = orderedBusAuth === undefined ? undefined : deepFreeze(structuredClone(orderedBusAuth));
+  const legacy = exchange === undefined ? Object.freeze({ ...config.busAuth }) : undefined;
   return {
     config,
     controller,
-    createConnection: (identityId, namespaces) =>
-      createCancellableWorkerConnection(
-        createWorkerBus({ busUrl: config.busUrl, busAuth: config.busAuth, identityId, namespaces }),
-        config.cancelSubject,
+    createConnection: (identityId, namespaces) => {
+      const busAuth = exchange ?? legacy;
+      if (busAuth === undefined) throw new Error('Worker exchange connection was already acquired');
+      exchange = undefined;
+      return createCancellableWorkerConnection(
+        createWorkerBus({ busUrl, busAuth, identityId, namespaces }),
+        cancelSubject,
         controller,
-      ),
+      );
+    },
   };
 }
 
@@ -331,6 +354,9 @@ function createCancellableWorkerConnection(
   let unsubscribe: (() => void) | undefined;
   return {
     bus: connection.bus,
+    get bootstrapPayload() {
+      return connection.bootstrapPayload;
+    },
     async connect(signal) {
       await connection.connect(signal);
       signal.throwIfAborted();

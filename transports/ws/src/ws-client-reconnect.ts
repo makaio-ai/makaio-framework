@@ -63,6 +63,15 @@ export function backoffMs(attempt: number, baseMs: number, maxMs: number): numbe
 }
 
 /**
+ * Use the standard client recovery schedule.
+ * @param attempt - Zero-based attempt counter.
+ * @returns Delay before the next connection attempt.
+ */
+export function defaultReconnectDelay(attempt: number): number {
+  return backoffMs(attempt, DEFAULT_AUTO_RECONNECT.baseMs, DEFAULT_AUTO_RECONNECT.maxMs);
+}
+
+/**
  * Sleep for `ms` milliseconds, resolving early when `signal` aborts.
  * @param ms - Duration to sleep
  * @param signal - AbortSignal that cancels the sleep
