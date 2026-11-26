@@ -22,7 +22,7 @@
     "@makaio/bus-core": "workspace:*",
     "@makaio/core": "workspace:*",
     "@makaio/utils": "workspace:*",
-    "zod": "4.4.3"
+    "zod": "4.6.6"
   },
   "devDependencies": {
     "@makaio/build-tooling": "workspace:*",
