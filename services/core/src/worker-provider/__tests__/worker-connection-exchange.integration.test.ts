@@ -361,9 +361,19 @@ describe.each(['node', 'bun'] as const)('stock worker exchange on %s', (runtime)
     expect(replacement.count('stock-attempt')).toBe(1);
   });
 
+  it('delivers cancellation on the initial checked worker connection', async () => {
+    const running = await connectStock(runtime, 'stock-reconnect');
+    await running.peer.event('stock-status');
+    await expect(running.initialHost.event('stock-status-checked')).resolves.toMatchObject({ cancelAdvertised: true });
+    running.initialHost.send('cancel-worker');
+    await running.peer.event('stock-cancelled');
+    await running.waitForWorkerExit();
+  });
+
   it('rechecks owner status on a fresh identity connection after host loss', async () => {
     const running = await connectStock(runtime, 'stock-reconnect');
     const first = await running.peer.event('stock-status');
+    await expect(running.initialHost.event('stock-status-checked')).resolves.toMatchObject({ cancelAdvertised: true });
     const replacement = await running.restart(true);
     const next = await running.peer.event('stock-status');
     expect(next.expiresAt).toBe(first.expiresAt);
@@ -375,6 +385,10 @@ describe.each(['node', 'bun'] as const)('stock worker exchange on %s', (runtime)
       bound: true,
       issuerKeyMatches: true,
     });
+    await expect(replacement.event('stock-status-checked')).resolves.toMatchObject({ cancelAdvertised: true });
+    replacement.send('cancel-worker');
+    await running.peer.event('stock-cancelled');
+    await running.waitForWorkerExit();
   });
 
   it('uses only identity when the socket drops after the reply but before peer sync', async () => {

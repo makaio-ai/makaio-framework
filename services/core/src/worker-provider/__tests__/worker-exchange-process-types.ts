@@ -148,6 +148,8 @@ export type ExchangeMessage =
   | { kind: 'remote-resync-superseded' }
   | { kind: 'remote-resync-reconciled'; facts: number; terminalWakes: number }
   | { kind: 'stock-status'; expiresAt: string }
+  | { kind: 'stock-status-checked'; cancelAdvertised: boolean }
+  | { kind: 'stock-cancelled' }
   | { kind: 'stock-clock-expired' }
   | { kind: 'stock-accepted'; payload: JsonValue | undefined; principal: string }
   | { kind: 'stock-stopped'; code: string; decoderRequired?: boolean }
@@ -184,6 +186,7 @@ export type ExchangeCommand =
   | 'stop'
   | 'abort-host'
   | 'close-run'
+  | 'cancel-worker'
   | 'rollback-run'
   | 'grace-run'
   | 'probe'
@@ -199,6 +202,7 @@ export type ExchangeCommand =
   | 'expire-replay';
 
 export const OTHER_RUN_ID = 'other-run';
+export const STOCK_CANCEL_SUBJECT = 'workflow.exchange-execution.cancel';
 export const LOCAL_DELIVERY_SUBJECT = 'exchangeTest.localDelivery';
 
 /** Keep a real refusal release window in one process test per host and dialect. */

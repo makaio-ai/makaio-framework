@@ -206,6 +206,7 @@ export type {
   ConnectedWorker,
   WorkerConnector,
   WorkerConnectorContext,
+  WorkerRunStatusReader,
 } from './workflow-worker/index.js';
 // Opt-in CodeExecution provider. It is never registered implicitly: the
 // composing host decides whether a runtime may execute submitted code, and it

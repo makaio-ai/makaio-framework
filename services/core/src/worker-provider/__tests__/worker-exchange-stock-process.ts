@@ -3,9 +3,11 @@ import { once } from 'node:events';
 import { OrderedWorkerBootstrapAuthSchema, WorkflowWorkerBusAuthSchema } from '@makaio/contracts';
 import { createBusNamespace } from '@makaio/core';
 import { z } from 'zod';
-import { runWorkflowInWorker } from '../../../../../runtimes/node/src/workflow-worker/worker-entry.js';
-import { createWorkerBus } from '../../../../../runtimes/node/src/workflow-worker/runtime/worker-boot.js';
-import type { ExchangeMessage } from './worker-exchange-process-types.js';
+import {
+  runWorkflowInWorker,
+  type WorkerConnectorContext,
+} from '../../../../../runtimes/node/src/workflow-worker/worker-entry.js';
+import { STOCK_CANCEL_SUBJECT, type ExchangeMessage } from './worker-exchange-process-types.js';
 import { exchangeStatus } from './worker-exchange-status.js';
 
 const StartMessageSchema = z.strictObject({
@@ -77,8 +79,9 @@ function holdFirstReconnectLookup(signal: AbortSignal): void {
  * @param start - Ordered provider launch message delivered over process IPC.
  */
 async function run({ port, auth, requireDecoder, reconnect }: StartMessage): Promise<void> {
-  const useDns = process.argv[2] === 'dns-retry';
-  if (useDns) failFirstLocalLookup();
+  const lookupProbe = process.argv[2];
+  const useDns = lookupProbe === 'dns-retry' || lookupProbe === 'hold-reconnect-dial';
+  if (lookupProbe === 'dns-retry') failFirstLocalLookup();
   if (auth.kind === 'exchange') {
     const { bootstrapDeadlineAt, replayDeadlineAt } = auth;
     const now = Date.now;
@@ -91,10 +94,9 @@ async function run({ port, auth, requireDecoder, reconnect }: StartMessage): Pro
       process.send?.(event);
     });
   }
-  if (reconnect && auth.kind === 'exchange') {
-    await runReconnectProbe(port, auth);
-    return;
-  }
+  const lifetime = new AbortController();
+  const stop = (): void => lifetime.abort();
+  if (reconnect) process.once('disconnect', stop);
   const namespace = createBusNamespace('exchangeTest', {
     ping: { request: z.object({}), response: z.object({ principal: z.string() }) },
   });
@@ -110,15 +112,18 @@ async function run({ port, auth, requireDecoder, reconnect }: StartMessage): Pro
           workflowId: 'exchange-probe',
           executionId: 'exchange-execution',
           coordinatorSessionId: 'exchange-session',
-          cancelSubject: 'workflow.exchange-execution.cancel',
+          cancelSubject: STOCK_CANCEL_SUBJECT,
           busUrl: `wss://${useDns ? 'localhost' : '127.0.0.1'}:${port}/bus`,
           ...(auth.kind === 'exchange' ? { orderedBusAuth: auth } : { busAuth: auth }),
         },
         manifest: { contributionRefs: [] },
         contributionEntrypoints: [],
+        signal: lifetime.signal,
       },
-      async ({ config, controller, createConnection }) => {
-        if ('orderedBusAuth' in config) throw new Error('Worker execution received bootstrap auth');
+      async (context) => {
+        if ('orderedBusAuth' in context.config) throw new Error('Worker execution received bootstrap auth');
+        if (reconnect) return runReconnectProbe(context);
+        const { controller, createConnection } = context;
         const worker = createConnection(undefined, [namespace]);
         const start = performance.now();
         try {
@@ -141,56 +146,31 @@ async function run({ port, auth, requireDecoder, reconnect }: StartMessage): Pro
     );
   } catch (error) {
     if (error !== measured) throw error;
+  } finally {
+    if (reconnect) {
+      process.off('disconnect', stop);
+      lifetime.abort();
+    }
   }
 }
 
 /**
- * Keep the actual worker bus alive across host loss in the checked composition.
- * @param port - TLS listener port.
- * @param auth - Initial ordered launch input.
+ * Observe the public connector before returning to workflow execution.
+ * @param context - The application's public connector context.
  */
-async function runReconnectProbe(
-  port: number,
-  auth: Extract<StartMessage['auth'], { kind: 'exchange' }>,
-): Promise<void> {
-  const terminal = Promise.withResolvers<unknown>();
-  const lifetime = new AbortController();
-  const holdReconnectDial = process.argv[2] === 'hold-reconnect-dial';
-  let armReconnectDial = holdReconnectDial;
-  const stop = (): void => {
-    lifetime.abort();
-    terminal.resolve(undefined);
-  };
-  process.once('disconnect', stop);
-  const worker = createWorkerBus(
-    {
-      busUrl: `wss://${holdReconnectDial ? 'localhost' : '127.0.0.1'}:${port}/bus`,
-      busAuth: auth,
-      namespaces: [exchangeStatus],
-    },
-    {
-      check: (bus) => ({
-        async readExpiry(jobRunId, signal) {
-          const { expiresAt } = await bus.request(
-            bus.own('root'),
-            exchangeStatus.subjects.read,
-            { jobRunId },
-            { signal },
-          );
-          if (expiresAt !== undefined) {
-            if (armReconnectDial) {
-              armReconnectDial = false;
-              holdFirstReconnectLookup(lifetime.signal);
-            }
-            const status: ExchangeMessage = { kind: 'stock-status', expiresAt };
-            process.send?.(status);
-          }
-          return expiresAt;
-        },
-      }),
-      onTerminal: terminal.resolve,
-    },
-  );
+async function runReconnectProbe({ controller, createConnection }: WorkerConnectorContext): Promise<never> {
+  let holdReconnectDial = process.argv[2] === 'hold-reconnect-dial';
+  const worker = createConnection(undefined, [exchangeStatus], async (bus, jobRunId, signal) => {
+    const { expiresAt } = await bus.request(bus.own('root'), exchangeStatus.subjects.read, { jobRunId }, { signal });
+    if (expiresAt !== undefined) {
+      if (holdReconnectDial) {
+        holdReconnectDial = false;
+        holdFirstReconnectLookup(controller.signal);
+      }
+      process.send?.({ kind: 'stock-status', expiresAt } satisfies ExchangeMessage);
+    }
+    return expiresAt;
+  });
   const observed = setInterval(() => {
     if (worker.bootstrapPayload !== undefined) {
       process.send?.({ kind: 'valid-bootstrap' } satisfies ExchangeMessage);
@@ -198,13 +178,15 @@ async function runReconnectProbe(
     }
   }, 5);
   try {
-    await worker.connect(lifetime.signal);
-    const failure = await terminal.promise;
-    if (failure !== undefined) throw failure;
+    const { signal } = controller;
+    await worker.connect(signal);
+    if (!signal.aborted) await once(signal, 'abort');
+    if (signal.reason instanceof DOMException && signal.reason.name === 'AbortError') {
+      process.send?.({ kind: 'stock-cancelled' } satisfies ExchangeMessage);
+    }
+    throw signal.reason;
   } finally {
     clearInterval(observed);
-    process.off('disconnect', stop);
-    lifetime.abort();
     await worker.close();
   }
 }

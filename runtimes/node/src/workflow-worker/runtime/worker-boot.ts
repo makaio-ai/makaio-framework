@@ -68,7 +68,7 @@ export interface WorkerRuntimeHandle {
  * the socket instead of authenticating it against the process-global secret.
  * The host owns the credential's identity and its authenticated claims.
  * @param config - Bus connection configuration from the workflow worker config.
- * @param sessions - Local test composition for the synchronized owner check.
+ * @param sessions - Worker composer policy for the synchronized owner check.
  * @returns A handle with the bus instance, connect and close methods.
  */
 export function createWorkerBus(

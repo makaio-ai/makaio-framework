@@ -5,6 +5,7 @@ import { createServer as createHttpsServer } from 'node:https';
 import { join } from 'node:path';
 import type { WebSocketHandler } from 'bun';
 import { CorePartyKind, createBusNamespace } from '@makaio/core';
+import { createWorkflowCancelSubject } from '@makaio/contracts';
 import type { BoundaryAccessCheck, BusEventMessage } from '@makaio/bus-core';
 import { busContextOf } from '@makaio/bus-core/kernel-api';
 import {
@@ -35,6 +36,7 @@ import {
 import {
   TEST_EXCHANGE_BUDGET,
   LOCAL_DELIVERY_SUBJECT,
+  STOCK_CANCEL_SUBJECT,
   RUN_ID,
   ExchangeHostStartSchema,
   type ExchangeMessage,
@@ -58,6 +60,7 @@ const stopped = Promise.withResolvers<void>();
 const stopTransport = Promise.withResolvers<void>();
 const finished = Promise.withResolvers<void>();
 const hmacSecret = 'shared-test-credential';
+const cancelSubject = createWorkflowCancelSubject(STOCK_CANCEL_SUBJECT);
 
 /** Release all test barriers and cancel work when the supervisor goes away. */
 function stop(): void {
@@ -190,18 +193,22 @@ async function serveExchange(
   );
   let received = 0;
   let advertised = 0;
+  let cancelAdvertised = false;
   bus.on(subjects.ping, (context) => {
     received += 1;
     context.setResult({ principal: context.call.principal.kind });
   });
   if (scenario === 'stock-before-sync' || scenario === 'stock-reconnect' || scenario === 'stock-listener-outage') {
-    installStatusProbe(fixture);
+    installStatusProbe(fixture, () => cancelAdvertised);
   }
   if (scenario === 'stock-before-sync' && resumePort === 0) interruptFirstSync();
   const auth = new HmacAuth({ secret: hmacSecret });
   const holdInbound = Promise.withResolvers<void>();
   const checkBoundaryAccess: BoundaryAccessCheck = async (intent, call) => {
-    if (intent.operation === 'subscribe' || intent.operation === 'register-handler') advertised += 1;
+    if (intent.operation === 'subscribe' || intent.operation === 'register-handler') {
+      advertised += 1;
+      if (intent.pattern === STOCK_CANCEL_SUBJECT) cancelAdvertised = true;
+    }
     if (
       scenario === 'local-revoke' &&
       intent.operation === 'send' &&
@@ -386,11 +393,16 @@ function observeLocalRetirement(
 /**
  * Read live state only for the authenticated run, under the same owner lock.
  * @param fixture - Real owner storage and bus.
+ * @param didAdvertiseCancel - Whether the worker replayed cancellation before checking its standing.
  */
-function installStatusProbe(fixture: Awaited<ReturnType<typeof setupExchangeStorage>>): void {
+function installStatusProbe(
+  fixture: Awaited<ReturnType<typeof setupExchangeStorage>>,
+  didAdvertiseCancel: () => boolean,
+): void {
   const { bus, host } = fixture;
   const { subjects } = bus.registerNamespace(exchangeStatus);
   bus.on(subjects.read, async (context) => {
+    report({ kind: 'stock-status-checked', cancelAdvertised: didAdvertiseCancel() });
     const { caller } = context.call;
     const { jobRunId } = context.payload;
     const expiresAt =
@@ -403,6 +415,12 @@ function installStatusProbe(fixture: Awaited<ReturnType<typeof setupExchangeStor
           })
         : undefined;
     context.setResult({ expiresAt });
+  });
+  process.on('message', (command) => {
+    if (command !== 'cancel-worker') return;
+    void bus.emit(bus.own('root'), cancelSubject, { executionId: 'exchange-execution' }).catch(() => {
+      report({ kind: 'failed', stage: 'worker cancellation' });
+    });
   });
 }
 

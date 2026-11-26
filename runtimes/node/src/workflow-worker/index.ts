@@ -61,7 +61,12 @@ export {
 export { runLocalCodeStep, type CodeStepProcessResult, type LocalCodeStepInvocation } from './code-step-process.js';
 export { isCooperativeCancellation } from '../cooperative-cancellation.js';
 export type { BootstrapRuntimeConnection } from './runtime/worker-boot.js';
-export type { ConnectedWorker, WorkerConnector, WorkerConnectorContext } from './worker-entry.js';
+export type {
+  ConnectedWorker,
+  WorkerConnector,
+  WorkerConnectorContext,
+  WorkerRunStatusReader,
+} from './worker-entry.js';
 
 export { runProcessWorkflow, type ProcessWorkflowRunOptions } from './process-workflow.js';
 export type { ProcessStepRunnerOptions } from './process-step-runner.js';

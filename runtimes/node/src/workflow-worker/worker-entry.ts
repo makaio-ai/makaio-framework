@@ -1,5 +1,5 @@
 import type { RegistrableBusNamespaceDefinition } from '@makaio/core';
-import { waitForSubscriptionPropagation } from '@makaio/bus-core';
+import { waitForSubscriptionPropagation, type IMakaioBus } from '@makaio/bus-core';
 import {
   WorkflowError,
   WorkflowErrorCode,
@@ -90,6 +90,19 @@ interface CallerLocalFileWorkerParams extends WorkflowWorkerRunParamsBase {
   readonly kind: 'caller-local-file';
 }
 
+/**
+ * Read owner-confirmed standing through the authenticated, synchronized worker bus.
+ * @param bus - Authenticated worker bus after subscription synchronization.
+ * @param jobRunId - Expected authenticated run. The owner must verify the caller owns this run.
+ * @param signal - Lifetime of this connection and check.
+ * @returns The original identity expiry as an ISO timestamp, or undefined if work must stop.
+ */
+export type WorkerRunStatusReader = (
+  bus: IMakaioBus,
+  jobRunId: string,
+  signal: AbortSignal,
+) => Promise<string | undefined>;
+
 /** Inputs for opening a worker's bus before it loads its workflow. */
 export interface WorkerConnectorContext {
   /** Validated worker configuration. */
@@ -100,11 +113,14 @@ export interface WorkerConnectorContext {
    * Acquire a connection that routes the run's cancel subject to the controller.
    * @param identityId - Optional transport identity for the connection.
    * @param namespaces - Protocol namespaces hosted by the isolated worker.
+   * @param readRunStatus - Check standing after each ordered exchange sync and enable bounded identity reconnect.
    * @returns Disposable connection that the connector must open before returning.
+   * @throws If a status reader is supplied for a legacy connection.
    */
   createConnection(
     identityId?: string,
     namespaces?: readonly RegistrableBusNamespaceDefinition[],
+    readRunStatus?: WorkerRunStatusReader,
   ): BootstrapRuntimeConnection;
 }
 
@@ -307,15 +323,22 @@ function createWorkerConnectorContext(
   return {
     config,
     controller,
-    createConnection: (identityId, namespaces) => {
+    createConnection: (identityId, namespaces, readRunStatus) => {
       const busAuth = exchange ?? legacy;
       if (busAuth === undefined) throw new Error('Worker exchange connection was already acquired');
+      if (readRunStatus !== undefined && busAuth.kind !== 'exchange') {
+        throw new Error('A run status reader requires an ordered worker exchange');
+      }
       exchange = undefined;
-      return createCancellableWorkerConnection(
-        createWorkerBus({ busUrl, busAuth, identityId, namespaces }),
-        cancelSubject,
-        controller,
-      );
+      const connectionConfig = { busUrl, busAuth, identityId, namespaces };
+      const connection =
+        readRunStatus === undefined
+          ? createWorkerBus(connectionConfig)
+          : createWorkerBus(connectionConfig, {
+              check: (bus) => ({ readExpiry: (jobRunId, signal) => readRunStatus(bus, jobRunId, signal) }),
+              onTerminal: (error) => controller.abort(error),
+            });
+      return createCancellableWorkerConnection(connection, cancelSubject, controller, readRunStatus !== undefined);
     },
   };
 }
@@ -344,12 +367,14 @@ async function connectUnboundWorker({
  * @param connection - Synchronously acquired bus connection handle.
  * @param cancelSubject - Workflow-specific cancellation routing key.
  * @param controller - Work lifecycle cancellation, independent of the bootstrap lease.
+ * @param replayCancellation - Stage ordered cancellation in the transport before opening its socket.
  * @returns Connection wrapper retaining cancellation routing until close.
  */
 function createCancellableWorkerConnection(
   connection: BootstrapRuntimeConnection,
   cancelSubject: string,
   controller: AbortController,
+  replayCancellation: boolean,
 ): BootstrapRuntimeConnection {
   let unsubscribe: (() => void) | undefined;
   return {
@@ -358,11 +383,14 @@ function createCancellableWorkerConnection(
       return connection.bootstrapPayload;
     },
     async connect(signal) {
-      await connection.connect(signal);
+      if (!replayCancellation) await connection.connect(signal);
       signal.throwIfAborted();
       unsubscribe = connection.bus.on(createWorkflowCancelSubject(cancelSubject), () => controller.abort());
       await waitForSubscriptionPropagation(unsubscribe);
       signal.throwIfAborted();
+      // Buffer cancellation while offline so the initial connection and each
+      // identity reconnect replay it before checking run standing.
+      if (replayCancellation) await connection.connect(signal);
     },
     async close() {
       unsubscribe?.();
