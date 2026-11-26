@@ -12,6 +12,8 @@ export interface CheckoutWorkflowSource {
   readonly workflowPath: string;
   /** Logical workflow expected by the run. */
   readonly workflowId: string;
+  /** Canonical file accepted by the host for a pinned source. */
+  readonly verifiedPath?: string;
 }
 
 /** Frozen workflow source and the local roots prepared for its invocation. */
@@ -48,15 +50,20 @@ export function bindCheckoutWorkflow(binding: CheckoutWorkflowBinding): Checkout
 /**
  * Resolve a file against the bound checkout before the module loader sees it.
  * @param source - Checkout root and checkout-relative module path.
+ * @param canonicalRoot - Require the provided root to already be canonical.
  * @returns Canonical path to an existing regular file.
  */
-async function resolveWorkflowPath(source: CheckoutWorkflowSource): Promise<string> {
-  const { checkoutRoot, workflowPath } = source;
-  if (/[:\\\0]/u.test(workflowPath) || workflowPath.split('/').some((part) => !part || part === '.' || part === '..')) {
-    throw new WorkflowError(WorkflowErrorCode.SOURCE_MISMATCH, 'Expected a checkout-relative workflow file path');
-  }
+export async function resolveWorkflowPath(source: CheckoutWorkflowSource, canonicalRoot = false): Promise<string> {
+  const { checkoutRoot, workflowPath, verifiedPath } = source;
+  assertWorkflowPathSyntax(workflowPath);
   const root = await realpath(checkoutRoot);
+  if ((canonicalRoot || verifiedPath !== undefined) && root !== checkoutRoot) {
+    throw new WorkflowError(WorkflowErrorCode.SOURCE_MISMATCH, 'Checkout root changed after verification');
+  }
   const file = await realpath(join(root, workflowPath));
+  if (verifiedPath !== undefined && file !== verifiedPath) {
+    throw new WorkflowError(WorkflowErrorCode.SOURCE_MISMATCH, 'Checkout workflow path changed after verification');
+  }
   try {
     assertContainedIn(file, root, 'Workflow file');
   } catch {
@@ -66,6 +73,20 @@ async function resolveWorkflowPath(source: CheckoutWorkflowSource): Promise<stri
     throw new WorkflowError(WorkflowErrorCode.NOT_EXECUTABLE, 'Checkout workflow path is not a regular file');
   }
   return file;
+}
+
+/**
+ * Require a portable path before beginning checkout preparation.
+ * @param path - Admitted workflow path.
+ */
+export function assertWorkflowPathSyntax(path: string): void {
+  if (
+    typeof path !== 'string' ||
+    /[:\\\0]/u.test(path) ||
+    path.split('/').some((part) => !part || part === '.' || part === '..')
+  ) {
+    throw new WorkflowError(WorkflowErrorCode.SOURCE_MISMATCH, 'Expected a checkout-relative workflow file path');
+  }
 }
 
 /**

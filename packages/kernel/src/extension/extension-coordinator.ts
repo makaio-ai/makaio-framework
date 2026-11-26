@@ -1,6 +1,6 @@
 /* eslint max-lines: ["error", { "max": 490, "skipBlankLines": true, "skipComments": true }] */
 import type { IMakaioBus } from '@makaio/bus-core';
-import { listOwners, ownerOf, type NamespaceHolder } from '@makaio/bus-core/kernel-api';
+import { listOwners, ownerOf } from '@makaio/bus-core/kernel-api';
 import type { ExtensionOperatorConfigSource, ExtensionService, ExtensionToken, TrayManifest } from '@makaio/contracts';
 import type { ExtensionIdentity, ExtensionWarningAction } from '@makaio/contracts/extension';
 import type { RuleSourceContribution } from '@makaio/contracts/rules';
@@ -41,6 +41,7 @@ import type {
   InstalledExtensionCatalogSource,
   KernelExtensionContext,
   KernelMakaioExtension,
+  NamespaceOwners,
   RuntimeEnvironment,
 } from './types.js';
 import type { ExtensionInfo } from '../observability/shared-schemas.js';
@@ -61,6 +62,7 @@ import {
   type OwnedCliContribution,
 } from './extension-surface-collector.js';
 import {
+  extensionStopBudgetMs,
   resolveDefaultStopBudgetMs,
   shutdownExtensions,
   totalExtensionStopBudgetMs,
@@ -69,14 +71,6 @@ import {
 import { CredentialResolverContributions } from './credential-resolver-contributions.js';
 import { closeEntryRegistration, releaseEntryNamespaces, startExtensionEntry } from './extension-start-runner.js';
 import { reportStartupDiagnostics } from './startup-diagnostics.js';
-
-/** Live namespace holder queries for the coordinator's bus. */
-interface NamespaceOwners {
-  /** @param namespace - Domain to look up. */
-  ownerOf(namespace: string): NamespaceHolder | undefined;
-  /** Return registered domains in namespace order. */
-  listOwners(): ReturnType<typeof listOwners>;
-}
 
 /** Options of {@link ExtensionCoordinator.startAll}. */
 export interface ExtensionStartOptions {
@@ -585,6 +579,15 @@ export class ExtensionCoordinator<THostContext extends KernelHostContext = Kerne
   }
 
   /**
+   * Read the stop window available to a contribution of a loaded extension.
+   * @param name - Extension whose service may declare its own window.
+   * @returns The per-extension stop budget before coordinator scheduling headroom.
+   */
+  public extensionStopBudgetMs(name: string): number {
+    return extensionStopBudgetMs(this.entries.get(name), this.defaultStopBudgetMs);
+  }
+
+  /**
    * Build the coordinator state {@link shutdownExtensions} and
    * {@link totalExtensionStopBudgetMs} work on.
    * @returns The shutdown host view of this coordinator.
@@ -641,7 +644,7 @@ export class ExtensionCoordinator<THostContext extends KernelHostContext = Kerne
   }
 
   /**
-   * Return the current state snapshot for all registered packages.
+   * Return the current state snapshot for all registered packages in dependency order.
    * @returns Array of {@link ExtensionInfo} objects reflecting current observable states.
    */
   public list(): ExtensionInfo[] {

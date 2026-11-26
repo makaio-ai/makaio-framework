@@ -59,6 +59,7 @@ export type ProcessStepRunnerOptions = ProcessStepCheckoutOptions & {
   readonly codeCommand: ProcessCommand;
   readonly agentCommand: ProcessCommand;
   readonly timeoutMs: number;
+  readonly fixed?: FixedStepAuthority;
   readonly resolveRole: (
     call: CallContext,
     role: string,
@@ -68,6 +69,12 @@ export type ProcessStepRunnerOptions = ProcessStepCheckoutOptions & {
   /** Model configuration for an authenticated booking. Takes precedence when supplied. */
   readonly runModel?: ModelConfiguration & { readonly credentialSource: RunCredentialPort };
 };
+
+/** Admission checks at the step's effect boundaries. */
+export interface FixedStepAuthority {
+  readonly assertActive: () => void;
+  readonly verifySource?: (signal: AbortSignal) => Promise<void>;
+}
 
 const agentFailureCodes = {
   'request-invalid': 'requestInvalid',
@@ -151,15 +158,35 @@ function supportsResolvedRole(role: WorkflowResolvedRole, expectedAdapter: strin
 }
 
 /**
- * Select the model and detach booked settings before asynchronous role resolution.
- * @param options - Worker-supplied runner settings.
- * @returns The model settings for this invocation.
+ * Detach booked model settings before asynchronous execution.
+ * @param model - The model configuration and its run-scoped credential port.
+ * @returns The frozen settings for this invocation, when supplied.
  */
-function selectModel(options: ProcessStepRunnerOptions): ProcessStepRunnerOptions['model' | 'runModel'] {
-  const { runModel } = options;
-  if (runModel === undefined) return options.model;
-  const { name, url } = runModel.target;
-  return Object.freeze({ ...runModel, target: Object.freeze({ name, url: new URL(url) }) });
+export function snapshotRunModel(model: ProcessStepRunnerOptions['runModel']): ProcessStepRunnerOptions['runModel'] {
+  if (model === undefined) return undefined;
+  const { target, credentialSource } = model;
+  return Object.freeze({
+    ...model,
+    target: Object.freeze({ name: target.name, url: new URL(target.url) }),
+    credentialSource: Object.freeze({
+      modelScope: credentialSource.modelScope.bind(credentialSource),
+      withCredential: credentialSource.withCredential.bind(credentialSource),
+    }),
+  });
+}
+
+/**
+ * Select the model for a step that is still eligible to run.
+ * @param options - Worker-supplied model settings.
+ * @param signal - Cancellation from the workflow owner.
+ * @returns The booked model or legacy model settings, when available.
+ */
+function selectModel(
+  options: ProcessStepRunnerOptions,
+  signal: AbortSignal,
+): ProcessStepRunnerOptions['model' | 'runModel'] {
+  if (signal.aborted) return undefined;
+  return snapshotRunModel(options.runModel) ?? options.model;
 }
 
 /**
@@ -178,8 +205,7 @@ async function runAgentStep(
 ): Promise<StepRunResult> {
   const fail = (error: StepRunErrorCode): StepRunResult => ({ status: 'failed', error, telemetry: { duration: 0 } });
   const cancelled: StepRunResult = { status: 'cancelled', telemetry: { duration: 0 } };
-  if (workflowSignal.aborted) return cancelled;
-  const model = selectModel(options);
+  const model = selectModel(options, workflowSignal);
   if (workflowSignal.aborted) return cancelled;
   // Worker bootstrap authorization only connects the bus. The model has its own grant.
   if (model === undefined) return fail('environmentMissing');
@@ -219,6 +245,7 @@ async function runAgentStep(
   if (request.kind === 'invalid') return fail('agentStartRefused');
   const requestTimeoutMs = remainingMs();
   if (signal.aborted || requestTimeoutMs === 0) return interrupted();
+  options.fixed?.assertActive();
   const lease = await openLocalModelAddress({
     call: options.call,
     model: createHttpWorkerModelPort(role.model, model.target),
@@ -270,6 +297,8 @@ export function createProcessStepRunner(
       };
       const step = { step: config.stepId, input: config.data, workspace: options.workspace };
       if (registeredSource !== undefined) {
+        await options.fixed?.verifySource?.(signal);
+        signal.throwIfAborted();
         return toStepResult(
           await runCodeStepProcess(
             options.launcher,

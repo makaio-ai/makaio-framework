@@ -188,6 +188,7 @@ describe('ExtensionCoordinator contribution processor lifecycle', () => {
       'feature',
       expect.objectContaining({ name: 'feature' }),
       expect.objectContaining({ bus: expect.any(Object) }),
+      expect.any(AbortSignal),
     );
     expect(firstStopped).toHaveBeenCalledWith('feature');
   });

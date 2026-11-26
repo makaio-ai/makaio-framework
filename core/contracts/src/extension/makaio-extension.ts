@@ -24,6 +24,7 @@ import type { AccountResolverContribution, InboundEdgeContribution } from '../jo
 import type { ReaderContribution } from '../journal/reader.js';
 import type { ProviderDefinitionInput } from '../provider/definition.js';
 import type { EntityUIConfig } from '../shared/ui-config.js';
+import type { FixedOperationContribution } from './contributions/fixed-operation.js';
 import type { ExtensionBootstrap } from './contributions/bootstrap-types.js';
 import type { ExtensionWorkerProvidersContribution } from './contributions/worker-provider-types.js';
 import type { ExtensionWorkflowBlocksContribution } from './contributions/workflow-block-types.js';
@@ -70,8 +71,14 @@ export interface ExtensionContributionProcessor<THostContext extends ExtensionCo
    * @param name - Extension package name.
    * @param pkg - Extension manifest.
    * @param ctx - Per-extension runtime context.
+   * @param generation - Activation lifetime supplied by the coordinator.
    */
-  readonly processActivated: (name: string, pkg: MakaioExtension<THostContext>, ctx: THostContext) => Promise<void>;
+  readonly processActivated: (
+    name: string,
+    pkg: MakaioExtension<THostContext>,
+    ctx: THostContext,
+    generation?: AbortSignal,
+  ) => Promise<void>;
   /**
    * Called when an extension is stopped or disabled.
    * @param name - Extension package name.
@@ -227,6 +234,9 @@ export interface MakaioExtension<THostContext extends ExtensionContext = NodeExt
    * Extensions that don't own bus namespaces omit this field.
    */
   readonly namespaces?: readonly RegistrableBusNamespaceDefinition[];
+
+  /** Operations made available to the worker host for this activation. */
+  readonly fixedOperations?: readonly FixedOperationContribution[];
 
   /**
    * Factory that creates and returns the extension's service.

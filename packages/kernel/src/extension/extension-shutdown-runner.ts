@@ -154,11 +154,11 @@ export function resolveDefaultStopBudgetMs(defaultStopBudgetMs: number | undefin
  * @param defaultStopBudgetMs - Window of an extension whose service declares none.
  * @returns The window, in milliseconds.
  */
-function extensionStopBudgetMs(
-  entry: Pick<ExtensionEntry, 'pendingService' | 'service'>,
+export function extensionStopBudgetMs(
+  entry: Pick<ExtensionEntry, 'pendingService' | 'service'> | undefined,
   defaultStopBudgetMs: number,
 ): number {
-  return acceptedStopBudgetMs(entry.service ?? entry.pendingService) ?? defaultStopBudgetMs;
+  return acceptedStopBudgetMs(entry?.service ?? entry?.pendingService) ?? defaultStopBudgetMs;
 }
 
 /**

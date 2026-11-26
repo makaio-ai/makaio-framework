@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { promisify } from 'node:util';
 import { mintCallContext } from '@makaio/bus-core/kernel-api';
-import type { StepRunConfig } from '@makaio/contracts';
+import { WorkflowSubjects, type StepRunConfig, type WorkflowDefinition } from '@makaio/contracts';
 import {
   createSecret,
   type CredentialResolverContribution,
@@ -22,6 +22,8 @@ import { closeHttpServer, listenOnLoopback } from '../../__tests__/http-test-hel
 import { createHttpWorkerModelPort } from '../agent-step/http-model-port.js';
 import { openLocalModelAddress } from '../agent-step/model-mediator.js';
 import { createProcessStepRunner } from '../process-step-runner.js';
+import { composeFixedOperationHost, makeFixedOperationExtension, runPorts } from './fixed-operation-host.fixture.js';
+import { makeWorkerConfig } from './fixtures.js';
 
 const refused = { kind: 'purpose-not-granted' };
 const acquired = { kind: 'granted', value: true, isCurrent: expect.any(Function) };
@@ -238,6 +240,69 @@ describe('run-scoped credential mediation', () => {
       expect(authorized).toBe(true);
     } finally {
       await upstream.close();
+    }
+  });
+
+  it('keeps the booked model binding across fixed operations and into the agent step', async () => {
+    await start();
+    const operationOwner = 'operation-fixture';
+    const fixture = composeFixedOperationHost(
+      [
+        makeFixedOperationExtension(operationOwner, [
+          {
+            name: `${operationOwner}.prepare`,
+            phase: 'before-steps',
+            applies: () => true,
+            run: async () => ({ ok: true, facts: { prepared: true } }),
+          },
+        ]),
+      ],
+      workspace,
+    );
+    const offRole = fixture.bus.on(WorkflowSubjects.resolveRole, (ctx) => {
+      ctx.setResult({ adapterName: 'text-model', model: 'booked-model' });
+    });
+    const requests: Array<{ path: string | undefined; authorized: boolean }> = [];
+    const upstream = await openUpstream((request, response) => {
+      request.resume();
+      const authorized = request.headers.authorization === `Bearer ${secret.reveal()}`;
+      requests.push({ path: request.url, authorized });
+      response.writeHead(authorized ? 200 : 401, { 'content-type': 'application/json' });
+      response.end(JSON.stringify({ text: '{"approved":true}' }));
+    });
+    const definition: WorkflowDefinition = {
+      id: 'workflow-1',
+      scope: { type: 'global' },
+      extensions: { [operationOwner]: true },
+      root: { id: 'root', type: 'sequence', nodes: [step.stepDefinition] },
+    };
+    try {
+      await fixture.coordinator.startAll();
+      const attempt = fixture.host.run(
+        {
+          bus: fixture.bus,
+          call,
+          workspace,
+          signal: lifetime.signal,
+          config: { ...makeWorkerConfig({ definition }), terminalAuthority: 'authority' },
+          runModel: {
+            adapterName: 'text-model',
+            ownerInstanceId: owner,
+            target: { name: 'model', url: upstream.url },
+            credentialSource: bind([{ ...scope, target: upstream.url.href }]),
+          },
+        },
+        { ...runPorts, allowSourceFree: true },
+      );
+      upstream.url.pathname = '/unbooked';
+      const outcome = await attempt;
+      expect(outcome.result).toMatchObject({ status: 'completed' });
+      expect(outcome.facts.get(operationOwner)).toEqual({ prepared: true });
+      expect(resolverCalls).toBe(1);
+      expect(requests).toEqual([{ path: '/turn', authorized: true }]);
+    } finally {
+      offRole();
+      await Promise.all([fixture.close(), upstream.close()]);
     }
   });
 

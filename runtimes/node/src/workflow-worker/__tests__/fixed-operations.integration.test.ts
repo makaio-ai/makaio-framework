@@ -1,22 +1,42 @@
-import { appendFile, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { appendFile, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import type { WorkflowDefinition } from '@makaio/contracts';
 import { WorkflowStorageSubjects } from '@makaio/subsystem-workflow-engine';
 import { expect, it, vi } from 'vitest';
 import { z } from 'zod';
-import { runProcessWorkflowWithFixedOperations } from '../fixed-operation-workflow.js';
+import {
+  runProcessWorkflowWithFixedOperations as runFixedWorkflow,
+  type FixedProcessWorkflow,
+  type FixedWorkflowRunOptions,
+} from '../fixed-operation-workflow.js';
 import { computeContributionPackageDigest, verifyContribution } from '../local-directory-materializer.js';
 import {
-  registerFixedOperations,
+  FixedOperationRegistry,
   type FixedOperationContribution,
-  type FixedOperationExtension,
   type FixedOperationRun,
 } from '../runtime/fixed-operations.js';
 import { makeBusWithStorage, makeWorkerConfig } from './fixtures.js';
 
 vi.setConfig({ testTimeout: 30_000 });
+
+interface FixedOperationExtension {
+  readonly name: string;
+  readonly fixedOperations: readonly FixedOperationContribution[];
+}
+
+/**
+ * Activate fixture contributions using the same operation registry as the host processor.
+ * @param extensions - Fixture extensions in dependency order.
+ * @returns The registry used by the test runner.
+ */
+function registerFixedOperations(extensions: readonly FixedOperationExtension[]): FixedOperationRegistry {
+  const registry = new FixedOperationRegistry(() => extensions.map(({ name }) => name));
+  for (const { name, fixedOperations } of extensions)
+    registry.activate(name, fixedOperations, new AbortController().signal, () => true);
+  return registry;
+}
 
 /**
  * Install, verify and import a package with real runner-side operations.
@@ -34,7 +54,7 @@ async function loadVerifiedExtension(workspace: string, sourceOutcome?: string):
   await writeFile(
     join(directory, entrypoint),
     `import { appendFile } from 'node:fs/promises';
-    import { join, sep } from 'node:path';
+    import { dirname, join, sep } from 'node:path';
     const mark = (workspace, value) => appendFile(join(workspace, 'events'), value + '\\n');
     export default {
       name: 'source-tools',
@@ -43,7 +63,7 @@ async function loadVerifiedExtension(workspace: string, sourceOutcome?: string):
           async run(ctx) {
             if (ctx.declaration.pin !== 'revision-1' || ctx.block.pin !== 'revision-1') throw Error('Wrong source pin');
             await mark(ctx.workspace, 'source');
-            return ${sourceOutcome ?? "{ ok: true, workflowRoot: join(ctx.workspace, 'prepared'), facts: { revision: ctx.declaration.pin } }"};
+            return ${sourceOutcome ?? "{ ok: true, workflowRoot: join(dirname(ctx.workspace), 'prepared'), facts: { revision: ctx.declaration.pin } }"};
           } },
         { name: 'source-tools.prepare', phase: 'before-steps', applies: (decl) => decl.enabled,
           async run(ctx) {
@@ -105,7 +125,9 @@ async function createRun(
   signal = new AbortController().signal,
   fail = false,
 ) {
-  const workspace = await mkdtemp(join(tmpdir(), 'workflow-fixed-operations-'));
+  const root = await mkdtemp(join(tmpdir(), 'workflow-fixed-operations-'));
+  const workspace = join(root, 'workspace');
+  await mkdir(workspace);
   const [bus, cleanup] = makeBusWithStorage();
   const off = bus.on(WorkflowStorageSubjects.getRunContext, (ctx) => ctx.setResult({ runContext: null }));
   const definition: WorkflowDefinition = {
@@ -115,9 +137,9 @@ async function createRun(
     root: { id: 'root', type: 'sequence', nodes: [{ id: 'record', type: 'code-step' }] },
   };
   const config = { ...makeWorkerConfig({ definition }), terminalAuthority: 'authority' as const };
-  await mkdir(join(workspace, 'prepared'));
+  await mkdir(join(root, 'prepared'));
   await writeFile(
-    join(workspace, 'prepared', 'flow.mjs'),
+    join(root, 'prepared', 'flow.mjs'),
     `import { appendFile } from 'node:fs/promises';
      export default {
        definition: ${JSON.stringify(definition)},
@@ -137,9 +159,40 @@ async function createRun(
     async cleanup() {
       off();
       cleanup();
-      await rm(workspace, { recursive: true, force: true });
+      await rm(root, { recursive: true, force: true });
     },
   };
+}
+
+const checkout = {
+  checkoutId: 'fixture-checkout',
+  revision: 'a'.repeat(40),
+};
+
+/**
+ * Run scheduler cases against the fixture's prepared workflow file.
+ * @param options - Existing fixture process inputs.
+ * @param fixed - Existing fixture contributions and ports.
+ * @returns The recorded execution.
+ */
+function runProcessWorkflowWithFixedOperations(
+  options: FixedWorkflowRunOptions,
+  fixed: Omit<FixedProcessWorkflow, 'source'> & {
+    readonly registry: ReturnType<typeof registerFixedOperations>;
+    readonly source?: Omit<NonNullable<FixedProcessWorkflow['source']>, 'verify' | 'revision' | 'checkoutId'>;
+  },
+) {
+  const { registry, source, ...ports } = fixed;
+  return runFixedWorkflow(
+    registry,
+    options,
+    {
+      ...ports,
+      allowSourceFree: true,
+      source: source === undefined ? undefined : { ...source, ...checkout, verify: async () => checkout },
+    },
+    false,
+  );
 }
 
 const source = {
@@ -202,11 +255,12 @@ it('runs verified source, resolver, extension phases and isolated steps in depen
             ...mark('dependent.resolve', 'workflow-source', () => {
               throw new Error('The named resolver does not call applies');
             }),
-            async run({ block, declaration, facts, workflowRoot, workspace }) {
+            async run({ block, declaration, facts, workflowRoot, verifiedSource, workspace }) {
               expect(block).toBeUndefined();
               expect(declaration).toEqual({ resolver: 'dependent.resolve' });
               expect(facts).toEqual({});
-              expect(workflowRoot).toBe(join(workspace, 'prepared'));
+              expect(workflowRoot).toBe(await realpath(join(dirname(workspace), 'prepared')));
+              expect(verifiedSource).toMatchObject({ ...checkout, checkoutRoot: workflowRoot });
               await appendFile(join(workspace, 'events'), 'resolver\n');
               return { ok: true, facts: {} };
             },
@@ -375,9 +429,10 @@ it('runs the follow-up after successful preparation races with cancellation', as
           {
             ...mark('stopping.prepare', 'before-steps'),
             async run(ctx) {
-              expect(ctx.signal).toBe(controller.signal);
+              expect(ctx.signal.aborted).toBe(false);
               const outcome = await mark('stopping.prepare', 'before-steps').run(ctx);
               controller.abort(new Error('Cancelled during preparation'));
+              expect(ctx.signal.aborted).toBe(true);
               return outcome;
             },
           },
@@ -534,6 +589,7 @@ it('runs follow-ups with closure evidence after an infrastructure failure', asyn
 
 it('keeps the step result and facts while attempting every follow-up', async () => {
   const run = await createRun({ 'source-tools': source.declaration });
+  const followUpOrder: string[] = [];
   try {
     const extension = await loadVerifiedExtension(run.options.workspace);
     const registry = registerFixedOperations([
@@ -545,9 +601,14 @@ it('keeps the step result and facts while attempting every follow-up', async () 
           {
             ...mark('source-tools.broken', 'after-steps'),
             async run() {
+              followUpOrder.push('first operation');
               return { ok: false, detail: 'cleanup-failed', facts: { attempted: true } };
             },
           },
+          mark('source-tools.selection-failed', 'after-steps', () => {
+            followUpOrder.push('later predicate');
+            throw new Error('Follow-up predicate failed');
+          }),
           mark('source-tools.last', 'after-steps'),
         ],
       },
@@ -555,8 +616,10 @@ it('keeps the step result and facts while attempting every follow-up', async () 
     const outcome = await runProcessWorkflowWithFixedOperations(run.options, { ...ports, registry, source });
     expect(outcome.result.status).toBe('completed');
     expect(outcome.facts.get('source-tools')).toEqual({ revision: 'revision-1', attempted: true });
+    expect(followUpOrder).toEqual(['later predicate', 'first operation']);
     expect(outcome.afterStepsErrors).toEqual([
       expect.objectContaining({ code: 'operation-failed', detail: 'cleanup-failed' }),
+      expect.objectContaining({ code: 'operation-failed', phase: 'after-steps' }),
     ]);
     await expect(run.events()).resolves.toEqual([
       'source',
@@ -591,7 +654,7 @@ it("runs a successful source owner's follow-up without a before-steps operation"
 });
 
 it('passes the prepared source root to its follow-up when dependency resolution fails', async () => {
-  const run = await createRun({ 'source-tools': source.declaration });
+  const run = await createRun({ 'source-tools': source.declaration, dependent: {} });
   try {
     const extension = await loadVerifiedExtension(run.options.workspace);
     const finish = mark('source-tools.finish', 'after-steps');
@@ -603,7 +666,7 @@ it('passes the prepared source root to its follow-up when dependency resolution 
           {
             ...finish,
             async run(ctx) {
-              expect(ctx.workflowRoot).toBe(join(ctx.workspace, 'prepared'));
+              expect(ctx.workflowRoot).toBe(await realpath(join(dirname(ctx.workspace), 'prepared')));
               return finish.run(ctx);
             },
           },
@@ -629,6 +692,55 @@ it('passes the prepared source root to its follow-up when dependency resolution 
       }),
     ).rejects.toMatchObject({ code: 'operation-failed', detail: 'resolver-failed' });
     await expect(run.events()).resolves.toEqual(['source', 'source-tools.finish:not-started']);
+  } finally {
+    await run.cleanup();
+  }
+});
+
+it('rejects a resolver whose owner is absent from the frozen declaration', async () => {
+  const run = await createRun({ 'source-tools': source.declaration });
+  try {
+    const registry = registerFixedOperations([
+      await loadVerifiedExtension(run.options.workspace),
+      { name: 'dependent', fixedOperations: [mark('dependent.resolve', 'workflow-source')] },
+    ]);
+    await expect(
+      runProcessWorkflowWithFixedOperations(run.options, {
+        ...ports,
+        registry,
+        source: { ...source, dependencies: { resolver: 'dependent.resolve' } },
+      }),
+    ).rejects.toMatchObject({ code: 'invalid-resolver', phase: 'workflow-source' });
+    await expect(run.events()).rejects.toMatchObject({ code: 'ENOENT' });
+  } finally {
+    await run.cleanup();
+  }
+});
+
+it.each([
+  [() => Promise.resolve(true), 'invalid-registration'],
+  [
+    () => {
+      throw new Error('Predicate failed');
+    },
+    'operation-failed',
+  ],
+] as const)('preflights all preparation predicates before invoking source or preparation', async (applies, code) => {
+  const run = await createRun({ 'source-tools': source.declaration, preparing: true });
+  const operation = mark('preparing.run', 'before-steps');
+  Reflect.set(operation, 'applies', applies);
+  try {
+    const registry = registerFixedOperations([
+      await loadVerifiedExtension(run.options.workspace),
+      { name: 'preparing', fixedOperations: [mark('preparing.first', 'before-steps'), operation] },
+    ]);
+    await expect(
+      runProcessWorkflowWithFixedOperations(run.options, { ...ports, registry, source }),
+    ).rejects.toMatchObject({
+      code,
+      phase: 'before-steps',
+    });
+    await expect(run.events()).rejects.toMatchObject({ code: 'ENOENT' });
   } finally {
     await run.cleanup();
   }

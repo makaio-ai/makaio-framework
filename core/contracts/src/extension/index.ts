@@ -269,6 +269,14 @@ export type {
   WidgetSize,
   ExtensionWorkflowBlocksContribution,
 } from './contributions/index.js';
+
+export type {
+  FixedOperationContext,
+  FixedOperationContribution,
+  FixedOperationFacts,
+  FixedOperationOutcome,
+  FixedOperationPhase,
+} from './contributions/fixed-operation.js';
 export type {
   DispatchBinding,
   OrderedProvisionOutcome,

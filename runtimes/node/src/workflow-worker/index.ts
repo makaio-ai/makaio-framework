@@ -65,3 +65,18 @@ export type { ConnectedWorker, WorkerConnector, WorkerConnectorContext } from '.
 
 export { runProcessWorkflow, type ProcessWorkflowRunOptions } from './process-workflow.js';
 export type { ProcessStepRunnerOptions } from './process-step-runner.js';
+
+export type { FixedOperationHost } from './fixed-operation-host.js';
+export type { FixedOperationAdmission, FixedOperationCatalog } from './runtime/fixed-operation-registration.js';
+export type {
+  AdmittedFixedWorkflowSource,
+  FixedProcessWorkflow,
+  FixedSourceIdentity,
+  FixedWorkflowRunOptions,
+} from './fixed-operation-workflow.js';
+export {
+  FixedOperationError,
+  type FixedOperationFailure,
+  type FixedOperationCatalogEntry,
+  type FixedOperationRunResult,
+} from './runtime/fixed-operations.js';

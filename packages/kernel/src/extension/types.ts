@@ -14,10 +14,19 @@ import type {
   VersionLiteral,
 } from '@makaio/contracts';
 import type { IMakaioBus } from '@makaio/bus-core';
+import type { listOwners, NamespaceHolder } from '@makaio/bus-core/kernel-api';
 import type { ExtensionName, PartyRef } from '@makaio/core';
 import type { CoordinatorRights } from '../rights/coordinator-rights.js';
 import type { ComponentState } from '../observability/index.js';
 import type { InstalledExtensionRecord } from '../observability/installed-extension-catalog-schemas.js';
+
+/** Live namespace holder queries for the coordinator's bus. */
+export interface NamespaceOwners {
+  /** @param namespace - Domain to look up. */
+  ownerOf(namespace: string): NamespaceHolder | undefined;
+  /** Return registered domains in namespace order. */
+  listOwners(): ReturnType<typeof listOwners>;
+}
 
 /**
  * Host-supplied reader for the extension packages installed on the machine
